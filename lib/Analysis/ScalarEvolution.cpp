@@ -1102,13 +1102,14 @@ const SCEV *ScalarEvolution::getTruncateExpr(const SCEV *Op,
     return getTruncateOrZeroExtend(SZ->getOperand(), Ty);
 
   // trunc(x1+x2+...+xN) --> trunc(x1)+trunc(x2)+...+trunc(xN) if we can
-  // eliminate all the truncates.
+  // eliminate all the truncates, or we replace other casts with truncates.
   if (const SCEVAddExpr *SA = dyn_cast<SCEVAddExpr>(Op)) {
     SmallVector<const SCEV *, 4> Operands;
     bool hasTrunc = false;
     for (unsigned i = 0, e = SA->getNumOperands(); i != e && !hasTrunc; ++i) {
       const SCEV *S = getTruncateExpr(SA->getOperand(i), Ty);
-      hasTrunc = isa<SCEVTruncateExpr>(S);
+      if (!isa<SCEVCastExpr>(SA->getOperand(i)))
+        hasTrunc = isa<SCEVTruncateExpr>(S);
       Operands.push_back(S);
     }
     if (!hasTrunc)
@@ -1117,13 +1118,14 @@ const SCEV *ScalarEvolution::getTruncateExpr(const SCEV *Op,
   }
 
   // trunc(x1*x2*...*xN) --> trunc(x1)*trunc(x2)*...*trunc(xN) if we can
-  // eliminate all the truncates.
+  // eliminate all the truncates, or we replace other casts with truncates.
   if (const SCEVMulExpr *SM = dyn_cast<SCEVMulExpr>(Op)) {
     SmallVector<const SCEV *, 4> Operands;
     bool hasTrunc = false;
     for (unsigned i = 0, e = SM->getNumOperands(); i != e && !hasTrunc; ++i) {
       const SCEV *S = getTruncateExpr(SM->getOperand(i), Ty);
-      hasTrunc = isa<SCEVTruncateExpr>(S);
+      if (!isa<SCEVCastExpr>(SM->getOperand(i)))
+        hasTrunc = isa<SCEVTruncateExpr>(S);
       Operands.push_back(S);
     }
     if (!hasTrunc)
@@ -5306,12 +5308,9 @@ static bool canConstantEvolve(Instruction *I, const Loop *L) {
   if (!L->contains(I)) return false;
 
   if (isa<PHINode>(I)) {
-    if (L->getHeader() == I->getParent())
-      return true;
-    else
-      // We don't currently keep track of the control flow needed to evaluate
-      // PHIs, so we cannot handle PHIs inside of loops.
-      return false;
+    // We don't currently keep track of the control flow needed to evaluate
+    // PHIs, so we cannot handle PHIs inside of loops.
+    return L->getHeader() == I->getParent();
   }
 
   // If we won't be able to constant fold this expression even if the operands
@@ -6794,15 +6793,6 @@ bool ScalarEvolution::isImpliedCond(ICmpInst::Predicate Pred,
   ICmpInst *ICI = dyn_cast<ICmpInst>(FoundCondValue);
   if (!ICI) return false;
 
-  // Bail if the ICmp's operands' types are wider than the needed type
-  // before attempting to call getSCEV on them. This avoids infinite
-  // recursion, since the analysis of widening casts can require loop
-  // exit condition information for overflow checking, which would
-  // lead back here.
-  if (getTypeSizeInBits(LHS->getType()) <
-      getTypeSizeInBits(ICI->getOperand(0)->getType()))
-    return false;
-
   // Now that we found a conditional branch that dominates the loop or controls
   // the loop latch. Check to see if it is the comparison we are looking for.
   ICmpInst::Predicate FoundPred;
@@ -6814,9 +6804,17 @@ bool ScalarEvolution::isImpliedCond(ICmpInst::Predicate Pred,
   const SCEV *FoundLHS = getSCEV(ICI->getOperand(0));
   const SCEV *FoundRHS = getSCEV(ICI->getOperand(1));
 
-  // Balance the types. The case where FoundLHS' type is wider than
-  // LHS' type is checked for above.
-  if (getTypeSizeInBits(LHS->getType()) >
+  // Balance the types.
+  if (getTypeSizeInBits(LHS->getType()) <
+      getTypeSizeInBits(FoundLHS->getType())) {
+    if (CmpInst::isSigned(Pred)) {
+      LHS = getSignExtendExpr(LHS, FoundLHS->getType());
+      RHS = getSignExtendExpr(RHS, FoundLHS->getType());
+    } else {
+      LHS = getZeroExtendExpr(LHS, FoundLHS->getType());
+      RHS = getZeroExtendExpr(RHS, FoundLHS->getType());
+    }
+  } else if (getTypeSizeInBits(LHS->getType()) >
       getTypeSizeInBits(FoundLHS->getType())) {
     if (CmpInst::isSigned(FoundPred)) {
       FoundLHS = getSignExtendExpr(FoundLHS, LHS->getType());

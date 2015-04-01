@@ -175,6 +175,9 @@ def HasV8Ops    : SubtargetFeature<"v8", "HasV8Ops", "true",
                                    "Support ARM v8 instructions",
                                    [HasV7Ops, FeatureVirtualization,
                                     FeatureMP]>;
+def HasV8_1aOps : SubtargetFeature<"v8.1a", "HasV8_1aOps", "true",
+                                   "Support ARM v8.1a instructions",
+                                   [HasV8Ops, FeatureAClass, FeatureCRC]>;
 
 //===----------------------------------------------------------------------===//
 // ARM Processors supported.
@@ -469,7 +472,15 @@ def ARMInstrInfo : InstrInfo;
 // Declare the target which we are implementing
 //===----------------------------------------------------------------------===//
 
+def ARMAsmWriter : AsmWriter {
+  string AsmWriterClassName  = "InstPrinter";
+  int PassSubtarget = 1;
+  int Variant = 0;
+  bit isMCAsmWriter = 1;
+}
+
 def ARM : Target {
   // Pull in Instruction Info:
   let InstructionSet = ARMInstrInfo;
+  let AssemblyWriters = [ARMAsmWriter];
 }

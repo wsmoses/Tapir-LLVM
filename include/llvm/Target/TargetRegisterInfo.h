@@ -46,6 +46,11 @@ public:
   const uint32_t *SubClassMask;
   const uint16_t *SuperRegIndices;
   const unsigned LaneMask;
+  /// Classes with a higher priority value are assigned first by register
+  /// allocators using a greedy heuristic. The value is in the range [0,63].
+  const uint8_t AllocationPriority;
+  /// Whether the class supports two (or more) disjunct subregister indices.
+  const bool HasDisjunctSubRegs;
   const sc_iterator SuperClasses;
   ArrayRef<MCPhysReg> (*OrderFunc)(const MachineFunction&);
 
@@ -357,13 +362,13 @@ public:
   ///
   /// then:
   ///
-  ///   getSubRegIndexLaneMask(A) & getSubRegIndexLaneMask(B) != 0
+  ///   (getSubRegIndexLaneMask(A) & getSubRegIndexLaneMask(B)) != 0
   ///
   /// The converse is not necessarily true. If two lane masks have a common
   /// bit, the corresponding sub-registers may not overlap, but it can be
   /// assumed that they usually will.
+  /// SubIdx == 0 is allowed, it has the lane mask ~0u.
   unsigned getSubRegIndexLaneMask(unsigned SubIdx) const {
-    // SubIdx == 0 is allowed, it has the lane mask ~0u.
     assert(SubIdx < getNumSubRegIndices() && "This is not a subregister index");
     return SubRegIndexLaneMasks[SubIdx];
   }
@@ -797,9 +802,9 @@ public:
     llvm_unreachable("resolveFrameIndex does not exist on this target");
   }
 
-  /// isFrameOffsetLegal - Determine whether a given offset immediate is
-  /// encodable to resolve a frame index.
-  virtual bool isFrameOffsetLegal(const MachineInstr *MI,
+  /// isFrameOffsetLegal - Determine whether a given base register plus offset
+  /// immediate is encodable to resolve a frame index.
+  virtual bool isFrameOffsetLegal(const MachineInstr *MI, unsigned BaseReg,
                                   int64_t Offset) const {
     llvm_unreachable("isFrameOffsetLegal does not exist on this target");
   }

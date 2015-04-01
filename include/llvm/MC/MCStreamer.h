@@ -366,6 +366,8 @@ public:
   /// Create the default sections and set the initial one.
   virtual void InitSections(bool NoExecStack);
 
+  MCSymbol *endSection(const MCSection *Section);
+
   /// AssignSection - Sets the symbol's section.
   ///
   /// Each emitted symbol will be tracked in the ordering table,
@@ -748,20 +750,6 @@ MCStreamer *createAsmStreamer(MCContext &Ctx, formatted_raw_ostream &OS,
                               bool isVerboseAsm, bool useDwarfDirectory,
                               MCInstPrinter *InstPrint, MCCodeEmitter *CE,
                               MCAsmBackend *TAB, bool ShowInst);
-
-/// Create a machine code streamer which will generate Mach-O format object
-/// files.
-///
-/// Takes ownership of \p TAB and \p CE.
-MCStreamer *createMachOStreamer(MCContext &Ctx, MCAsmBackend &TAB,
-                                raw_ostream &OS, MCCodeEmitter *CE,
-                                bool RelaxAll, bool LabelSections = false);
-
-/// Create a machine code streamer which will generate ELF format object files.
-MCStreamer *createELFStreamer(MCContext &Ctx, MCAsmBackend &TAB,
-                              raw_ostream &OS, MCCodeEmitter *CE,
-                              bool RelaxAll);
-
 } // end namespace llvm
 
 #endif

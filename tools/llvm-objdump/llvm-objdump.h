@@ -27,6 +27,7 @@ extern cl::opt<std::string> ArchName;
 extern cl::opt<std::string> MCPU;
 extern cl::list<std::string> MAttrs;
 extern cl::list<std::string> DumpSections;
+extern cl::opt<bool> Raw;
 extern cl::opt<bool> Disassemble;
 extern cl::opt<bool> NoShowRawInsn;
 extern cl::opt<bool> PrivateHeaders;
@@ -54,7 +55,7 @@ extern cl::opt<bool> UnwindInfo;
 // Various helper functions.
 bool error(std::error_code ec);
 bool RelocAddressLess(object::RelocationRef a, object::RelocationRef b);
-void DumpBytes(StringRef bytes);
+void DumpBytes(ArrayRef<uint8_t> bytes);
 void ParseInputMachO(StringRef Filename);
 void printCOFFUnwindInfo(const object::COFFObjectFile* o);
 void printMachOUnwindInfo(const object::MachOObjectFile* o);

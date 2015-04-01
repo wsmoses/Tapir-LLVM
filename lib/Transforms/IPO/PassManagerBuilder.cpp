@@ -59,6 +59,10 @@ static cl::opt<bool>
 RunLoopRerolling("reroll-loops", cl::Hidden,
                  cl::desc("Run the loop rerolling pass"));
 
+static cl::opt<bool>
+RunFloat2Int("float-to-int", cl::Hidden, cl::init(true),
+             cl::desc("Run the float2int (float demotion) pass"));
+
 static cl::opt<bool> RunLoadCombine("combine-loads", cl::init(false),
                                     cl::Hidden,
                                     cl::desc("Run the load combining pass"));
@@ -97,7 +101,6 @@ PassManagerBuilder::PassManagerBuilder() {
     DisableGVNLoadPRE = false;
     VerifyInput = false;
     VerifyOutput = false;
-    StripDebug = false;
     MergeFunctions = false;
 }
 
@@ -308,6 +311,9 @@ void PassManagerBuilder::populateModulePassManager(
   // we must insert a no-op module pass to reset the pass manager.
   MPM.add(createBarrierNoopPass());
 
+  if (RunFloat2Int)
+    MPM.add(createFloat2IntPass());
+
   // Re-rotate loops in all our loop nests. These may have fallout out of
   // rotated form due to GVN or other transformations, and the vectorizer relies
   // on the rotated form.
@@ -492,10 +498,10 @@ void PassManagerBuilder::addLTOOptimizationPasses(legacy::PassManagerBase &PM) {
   addExtensionsToPM(EP_Peephole, PM);
 
   PM.add(createJumpThreadingPass());
+}
 
-  // Lower bitset metadata to bitsets.
-  PM.add(createLowerBitSetsPass());
-
+void PassManagerBuilder::addLateLTOOptimizationPasses(
+    legacy::PassManagerBase &PM) {
   // Delete basic blocks, which optimization passes may have killed.
   PM.add(createCFGSimplificationPass());
 
@@ -515,19 +521,19 @@ void PassManagerBuilder::populateLTOPassManager(legacy::PassManagerBase &PM) {
   if (VerifyInput)
     PM.add(createVerifierPass());
 
-  if (StripDebug)
-    PM.add(createStripSymbolsPass(true));
-
-  if (VerifyInput)
-    PM.add(createDebugInfoVerifierPass());
-
-  if (OptLevel != 0)
+  if (OptLevel > 1)
     addLTOOptimizationPasses(PM);
 
-  if (VerifyOutput) {
+  // Lower bit sets to globals. This pass supports Clang's control flow
+  // integrity mechanisms (-fsanitize=cfi*) and needs to run at link time if CFI
+  // is enabled. The pass does nothing if CFI is disabled.
+  PM.add(createLowerBitSetsPass());
+
+  if (OptLevel != 0)
+    addLateLTOOptimizationPasses(PM);
+
+  if (VerifyOutput)
     PM.add(createVerifierPass());
-    PM.add(createDebugInfoVerifierPass());
-  }
 }
 
 inline PassManagerBuilder *unwrap(LLVMPassManagerBuilderRef P) {

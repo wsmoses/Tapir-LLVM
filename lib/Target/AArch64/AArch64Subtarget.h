@@ -37,6 +37,8 @@ protected:
   /// ARMProcFamily - ARM processor family: Cortex-A53, Cortex-A57, and others.
   ARMProcFamilyEnum ARMProcFamily;
 
+  bool HasV8_1aOps;
+
   bool HasFPARMv8;
   bool HasNEON;
   bool HasCrypto;
@@ -56,7 +58,6 @@ protected:
   /// TargetTriple - What processor and OS we're targeting.
   Triple TargetTriple;
 
-  const AArch64TargetMachine &TM;
   AArch64FrameLowering FrameLowering;
   AArch64InstrInfo InstrInfo;
   AArch64SelectionDAGInfo TSInfo;
@@ -71,7 +72,7 @@ public:
   /// This constructor initializes the data members to match that
   /// of the specified triple.
   AArch64Subtarget(const std::string &TT, const std::string &CPU,
-                   const std::string &FS, const AArch64TargetMachine &TM,
+                   const std::string &FS, const TargetMachine &TM,
                    bool LittleEndian);
 
   const AArch64SelectionDAGInfo *getSelectionDAGInfo() const override {
@@ -84,13 +85,16 @@ public:
     return &TLInfo;
   }
   const AArch64InstrInfo *getInstrInfo() const override { return &InstrInfo; }
-  const AArch64TargetMachine &getTargetMachine() const { return TM; }
-  const AArch64RegisterInfo *getRegisterInfo() const override;
+  const AArch64RegisterInfo *getRegisterInfo() const override {
+    return &getInstrInfo()->getRegisterInfo();
+  }
   const Triple &getTargetTriple() const { return TargetTriple; }
   bool enableMachineScheduler() const override { return true; }
   bool enablePostMachineScheduler() const override {
     return isCortexA53() || isCortexA57();
   }
+
+  bool hasV8_1aOps() const { return HasV8_1aOps; }
 
   bool hasZeroCycleRegMove() const { return HasZeroCycleRegMove; }
 

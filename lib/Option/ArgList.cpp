@@ -63,6 +63,26 @@ Arg *ArgList::getLastArgNoClaim(OptSpecifier Id0, OptSpecifier Id1) const {
   return nullptr;
 }
 
+Arg *ArgList::getLastArgNoClaim(OptSpecifier Id0, OptSpecifier Id1,
+                                OptSpecifier Id2) const {
+  // FIXME: Make search efficient?
+  for (const_reverse_iterator it = rbegin(), ie = rend(); it != ie; ++it)
+    if ((*it)->getOption().matches(Id0) || (*it)->getOption().matches(Id1) ||
+        (*it)->getOption().matches(Id2))
+      return *it;
+  return nullptr;
+}
+
+Arg *ArgList::getLastArgNoClaim(OptSpecifier Id0, OptSpecifier Id1,
+                                OptSpecifier Id2, OptSpecifier Id3) const {
+  // FIXME: Make search efficient?
+  for (const_reverse_iterator it = rbegin(), ie = rend(); it != ie; ++it)
+    if ((*it)->getOption().matches(Id0) || (*it)->getOption().matches(Id1) ||
+        (*it)->getOption().matches(Id2) || (*it)->getOption().matches(Id3))
+      return *it;
+  return nullptr;
+}
+
 Arg *ArgList::getLastArg(OptSpecifier Id) const {
   Arg *Res = nullptr;
   for (const_iterator it = begin(), ie = end(); it != ie; ++it) {
@@ -375,7 +395,7 @@ Arg *DerivedArgList::MakeSeparateArg(const Arg *BaseArg, const Option Opt,
 
 Arg *DerivedArgList::MakeJoinedArg(const Arg *BaseArg, const Option Opt,
                                    StringRef Value) const {
-  unsigned Index = BaseArgs.MakeIndex(Opt.getName().str() + Value.str());
+  unsigned Index = BaseArgs.MakeIndex((Opt.getName() + Value).str());
   SynthesizedArgs.push_back(make_unique<Arg>(
       Opt, MakeArgString(Opt.getPrefix() + Opt.getName()), Index,
       BaseArgs.getArgString(Index) + Opt.getName().size(), BaseArg));

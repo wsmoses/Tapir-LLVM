@@ -118,7 +118,7 @@ void NVPTXAsmPrinter::emitLineNumberAsDotLoc(const MachineInstr &MI) {
 
   DebugLoc curLoc = MI.getDebugLoc();
 
-  if (prevDebugLoc.isUnknown() && curLoc.isUnknown())
+  if (!prevDebugLoc && !curLoc)
     return;
 
   if (prevDebugLoc == curLoc)
@@ -126,14 +126,10 @@ void NVPTXAsmPrinter::emitLineNumberAsDotLoc(const MachineInstr &MI) {
 
   prevDebugLoc = curLoc;
 
-  if (curLoc.isUnknown())
+  if (!curLoc)
     return;
 
-  const MachineFunction *MF = MI.getParent()->getParent();
-  //const TargetMachine &TM = MF->getTarget();
-
-  const LLVMContext &ctx = MF->getFunction()->getContext();
-  DIScope Scope(curLoc.getScope(ctx));
+  DIScope Scope(curLoc.getScope());
 
   assert((!Scope || Scope.isScope()) &&
     "Scope of a DebugLoc should be null or a DIScope.");
@@ -145,20 +141,20 @@ void NVPTXAsmPrinter::emitLineNumberAsDotLoc(const MachineInstr &MI) {
   SmallString<128> FullPathName = dirName;
   if (!dirName.empty() && !sys::path::is_absolute(fileName)) {
     sys::path::append(FullPathName, fileName);
-    fileName = FullPathName.str();
+    fileName = FullPathName;
   }
 
-  if (filenameMap.find(fileName.str()) == filenameMap.end())
+  if (filenameMap.find(fileName) == filenameMap.end())
     return;
 
   // Emit the line from the source file.
   if (InterleaveSrc)
-    this->emitSrcInText(fileName.str(), curLoc.getLine());
+    this->emitSrcInText(fileName, curLoc.getLine());
 
   std::stringstream temp;
-  temp << "\t.loc " << filenameMap[fileName.str()] << " " << curLoc.getLine()
+  temp << "\t.loc " << filenameMap[fileName] << " " << curLoc.getLine()
        << " " << curLoc.getCol();
-  OutStreamer.EmitRawText(Twine(temp.str().c_str()));
+  OutStreamer.EmitRawText(temp.str());
 }
 
 void NVPTXAsmPrinter::EmitInstruction(const MachineInstr *MI) {
@@ -504,8 +500,7 @@ void NVPTXAsmPrinter::EmitFunctionBodyEnd() {
 
 void NVPTXAsmPrinter::emitImplicitDef(const MachineInstr *MI) const {
   unsigned RegNo = MI->getOperand(0).getReg();
-  const TargetRegisterInfo *TRI = nvptxSubtarget->getRegisterInfo();
-  if (TRI->isVirtualRegister(RegNo)) {
+  if (TargetRegisterInfo::isVirtualRegister(RegNo)) {
     OutStreamer.AddComment(Twine("implicit-def: ") +
                            getVirtualRegisterName(RegNo));
   } else {
@@ -522,15 +517,15 @@ void NVPTXAsmPrinter::emitKernelFunctionDirectives(const Function &F,
   // If none of reqntid* is specified, don't output reqntid directive.
   unsigned reqntidx, reqntidy, reqntidz;
   bool specified = false;
-  if (llvm::getReqNTIDx(F, reqntidx) == false)
+  if (!llvm::getReqNTIDx(F, reqntidx))
     reqntidx = 1;
   else
     specified = true;
-  if (llvm::getReqNTIDy(F, reqntidy) == false)
+  if (!llvm::getReqNTIDy(F, reqntidy))
     reqntidy = 1;
   else
     specified = true;
-  if (llvm::getReqNTIDz(F, reqntidz) == false)
+  if (!llvm::getReqNTIDz(F, reqntidz))
     reqntidz = 1;
   else
     specified = true;
@@ -544,15 +539,15 @@ void NVPTXAsmPrinter::emitKernelFunctionDirectives(const Function &F,
   // If none of maxntid* is specified, don't output maxntid directive.
   unsigned maxntidx, maxntidy, maxntidz;
   specified = false;
-  if (llvm::getMaxNTIDx(F, maxntidx) == false)
+  if (!llvm::getMaxNTIDx(F, maxntidx))
     maxntidx = 1;
   else
     specified = true;
-  if (llvm::getMaxNTIDy(F, maxntidy) == false)
+  if (!llvm::getMaxNTIDy(F, maxntidy))
     maxntidy = 1;
   else
     specified = true;
-  if (llvm::getMaxNTIDz(F, maxntidz) == false)
+  if (!llvm::getMaxNTIDz(F, maxntidz))
     maxntidz = 1;
   else
     specified = true;
@@ -642,7 +637,7 @@ static bool usedInGlobalVarDef(const Constant *C) {
     return false;
 
   if (const GlobalVariable *GV = dyn_cast<GlobalVariable>(C)) {
-    if (GV->getName().str() == "llvm.used")
+    if (GV->getName() == "llvm.used")
       return false;
     return true;
   }
@@ -657,7 +652,7 @@ static bool usedInGlobalVarDef(const Constant *C) {
 
 static bool usedInOneFunc(const User *U, Function const *&oneFunc) {
   if (const GlobalVariable *othergv = dyn_cast<GlobalVariable>(U)) {
-    if (othergv->getName().str() == "llvm.used")
+    if (othergv->getName() == "llvm.used")
       return true;
   }
 
@@ -673,7 +668,7 @@ static bool usedInOneFunc(const User *U, Function const *&oneFunc) {
   }
 
   for (const User *UU : U->users())
-    if (usedInOneFunc(UU, oneFunc) == false)
+    if (!usedInOneFunc(UU, oneFunc))
       return false;
 
   return true;
@@ -687,7 +682,7 @@ static bool usedInOneFunc(const User *U, Function const *&oneFunc) {
  * 3. Is the global variable referenced only in one function?
  */
 static bool canDemoteGlobalVar(const GlobalVariable *gv, Function const *&f) {
-  if (gv->hasInternalLinkage() == false)
+  if (!gv->hasInternalLinkage())
     return false;
   const PointerType *Pty = gv->getType();
   if (Pty->getAddressSpace() != llvm::ADDRESS_SPACE_SHARED)
@@ -696,7 +691,7 @@ static bool canDemoteGlobalVar(const GlobalVariable *gv, Function const *&f) {
   const Function *oneFunc = nullptr;
 
   bool flag = usedInOneFunc(gv, oneFunc);
-  if (flag == false)
+  if (!flag)
     return false;
   if (!oneFunc)
     return false;
@@ -787,12 +782,12 @@ void NVPTXAsmPrinter::recordAndEmitFilenames(Module &M) {
     SmallString<128> FullPathName = Dirname;
     if (!Dirname.empty() && !sys::path::is_absolute(Filename)) {
       sys::path::append(FullPathName, Filename);
-      Filename = FullPathName.str();
+      Filename = FullPathName;
     }
-    if (filenameMap.find(Filename.str()) != filenameMap.end())
+    if (filenameMap.find(Filename) != filenameMap.end())
       continue;
-    filenameMap[Filename.str()] = i;
-    OutStreamer.EmitDwarfFileDirective(i, "", Filename.str());
+    filenameMap[Filename] = i;
+    OutStreamer.EmitDwarfFileDirective(i, "", Filename);
     ++i;
   }
 
@@ -802,11 +797,11 @@ void NVPTXAsmPrinter::recordAndEmitFilenames(Module &M) {
     SmallString<128> FullPathName = Dirname;
     if (!Dirname.empty() && !sys::path::is_absolute(Filename)) {
       sys::path::append(FullPathName, Filename);
-      Filename = FullPathName.str();
+      Filename = FullPathName;
     }
-    if (filenameMap.find(Filename.str()) != filenameMap.end())
+    if (filenameMap.find(Filename) != filenameMap.end())
       continue;
-    filenameMap[Filename.str()] = i;
+    filenameMap[Filename] = i;
     ++i;
   }
 }
@@ -1012,7 +1007,7 @@ void NVPTXAsmPrinter::emitLinkageDirective(const GlobalValue *V,
       msg.append("Error: ");
       msg.append("Symbol ");
       if (V->hasName())
-        msg.append(V->getName().str());
+        msg.append(V->getName());
       msg.append("has unsupported appending linkage type");
       llvm_unreachable(msg.c_str());
     } else if (!V->hasInternalLinkage() &&
@@ -1148,7 +1143,7 @@ void NVPTXAsmPrinter::printModuleLevelGV(const GlobalVariable *GVar,
 
   const Function *demotedFunc = nullptr;
   if (!processDemoted && canDemoteGlobalVar(GVar, demotedFunc)) {
-    O << "// " << GVar->getName().str() << " has been demoted\n";
+    O << "// " << GVar->getName() << " has been demoted\n";
     if (localDecls.find(demotedFunc) != localDecls.end())
       localDecls[demotedFunc].push_back(GVar);
     else {
@@ -1196,9 +1191,10 @@ void NVPTXAsmPrinter::printModuleLevelGV(const GlobalVariable *GVar,
         // The frontend adds zero-initializer to variables that don't have an
         // initial value, so skip warning for this case.
         if (!GVar->getInitializer()->isNullValue()) {
-          std::string warnMsg = "initial value of '" + GVar->getName().str() +
-              "' is not allowed in addrspace(" +
-              llvm::utostr_32(PTy->getAddressSpace()) + ")";
+          std::string warnMsg =
+              ("initial value of '" + GVar->getName() +
+               "' is not allowed in addrspace(" +
+               Twine(llvm::utostr_32(PTy->getAddressSpace())) + ")").str();
           report_fatal_error(warnMsg.c_str());
         }
       }
@@ -1472,7 +1468,7 @@ void NVPTXAsmPrinter::emitFunctionParamList(const Function *F, raw_ostream &O) {
       }
     }
 
-    if (PAL.hasAttribute(paramIndex + 1, Attribute::ByVal) == false) {
+    if (!PAL.hasAttribute(paramIndex + 1, Attribute::ByVal)) {
       if (Ty->isAggregateType() || Ty->isVectorTy()) {
         // Just print .param .align <a> .b8 .param[size];
         // <a> = PAL.getparamalignment
@@ -2087,7 +2083,7 @@ void NVPTXAsmPrinter::printMemOperand(const MachineInstr *MI, int opNum,
 
 void NVPTXAsmPrinter::emitSrcInText(StringRef filename, unsigned line) {
   std::stringstream temp;
-  LineReader *reader = this->getReader(filename.str());
+  LineReader *reader = this->getReader(filename);
   temp << "\n//";
   temp << filename.str();
   temp << ":";
@@ -2095,7 +2091,7 @@ void NVPTXAsmPrinter::emitSrcInText(StringRef filename, unsigned line) {
   temp << " ";
   temp << reader->readLine(line);
   temp << "\n";
-  this->OutStreamer.EmitRawText(Twine(temp.str()));
+  this->OutStreamer.EmitRawText(temp.str());
 }
 
 LineReader *NVPTXAsmPrinter::getReader(std::string filename) {

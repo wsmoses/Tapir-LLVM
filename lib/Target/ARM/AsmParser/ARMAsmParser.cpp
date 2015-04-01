@@ -276,6 +276,9 @@ class ARMAsmParser : public MCTargetAsmParser {
   bool hasD16() const {
     return STI.getFeatureBits() & ARM::FeatureD16;
   }
+  bool hasV8_1aOps() const {
+    return STI.getFeatureBits() & ARM::HasV8_1aOps;
+  }
 
   void SwitchMode() {
     uint64_t FB = ComputeAvailableFeatures(STI.ToggleFeature(ARM::ModeThumb));

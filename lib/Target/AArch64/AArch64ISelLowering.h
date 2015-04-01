@@ -355,6 +355,8 @@ public:
   getPreferredVectorAction(EVT VT) const override;
 
 private:
+  bool isExtFreeImpl(const Instruction *Ext) const override;
+
   /// Subtarget - Keep a pointer to the AArch64Subtarget around so that we can
   /// make the right decision when generating code for different targets.
   const AArch64Subtarget *Subtarget;
@@ -475,8 +477,12 @@ private:
 
   unsigned getInlineAsmMemConstraint(
       const std::string &ConstraintCode) const override {
-    // FIXME: Map different constraints differently.
-    return InlineAsm::Constraint_m;
+    if (ConstraintCode == "Q")
+      return InlineAsm::Constraint_Q;
+    // FIXME: clang has code for 'Ump', 'Utf', 'Usa', and 'Ush' but these are
+    //        followed by llvm_unreachable so we'll leave them unimplemented in
+    //        the backend for now.
+    return TargetLowering::getInlineAsmMemConstraint(ConstraintCode);
   }
 
   bool isUsedByReturnOnly(SDNode *N, SDValue &Chain) const override;

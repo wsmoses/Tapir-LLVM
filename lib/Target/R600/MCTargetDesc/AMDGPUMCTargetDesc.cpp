@@ -64,48 +64,27 @@ static MCCodeGenInfo *createAMDGPUMCCodeGenInfo(StringRef TT, Reloc::Model RM,
   return X;
 }
 
-static MCInstPrinter *createAMDGPUMCInstPrinter(const Target &T,
+static MCInstPrinter *createAMDGPUMCInstPrinter(const Triple &T,
                                                 unsigned SyntaxVariant,
                                                 const MCAsmInfo &MAI,
                                                 const MCInstrInfo &MII,
-                                                const MCRegisterInfo &MRI,
-                                                const MCSubtargetInfo &STI) {
+                                                const MCRegisterInfo &MRI) {
   return new AMDGPUInstPrinter(MAI, MII, MRI);
 }
 
-static MCStreamer *createMCStreamer(const Triple &T, MCContext &Ctx,
-                                    MCAsmBackend &MAB, raw_ostream &OS,
-                                    MCCodeEmitter *Emitter,
-                                    const MCSubtargetInfo &STI, bool RelaxAll) {
-  return createELFStreamer(Ctx, MAB, OS, Emitter, false);
-}
-
 extern "C" void LLVMInitializeR600TargetMC() {
+  for (Target *T : {&TheAMDGPUTarget, &TheGCNTarget}) {
+    RegisterMCAsmInfo<AMDGPUMCAsmInfo> X(*T);
 
-  RegisterMCAsmInfo<AMDGPUMCAsmInfo> Y(TheAMDGPUTarget);
-  RegisterMCAsmInfo<AMDGPUMCAsmInfo> Z(TheGCNTarget);
+    TargetRegistry::RegisterMCCodeGenInfo(*T, createAMDGPUMCCodeGenInfo);
+    TargetRegistry::RegisterMCInstrInfo(*T, createAMDGPUMCInstrInfo);
+    TargetRegistry::RegisterMCRegInfo(*T, createAMDGPUMCRegisterInfo);
+    TargetRegistry::RegisterMCSubtargetInfo(*T, createAMDGPUMCSubtargetInfo);
+    TargetRegistry::RegisterMCInstPrinter(*T, createAMDGPUMCInstPrinter);
+    TargetRegistry::RegisterMCAsmBackend(*T, createAMDGPUAsmBackend);
+  }
 
-  TargetRegistry::RegisterMCCodeGenInfo(TheAMDGPUTarget, createAMDGPUMCCodeGenInfo);
-  TargetRegistry::RegisterMCCodeGenInfo(TheGCNTarget, createAMDGPUMCCodeGenInfo);
-
-  TargetRegistry::RegisterMCInstrInfo(TheAMDGPUTarget, createAMDGPUMCInstrInfo);
-  TargetRegistry::RegisterMCInstrInfo(TheGCNTarget, createAMDGPUMCInstrInfo);
-
-  TargetRegistry::RegisterMCRegInfo(TheAMDGPUTarget, createAMDGPUMCRegisterInfo);
-  TargetRegistry::RegisterMCRegInfo(TheGCNTarget, createAMDGPUMCRegisterInfo);
-
-  TargetRegistry::RegisterMCSubtargetInfo(TheAMDGPUTarget, createAMDGPUMCSubtargetInfo);
-  TargetRegistry::RegisterMCSubtargetInfo(TheGCNTarget, createAMDGPUMCSubtargetInfo);
-
-  TargetRegistry::RegisterMCInstPrinter(TheAMDGPUTarget, createAMDGPUMCInstPrinter);
-  TargetRegistry::RegisterMCInstPrinter(TheGCNTarget, createAMDGPUMCInstPrinter);
-
-  TargetRegistry::RegisterMCCodeEmitter(TheAMDGPUTarget, createR600MCCodeEmitter);
+  TargetRegistry::RegisterMCCodeEmitter(TheAMDGPUTarget,
+                                        createR600MCCodeEmitter);
   TargetRegistry::RegisterMCCodeEmitter(TheGCNTarget, createSIMCCodeEmitter);
-
-  TargetRegistry::RegisterMCAsmBackend(TheAMDGPUTarget, createAMDGPUAsmBackend);
-  TargetRegistry::RegisterMCAsmBackend(TheGCNTarget, createAMDGPUAsmBackend);
-
-  TargetRegistry::RegisterMCObjectStreamer(TheAMDGPUTarget, createMCStreamer);
-  TargetRegistry::RegisterMCObjectStreamer(TheGCNTarget, createMCStreamer);
 }

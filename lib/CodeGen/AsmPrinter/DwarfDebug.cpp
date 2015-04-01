@@ -45,6 +45,7 @@
 #include "llvm/Support/MD5.h"
 #include "llvm/Support/Path.h"
 #include "llvm/Support/Timer.h"
+#include "llvm/Support/raw_ostream.h"
 #include "llvm/Target/TargetFrameLowering.h"
 #include "llvm/Target/TargetLoweringObjectFile.h"
 #include "llvm/Target/TargetMachine.h"
@@ -703,7 +704,8 @@ void DwarfDebug::ensureAbstractVariableIsCreated(const DIVariable &DV,
   if (getExistingAbstractVariable(DV, Cleansed))
     return;
 
-  createAbstractVariable(Cleansed, LScopes.getOrCreateAbstractScope(ScopeNode));
+  createAbstractVariable(Cleansed, LScopes.getOrCreateAbstractScope(
+                                       cast<MDLocalScope>(ScopeNode)));
 }
 
 void
@@ -713,7 +715,8 @@ DwarfDebug::ensureAbstractVariableIsCreatedIfScoped(const DIVariable &DV,
   if (getExistingAbstractVariable(DV, Cleansed))
     return;
 
-  if (LexicalScope *Scope = LScopes.findAbstractScope(ScopeNode))
+  if (LexicalScope *Scope =
+          LScopes.findAbstractScope(cast_or_null<MDLocalScope>(ScopeNode)))
     createAbstractVariable(Cleansed, Scope);
 }
 
@@ -900,10 +903,10 @@ DwarfDebug::collectVariableInfo(DwarfCompileUnit &TheCU, DISubprogram SP,
       continue;
 
     LexicalScope *Scope = nullptr;
-    if (MDNode *IA = DV.getInlinedAt())
-      Scope = LScopes.findInlinedScope(DV.getContext(), IA);
+    if (MDLocation *IA = DV.get()->getInlinedAt())
+      Scope = LScopes.findInlinedScope(DV.get()->getScope(), IA);
     else
-      Scope = LScopes.findLexicalScope(DV.getContext());
+      Scope = LScopes.findLexicalScope(DV.get()->getScope());
     // If variable scope is not found then skip this variable.
     if (!Scope)
       continue;
@@ -942,7 +945,7 @@ DwarfDebug::collectVariableInfo(DwarfCompileUnit &TheCU, DISubprogram SP,
     assert(DV.isVariable());
     if (!Processed.insert(DV).second)
       continue;
-    if (LexicalScope *Scope = LScopes.findLexicalScope(DV.getContext())) {
+    if (LexicalScope *Scope = LScopes.findLexicalScope(DV.get()->getScope())) {
       ensureAbstractVariableIsCreatedIfScoped(DV, Scope->getScopeNode());
       DIExpression NoExpr;
       ConcreteVariables.push_back(make_unique<DbgVariable>(DV, NoExpr, this));
@@ -970,23 +973,25 @@ void DwarfDebug::beginInstruction(const MachineInstr *MI) {
   // Check if source location changes, but ignore DBG_VALUE locations.
   if (!MI->isDebugValue()) {
     DebugLoc DL = MI->getDebugLoc();
-    if (DL != PrevInstLoc && (!DL.isUnknown() || UnknownLocations)) {
-      unsigned Flags = 0;
-      PrevInstLoc = DL;
-      if (DL == PrologEndLoc) {
-        Flags |= DWARF2_FLAG_PROLOGUE_END;
-        PrologEndLoc = DebugLoc();
-        Flags |= DWARF2_FLAG_IS_STMT;
-      }
-      if (DL.getLine() !=
-          Asm->OutStreamer.getContext().getCurrentDwarfLoc().getLine())
-        Flags |= DWARF2_FLAG_IS_STMT;
+    if (DL != PrevInstLoc) {
+      if (DL) {
+        unsigned Flags = 0;
+        PrevInstLoc = DL;
+        if (DL == PrologEndLoc) {
+          Flags |= DWARF2_FLAG_PROLOGUE_END;
+          PrologEndLoc = DebugLoc();
+          Flags |= DWARF2_FLAG_IS_STMT;
+        }
+        if (DL.getLine() !=
+            Asm->OutStreamer.getContext().getCurrentDwarfLoc().getLine())
+          Flags |= DWARF2_FLAG_IS_STMT;
 
-      if (!DL.isUnknown()) {
-        const MDNode *Scope = DL.getScope(Asm->MF->getFunction()->getContext());
+        const MDNode *Scope = DL.getScope();
         recordSourceLine(DL.getLine(), DL.getCol(), Scope, Flags);
-      } else
+      } else if (UnknownLocations) {
+        PrevInstLoc = DL;
         recordSourceLine(0, 0, nullptr, 0);
+      }
     }
   }
 
@@ -1069,7 +1074,7 @@ static DebugLoc findPrologueEndLoc(const MachineFunction *MF) {
   for (const auto &MBB : *MF)
     for (const auto &MI : MBB)
       if (!MI.isDebugValue() && !MI.getFlag(MachineInstr::FrameSetup) &&
-          !MI.getDebugLoc().isUnknown()) {
+          MI.getDebugLoc()) {
         // Did the target forget to set the FrameSetup flag for CFI insns?
         assert(!MI.isCFIInstruction() &&
                "First non-frame-setup instruction is a CFI instruction.");
@@ -1165,15 +1170,11 @@ void DwarfDebug::beginFunction(const MachineFunction *MF) {
 
   // Record beginning of function.
   PrologEndLoc = findPrologueEndLoc(MF);
-  if (!PrologEndLoc.isUnknown()) {
-    DebugLoc FnStartDL =
-        PrologEndLoc.getFnDebugLoc(MF->getFunction()->getContext());
-
+  if (MDLocation *L = PrologEndLoc) {
     // We'd like to list the prologue as "not statements" but GDB behaves
     // poorly if we do that. Revisit this with caution/GDB (7.5+) testing.
-    recordSourceLine(FnStartDL.getLine(), FnStartDL.getCol(),
-                     FnStartDL.getScope(MF->getFunction()->getContext()),
-                     DWARF2_FLAG_IS_STMT);
+    auto *SP = L->getInlinedAtScope()->getSubprogram();
+    recordSourceLine(SP->getScopeLine(), 0, SP, DWARF2_FLAG_IS_STMT);
   }
 }
 
@@ -1661,15 +1662,8 @@ void DwarfDebug::emitDebugARanges() {
     const MCSection *Section = I.first;
     MCSymbol *Sym = nullptr;
 
-    if (Section) {
-      // We can't call MCSection::getLabelEndName, as it's only safe to do so
-      // if we know the section name up-front. For user-created sections, the
-      // resulting label may not be valid to use as a label. (section names can
-      // use a greater set of characters on some systems)
-      Sym = Asm->createTempSymbol("debug_end");
-      Asm->OutStreamer.SwitchSection(Section);
-      Asm->OutStreamer.EmitLabel(Sym);
-    }
+    if (Section)
+      Sym = Asm->OutStreamer.endSection(Section);
 
     // Insert a final terminator.
     SectionMap[Section].push_back(SymbolCU(nullptr, Sym));

@@ -976,6 +976,15 @@ public:
     return false;
   }
 
+  /// Return true if the pointer arguments to CI should be aligned by aligning
+  /// the object whose address is being passed. If so then MinSize is set to the
+  /// minimum size the object must be to be aligned and PrefAlign is set to the
+  /// preferred alignment.
+  virtual bool shouldAlignPointerArgs(CallInst * /*CI*/, unsigned & /*MinSize*/,
+                                      unsigned & /*PrefAlign*/) const {
+    return false;
+  }
+
   //===--------------------------------------------------------------------===//
   /// \name Helpers for TargetTransformInfo implementations
   /// @{
@@ -1070,6 +1079,11 @@ public:
   virtual bool shouldExpandAtomicStoreInIR(StoreInst *SI) const {
     return false;
   }
+
+  /// Returns true if arguments should be sign-extended in lib calls.
+  virtual bool shouldSignExtendTypeInLibCall(EVT Type, bool IsSigned) const {
+    return IsSigned;
+ }
 
   /// Returns true if the given (atomic) load should be expanded by the
   /// IR-level AtomicExpand pass into a load-linked instruction
@@ -2016,6 +2030,7 @@ public:
                            ISD::CondCode &CCCode, SDLoc DL) const;
 
   /// Returns a pair of (return value, chain).
+  /// It is an error to pass RTLIB::UNKNOWN_LIBCALL as \p LC.
   std::pair<SDValue, SDValue> makeLibCall(SelectionDAG &DAG, RTLIB::Libcall LC,
                                           EVT RetVT, const SDValue *Ops,
                                           unsigned NumOps, bool isSigned,

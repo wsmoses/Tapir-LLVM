@@ -421,6 +421,10 @@ def int_eh_endcatch : Intrinsic<[], []>;
 // Represents the list of actions to take when an exception is thrown.
 def int_eh_actions : Intrinsic<[llvm_ptr_ty], [llvm_vararg_ty], []>;
 
+// Designates the provided static alloca as the unwind help object. Required
+// for WinEH.
+def int_eh_unwindhelp : Intrinsic<[], [llvm_ptr_ty], []>;
+
 // __builtin_unwind_init is an undocumented GCC intrinsic that causes all
 // callee-saved registers to be saved and restored (regardless of whether they
 // are used) in the calling function. It is used by libgcc_eh.
@@ -626,3 +630,4 @@ include "llvm/IR/IntrinsicsNVVM.td"
 include "llvm/IR/IntrinsicsMips.td"
 include "llvm/IR/IntrinsicsR600.td"
 include "llvm/IR/IntrinsicsBPF.td"
+include "llvm/IR/IntrinsicsSystemZ.td"

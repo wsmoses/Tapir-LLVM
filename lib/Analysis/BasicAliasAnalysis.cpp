@@ -932,14 +932,14 @@ aliasSameBasePointerGEPs(const GEPOperator *GEP1, uint64_t V1Size,
   // Also, check that they all index through arrays.
   for (unsigned i = 1, e = GEP1->getNumIndices() - 1; i != e; ++i) {
     if (!isa<ArrayType>(GetElementPtrInst::getIndexedType(
-            GEP1->getPointerOperandType(), IntermediateIndices)))
+            GEP1->getSourceElementType(), IntermediateIndices)))
       return AliasAnalysis::MayAlias;
     IntermediateIndices.push_back(GEP1->getOperand(i + 1));
   }
 
   StructType *LastIndexedStruct =
       dyn_cast<StructType>(GetElementPtrInst::getIndexedType(
-          GEP1->getPointerOperandType(), IntermediateIndices));
+          GEP1->getSourceElementType(), IntermediateIndices));
 
   if (!LastIndexedStruct)
     return AliasAnalysis::MayAlias;
@@ -1524,6 +1524,9 @@ bool BasicAliasAnalysis::isValueEqualInPotentialCycles(const Value *V,
 
   const Instruction *Inst = dyn_cast<Instruction>(V);
   if (!Inst)
+    return true;
+
+  if (VisitedPhiBBs.empty())
     return true;
 
   if (VisitedPhiBBs.size() > MaxNumPhiBBsValueReachabilityCheck)

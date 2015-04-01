@@ -57,6 +57,7 @@
 #include "llvm/IR/ValueHandle.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/Scalar.h"
 #include "llvm/Transforms/Utils/Local.h"
 #include <algorithm>
@@ -868,11 +869,9 @@ Instruction *InstCombiner::FoldOpIntoPhi(Instruction &I) {
 /// whether or not there is a sequence of GEP indices into the pointed type that
 /// will land us at the specified offset.  If so, fill them into NewIndices and
 /// return the resultant element type, otherwise return null.
-Type *InstCombiner::FindElementAtOffset(Type *PtrTy, int64_t Offset,
+Type *InstCombiner::FindElementAtOffset(PointerType *PtrTy, int64_t Offset,
                                         SmallVectorImpl<Value *> &NewIndices) {
-  assert(PtrTy->isPtrOrPtrVectorTy());
-
-  Type *Ty = PtrTy->getPointerElementType();
+  Type *Ty = PtrTy->getElementType();
   if (!Ty->isSized())
     return nullptr;
 
@@ -1333,11 +1332,24 @@ Instruction *InstCombiner::visitGetElementPtrInst(GetElementPtrInst &GEP) {
     if (!Op1)
       return nullptr;
 
+    // Don't fold a GEP into itself through a PHI node. This can only happen
+    // through the back-edge of a loop. Folding a GEP into itself means that
+    // the value of the previous iteration needs to be stored in the meantime,
+    // thus requiring an additional register variable to be live, but not
+    // actually achieving anything (the GEP still needs to be executed once per
+    // loop iteration).
+    if (Op1 == &GEP)
+      return nullptr;
+
     signed DI = -1;
 
     for (auto I = PN->op_begin()+1, E = PN->op_end(); I !=E; ++I) {
       GetElementPtrInst *Op2 = dyn_cast<GetElementPtrInst>(*I);
       if (!Op2 || Op1->getNumOperands() != Op2->getNumOperands())
+        return nullptr;
+
+      // As for Op1 above, don't try to fold a GEP into itself.
+      if (Op2 == &GEP)
         return nullptr;
 
       // Keep track of the type as we walk the GEP.
@@ -1597,9 +1609,12 @@ Instruction *InstCombiner::visitGetElementPtrInst(GetElementPtrInst &GEP) {
             // %0 = GEP [10 x i8] addrspace(1)* X, ...
             // addrspacecast i8 addrspace(1)* %0 to i8*
             SmallVector<Value*, 8> Idx(GEP.idx_begin(), GEP.idx_end());
-            Value *NewGEP = GEP.isInBounds() ?
-              Builder->CreateInBoundsGEP(StrippedPtr, Idx, GEP.getName()) :
-              Builder->CreateGEP(StrippedPtr, Idx, GEP.getName());
+            Value *NewGEP =
+                GEP.isInBounds()
+                    ? Builder->CreateInBoundsGEP(StrippedPtr, Idx,
+                                                 GEP.getName())
+                    : Builder->CreateGEP(StrippedPtrTy->getElementType(),
+                                         StrippedPtr, Idx, GEP.getName());
             return new AddrSpaceCastInst(NewGEP, GEP.getType());
           }
         }
@@ -1615,9 +1630,11 @@ Instruction *InstCombiner::visitGetElementPtrInst(GetElementPtrInst &GEP) {
               DL.getTypeAllocSize(ResElTy)) {
         Type *IdxType = DL.getIntPtrType(GEP.getType());
         Value *Idx[2] = { Constant::getNullValue(IdxType), GEP.getOperand(1) };
-        Value *NewGEP = GEP.isInBounds() ?
-          Builder->CreateInBoundsGEP(StrippedPtr, Idx, GEP.getName()) :
-          Builder->CreateGEP(StrippedPtr, Idx, GEP.getName());
+        Value *NewGEP =
+            GEP.isInBounds()
+                ? Builder->CreateInBoundsGEP(StrippedPtr, Idx, GEP.getName())
+                : Builder->CreateGEP(StrippedPtrTy->getElementType(),
+                                     StrippedPtr, Idx, GEP.getName());
 
         // V and GEP are both pointer types --> BitCast
         return CastInst::CreatePointerBitCastOrAddrSpaceCast(NewGEP,
@@ -1648,9 +1665,12 @@ Instruction *InstCombiner::visitGetElementPtrInst(GetElementPtrInst &GEP) {
             // Successfully decomposed Idx as NewIdx * Scale, form a new GEP.
             // If the multiplication NewIdx * Scale may overflow then the new
             // GEP may not be "inbounds".
-            Value *NewGEP = GEP.isInBounds() && NSW ?
-              Builder->CreateInBoundsGEP(StrippedPtr, NewIdx, GEP.getName()) :
-              Builder->CreateGEP(StrippedPtr, NewIdx, GEP.getName());
+            Value *NewGEP =
+                GEP.isInBounds() && NSW
+                    ? Builder->CreateInBoundsGEP(StrippedPtr, NewIdx,
+                                                 GEP.getName())
+                    : Builder->CreateGEP(StrippedPtrTy->getElementType(),
+                                         StrippedPtr, NewIdx, GEP.getName());
 
             // The NewGEP must be pointer typed, so must the old one -> BitCast
             return CastInst::CreatePointerBitCastOrAddrSpaceCast(NewGEP,
@@ -1690,7 +1710,7 @@ Instruction *InstCombiner::visitGetElementPtrInst(GetElementPtrInst &GEP) {
 
             Value *NewGEP = GEP.isInBounds() && NSW ?
               Builder->CreateInBoundsGEP(StrippedPtr, Off, GEP.getName()) :
-              Builder->CreateGEP(StrippedPtr, Off, GEP.getName());
+              Builder->CreateGEP(SrcElTy, StrippedPtr, Off, GEP.getName());
             // The NewGEP must be pointer typed, so must the old one -> BitCast
             return CastInst::CreatePointerBitCastOrAddrSpaceCast(NewGEP,
                                                                  GEP.getType());
@@ -1754,7 +1774,7 @@ Instruction *InstCombiner::visitGetElementPtrInst(GetElementPtrInst &GEP) {
       if (FindElementAtOffset(OpType, Offset.getSExtValue(), NewIndices)) {
         Value *NGEP = GEP.isInBounds() ?
           Builder->CreateInBoundsGEP(Operand, NewIndices) :
-          Builder->CreateGEP(Operand, NewIndices);
+          Builder->CreateGEP(OpType->getElementType(), Operand, NewIndices);
 
         if (NGEP->getType() == GEP.getType())
           return ReplaceInstUsesWith(GEP, NGEP);
@@ -2703,7 +2723,7 @@ bool InstCombiner::run() {
         DEBUG(dbgs() << "IC: Old = " << *I << '\n'
                      << "    New = " << *Result << '\n');
 
-        if (!I->getDebugLoc().isUnknown())
+        if (I->getDebugLoc())
           Result->setDebugLoc(I->getDebugLoc());
         // Everything uses the new instruction now.
         I->replaceAllUsesWith(Result);

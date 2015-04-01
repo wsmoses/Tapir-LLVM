@@ -24,6 +24,7 @@
 #include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/raw_ostream.h"
 
 using namespace llvm;
 
@@ -373,7 +374,8 @@ Value *SCEVExpander::expandAddToGEP(const SCEV *const *op_begin,
                                     PointerType *PTy,
                                     Type *Ty,
                                     Value *V) {
-  Type *ElTy = PTy->getElementType();
+  Type *OriginalElTy = PTy->getElementType();
+  Type *ElTy = OriginalElTy;
   SmallVector<Value *, 4> GepIndices;
   SmallVector<const SCEV *, 8> Ops(op_begin, op_end);
   bool AnyNonZeroIndices = false;
@@ -557,7 +559,7 @@ Value *SCEVExpander::expandAddToGEP(const SCEV *const *op_begin,
   Value *Casted = V;
   if (V->getType() != PTy)
     Casted = InsertNoopCastOfTo(Casted, PTy);
-  Value *GEP = Builder.CreateGEP(Casted,
+  Value *GEP = Builder.CreateGEP(OriginalElTy, Casted,
                                  GepIndices,
                                  "scevgep");
   Ops.push_back(SE.getUnknown(GEP));

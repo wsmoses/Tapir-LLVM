@@ -51,7 +51,7 @@ $"\01??_R0H@8" = comdat any
 @"\01??_R0H@8" = linkonce_odr global %rtti.TypeDescriptor2 { i8** @"\01??_7type_info@@6B@", i8* null, [3 x i8] c".H\00" }, comdat
 
 ; The function entry should be rewritten like this.
-; CHECK: define void @"\01?test@@YAXXZ"() #0 {
+; CHECK: define void @"\01?test@@YAXXZ"()
 ; CHECK: entry:
 ; CHECK:   [[NUMEXCEPTIONS_REGMEM:\%.+]] = alloca i32
 ; CHECK:   [[I_REGMEM:\%.+]] = alloca i32
@@ -112,9 +112,9 @@ invoke.cont:                                      ; preds = %for.body
   br label %try.cont
 
 ; CHECK: [[LPAD_LABEL:lpad[0-9]*]]:{{[ ]+}}; preds = %for.body
-; CHECK:   [[LPAD_VAL:\%.+]] = landingpad { i8*, i32 } personality i8* bitcast (i32 (...)* @__CxxFrameHandler3 to i8*)
+; CHECK:   landingpad { i8*, i32 } personality i8* bitcast (i32 (...)* @__CxxFrameHandler3 to i8*)
 ; CHECK-NEXT:           catch i8* bitcast (%rtti.TypeDescriptor2* @"\01??_R0H@8" to i8*)
-; CHECK-NEXT:   [[RECOVER:\%.+]] = call i8* (...)* @llvm.eh.actions({ i8*, i32 } [[LPAD_VAL]], i32 0, i8* bitcast (%rtti.TypeDescriptor2* @"\01??_R0H@8" to i8*), i32* %e, i8* bitcast (i8* (i8*, i8*)* @"\01?test@@YAXXZ.catch" to i8*))
+; CHECK-NEXT:   [[RECOVER:\%.+]] = call i8* (...)* @llvm.eh.actions(i32 1, i8* bitcast (%rtti.TypeDescriptor2* @"\01??_R0H@8" to i8*), i32* %e, i8* (i8*, i8*)* @"\01?test@@YAXXZ.catch")
 ; CHECK-NEXT:   indirectbr i8* [[RECOVER]], [label %try.cont]
 
 lpad:                                             ; preds = %for.body
@@ -190,7 +190,7 @@ eh.resume:                                        ; preds = %lpad
 }
 
 ; The following catch handler should be outlined.
-; CHECK: define internal i8* @"\01?test@@YAXXZ.catch"(i8*, i8*) {
+; CHECK: define internal i8* @"\01?test@@YAXXZ.catch"(i8*, i8*)
 ; CHECK: entry:
 ; CHECK:   [[RECOVER_E:\%.+]] = call i8* @llvm.framerecover(i8* bitcast (void ()* @"\01?test@@YAXXZ" to i8*), i8* %1, i32 0)
 ; CHECK:   [[E_PTR:\%.+]] = bitcast i8* [[RECOVER_E]] to i32*

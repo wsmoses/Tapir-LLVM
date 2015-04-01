@@ -481,6 +481,7 @@ AArch64TargetLowering::AArch64TargetLowering(const TargetMachine &TM,
 
   // Enable TBZ/TBNZ
   MaskAndBranchFoldingIsLegal = true;
+  EnableExtLdPromotion = true;
 
   setMinFunctionAlignment(2);
 
@@ -1257,7 +1258,7 @@ getAArch64XALUOOp(AArch64CC::CondCode &CC, SDValue Op, SelectionDAG &DAG) {
   case ISD::SMULO:
   case ISD::UMULO: {
     CC = AArch64CC::NE;
-    bool IsSigned = (Op.getOpcode() == ISD::SMULO) ? true : false;
+    bool IsSigned = Op.getOpcode() == ISD::SMULO;
     if (Op.getValueType() == MVT::i32) {
       unsigned ExtendOpc = IsSigned ? ISD::SIGN_EXTEND : ISD::ZERO_EXTEND;
       // For a 32 bit multiply with overflow check we want the instruction
@@ -6554,6 +6555,59 @@ bool AArch64TargetLowering::isZExtFree(SDValue Val, EVT VT2) const {
           VT1.getSizeInBits() <= 32);
 }
 
+bool AArch64TargetLowering::isExtFreeImpl(const Instruction *Ext) const {
+  if (isa<FPExtInst>(Ext))
+    return false;
+
+  // Vector types are next free.
+  if (Ext->getType()->isVectorTy())
+    return false;
+
+  for (const Use &U : Ext->uses()) {
+    // The extension is free if we can fold it with a left shift in an
+    // addressing mode or an arithmetic operation: add, sub, and cmp.
+
+    // Is there a shift?
+    const Instruction *Instr = cast<Instruction>(U.getUser());
+
+    // Is this a constant shift?
+    switch (Instr->getOpcode()) {
+    case Instruction::Shl:
+      if (!isa<ConstantInt>(Instr->getOperand(1)))
+        return false;
+      break;
+    case Instruction::GetElementPtr: {
+      gep_type_iterator GTI = gep_type_begin(Instr);
+      std::advance(GTI, U.getOperandNo());
+      Type *IdxTy = *GTI;
+      // This extension will end up with a shift because of the scaling factor.
+      // 8-bit sized types have a scaling factor of 1, thus a shift amount of 0.
+      // Get the shift amount based on the scaling factor:
+      // log2(sizeof(IdxTy)) - log2(8).
+      uint64_t ShiftAmt =
+        countTrailingZeros(getDataLayout()->getTypeStoreSizeInBits(IdxTy)) - 3;
+      // Is the constant foldable in the shift of the addressing mode?
+      // I.e., shift amount is between 1 and 4 inclusive.
+      if (ShiftAmt == 0 || ShiftAmt > 4)
+        return false;
+      break;
+    }
+    case Instruction::Trunc:
+      // Check if this is a noop.
+      // trunc(sext ty1 to ty2) to ty1.
+      if (Instr->getType() == Ext->getOperand(0)->getType())
+        continue;
+    // FALL THROUGH.
+    default:
+      return false;
+    }
+
+    // At this point we can use the bfm family, so this extension is free
+    // for that use.
+  }
+  return true;
+}
+
 bool AArch64TargetLowering::hasPairedLoad(Type *LoadedType,
                                           unsigned &RequiredAligment) const {
   if (!LoadedType->isIntegerTy() && !LoadedType->isFloatTy())
@@ -6748,7 +6802,7 @@ bool AArch64TargetLowering::shouldConvertConstantLoadToIntImm(const APInt &Imm,
   unsigned LZ = countLeadingZeros((uint64_t)Val);
   unsigned Shift = (63 - LZ) / 16;
   // MOVZ is free so return true for one or fewer MOVK.
-  return (Shift < 3) ? true : false;
+  return Shift < 3;
 }
 
 // Generate SUBS and CSEL for integer abs.
@@ -7187,8 +7241,9 @@ static SDValue performConcatVectorsCombine(SDNode *N,
   //   (v4i16 (concat_vectors (v2i16 (truncate (v2i64))),
   //                          (v2i16 (truncate (v2i64)))))
   // ->
-  //   (v4i16 (truncate (v4i32 (concat_vectors (v2i32 (truncate (v2i64))),
-  //                                           (v2i32 (truncate (v2i64)))))))
+  //   (v4i16 (truncate (vector_shuffle (v4i32 (bitcast (v2i64))),
+  //                                    (v4i32 (bitcast (v2i64))),
+  //                                    <0, 2, 4, 6>)))
   // This isn't really target-specific, but ISD::TRUNCATE legality isn't keyed
   // on both input and result type, so we might generate worse code.
   // On AArch64 we know it's fine for v2i64->v4i16 and v4i32->v8i8.
@@ -7202,20 +7257,15 @@ static SDValue performConcatVectorsCombine(SDNode *N,
     if (N00VT == N10.getValueType() &&
         (N00VT == MVT::v2i64 || N00VT == MVT::v4i32) &&
         N00VT.getScalarSizeInBits() == 4 * VT.getScalarSizeInBits()) {
-      MVT MidVT = (N00VT == MVT::v2i64 ? MVT::v2i32 : MVT::v4i16);
-#if defined(__GNUC__)
-#if __GNUC__ == 4 && __GNUC_MINOR__ == 7 && __GNUC_PATCHLEVEL__ == 2
-      // FIXME: g++-4.7.2 might miscompile PerformDAGCombine().
-      asm volatile("":::"memory");
-#endif
-#endif
-      MVT ConcatMidVT = MVT::getVectorVT(MidVT.getVectorElementType(),
-                                         MidVT.getVectorNumElements() * 2);
-      return DAG.getNode(
-          ISD::TRUNCATE, dl, VT,
-          DAG.getNode(ISD::CONCAT_VECTORS, dl, ConcatMidVT,
-                      DAG.getNode(ISD::TRUNCATE, dl, MidVT, N00),
-                      DAG.getNode(ISD::TRUNCATE, dl, MidVT, N10)));
+      MVT MidVT = (N00VT == MVT::v2i64 ? MVT::v4i32 : MVT::v8i16);
+      SmallVector<int, 8> Mask(MidVT.getVectorNumElements());
+      for (size_t i = 0; i < Mask.size(); ++i)
+        Mask[i] = i * 2;
+      return DAG.getNode(ISD::TRUNCATE, dl, VT,
+                         DAG.getVectorShuffle(
+                             MidVT, dl,
+                             DAG.getNode(ISD::BITCAST, dl, MidVT, N00),
+                             DAG.getNode(ISD::BITCAST, dl, MidVT, N10), Mask));
     }
   }
 

@@ -40,7 +40,7 @@ StringRef WinCodeViewLineTables::getFullFilepath(const MDNode *S) {
   if (Filename.find(':') == 1)
     Filepath = Filename;
   else
-    Filepath = (Dir + Twine("\\") + Filename).str();
+    Filepath = (Dir + "\\" + Filename).str();
 
   // Canonicalize the path.  We have to do it textually because we may no longer
   // have access the file in the filesystem.
@@ -81,7 +81,7 @@ StringRef WinCodeViewLineTables::getFullFilepath(const MDNode *S) {
 
 void WinCodeViewLineTables::maybeRecordLocation(DebugLoc DL,
                                                 const MachineFunction *MF) {
-  const MDNode *Scope = DL.getScope(MF->getFunction()->getContext());
+  const MDNode *Scope = DL.getScope();
   if (!Scope)
     return;
   StringRef Filename = getFullFilepath(Scope);
@@ -190,8 +190,11 @@ void WinCodeViewLineTables::emitDebugInfoForFunction(const Function *GV) {
     return;
   assert(FI.End && "Don't know where the function ends?");
 
-  StringRef FuncName = getDISubprogram(GV).getDisplayName(),
-            GVName = GV->getName();
+  StringRef GVName = GV->getName();
+  StringRef FuncName;
+  if (DISubprogram SP = getDISubprogram(GV))
+    FuncName = SP.getDisplayName();
+
   // FIXME Clang currently sets DisplayName to "bar" for a C++
   // "namespace_foo::bar" function, see PR21528.  Luckily, dbghelp.dll is trying
   // to demangle display names anyways, so let's just put a mangled name into
@@ -327,7 +330,7 @@ void WinCodeViewLineTables::beginFunction(const MachineFunction *MF) {
   DebugLoc PrologEndLoc;
   bool EmptyPrologue = true;
   for (const auto &MBB : *MF) {
-    if (!PrologEndLoc.isUnknown())
+    if (PrologEndLoc)
       break;
     for (const auto &MI : MBB) {
       if (MI.isDebugValue())
@@ -336,8 +339,7 @@ void WinCodeViewLineTables::beginFunction(const MachineFunction *MF) {
       // First known non-DBG_VALUE and non-frame setup location marks
       // the beginning of the function body.
       // FIXME: do we need the first subcondition?
-      if (!MI.getFlag(MachineInstr::FrameSetup) &&
-          (!MI.getDebugLoc().isUnknown())) {
+      if (!MI.getFlag(MachineInstr::FrameSetup) && MI.getDebugLoc()) {
         PrologEndLoc = MI.getDebugLoc();
         break;
       }
@@ -345,9 +347,8 @@ void WinCodeViewLineTables::beginFunction(const MachineFunction *MF) {
     }
   }
   // Record beginning of function if we have a non-empty prologue.
-  if (!PrologEndLoc.isUnknown() && !EmptyPrologue) {
-    DebugLoc FnStartDL =
-        PrologEndLoc.getFnDebugLoc(MF->getFunction()->getContext());
+  if (PrologEndLoc && !EmptyPrologue) {
+    DebugLoc FnStartDL = PrologEndLoc.getFnDebugLoc();
     maybeRecordLocation(FnStartDL, MF);
   }
 }
@@ -374,7 +375,7 @@ void WinCodeViewLineTables::beginInstruction(const MachineInstr *MI) {
   if (!Asm || MI->isDebugValue() || MI->getFlag(MachineInstr::FrameSetup))
     return;
   DebugLoc DL = MI->getDebugLoc();
-  if (DL == PrevInstLoc || DL.isUnknown())
+  if (DL == PrevInstLoc || !DL)
     return;
   maybeRecordLocation(DL, Asm->MF);
 }

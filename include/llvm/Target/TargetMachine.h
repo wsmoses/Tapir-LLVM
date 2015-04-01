@@ -30,6 +30,9 @@ class Mangler;
 class MCAsmInfo;
 class MCCodeGenInfo;
 class MCContext;
+class MCInstrInfo;
+class MCRegisterInfo;
+class MCSubtargetInfo;
 class MCSymbol;
 class Target;
 class DataLayout;
@@ -86,6 +89,9 @@ protected: // Can only create subclasses.
   /// AsmInfo - Contains target specific asm information.
   ///
   const MCAsmInfo *AsmInfo;
+  const MCRegisterInfo *MRI;
+  const MCInstrInfo *MII;
+  const MCSubtargetInfo *STI;
 
   unsigned RequireStructuredCFG : 1;
 
@@ -102,11 +108,8 @@ public:
 
   /// getSubtargetImpl - virtual method implemented by subclasses that returns
   /// a reference to that target's TargetSubtargetInfo-derived member variable.
-  virtual const TargetSubtargetInfo *getSubtargetImpl() const {
-    return nullptr;
-  }
   virtual const TargetSubtargetInfo *getSubtargetImpl(const Function &) const {
-    return getSubtargetImpl();
+    return nullptr;
   }
   virtual TargetLoweringObjectFile *getObjFileLowering() const {
     return nullptr;
@@ -115,11 +118,8 @@ public:
   /// getSubtarget - This method returns a pointer to the specified type of
   /// TargetSubtargetInfo.  In debug builds, it verifies that the object being
   /// returned is of the correct type.
-  template<typename STC> const STC &getSubtarget() const {
-    return *static_cast<const STC*>(getSubtargetImpl());
-  }
-  template <typename STC> const STC &getSubtarget(const Function &) const {
-    return *static_cast<const STC*>(getSubtargetImpl());
+  template <typename STC> const STC &getSubtarget(const Function &F) const {
+    return *static_cast<const STC*>(getSubtargetImpl(F));
   }
 
   /// getDataLayout - This method returns a pointer to the DataLayout for
@@ -134,6 +134,9 @@ public:
   /// getMCAsmInfo - Return target specific asm information.
   ///
   const MCAsmInfo *getMCAsmInfo() const { return AsmInfo; }
+  const MCRegisterInfo *getMCRegisterInfo() const { return MRI; }
+  const MCInstrInfo *getMCInstrInfo() const { return MII; }
+  const MCSubtargetInfo *getMCSubtargetInfo() const { return STI; }
 
   /// getIntrinsicInfo - If intrinsic information is available, return it.  If
   /// not, return null.

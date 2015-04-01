@@ -162,12 +162,39 @@ namespace llvm {
     /// The Compile Unit ID that we are currently processing.
     unsigned DwarfCompileUnitID;
 
-    typedef std::pair<std::string, std::string> SectionGroupPair;
-    typedef std::tuple<std::string, std::string, int> SectionGroupTriple;
+    struct ELFSectionKey {
+      std::string SectionName;
+      StringRef GroupName;
+      ELFSectionKey(StringRef SectionName, StringRef GroupName)
+          : SectionName(SectionName), GroupName(GroupName) {}
+      bool operator<(const ELFSectionKey &Other) const {
+        if (SectionName != Other.SectionName)
+          return SectionName < Other.SectionName;
+        return GroupName < Other.GroupName;
+      }
+    };
+
+    struct COFFSectionKey {
+      std::string SectionName;
+      StringRef GroupName;
+      int SelectionKey;
+      COFFSectionKey(StringRef SectionName, StringRef GroupName,
+                     int SelectionKey)
+          : SectionName(SectionName), GroupName(GroupName),
+            SelectionKey(SelectionKey) {}
+      bool operator<(const COFFSectionKey &Other) const {
+        if (SectionName != Other.SectionName)
+          return SectionName < Other.SectionName;
+        if (GroupName != Other.GroupName)
+          return GroupName < Other.GroupName;
+        return SelectionKey < Other.SelectionKey;
+      }
+    };
 
     StringMap<const MCSectionMachO*> MachOUniquingMap;
-    std::map<SectionGroupPair, const MCSectionELF *> ELFUniquingMap;
-    std::map<SectionGroupTriple, const MCSectionCOFF *> COFFUniquingMap;
+    std::map<ELFSectionKey, const MCSectionELF *> ELFUniquingMap;
+    std::map<COFFSectionKey, const MCSectionCOFF *> COFFUniquingMap;
+    StringMap<bool> ELFRelSecNames;
 
     /// Do automatic reset in destructor
     bool AutoReset;
@@ -232,6 +259,7 @@ namespace llvm {
     MCSymbol *getOrCreateSectionSymbol(const MCSectionELF &Section);
 
     MCSymbol *getOrCreateFrameAllocSymbol(StringRef FuncName, unsigned Idx);
+    MCSymbol *getOrCreateParentFrameOffsetSymbol(StringRef FuncName);
 
     /// Get the symbol for \p Name, or null.
     MCSymbol *LookupSymbol(const Twine &Name) const;
@@ -277,6 +305,10 @@ namespace llvm {
                                       unsigned Flags, unsigned EntrySize,
                                       StringRef Group, bool Unique,
                                       const char *BeginSymName = nullptr);
+
+    const MCSectionELF *createELFRelSection(StringRef Name, unsigned Type,
+                                            unsigned Flags, unsigned EntrySize,
+                                            const MCSymbol *Group);
 
     void renameELFSection(const MCSectionELF *Section, StringRef Name);
 

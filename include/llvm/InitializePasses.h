@@ -106,7 +106,6 @@ void initializeDAEPass(PassRegistry&);
 void initializeDAHPass(PassRegistry&);
 void initializeDCEPass(PassRegistry&);
 void initializeDSEPass(PassRegistry&);
-void initializeDebugInfoVerifierLegacyPassPass(PassRegistry &);
 void initializeDeadInstEliminationPass(PassRegistry&);
 void initializeDeadMachineInstructionElimPass(PassRegistry&);
 void initializeDelinearizationPass(PassRegistry &);
@@ -295,6 +294,7 @@ void initializeWinEHPreparePass(PassRegistry&);
 void initializePlaceBackedgeSafepointsImplPass(PassRegistry&);
 void initializePlaceSafepointsPass(PassRegistry&);
 void initializeDwarfEHPreparePass(PassRegistry&);
+void initializeFloat2IntPass(PassRegistry&);
 }
 
 #endif

@@ -320,6 +320,7 @@ def SIOperand {
 
 def SRCMODS {
   int NONE = 0;
+  int NEG = 1;
 }
 
 def DSTCLAMP {
@@ -845,23 +846,28 @@ class VOP1_Pseudo <dag outs, dag ins, list<dag> pattern, string opName> :
   field bits<9> src0;
 }
 
+class VOP1_Real_si <string opName, vop1 op, dag outs, dag ins, string asm> :
+  VOP1<op.SI, outs, ins, asm, []>,
+  SIMCInstr <opName#"_e32", SISubtarget.SI>;
+
+class VOP1_Real_vi <string opName, vop1 op, dag outs, dag ins, string asm> :
+  VOP1<op.VI, outs, ins, asm, []>,
+  SIMCInstr <opName#"_e32", SISubtarget.VI>;
+
 multiclass VOP1_m <vop1 op, dag outs, dag ins, string asm, list<dag> pattern,
                    string opName> {
   def "" : VOP1_Pseudo <outs, ins, pattern, opName>;
 
-  def _si : VOP1<op.SI, outs, ins, asm, []>,
-            SIMCInstr <opName#"_e32", SISubtarget.SI>;
-  def _vi : VOP1<op.VI, outs, ins, asm, []>,
-            SIMCInstr <opName#"_e32", SISubtarget.VI>;
+  def _si : VOP1_Real_si <opName, op, outs, ins, asm>;
+
+  def _vi : VOP1_Real_vi <opName, op, outs, ins, asm>;
 }
 
 multiclass VOP1SI_m <vop1 op, dag outs, dag ins, string asm, list<dag> pattern,
                    string opName> {
   def "" : VOP1_Pseudo <outs, ins, pattern, opName>;
 
-  def _si : VOP1<op.SI, outs, ins, asm, []>,
-            SIMCInstr <opName#"_e32", SISubtarget.SI>;
-  // No VI instruction. This class is for SI only.
+  def _si : VOP1_Real_si <opName, op, outs, ins, asm>;
 }
 
 class VOP2_Pseudo <dag outs, dag ins, list<dag> pattern, string opName> :
@@ -872,13 +878,20 @@ class VOP2_Pseudo <dag outs, dag ins, list<dag> pattern, string opName> :
   let isCodeGenOnly = 1;
 }
 
+class VOP2_Real_si <string opName, vop2 op, dag outs, dag ins, string asm> :
+  VOP2 <op.SI, outs, ins, opName#asm, []>,
+  SIMCInstr <opName#"_e32", SISubtarget.SI>;
+
+class VOP2_Real_vi <string opName, vop2 op, dag outs, dag ins, string asm> :
+  VOP2 <op.VI, outs, ins, opName#asm, []>,
+  SIMCInstr <opName#"_e32", SISubtarget.VI>;
+
 multiclass VOP2SI_m <vop2 op, dag outs, dag ins, string asm, list<dag> pattern,
                      string opName, string revOp> {
   def "" : VOP2_Pseudo <outs, ins, pattern, opName>,
            VOP2_REV<revOp#"_e32", !eq(revOp, opName)>;
 
-  def _si : VOP2 <op.SI, outs, ins, opName#asm, []>,
-            SIMCInstr <opName#"_e32", SISubtarget.SI>;
+  def _si : VOP2_Real_si <opName, op, outs, ins, asm>;
 }
 
 multiclass VOP2_m <vop2 op, dag outs, dag ins, string asm, list<dag> pattern,
@@ -886,10 +899,10 @@ multiclass VOP2_m <vop2 op, dag outs, dag ins, string asm, list<dag> pattern,
   def "" : VOP2_Pseudo <outs, ins, pattern, opName>,
            VOP2_REV<revOp#"_e32", !eq(revOp, opName)>;
 
-  def _si : VOP2 <op.SI, outs, ins, opName#asm, []>,
-            SIMCInstr <opName#"_e32", SISubtarget.SI>;
-  def _vi : VOP2 <op.VI, outs, ins, opName#asm, []>,
-            SIMCInstr <opName#"_e32", SISubtarget.VI>;
+  def _si : VOP2_Real_si <opName, op, outs, ins, asm>;
+
+  def _vi : VOP2_Real_vi <opName, op, outs, ins, asm>;
+
 }
 
 class VOP3DisableFields <bit HasSrc1, bit HasSrc2, bit HasModifiers> {
@@ -1057,9 +1070,10 @@ multiclass VOP3b_3_m <vop op, dag outs, dag ins, string asm,
 
 multiclass VOP3_C_m <vop op, dag outs, dag ins, string asm,
                      list<dag> pattern, string opName,
-                     bit HasMods, bit defExec> {
+                     bit HasMods, bit defExec, string revOp> {
 
-  def "" : VOP3_Pseudo <outs, ins, pattern, opName>;
+  def "" : VOP3_Pseudo <outs, ins, pattern, opName>,
+           VOP2_REV<revOp#"_e64", !eq(revOp, opName)>;
 
   def _si : VOP3_Real_si <op.SI3, outs, ins, asm, opName>,
             VOP3DisableFields<1, 0, HasMods> {
@@ -1245,28 +1259,30 @@ class VOPC_Pseudo <dag outs, dag ins, list<dag> pattern, string opName> :
 }
 
 multiclass VOPC_m <vopc op, dag outs, dag ins, string asm, list<dag> pattern,
-                   string opName, bit DefExec> {
+                   string opName, bit DefExec, string revOpName = ""> {
   def "" : VOPC_Pseudo <outs, ins, pattern, opName>;
 
   def _si : VOPC<op.SI, ins, asm, []>,
             SIMCInstr <opName#"_e32", SISubtarget.SI> {
     let Defs = !if(DefExec, [EXEC], []);
+    let hasSideEffects = DefExec;
   }
 
   def _vi : VOPC<op.VI, ins, asm, []>,
             SIMCInstr <opName#"_e32", SISubtarget.VI> {
     let Defs = !if(DefExec, [EXEC], []);
+    let hasSideEffects = DefExec;
   }
 }
 
 multiclass VOPC_Helper <vopc op, string opName,
                         dag ins32, string asm32, list<dag> pat32,
                         dag out64, dag ins64, string asm64, list<dag> pat64,
-                        bit HasMods, bit DefExec> {
+                        bit HasMods, bit DefExec, string revOp> {
   defm _e32 : VOPC_m <op, (outs), ins32, opName#asm32, pat32, opName, DefExec>;
 
   defm _e64 : VOP3_C_m <op, out64, ins64, opName#asm64, pat64,
-                        opName, HasMods, DefExec>;
+                        opName, HasMods, DefExec, revOp>;
 }
 
 // Special case for class instructions which only have modifiers on
@@ -1274,16 +1290,17 @@ multiclass VOPC_Helper <vopc op, string opName,
 multiclass VOPC_Class_Helper <vopc op, string opName,
                              dag ins32, string asm32, list<dag> pat32,
                              dag out64, dag ins64, string asm64, list<dag> pat64,
-                             bit HasMods, bit DefExec> {
+                             bit HasMods, bit DefExec, string revOp> {
   defm _e32 : VOPC_m <op, (outs), ins32, opName#asm32, pat32, opName, DefExec>;
 
   defm _e64 : VOP3_C_m <op, out64, ins64, opName#asm64, pat64,
-                        opName, HasMods, DefExec>,
+                        opName, HasMods, DefExec, revOp>,
                         VOP3DisableModFields<1, 0, 0>;
 }
 
 multiclass VOPCInst <vopc op, string opName,
                      VOPProfile P, PatLeaf cond = COND_NULL,
+                     string revOp = opName,
                      bit DefExec = 0> : VOPC_Helper <
   op, opName,
   P.Ins32, P.Asm32, [],
@@ -1295,7 +1312,7 @@ multiclass VOPCInst <vopc op, string opName,
                  (P.Src1VT (VOP3Mods P.Src1VT:$src1, i32:$src1_modifiers)),
                  cond))],
       [(set i1:$dst, (setcc P.Src0VT:$src0, P.Src1VT:$src1, cond))]),
-  P.HasModifiers, DefExec
+  P.HasModifiers, DefExec, revOp
 >;
 
 multiclass VOPCClassInst <vopc op, string opName, VOPProfile P,
@@ -1307,38 +1324,39 @@ multiclass VOPCClassInst <vopc op, string opName, VOPProfile P,
       [(set i1:$dst,
           (AMDGPUfp_class (P.Src0VT (VOP3Mods0Clamp0OMod P.Src0VT:$src0, i32:$src0_modifiers)), P.Src1VT:$src1))],
       [(set i1:$dst, (AMDGPUfp_class P.Src0VT:$src0, P.Src1VT:$src1))]),
-  P.HasModifiers, DefExec
+  P.HasModifiers, DefExec, opName
 >;
 
 
-multiclass VOPC_F32 <vopc op, string opName, PatLeaf cond = COND_NULL> :
-  VOPCInst <op, opName, VOP_F32_F32_F32, cond>;
+multiclass VOPC_F32 <vopc op, string opName, PatLeaf cond = COND_NULL, string revOp = opName> :
+  VOPCInst <op, opName, VOP_F32_F32_F32, cond, revOp>;
 
-multiclass VOPC_F64 <vopc op, string opName, PatLeaf cond = COND_NULL> :
-  VOPCInst <op, opName, VOP_F64_F64_F64, cond>;
+multiclass VOPC_F64 <vopc op, string opName, PatLeaf cond = COND_NULL, string revOp = opName> :
+  VOPCInst <op, opName, VOP_F64_F64_F64, cond, revOp>;
 
-multiclass VOPC_I32 <vopc op, string opName, PatLeaf cond = COND_NULL> :
-  VOPCInst <op, opName, VOP_I32_I32_I32, cond>;
+multiclass VOPC_I32 <vopc op, string opName, PatLeaf cond = COND_NULL, string revOp = opName> :
+  VOPCInst <op, opName, VOP_I32_I32_I32, cond, revOp>;
 
-multiclass VOPC_I64 <vopc op, string opName, PatLeaf cond = COND_NULL> :
-  VOPCInst <op, opName, VOP_I64_I64_I64, cond>;
+multiclass VOPC_I64 <vopc op, string opName, PatLeaf cond = COND_NULL, string revOp = opName> :
+  VOPCInst <op, opName, VOP_I64_I64_I64, cond, revOp>;
 
 
 multiclass VOPCX <vopc op, string opName, VOPProfile P,
-                  PatLeaf cond = COND_NULL>
-  : VOPCInst <op, opName, P, cond, 1>;
+                  PatLeaf cond = COND_NULL,
+                  string revOp = "">
+  : VOPCInst <op, opName, P, cond, revOp, 1>;
 
-multiclass VOPCX_F32 <vopc op, string opName, PatLeaf cond = COND_NULL> :
-  VOPCX <op, opName, VOP_F32_F32_F32, cond>;
+multiclass VOPCX_F32 <vopc op, string opName, string revOp = opName> :
+  VOPCX <op, opName, VOP_F32_F32_F32, COND_NULL, revOp>;
 
-multiclass VOPCX_F64 <vopc op, string opName, PatLeaf cond = COND_NULL> :
-  VOPCX <op, opName, VOP_F64_F64_F64, cond>;
+multiclass VOPCX_F64 <vopc op, string opName, string revOp = opName> :
+  VOPCX <op, opName, VOP_F64_F64_F64, COND_NULL, revOp>;
 
-multiclass VOPCX_I32 <vopc op, string opName, PatLeaf cond = COND_NULL> :
-  VOPCX <op, opName, VOP_I32_I32_I32, cond>;
+multiclass VOPCX_I32 <vopc op, string opName, string revOp = opName> :
+  VOPCX <op, opName, VOP_I32_I32_I32, COND_NULL, revOp>;
 
-multiclass VOPCX_I64 <vopc op, string opName, PatLeaf cond = COND_NULL> :
-  VOPCX <op, opName, VOP_I64_I64_I64, cond>;
+multiclass VOPCX_I64 <vopc op, string opName, string revOp = opName> :
+  VOPCX <op, opName, VOP_I64_I64_I64, COND_NULL, revOp>;
 
 multiclass VOP3_Helper <vop3 op, string opName, dag outs, dag ins, string asm,
                         list<dag> pat, int NumSrcArgs, bit HasMods> : VOP3_m <
@@ -2197,15 +2215,6 @@ def getVOPe32 : InstrMapping {
   let ValueCols = [["4"]];
 }
 
-// Maps an original opcode to its commuted version
-def getCommuteRev : InstrMapping {
-  let FilterClass = "VOP2_REV";
-  let RowFields = ["RevOp"];
-  let ColFields = ["IsOrig"];
-  let KeyCol = ["1"];
-  let ValueCols = [["0"]];
-}
-
 def getMaskedMIMGOp : InstrMapping {
   let FilterClass = "MIMG_Mask";
   let RowFields = ["Op"];
@@ -2222,6 +2231,33 @@ def getCommuteOrig : InstrMapping {
   let KeyCol = ["0"];
   let ValueCols = [["1"]];
 }
+
+// Maps an original opcode to its commuted version
+def getCommuteRev : InstrMapping {
+  let FilterClass = "VOP2_REV";
+  let RowFields = ["RevOp"];
+  let ColFields = ["IsOrig"];
+  let KeyCol = ["1"];
+  let ValueCols = [["0"]];
+}
+
+def getCommuteCmpOrig : InstrMapping {
+  let FilterClass = "VOP2_REV";
+  let RowFields = ["RevOp"];
+  let ColFields = ["IsOrig"];
+  let KeyCol = ["0"];
+  let ValueCols = [["1"]];
+}
+
+// Maps an original opcode to its commuted version
+def getCommuteCmpRev : InstrMapping {
+  let FilterClass = "VOP2_REV";
+  let RowFields = ["RevOp"];
+  let ColFields = ["IsOrig"];
+  let KeyCol = ["1"];
+  let ValueCols = [["0"]];
+}
+
 
 def getMCOpcodeGen : InstrMapping {
   let FilterClass = "SIMCInstr";

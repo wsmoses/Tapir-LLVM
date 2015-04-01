@@ -127,8 +127,6 @@ AArch64TargetMachine::AArch64TargetMachine(const Target &T, StringRef TT,
     : LLVMTargetMachine(T, computeDataLayout(TT, LittleEndian), TT, CPU, FS,
                         Options, RM, CM, OL),
       TLOF(createTLOF(Triple(getTargetTriple()))),
-      RI(TT),
-      Subtarget(TT, CPU, FS, *this, LittleEndian),
       isLittle(LittleEndian) {
   initAsmInfo();
 }
@@ -247,7 +245,7 @@ bool AArch64PassConfig::addPreISel() {
   // FIXME: On AArch64, this depends on the type.
   // Basically, the addressable offsets are up to 4095 * Ty.getSizeInBytes().
   // and the offset has to be a multiple of the related size in bytes.
-  if (TM->getOptLevel() != CodeGenOpt::None)
+  if (TM->getOptLevel() == CodeGenOpt::Aggressive)
     addPass(createGlobalMergePass(TM, 4095));
   if (TM->getOptLevel() != CodeGenOpt::None)
     addPass(createAArch64AddressTypePromotionPass());

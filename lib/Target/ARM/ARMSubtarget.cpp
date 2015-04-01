@@ -133,6 +133,7 @@ void ARMSubtarget::initializeEnvironment() {
   HasV6T2Ops = false;
   HasV7Ops = false;
   HasV8Ops = false;
+  HasV8_1aOps = false;
   HasVFPv2 = false;
   HasVFPv3 = false;
   HasVFPv4 = false;
@@ -189,7 +190,7 @@ void ARMSubtarget::initSubtargetFeatures(StringRef CPU, StringRef FS) {
       ARM_MC::ParseARMTriple(TargetTriple.getTriple(), CPUString);
   if (!FS.empty()) {
     if (!ArchFS.empty())
-      ArchFS = ArchFS + "," + FS.str();
+      ArchFS = (Twine(ArchFS) + "," + FS).str();
     else
       ArchFS = FS;
   }
