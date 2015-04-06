@@ -333,6 +333,13 @@ static void WriteTypeTable(const ValueEnumerator &VE, BitstreamWriter &Stream) {
   Abbv->Add(BitCodeAbbrevOp(0));  // Addrspace = 0
   unsigned PtrAbbrev = Stream.EmitAbbrev(Abbv);
 
+  // Abbrev for TYPE_CODE_FUTURE
+  *Abbv = new BitCodeAbbrev();
+  Abbv->Add(BitCodeAbbrevOp(bitc::TYPE_CODE_FUTURE));
+  Abbv->Add(BitCodeAbbrevOp(BitCodeAbbrevOp::Fixed, NumBits));
+  Abbv->Add(BitCodeAbbrevOp(0));  // Addrspace = 0
+  unsigned FtrAbbrev = Stream.EmitAbbrev(Abbv);
+
   // Abbrev for TYPE_CODE_FUNCTION.
   Abbv = new BitCodeAbbrev();
   Abbv->Add(BitCodeAbbrevOp(bitc::TYPE_CODE_FUNCTION));
@@ -410,6 +417,16 @@ static void WriteTypeTable(const ValueEnumerator &VE, BitstreamWriter &Stream) {
       unsigned AddressSpace = PTy->getAddressSpace();
       TypeVals.push_back(AddressSpace);
       if (AddressSpace == 0) AbbrevToUse = PtrAbbrev;
+      break;
+    }
+    case Type::FutureTyID: {
+      FutureType *FTy = cast<FutureType>(T);
+      // Future: [pointee type, address space]
+      Code = bitc::TYPE_CODE_FUTURE;
+      TypeVals.push_back(VE.getTypeID(FTy->getElementType()));
+      unsigned AddressSpace = FTy->getAddressSpace();
+      TypeVals.push_back(AddressSpace);
+      if (AddressSpace == 0) AbbrevToUse = FtrAbbrev;
       break;
     }
     case Type::FunctionTyID: {

@@ -90,7 +90,6 @@ public:
   }
 };
 
-
 /// FunctionType - Class to represent function types
 ///
 class FunctionType : public Type {
@@ -162,7 +161,8 @@ public:
     return T->getTypeID() == ArrayTyID ||
            T->getTypeID() == StructTyID ||
            T->getTypeID() == PointerTyID ||
-           T->getTypeID() == VectorTyID;
+           T->getTypeID() == VectorTyID ||
+           T->getTypeID() == FutureTyID;
   }
 };
 
@@ -325,7 +325,8 @@ public:
   static inline bool classof(const Type *T) {
     return T->getTypeID() == ArrayTyID ||
            T->getTypeID() == PointerTyID ||
-           T->getTypeID() == VectorTyID;
+           T->getTypeID() == VectorTyID ||
+	   T->getTypeID() == FutureTyID;
   }
 };
 
@@ -470,6 +471,39 @@ public:
   /// Implement support type inquiry through isa, cast, and dyn_cast.
   static inline bool classof(const Type *T) {
     return T->getTypeID() == PointerTyID;
+  }
+};
+
+
+/// Class to represent future types.
+/// @brief Future representation type
+class FutureType : public SequentialType {
+  FutureType(const FutureType &) = delete;
+  const FutureType &operator=(const FutureType &) = delete;
+  FutureType(Type *ElType, unsigned AddrSpace);
+public:
+  static FutureType *get(Type *ElementType, unsigned AddressSpace);
+  static FutureType *getUnqual(Type *ElementType){
+     return FutureType::get(ElementType,0);
+  }
+  static bool isValidElementType(Type *ElemTy);
+
+  /// @brief Return the number of elements in the Future type.
+  unsigned getNumElements() const { return 1; }
+
+  /// @brief Return the address space of the Pointer type.
+  inline unsigned getAddressSpace() const { return getSubclassData(); }
+
+
+  /// @brief Return the number of bits in the Vector type.
+  /// Returns zero when the vector is a vector of pointers.
+  //unsigned getBitWidth() const {
+  //  return NumElements * getElementType()->getPrimitiveSizeInBits();
+  //}
+
+  /// Methods for support type inquiry through isa, cast, and dyn_cast.
+  static inline bool classof(const Type *T) {
+    return T->getTypeID() == FutureTyID;
   }
 };
 

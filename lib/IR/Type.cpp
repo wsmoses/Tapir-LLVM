@@ -384,13 +384,13 @@ FunctionType *FunctionType::get(Type *Result, bool isVarArg) {
 /// type.
 bool FunctionType::isValidReturnType(Type *RetTy) {
   return !RetTy->isFunctionTy() && !RetTy->isLabelTy() &&
-  !RetTy->isMetadataTy();
+  !RetTy->isMetadataTy() && !RetTy->isFutureTy();
 }
 
 /// isValidArgumentType - Return true if the specified type is valid as an
 /// argument type.
 bool FunctionType::isValidArgumentType(Type *ArgTy) {
-  return ArgTy->isFirstClassType();
+  return ArgTy->isFirstClassType() && !ArgTy->isFutureTy();
 }
 
 //===----------------------------------------------------------------------===//
@@ -600,7 +600,7 @@ void StructType::setBody(Type *type, ...) {
 
 bool StructType::isValidElementType(Type *ElemTy) {
   return !ElemTy->isVoidTy() && !ElemTy->isLabelTy() &&
-         !ElemTy->isMetadataTy() && !ElemTy->isFunctionTy();
+         !ElemTy->isMetadataTy() && !ElemTy->isFunctionTy() && !ElemTy->isFutureTy();
 }
 
 /// isLayoutIdentical - Return true if this is layout identical to the
@@ -693,7 +693,7 @@ ArrayType *ArrayType::get(Type *elementType, uint64_t NumElements) {
 
 bool ArrayType::isValidElementType(Type *ElemTy) {
   return !ElemTy->isVoidTy() && !ElemTy->isLabelTy() &&
-         !ElemTy->isMetadataTy() && !ElemTy->isFunctionTy();
+         !ElemTy->isMetadataTy() && !ElemTy->isFunctionTy() && !ElemTy->isFutureTy();
 }
 
 //===----------------------------------------------------------------------===//
@@ -762,5 +762,45 @@ PointerType *Type::getPointerTo(unsigned addrs) {
 
 bool PointerType::isValidElementType(Type *ElemTy) {
   return !ElemTy->isVoidTy() && !ElemTy->isLabelTy() &&
-         !ElemTy->isMetadataTy();
+         !ElemTy->isMetadataTy() && !ElemTy->isFutureTy();
+}
+
+
+//===----------------------------------------------------------------------===//
+//                         FutureType Implementation
+//===----------------------------------------------------------------------===//
+
+FutureType *FutureType::get(Type *EltTy, unsigned AddressSpace) {
+  assert(EltTy && "Can't get a pointer to <null> type!");
+  assert(isValidElementType(EltTy) && "Invalid type for pointer element!");
+  
+  LLVMContextImpl *CImpl = EltTy->getContext().pImpl;
+  
+  // Since AddressSpace #0 is the common case, we special case it.
+  FutureType *&Entry = AddressSpace == 0 ? CImpl->FutureTypes[EltTy]
+     : CImpl->ASFutureTypes[std::make_pair(EltTy, AddressSpace)];
+
+  if (!Entry)
+    Entry = new (CImpl->TypeAllocator) FutureType(EltTy, AddressSpace);
+  return Entry;
+}
+
+
+FutureType::FutureType(Type *E, unsigned AddrSpace)
+  : SequentialType(FutureTyID, E) {
+#ifndef NDEBUG
+  const unsigned oldNCT = NumContainedTys;
+#endif
+  setSubclassData(AddrSpace);
+  // Check for miscompile. PR11652.
+  assert(oldNCT == NumContainedTys && "bitfield written out of bounds?");
+}
+
+FutureType *Type::getFutureTo(unsigned addrs) {
+  return FutureType::get(this, addrs);
+}
+
+bool FutureType::isValidElementType(Type *ElemTy) {
+  return !ElemTy->isVoidTy() && !ElemTy->isLabelTy() &&
+         !ElemTy->isMetadataTy() && !ElemTy->isFutureTy();
 }

@@ -943,6 +943,8 @@ public:
   DenseMap<std::pair<Type *, unsigned>, VectorType*> VectorTypes;
   DenseMap<Type*, PointerType*> PointerTypes;  // Pointers in AddrSpace = 0
   DenseMap<std::pair<Type*, unsigned>, PointerType*> ASPointerTypes;
+  DenseMap<Type*, FutureType*> FutureTypes;  // Futures in AddrSpace = 0
+  DenseMap<std::pair<Type*, unsigned>, FutureType*> ASFutureTypes;
 
 
   /// ValueHandles - This map keeps track of all of the value handles that are

@@ -24,6 +24,7 @@ namespace lltok {
     dotdotdot,         // ...
     equal, comma,      // =  ,
     star,              // *
+    question,
     lsquare, rsquare,  // [  ]
     lbrace, rbrace,    // {  }
     less, greater,     // <  >

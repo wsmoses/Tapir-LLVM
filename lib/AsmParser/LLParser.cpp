@@ -1734,20 +1734,42 @@ bool LLParser::ParseType(Type *&Result, const Twine &Msg, bool AllowVoid) {
       Lex.Lex();
       break;
 
-    // Type ::= Type 'addrspace' '(' uint32 ')' '*'
+    case lltok::question:
+      if (Result->isLabelTy())
+        return TokError("basic block futures are invalid");
+      if (Result->isVoidTy())
+        return TokError("futures to void are invalid");
+      if (!FutureType::isValidElementType(Result))
+        return TokError("future to this type is invalid");
+      Result = FutureType::getUnqual(Result);
+      Lex.Lex();
+      break;
+
+    // Type ::= Type 'addrspace' '(' uint32 ')' '*' / '?'
     case lltok::kw_addrspace: {
       if (Result->isLabelTy())
-        return TokError("basic block pointers are invalid");
-      if (Result->isVoidTy())
-        return TokError("pointers to void are invalid; use i8* instead");
-      if (!PointerType::isValidElementType(Result))
-        return TokError("pointer to this type is invalid");
+        return TokError("basic block pointers/futures are invalid");
       unsigned AddrSpace;
-      if (ParseOptionalAddrSpace(AddrSpace) ||
-          ParseToken(lltok::star, "expected '*' in address space"))
+      if (ParseOptionalAddrSpace(AddrSpace))
         return true;
-
-      Result = PointerType::get(Result, AddrSpace);
+      if (Lex.getKind() ==lltok::star){
+        Lex.Lex();
+        if (Result->isVoidTy())
+          return TokError("pointers to void are invalid; use i8* instead");
+        if (!PointerType::isValidElementType(Result))
+          return TokError("pointer to this type is invalid");
+        Result = PointerType::get(Result, AddrSpace);
+      } else if(Lex.getKind()==lltok::question){
+        Lex.Lex();
+        if (Result->isVoidTy())
+          return TokError("futures to void are invalid");
+        if (!FutureType::isValidElementType(Result))
+          return TokError("future to this type is invalid");
+        Result = FutureType::get(Result, AddrSpace);
+      } else{
+        TokError("expected '*' or '?' in address space");
+        return true;
+      }
       break;
     }
 
@@ -2831,13 +2853,10 @@ bool LLParser::ParseValID(ValID &ID, PerFunctionState *PFS) {
           !BasePointerType->getElementType()->isSized(&Visited))
         return Error(ID.Loc, "base element of getelementptr must be sized");
 
-      if (!GetElementPtrInst::getIndexedType(
-              cast<PointerType>(Elts[0]->getType()->getScalarType())
-                  ->getElementType(),
-              Indices))
+      if (!GetElementPtrInst::getIndexedType(Ty, Indices))
         return Error(ID.Loc, "invalid getelementptr indices");
-      ID.ConstantVal = ConstantExpr::getGetElementPtr(Elts[0], Indices,
-                                                      InBounds);
+      ID.ConstantVal =
+          ConstantExpr::getGetElementPtr(Ty, Elts[0], Indices, InBounds);
     } else if (Opc == Instruction::Select) {
       if (Elts.size() != 3)
         return Error(ID.Loc, "expected three operands to select");

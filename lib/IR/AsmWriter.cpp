@@ -511,6 +511,14 @@ void TypePrinting::print(Type *Ty, raw_ostream &OS) {
     OS << '>';
     return;
   }
+  case Type::FutureTyID: {
+    FutureType *FTy = cast<FutureType>(Ty);
+    print(FTy->getElementType(), OS);
+    if (unsigned AddressSpace = FTy->getAddressSpace())
+      OS << " addrspace(" << AddressSpace << ')';
+    OS << '?';
+    return;
+  }
   }
   llvm_unreachable("Invalid TypeID");
 }

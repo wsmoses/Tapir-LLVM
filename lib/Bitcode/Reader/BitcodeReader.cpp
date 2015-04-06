@@ -1344,6 +1344,19 @@ std::error_code BitcodeReader::ParseTypeTableBody() {
       ResultTy = PointerType::get(ResultTy, AddressSpace);
       break;
     }
+    case bitc::TYPE_CODE_FUTURE: { // FUTURE: [pointee type] or
+                                    //          [pointee type, address space]
+      if (Record.size() < 1)
+        return Error("Invalid record");
+      unsigned AddressSpace = 0;
+      if (Record.size() == 2)
+        AddressSpace = Record[1];
+      ResultTy = getTypeByID(Record[0]);
+      if (!ResultTy)
+        return Error("Invalid type");
+      ResultTy = FutureType::get(ResultTy, AddressSpace);
+      break;
+    }
     case bitc::TYPE_CODE_FUNCTION_OLD: {
       // FIXME: attrid is dead, remove it in LLVM 4.0
       // FUNCTION: [vararg, attrid, retty, paramty x N]
@@ -2313,14 +2326,17 @@ std::error_code BitcodeReader::ParseConstants() {
         Elts.push_back(ValueList.getConstantFwdRef(Record[OpNum++], ElTy));
       }
 
-      ArrayRef<Constant *> Indices(Elts.begin() + 1, Elts.end());
-      V = ConstantExpr::getGetElementPtr(Elts[0], Indices,
-                                         BitCode ==
-                                           bitc::CST_CODE_CE_INBOUNDS_GEP);
       if (PointeeType &&
-          PointeeType != cast<GEPOperator>(V)->getSourceElementType())
+          PointeeType !=
+              cast<SequentialType>(Elts[0]->getType()->getScalarType())
+                  ->getElementType())
         return Error("Explicit gep operator type does not match pointee type "
                      "of pointer operand");
+
+      ArrayRef<Constant *> Indices(Elts.begin() + 1, Elts.end());
+      V = ConstantExpr::getGetElementPtr(PointeeType, Elts[0], Indices,
+                                         BitCode ==
+                                             bitc::CST_CODE_CE_INBOUNDS_GEP);
       break;
     }
     case bitc::CST_CODE_CE_SELECT: {  // CE_SELECT: [opval#, opval#, opval#]

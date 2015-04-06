@@ -27,6 +27,7 @@ namespace llvm {
 
 class PointerType;
 class IntegerType;
+class FutureType;
 class raw_ostream;
 class Module;
 class LLVMContext;
@@ -71,7 +72,8 @@ public:
     StructTyID,      ///< 12: Structures
     ArrayTyID,       ///< 13: Arrays
     PointerTyID,     ///< 14: Pointers
-    VectorTyID       ///< 15: SIMD 'packed' format, or other vector type
+    VectorTyID,       ///< 15: SIMD 'packed' format, or other vector type
+    FutureTyID       ///< 16: Future Type
   };
 
 private:
@@ -216,6 +218,10 @@ public:
   ///
   bool isPointerTy() const { return getTypeID() == PointerTyID; }
 
+  /// isFutureTy - True if this is an instance of PointerType.
+  ///
+  bool isFutureTy() const { return getTypeID() == FutureTyID; }
+
   /// isPtrOrPtrVectorTy - Return true if this is a pointer type or a vector of
   /// pointer types.
   ///
@@ -249,7 +255,7 @@ public:
   ///
   bool isSingleValueType() const {
     return isFloatingPointTy() || isX86_MMXTy() || isIntegerTy() ||
-           isPointerTy() || isVectorTy();
+           isPointerTy() || isVectorTy() || isPointerTy();
   }
 
   /// isAggregateType - Return true if the type is an aggregate type. This
@@ -268,7 +274,7 @@ public:
   bool isSized(SmallPtrSetImpl<const Type*> *Visited = nullptr) const {
     // If it's a primitive, it is always sized.
     if (getTypeID() == IntegerTyID || isFloatingPointTy() ||
-        getTypeID() == PointerTyID ||
+        getTypeID() == PointerTyID || getTypeID()==FutureTyID ||
         getTypeID() == X86_MMXTyID)
       return true;
     // If it is not something that can have a size (e.g. a function or label),
@@ -417,6 +423,7 @@ public:
   /// getPointerTo - Return a pointer to the current type.  This is equivalent
   /// to PointerType::get(Foo, AddrSpace).
   PointerType *getPointerTo(unsigned AddrSpace = 0);
+  FutureType  *getFutureTo (unsigned AddrSpace = 0);
 
 private:
   /// isSizedDerivedType - Derived types like structures and arrays are sized
@@ -435,6 +442,13 @@ static inline raw_ostream &operator<<(raw_ostream &OS, Type &T) {
 template <> struct isa_impl<PointerType, Type> {
   static inline bool doit(const Type &Ty) {
     return Ty.getTypeID() == Type::PointerTyID;
+  }
+};
+
+// allow isa<FutureType>(x) to work without DerivedTypes.h included.
+template <> struct isa_impl<FutureType, Type> {
+  static inline bool doit(const Type &Ty) {
+    return Ty.getTypeID() == Type::FutureTyID;
   }
 };
 
