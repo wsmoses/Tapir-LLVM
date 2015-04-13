@@ -1451,11 +1451,11 @@ void MDFieldPrinter::printDIFlags(StringRef Name, unsigned Flags) {
   Out << FS << Name << ": ";
 
   SmallVector<unsigned, 8> SplitFlags;
-  unsigned Extra = DIDescriptor::splitFlags(Flags, SplitFlags);
+  unsigned Extra = DebugNode::splitFlags(Flags, SplitFlags);
 
   FieldSeparator FlagsFS(" | ");
   for (unsigned F : SplitFlags) {
-    const char *StringF = DIDescriptor::getFlagString(F);
+    const char *StringF = DebugNode::getFlagString(F);
     assert(StringF && "Expected valid flag");
     Out << FlagsFS << StringF;
   }
@@ -1513,7 +1513,7 @@ static void writeMDSubrange(raw_ostream &Out, const MDSubrange *N,
   Out << "!MDSubrange(";
   MDFieldPrinter Printer(Out);
   Printer.printInt("count", N->getCount(), /* ShouldSkipZero */ false);
-  Printer.printInt("lowerBound", N->getLo());
+  Printer.printInt("lowerBound", N->getLowerBound());
   Out << ")";
 }
 
@@ -1703,7 +1703,7 @@ static void writeMDTemplateTypeParameter(raw_ostream &Out,
   Out << "!MDTemplateTypeParameter(";
   MDFieldPrinter Printer(Out, TypePrinter, Machine, Context);
   Printer.printString("name", N->getName());
-  Printer.printMetadata("type", N->getType(), /* ShouldSkipNull */ false);
+  Printer.printMetadata("type", N->getRawType(), /* ShouldSkipNull */ false);
   Out << ")";
 }
 
@@ -1717,7 +1717,7 @@ static void writeMDTemplateValueParameter(raw_ostream &Out,
   if (N->getTag() != dwarf::DW_TAG_template_value_parameter)
     Printer.printTag(N);
   Printer.printString("name", N->getName());
-  Printer.printMetadata("type", N->getType());
+  Printer.printMetadata("type", N->getRawType());
   Printer.printMetadata("value", N->getValue(), /* ShouldSkipNull */ false);
   Out << ")";
 }

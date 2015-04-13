@@ -131,29 +131,6 @@ void AArch64AsmPrinter::EmitEndOfAsmFile(Module &M) {
     OutStreamer.EmitAssemblerFlag(MCAF_SubsectionsViaSymbols);
     SM.serializeToStackMapSection();
   }
-
-  // Emit a .data.rel section containing any stubs that were created.
-  if (TT.isOSBinFormatELF()) {
-    const TargetLoweringObjectFileELF &TLOFELF =
-      static_cast<const TargetLoweringObjectFileELF &>(getObjFileLowering());
-
-    MachineModuleInfoELF &MMIELF = MMI->getObjFileInfo<MachineModuleInfoELF>();
-
-    // Output stubs for external and common global variables.
-    MachineModuleInfoELF::SymbolListTy Stubs = MMIELF.GetGVStubList();
-    if (!Stubs.empty()) {
-      OutStreamer.SwitchSection(TLOFELF.getDataRelSection());
-      const DataLayout *TD = TM.getDataLayout();
-
-      for (unsigned i = 0, e = Stubs.size(); i != e; ++i) {
-        OutStreamer.EmitLabel(Stubs[i].first);
-        OutStreamer.EmitSymbolValue(Stubs[i].second.getPointer(),
-                                    TD->getPointerSize(0));
-      }
-      Stubs.clear();
-    }
-  }
-
 }
 
 MachineLocation
@@ -371,7 +348,7 @@ void AArch64AsmPrinter::PrintDebugValueComment(const MachineInstr *MI,
   assert(NOps == 4);
   OS << '\t' << MAI->getCommentString() << "DEBUG_VALUE: ";
   // cast away const; DIetc do not take const operands for some reason.
-  DIVariable V(const_cast<MDNode *>(MI->getOperand(NOps - 1).getMetadata()));
+  DIVariable V = cast<MDLocalVariable>(MI->getOperand(NOps - 2).getMetadata());
   OS << V.getName();
   OS << " <- ";
   // Frame address.  Currently handles register +- offset only.

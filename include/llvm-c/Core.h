@@ -247,7 +247,10 @@ typedef enum {
 
   /* Exception Handling Operators */
   LLVMResume         = 58,
-  LLVMLandingPad     = 59
+  LLVMLandingPad     = 59,
+
+  LLVMSpawn          = 61,
+  LLVMUnwrap         = 62
 
 } LLVMOpcode;
 

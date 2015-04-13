@@ -1033,6 +1033,78 @@ void TempMDNodeDeleter::operator()(MDNode *Node) const {
   MDNode::deleteTemporary(Node);
 }
 
+/// \brief Typed iterator through MDNode operands.
+///
+/// An iterator that transforms an \a MDNode::iterator into an iterator over a
+/// particular Metadata subclass.
+template <class T>
+class TypedMDOperandIterator
+    : std::iterator<std::input_iterator_tag, T *, std::ptrdiff_t, void, T *> {
+  MDNode::op_iterator I = nullptr;
+
+public:
+  TypedMDOperandIterator() = default;
+  explicit TypedMDOperandIterator(MDNode::op_iterator I) : I(I) {}
+  T *operator*() const { return cast_or_null<T>(*I); }
+  TypedMDOperandIterator &operator++() {
+    ++I;
+    return *this;
+  }
+  TypedMDOperandIterator operator++(int) {
+    TypedMDOperandIterator Temp(*this);
+    ++I;
+    return Temp;
+  }
+  bool operator==(const TypedMDOperandIterator &X) const { return I == X.I; }
+  bool operator!=(const TypedMDOperandIterator &X) const { return I != X.I; }
+};
+
+/// \brief Typed, array-like tuple of metadata.
+///
+/// This is a wrapper for \a MDTuple that makes it act like an array holding a
+/// particular type of metadata.
+template <class T> class MDTupleTypedArrayWrapper {
+  const MDTuple *N = nullptr;
+
+public:
+  MDTupleTypedArrayWrapper() = default;
+  MDTupleTypedArrayWrapper(const MDTuple *N) : N(N) {}
+
+  template <class U>
+  MDTupleTypedArrayWrapper(
+      const MDTupleTypedArrayWrapper<U> &Other,
+      typename std::enable_if<std::is_convertible<U *, T *>::value>::type * =
+          nullptr)
+      : N(Other.get()) {}
+
+  template <class U>
+  explicit MDTupleTypedArrayWrapper(
+      const MDTupleTypedArrayWrapper<U> &Other,
+      typename std::enable_if<!std::is_convertible<U *, T *>::value>::type * =
+          nullptr)
+      : N(Other.get()) {}
+
+  explicit operator bool() const { return get(); }
+  explicit operator MDTuple *() const { return get(); }
+
+  MDTuple *get() const { return const_cast<MDTuple *>(N); }
+  MDTuple *operator->() const { return get(); }
+  MDTuple &operator*() const { return *get(); }
+
+  // FIXME: Fix callers and remove condition on N.
+  unsigned size() const { return N ? N->getNumOperands() : 0u; }
+  T *operator[](unsigned I) const { return cast_or_null<T>(N->getOperand(I)); }
+
+  // FIXME: Fix callers and remove condition on N.
+  typedef TypedMDOperandIterator<T> iterator;
+  iterator begin() const { return N ? iterator(N->op_begin()) : iterator(); }
+  iterator end() const { return N ? iterator(N->op_end()) : iterator(); }
+};
+
+#define HANDLE_METADATA(CLASS)                                                 \
+  typedef MDTupleTypedArrayWrapper<CLASS> CLASS##Array;
+#include "llvm/IR/Metadata.def"
+
 //===----------------------------------------------------------------------===//
 /// \brief A tuple of MDNodes.
 ///
