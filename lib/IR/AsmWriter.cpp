@@ -401,9 +401,7 @@ public:
   /// NumberedTypes - The numbered types, along with their value.
   DenseMap<StructType*, unsigned> NumberedTypes;
 
-
-  TypePrinting() {}
-  ~TypePrinting() {}
+  TypePrinting() = default;
 
   void incorporateTypes(const Module &M);
 
@@ -509,14 +507,6 @@ void TypePrinting::print(Type *Ty, raw_ostream &OS) {
     OS << "<" << PTy->getNumElements() << " x ";
     print(PTy->getElementType(), OS);
     OS << '>';
-    return;
-  }
-  case Type::FutureTyID: {
-    FutureType *FTy = cast<FutureType>(Ty);
-    print(FTy->getElementType(), OS);
-    if (unsigned AddressSpace = FTy->getAddressSpace())
-      OS << " addrspace(" << AddressSpace << ')';
-    OS << '?';
     return;
   }
   }

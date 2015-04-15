@@ -1984,12 +1984,12 @@ SDValue DAGCombiner::visitMUL(SDNode *N) {
     N0IsConst = isConstantSplatVector(N0.getNode(), ConstValue0);
     N1IsConst = isConstantSplatVector(N1.getNode(), ConstValue1);
   } else {
-    N0IsConst = dyn_cast<ConstantSDNode>(N0) != nullptr;
-    ConstValue0 = N0IsConst ? (dyn_cast<ConstantSDNode>(N0))->getAPIntValue()
-                            : APInt();
-    N1IsConst = dyn_cast<ConstantSDNode>(N1) != nullptr;
-    ConstValue1 = N1IsConst ? (dyn_cast<ConstantSDNode>(N1))->getAPIntValue()
-                            : APInt();
+    N0IsConst = isa<ConstantSDNode>(N0);
+    if (N0IsConst)
+      ConstValue0 = cast<ConstantSDNode>(N0)->getAPIntValue();
+    N1IsConst = isa<ConstantSDNode>(N1);
+    if (N1IsConst)
+      ConstValue1 = cast<ConstantSDNode>(N1)->getAPIntValue();
   }
 
   // fold (mul c1, c2) -> c1*c2
@@ -10055,19 +10055,19 @@ bool DAGCombiner::MergeStoresOfConstantsOrVecElts(
 
   int64_t ElementSizeBytes = MemVT.getSizeInBits() / 8;
   LSBaseSDNode *FirstInChain = StoreNodes[0].MemNode;
-  unsigned EarliestNodeUsed = 0;
+  unsigned LatestNodeUsed = 0;
 
   for (unsigned i=0; i < NumElem; ++i) {
     // Find a chain for the new wide-store operand. Notice that some
     // of the store nodes that we found may not be selected for inclusion
     // in the wide store. The chain we use needs to be the chain of the
-    // earliest store node which is *used* and replaced by the wide store.
-    if (StoreNodes[i].SequenceNum > StoreNodes[EarliestNodeUsed].SequenceNum)
-      EarliestNodeUsed = i;
+    // latest store node which is *used* and replaced by the wide store.
+    if (StoreNodes[i].SequenceNum < StoreNodes[LatestNodeUsed].SequenceNum)
+      LatestNodeUsed = i;
   }
 
-  // The earliest Node in the DAG.
-  LSBaseSDNode *EarliestOp = StoreNodes[EarliestNodeUsed].MemNode;
+  // The latest Node in the DAG.
+  LSBaseSDNode *LatestOp = StoreNodes[LatestNodeUsed].MemNode;
   SDLoc DL(StoreNodes[0].MemNode);
 
   SDValue StoredVal;
@@ -10126,17 +10126,17 @@ bool DAGCombiner::MergeStoresOfConstantsOrVecElts(
     StoredVal = DAG.getConstant(StoreInt, StoreTy);
   }
 
-  SDValue NewStore = DAG.getStore(EarliestOp->getChain(), DL, StoredVal,
+  SDValue NewStore = DAG.getStore(LatestOp->getChain(), DL, StoredVal,
                                   FirstInChain->getBasePtr(),
                                   FirstInChain->getPointerInfo(),
                                   false, false,
                                   FirstInChain->getAlignment());
 
-  // Replace the first store with the new store
-  CombineTo(EarliestOp, NewStore);
+  // Replace the last store with the new store
+  CombineTo(LatestOp, NewStore);
   // Erase all other stores.
   for (unsigned i = 0; i < NumElem ; ++i) {
-    if (StoreNodes[i].MemNode == EarliestOp)
+    if (StoreNodes[i].MemNode == LatestOp)
       continue;
     StoreSDNode *St = cast<StoreSDNode>(StoreNodes[i].MemNode);
     // ReplaceAllUsesWith will replace all uses that existed when it was
@@ -10513,17 +10513,18 @@ bool DAGCombiner::MergeConsecutiveStores(StoreSDNode* St) {
   if (NumElem < 2)
     return false;
 
-  // The earliest Node in the DAG.
-  unsigned EarliestNodeUsed = 0;
-  LSBaseSDNode *EarliestOp = StoreNodes[EarliestNodeUsed].MemNode;
+  // The latest Node in the DAG.
+  unsigned LatestNodeUsed = 0;
   for (unsigned i=1; i<NumElem; ++i) {
     // Find a chain for the new wide-store operand. Notice that some
     // of the store nodes that we found may not be selected for inclusion
     // in the wide store. The chain we use needs to be the chain of the
-    // earliest store node which is *used* and replaced by the wide store.
-    if (StoreNodes[i].SequenceNum > StoreNodes[EarliestNodeUsed].SequenceNum)
-      EarliestNodeUsed = i;
+    // latest store node which is *used* and replaced by the wide store.
+    if (StoreNodes[i].SequenceNum < StoreNodes[LatestNodeUsed].SequenceNum)
+      LatestNodeUsed = i;
   }
+
+  LSBaseSDNode *LatestOp = StoreNodes[LatestNodeUsed].MemNode;
 
   // Find if it is better to use vectors or integers to load and store
   // to memory.
@@ -10546,7 +10547,7 @@ bool DAGCombiner::MergeConsecutiveStores(StoreSDNode* St) {
                                 false, false, false,
                                 FirstLoad->getAlignment());
 
-  SDValue NewStore = DAG.getStore(EarliestOp->getChain(), StoreDL, NewLoad,
+  SDValue NewStore = DAG.getStore(LatestOp->getChain(), StoreDL, NewLoad,
                                   FirstInChain->getBasePtr(),
                                   FirstInChain->getPointerInfo(), false, false,
                                   FirstInChain->getAlignment());
@@ -10564,12 +10565,12 @@ bool DAGCombiner::MergeConsecutiveStores(StoreSDNode* St) {
     DAG.ReplaceAllUsesOfValueWith(SDValue(Ld, 1), Ld->getChain());
   }
 
-  // Replace the first store with the new store.
-  CombineTo(EarliestOp, NewStore);
+  // Replace the last store with the new store.
+  CombineTo(LatestOp, NewStore);
   // Erase all other stores.
   for (unsigned i = 0; i < NumElem ; ++i) {
     // Remove all Store nodes.
-    if (StoreNodes[i].MemNode == EarliestOp)
+    if (StoreNodes[i].MemNode == LatestOp)
       continue;
     StoreSDNode *St = cast<StoreSDNode>(StoreNodes[i].MemNode);
     DAG.ReplaceAllUsesOfValueWith(SDValue(St, 0), St->getChain());
@@ -11513,9 +11514,10 @@ SDValue DAGCombiner::visitCONCAT_VECTORS(SDNode *N) {
   if (ISD::allOperandsUndef(N))
     return DAG.getUNDEF(VT);
 
-  // Optimize concat_vectors where one of the vectors is undef.
-  if (N->getNumOperands() == 2 &&
-      N->getOperand(1)->getOpcode() == ISD::UNDEF) {
+  // Optimize concat_vectors where all but the first of the vectors are undef.
+  if (std::all_of(std::next(N->op_begin()), N->op_end(), [](const SDValue &Op) {
+        return Op.getOpcode() == ISD::UNDEF;
+      })) {
     SDValue In = N->getOperand(0);
     assert(In.getValueType().isVector() && "Must concat vectors");
 
@@ -11523,6 +11525,15 @@ SDValue DAGCombiner::visitCONCAT_VECTORS(SDNode *N) {
     if (In->getOpcode() == ISD::BITCAST &&
         !In->getOperand(0)->getValueType(0).isVector()) {
       SDValue Scalar = In->getOperand(0);
+
+      // If the bitcast type isn't legal, it might be a trunc of a legal type;
+      // look through the trunc so we can still do the transform:
+      //   concat_vectors(trunc(scalar), undef) -> scalar_to_vector(scalar)
+      if (Scalar->getOpcode() == ISD::TRUNCATE &&
+          !TLI.isTypeLegal(Scalar.getValueType()) &&
+          TLI.isTypeLegal(Scalar->getOperand(0).getValueType()))
+        Scalar = Scalar->getOperand(0);
+
       EVT SclTy = Scalar->getValueType(0);
 
       if (!SclTy.isFloatingPoint() && !SclTy.isInteger())
@@ -11651,7 +11662,7 @@ SDValue DAGCombiner::visitEXTRACT_SUBVECTOR(SDNode* N) {
     // type.
     if (V->getOperand(0).getValueType() != NVT)
       return SDValue();
-    unsigned Idx = dyn_cast<ConstantSDNode>(N->getOperand(1))->getZExtValue();
+    unsigned Idx = N->getConstantOperandVal(1);
     unsigned NumElems = NVT.getVectorNumElements();
     assert((Idx % NumElems) == 0 &&
            "IDX in concat is not a multiple of the result vector length.");

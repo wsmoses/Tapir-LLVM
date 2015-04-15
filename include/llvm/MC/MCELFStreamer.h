@@ -34,12 +34,7 @@ public:
       : MCObjectStreamer(Context, TAB, OS, Emitter),
         SeenIdent(false) {}
 
-  MCELFStreamer(MCContext &Context, MCAsmBackend &TAB, raw_ostream &OS,
-                MCCodeEmitter *Emitter, MCAssembler *Assembler)
-      : MCObjectStreamer(Context, TAB, OS, Emitter, Assembler),
-        SeenIdent(false) {}
-
-  virtual ~MCELFStreamer();
+  ~MCELFStreamer() override;
 
   /// state management
   void reset() override {
@@ -100,6 +95,9 @@ private:
 
   void fixSymbolsInTLSFixups(const MCExpr *expr);
 
+  /// \brief Merge the content of the fragment \p EF into the fragment \p DF.
+  void mergeFragment(MCDataFragment *, MCEncodedFragmentWithFixups *);
+
   bool SeenIdent;
 
   struct LocalCommon {
@@ -111,6 +109,10 @@ private:
   std::vector<LocalCommon> LocalCommons;
 
   SmallPtrSet<MCSymbol *, 16> BindingExplicitlySet;
+
+  /// BundleGroups - The stack of fragments holding the bundle-locked
+  /// instructions.
+  llvm::SmallVector<MCDataFragment *, 4> BundleGroups;
 };
 
 MCELFStreamer *createARMELFStreamer(MCContext &Context, MCAsmBackend &TAB,

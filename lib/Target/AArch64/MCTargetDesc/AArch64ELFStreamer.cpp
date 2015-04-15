@@ -90,11 +90,11 @@ public:
   friend class AArch64TargetELFStreamer;
 
   AArch64ELFStreamer(MCContext &Context, MCAsmBackend &TAB, raw_ostream &OS,
-                   MCCodeEmitter *Emitter)
+                     MCCodeEmitter *Emitter)
       : MCELFStreamer(Context, TAB, OS, Emitter), MappingSymbolCounter(0),
         LastEMS(EMS_None) {}
 
-  ~AArch64ELFStreamer() {}
+  ~AArch64ELFStreamer() override {}
 
   void ChangeSection(const MCSection *Section,
                      const MCExpr *Subsection) override {

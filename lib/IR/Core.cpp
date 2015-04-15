@@ -262,8 +262,6 @@ LLVMTypeKind LLVMGetTypeKind(LLVMTypeRef Ty) {
     return LLVMVectorTypeKind;
   case Type::X86_MMXTyID:
     return LLVMX86_MMXTypeKind;
-  case Type::FutureTyID:
-    return LLVMFutureTypeKind;
   }
   llvm_unreachable("Unhandled TypeID.");
 }

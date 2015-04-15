@@ -247,10 +247,7 @@ typedef enum {
 
   /* Exception Handling Operators */
   LLVMResume         = 58,
-  LLVMLandingPad     = 59,
-
-  LLVMSpawn          = 61,
-  LLVMUnwrap         = 62
+  LLVMLandingPad     = 59
 
 } LLVMOpcode;
 
@@ -270,8 +267,7 @@ typedef enum {
   LLVMPointerTypeKind,     /**< Pointers */
   LLVMVectorTypeKind,      /**< SIMD 'packed' format, or other vector type */
   LLVMMetadataTypeKind,    /**< Metadata */
-  LLVMX86_MMXTypeKind,      /**< X86 MMX */
-  LLVMFutureTypeKind
+  LLVMX86_MMXTypeKind      /**< X86 MMX */
 } LLVMTypeKind;
 
 typedef enum {

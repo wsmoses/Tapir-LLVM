@@ -63,10 +63,6 @@ typedef DenseMap<const MDString *, MDNode *> DITypeIdentifierMap;
 /// This should not be stored in a container, because the underlying MDNode may
 /// change in certain situations.
 class DIDescriptor {
-  // Befriends DIRef so DIRef can befriend the protected member
-  // function: getFieldAs<DIRef>.
-  template <typename T> friend class DIRef;
-
 public:
   /// \brief Duplicated debug info flags.
   ///
@@ -79,11 +75,6 @@ public:
 
 protected:
   const MDNode *DbgNode;
-
-  DIDescriptor getDescriptorField(unsigned Elt) const;
-  template <typename DescTy> DescTy getFieldAs(unsigned Elt) const {
-    return DescTy(getDescriptorField(Elt));
-  }
 
 public:
   explicit DIDescriptor(const MDNode *N = nullptr) : DbgNode(N) {}
@@ -115,10 +106,6 @@ public:
 
   void print(raw_ostream &OS) const;
   void dump() const;
-
-  /// \brief Replace all uses of debug info referenced by this descriptor.
-  void replaceAllUsesWith(LLVMContext &VMContext, DIDescriptor D);
-  void replaceAllUsesWith(MDNode *D);
 };
 
 #define DECLARE_SIMPLIFY_DESCRIPTOR(DESC)                                      \
@@ -222,17 +209,10 @@ public:
     return *get();
   }
 
-  /// \brief Get the parent scope.
-  ///
-  /// Gets the parent scope for this scope node or returns a default
-  /// constructed scope.
-  DIScopeRef getContext() const;
-  /// \brief Get the scope name.
-  ///
-  /// If the scope node has a name, return that, else return an empty string.
-  StringRef getName() const;
-  StringRef getFilename() const;
-  StringRef getDirectory() const;
+  inline DIScopeRef getContext() const;
+  StringRef getName() const { return get()->getName(); }
+  StringRef getFilename() const { return get()->getFilename(); }
+  StringRef getDirectory() const { return get()->getDirectory(); }
 
   /// \brief Generate a reference to this DIScope.
   ///
@@ -245,17 +225,10 @@ public:
 ///
 /// Abstracts over direct and identifier-based metadata references.
 template <typename T> class DIRef {
-  template <typename DescTy>
-  friend DescTy DIDescriptor::getFieldAs(unsigned Elt) const;
-  friend DIScopeRef DIScope::getContext() const;
-  friend DIScopeRef DIScope::getRef() const;
-  friend class DIType;
-
   /// \brief Val can be either a MDNode or a MDString.
   ///
   /// In the latter, MDString specifies the type identifier.
   const Metadata *Val;
-  explicit DIRef(const Metadata *V);
 
 public:
   template <class U>
@@ -266,8 +239,6 @@ public:
 
   T resolve(const DITypeIdentifierMap &Map) const;
   operator Metadata *() const { return const_cast<Metadata *>(Val); }
-
-  static DIRef get(const Metadata *MD) { return DIRef(MD); }
 };
 
 template <>
@@ -276,21 +247,7 @@ template <>
 DIScope DIRef<DIScope>::resolve(const DITypeIdentifierMap &Map) const;
 template <> DIType DIRef<DIType>::resolve(const DITypeIdentifierMap &Map) const;
 
-/// \brief Handle fields that are references to DIDescriptors.
-template <>
-DIDescriptorRef DIDescriptor::getFieldAs<DIDescriptorRef>(unsigned Elt) const;
-/// \brief Specialize DIRef constructor for DIDescriptorRef.
-template <> DIRef<DIDescriptor>::DIRef(const Metadata *V);
-
-/// \brief Handle fields that are references to DIScopes.
-template <> DIScopeRef DIDescriptor::getFieldAs<DIScopeRef>(unsigned Elt) const;
-/// \brief Specialize DIRef constructor for DIScopeRef.
-template <> DIRef<DIScope>::DIRef(const Metadata *V);
-
-/// \brief Handle fields that are references to DITypes.
-template <> DITypeRef DIDescriptor::getFieldAs<DITypeRef>(unsigned Elt) const;
-/// \brief Specialize DIRef constructor for DITypeRef.
-template <> DIRef<DIType>::DIRef(const Metadata *V);
+DIScopeRef DIScope::getContext() const { return get()->getScope(); }
 
 /// \brief This is a wrapper for a type.
 ///
@@ -309,7 +266,7 @@ public:
     return *get();
   }
 
-  DIScopeRef getContext() const { return DIScopeRef::get(get()->getScope()); }
+  DIScopeRef getContext() const { return get()->getScope(); }
   StringRef getName() const { return get()->getName(); }
   unsigned getLineNumber() const { return get()->getLine(); }
   uint64_t getSizeInBits() const { return get()->getSizeInBits(); }
@@ -375,9 +332,7 @@ public:
     return *get();
   }
 
-  DITypeRef getTypeDerivedFrom() const {
-    return DITypeRef::get(get()->getBaseType());
-  }
+  DITypeRef getTypeDerivedFrom() const { return get()->getBaseType(); }
 
   /// \brief Return property node, if this ivar is associated with one.
   MDNode *getObjCProperty() const {
@@ -389,8 +344,8 @@ public:
   DITypeRef getClassType() const {
     assert(getTag() == dwarf::DW_TAG_ptr_to_member_type);
     if (auto *N = dyn_cast<MDDerivedType>(get()))
-      return DITypeRef::get(N->getExtraData());
-    return DITypeRef::get(nullptr);
+      return MDTypeRef(N->getExtraData());
+    return MDTypeRef();
   }
 
   Constant *getConstant() const {
@@ -435,9 +390,7 @@ public:
   }
 
   unsigned getRunTimeLang() const { return get()->getRuntimeLang(); }
-  DITypeRef getContainingType() const {
-    return DITypeRef::get(get()->getVTableHolder());
-  }
+  DITypeRef getContainingType() const { return get()->getVTableHolder(); }
 
   DIArray getTemplateParams() const { return get()->getTemplateParams(); }
   MDString *getIdentifier() const { return get()->getRawIdentifier(); }
@@ -559,19 +512,17 @@ public:
   /// \brief Get the beginning of the scope of the function (not the name).
   unsigned getScopeLineNumber() const { return get()->getScopeLine(); }
 
-  DIScopeRef getContext() const { return DIScopeRef::get(get()->getScope()); }
+  DIScopeRef getContext() const { return get()->getScope(); }
   DISubroutineType getType() const {
     return DISubroutineType(get()->getType());
   }
 
-  DITypeRef getContainingType() const {
-    return DITypeRef::get(get()->getContainingType());
-  }
+  DITypeRef getContainingType() const { return get()->getContainingType(); }
 
   /// \brief Check if this provides debugging information for the function F.
   bool describes(const Function *F);
 
-  Function *getFunction() const;
+  Function *getFunction() const { return get()->getFunction(); }
 
   void replaceFunction(Function *F) {
     if (auto *N = get())
@@ -682,8 +633,7 @@ public:
   }
 
   StringRef getName() const { return get()->getName(); }
-
-  DITypeRef getType() const { return DITypeRef::get(get()->getType()); }
+  DITypeRef getType() const { return get()->getType(); }
 };
 
 /// \brief This is a wrapper for template value parameter.
@@ -704,7 +654,7 @@ public:
   }
 
   StringRef getName() const { return get()->getName(); }
-  DITypeRef getType() const { return DITypeRef::get(get()->getType()); }
+  DITypeRef getType() const { return get()->getType(); }
   Metadata *getValue() const { return get()->getValue(); }
 };
 
@@ -734,17 +684,12 @@ public:
   unsigned isDefinition() const { return get()->isDefinition(); }
 
   DIScope getContext() const { return DIScope(get()->getScope()); }
-  StringRef getFilename() const { return getFile().getFilename(); }
-  StringRef getDirectory() const { return getFile().getDirectory(); }
-  DITypeRef getType() const { return DITypeRef::get(get()->getType()); }
+  StringRef getFilename() const { return get()->getFilename(); }
+  StringRef getDirectory() const { return get()->getDirectory(); }
+  DITypeRef getType() const { return get()->getType(); }
 
   GlobalVariable *getGlobal() const;
-  Constant *getConstant() const {
-    if (auto *N = get())
-      if (auto *C = dyn_cast_or_null<ConstantAsMetadata>(N->getVariable()))
-        return C->getValue();
-    return nullptr;
-  }
+  Constant *getConstant() const { return get()->getVariable(); }
   DIDerivedType getStaticDataMemberDeclaration() const {
     return DIDerivedType(get()->getStaticDataMemberDeclaration());
   }
@@ -774,7 +719,7 @@ public:
 
   DIScope getContext() const { return DIScope(get()->getScope()); }
   DIFile getFile() const { return DIFile(get()->getFile()); }
-  DITypeRef getType() const { return DITypeRef::get(get()->getType()); }
+  DITypeRef getType() const { return get()->getType(); }
 
   bool isArtificial() const { return get()->isArtificial(); }
   bool isObjectPointer() const { return get()->isObjectPointer(); }
@@ -849,12 +794,9 @@ public:
   DILocation getOrigLocation() const {
     return DILocation(get()->getInlinedAt());
   }
-  StringRef getFilename() const { return getScope().getFilename(); }
-  StringRef getDirectory() const { return getScope().getDirectory(); }
-  bool atSameLineAs(const DILocation &Other) const {
-    return (getLineNumber() == Other.getLineNumber() &&
-            getFilename() == Other.getFilename());
-  }
+  StringRef getFilename() const { return get()->getFilename(); }
+  StringRef getDirectory() const { return get()->getDirectory(); }
+
   /// \brief Get the DWAF discriminator.
   ///
   /// DWARF discriminators are used to distinguish identical file locations for
@@ -944,9 +886,7 @@ public:
   }
 
   DIScope getContext() const { return DIScope(get()->getScope()); }
-  DIDescriptorRef getEntity() const {
-    return DIDescriptorRef::get(get()->getEntity());
-  }
+  DIDescriptorRef getEntity() const { return get()->getEntity(); }
   unsigned getLineNumber() const { return get()->getLine(); }
   StringRef getName() const { return get()->getName(); }
 };

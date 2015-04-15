@@ -1734,42 +1734,20 @@ bool LLParser::ParseType(Type *&Result, const Twine &Msg, bool AllowVoid) {
       Lex.Lex();
       break;
 
-    case lltok::question:
-      if (Result->isLabelTy())
-        return TokError("basic block futures are invalid");
-      if (Result->isVoidTy())
-        return TokError("futures to void are invalid");
-      if (!FutureType::isValidElementType(Result))
-        return TokError("future to this type is invalid");
-      Result = FutureType::getUnqual(Result);
-      Lex.Lex();
-      break;
-
-    // Type ::= Type 'addrspace' '(' uint32 ')' '*' / '?'
+    // Type ::= Type 'addrspace' '(' uint32 ')' '*'
     case lltok::kw_addrspace: {
       if (Result->isLabelTy())
-        return TokError("basic block pointers/futures are invalid");
+        return TokError("basic block pointers are invalid");
+      if (Result->isVoidTy())
+        return TokError("pointers to void are invalid; use i8* instead");
+      if (!PointerType::isValidElementType(Result))
+        return TokError("pointer to this type is invalid");
       unsigned AddrSpace;
-      if (ParseOptionalAddrSpace(AddrSpace))
+      if (ParseOptionalAddrSpace(AddrSpace) ||
+          ParseToken(lltok::star, "expected '*' in address space"))
         return true;
-      if (Lex.getKind() ==lltok::star){
-        Lex.Lex();
-        if (Result->isVoidTy())
-          return TokError("pointers to void are invalid; use i8* instead");
-        if (!PointerType::isValidElementType(Result))
-          return TokError("pointer to this type is invalid");
-        Result = PointerType::get(Result, AddrSpace);
-      } else if(Lex.getKind()==lltok::question){
-        Lex.Lex();
-        if (Result->isVoidTy())
-          return TokError("futures to void are invalid");
-        if (!FutureType::isValidElementType(Result))
-          return TokError("future to this type is invalid");
-        Result = FutureType::get(Result, AddrSpace);
-      } else{
-        TokError("expected '*' or '?' in address space");
-        return true;
-      }
+
+      Result = PointerType::get(Result, AddrSpace);
       break;
     }
 

@@ -22,7 +22,8 @@ namespace {
   public:
     X86ELFObjectWriter(bool IsELF64, uint8_t OSABI, uint16_t EMachine);
 
-    virtual ~X86ELFObjectWriter();
+    ~X86ELFObjectWriter() override;
+
   protected:
     unsigned GetRelocType(const MCValue &Target, const MCFixup &Fixup,
                           bool IsPCRel) const override;
@@ -248,8 +249,7 @@ unsigned X86ELFObjectWriter::GetRelocType(const MCValue &Target,
   return getRelocType32(Modifier, getType32(Type), IsPCRel);
 }
 
-MCObjectWriter *llvm::createX86ELFObjectWriter(raw_ostream &OS,
-                                               bool IsELF64,
+MCObjectWriter *llvm::createX86ELFObjectWriter(raw_ostream &OS, bool IsELF64,
                                                uint8_t OSABI,
                                                uint16_t EMachine) {
   MCELFObjectTargetWriter *MOTW =

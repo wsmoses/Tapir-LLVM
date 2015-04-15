@@ -173,7 +173,6 @@ public:
   RetTy visitFCmpInst(FCmpInst &I)                { DELEGATE(CmpInst);}
   RetTy visitAllocaInst(AllocaInst &I)            { DELEGATE(UnaryInstruction);}
   RetTy visitLoadInst(LoadInst     &I)            { DELEGATE(UnaryInstruction);}
-  RetTy visitUnwrapInst(UnwrapInst     &I)        { DELEGATE(UnaryInstruction);}
   RetTy visitStoreInst(StoreInst   &I)            { DELEGATE(Instruction);}
   RetTy visitAtomicCmpXchgInst(AtomicCmpXchgInst &I) { DELEGATE(Instruction);}
   RetTy visitAtomicRMWInst(AtomicRMWInst &I)      { DELEGATE(Instruction);}
@@ -216,12 +215,9 @@ public:
   RetTy visitVACopyInst(VACopyInst &I)            { DELEGATE(IntrinsicInst); }
   RetTy visitIntrinsicInst(IntrinsicInst &I)      { DELEGATE(CallInst); }
 
-  // Call, Spawn and Invoke are slightly different as they delegate first through
+  // Call and Invoke are slightly different as they delegate first through
   // a generic CallSite visitor.
   RetTy visitCallInst(CallInst &I) {
-    return static_cast<SubClass*>(this)->visitCallSite(&I);
-  }
-  RetTy visitSpawnInst(SpawnInst &I) {
     return static_cast<SubClass*>(this)->visitCallSite(&I);
   }
   RetTy visitInvokeInst(InvokeInst &I) {
@@ -283,12 +279,6 @@ private:
   // code in the dispatching from opcodes to instruction subclasses.
   RetTy delegateCallInst(Instruction &I) {
     llvm_unreachable("delegateCallInst called for non-CallInst");
-  }
-
-  // An overload that will never actually be called, it is used only from dead
-  // code in the dispatching from opcodes to instruction subclasses.
-  RetTy delegateSpawnInst(Instruction &I) {
-    llvm_unreachable("delegateSpawnInst called for non-SpawnInst");
   }
 };
 

@@ -230,7 +230,7 @@ public:
                          DiagnosticHandlerFunction DiagnosticHandler);
   explicit BitcodeReader(DataStreamer *streamer, LLVMContext &C,
                          DiagnosticHandlerFunction DiagnosticHandler);
-  ~BitcodeReader() { FreeState(); }
+  ~BitcodeReader() override { FreeState(); }
 
   std::error_code materializeForwardReferencedFunctions();
 
@@ -1342,19 +1342,6 @@ std::error_code BitcodeReader::ParseTypeTableBody() {
       if (!ResultTy)
         return Error("Invalid type");
       ResultTy = PointerType::get(ResultTy, AddressSpace);
-      break;
-    }
-    case bitc::TYPE_CODE_FUTURE: { // FUTURE: [pointee type] or
-                                    //          [pointee type, address space]
-      if (Record.size() < 1)
-        return Error("Invalid record");
-      unsigned AddressSpace = 0;
-      if (Record.size() == 2)
-        AddressSpace = Record[1];
-      ResultTy = getTypeByID(Record[0]);
-      if (!ResultTy)
-        return Error("Invalid type");
-      ResultTy = FutureType::get(ResultTy, AddressSpace);
       break;
     }
     case bitc::TYPE_CODE_FUNCTION_OLD: {

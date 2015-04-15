@@ -33,25 +33,6 @@
 using namespace llvm;
 using namespace llvm::dwarf;
 
-//===----------------------------------------------------------------------===//
-// DIDescriptor
-//===----------------------------------------------------------------------===//
-
-static Metadata *getField(const MDNode *DbgNode, unsigned Elt) {
-  if (!DbgNode || Elt >= DbgNode->getNumOperands())
-    return nullptr;
-  return DbgNode->getOperand(Elt);
-}
-
-static MDNode *getNodeField(const MDNode *DbgNode, unsigned Elt) {
-  return dyn_cast_or_null<MDNode>(getField(DbgNode, Elt));
-}
-
-DIDescriptor DIDescriptor::getDescriptorField(unsigned Elt) const {
-  MDNode *Field = getNodeField(DbgNode, Elt);
-  return DIDescriptor(Field);
-}
-
 /// \brief Return the size reported by the variable's type.
 unsigned DIVariable::getSizeInBits(const DITypeIdentifierMap &Map) {
   DIType Ty = getType().resolve(Map);
@@ -69,62 +50,6 @@ unsigned DIVariable::getSizeInBits(const DITypeIdentifierMap &Map) {
 // Simple Descriptor Constructors and other Methods
 //===----------------------------------------------------------------------===//
 
-void DIDescriptor::replaceAllUsesWith(LLVMContext &, DIDescriptor D) {
-  assert(DbgNode && "Trying to replace an unverified type!");
-  assert(DbgNode->isTemporary() && "Expected temporary node");
-  TempMDNode Temp(get());
-
-  // Since we use a TrackingVH for the node, its easy for clients to manufacture
-  // legitimate situations where they want to replaceAllUsesWith() on something
-  // which, due to uniquing, has merged with the source. We shield clients from
-  // this detail by allowing a value to be replaced with replaceAllUsesWith()
-  // itself.
-  if (Temp.get() == D.get()) {
-    DbgNode = MDNode::replaceWithUniqued(std::move(Temp));
-    return;
-  }
-
-  Temp->replaceAllUsesWith(D.get());
-  DbgNode = D.get();
-}
-
-void DIDescriptor::replaceAllUsesWith(MDNode *D) {
-  assert(DbgNode && "Trying to replace an unverified type!");
-  assert(DbgNode != D && "This replacement should always happen");
-  assert(DbgNode->isTemporary() && "Expected temporary node");
-  TempMDNode Node(get());
-  Node->replaceAllUsesWith(D);
-}
-
-#ifndef NDEBUG
-/// \brief Check if a value can be a reference to a type.
-static bool isTypeRef(const Metadata *MD) {
-  if (!MD)
-    return true;
-  if (auto *S = dyn_cast<MDString>(MD))
-    return !S->getString().empty();
-  return isa<MDType>(MD);
-}
-
-/// \brief Check if a value can be a ScopeRef.
-static bool isScopeRef(const Metadata *MD) {
-  if (!MD)
-    return true;
-  if (auto *S = dyn_cast<MDString>(MD))
-    return !S->getString().empty();
-  return isa<MDScope>(MD);
-}
-
-/// \brief Check if a value can be a DescriptorRef.
-static bool isDescriptorRef(const Metadata *MD) {
-  if (!MD)
-    return true;
-  if (auto *S = dyn_cast<MDString>(MD))
-    return !S->getString().empty();
-  return isa<MDNode>(MD);
-}
-#endif
-
 DIScopeRef DIScope::getRef() const { return MDScopeRef::get(get()); }
 
 bool DIVariable::isInlinedFnArgument(const Function *CurFn) {
@@ -135,13 +60,6 @@ bool DIVariable::isInlinedFnArgument(const Function *CurFn) {
   // This variable is not inlined function argument if its scope
   // does not describe current function.
   return !SP.describes(CurFn);
-}
-
-Function *DISubprogram::getFunction() const {
-  if (auto *N = get())
-    if (auto *C = dyn_cast_or_null<ConstantAsMetadata>(N->getFunction()))
-      return dyn_cast<Function>(C->getValue());
-  return nullptr;
 }
 
 bool DISubprogram::describes(const Function *F) {
@@ -158,51 +76,6 @@ bool DISubprogram::describes(const Function *F) {
 
 GlobalVariable *DIGlobalVariable::getGlobal() const {
   return dyn_cast_or_null<GlobalVariable>(getConstant());
-}
-
-DIScopeRef DIScope::getContext() const {
-  if (DIType T = dyn_cast<MDType>(*this))
-    return T.getContext();
-
-  if (DISubprogram SP = dyn_cast<MDSubprogram>(*this))
-    return DIScopeRef(SP.getContext());
-
-  if (DILexicalBlock LB = dyn_cast<MDLexicalBlockBase>(*this))
-    return DIScopeRef(LB.getContext());
-
-  if (DINameSpace NS = dyn_cast<MDNamespace>(*this))
-    return DIScopeRef(NS.getContext());
-
-  assert((isa<MDFile>(*this) || isa<MDCompileUnit>(*this)) &&
-         "Unhandled type of scope.");
-  return DIScopeRef(nullptr);
-}
-
-StringRef DIScope::getName() const {
-  if (DIType T = dyn_cast<MDType>(*this))
-    return T.getName();
-  if (DISubprogram SP = dyn_cast<MDSubprogram>(*this))
-    return SP.getName();
-  if (DINameSpace NS = dyn_cast<MDNamespace>(*this))
-    return NS.getName();
-  assert((isa<MDLexicalBlockBase>(*this) || isa<MDFile>(*this) ||
-          isa<MDCompileUnit>(*this)) &&
-         "Unhandled type of scope.");
-  return StringRef();
-}
-
-StringRef DIScope::getFilename() const {
-  if (auto *N = get())
-    if (auto *F = N->getFile())
-      return F->getFilename();
-  return "";
-}
-
-StringRef DIScope::getDirectory() const {
-  if (auto *N = get())
-    if (auto *F = N->getFile())
-      return F->getDirectory();
-  return "";
 }
 
 void DICompileUnit::replaceSubprograms(DIArray Subprograms) {
@@ -562,29 +435,6 @@ void DIVariable::printExtendedName(raw_ostream &OS) const {
       OS << "]";
     }
   }
-}
-
-template <> DIRef<DIDescriptor>::DIRef(const Metadata *V) : Val(V) {
-  assert(isDescriptorRef(V) &&
-         "DIDescriptorRef should be a MDString or MDNode");
-}
-template <> DIRef<DIScope>::DIRef(const Metadata *V) : Val(V) {
-  assert(isScopeRef(V) && "DIScopeRef should be a MDString or MDNode");
-}
-template <> DIRef<DIType>::DIRef(const Metadata *V) : Val(V) {
-  assert(isTypeRef(V) && "DITypeRef should be a MDString or MDNode");
-}
-
-template <>
-DIDescriptorRef DIDescriptor::getFieldAs<DIDescriptorRef>(unsigned Elt) const {
-  return DIDescriptorRef(cast_or_null<Metadata>(getField(DbgNode, Elt)));
-}
-template <>
-DIScopeRef DIDescriptor::getFieldAs<DIScopeRef>(unsigned Elt) const {
-  return DIScopeRef(cast_or_null<Metadata>(getField(DbgNode, Elt)));
-}
-template <> DITypeRef DIDescriptor::getFieldAs<DITypeRef>(unsigned Elt) const {
-  return DITypeRef(cast_or_null<Metadata>(getField(DbgNode, Elt)));
 }
 
 template <>
