@@ -1666,6 +1666,76 @@ void SelectionDAGBuilder::visitBr(const BranchInst &I) {
   visitSwitchCase(CB, BrMBB);
 }
 
+
+void SelectionDAGBuilder::visitSpawn(const SpawnInst &I) {
+  MachineBasicBlock *BrMBB = FuncInfo.MBB;
+
+  // Update machine-CFG edges.
+  MachineBasicBlock *Succ0MBB = FuncInfo.MBBMap[I.getSuccessor(0)];
+
+  MachineBasicBlock *Succ1MBB = FuncInfo.MBBMap[I.getSuccessor(1)];
+  //TODO!!!
+  assert(0 && "Lowering spawn to machine instructions not completed yet!");
+  const Value *CondVal;// = I.getCondition();
+
+  // If this is a series of conditions that are or'd or and'd together, emit
+  // this as a sequence of branches instead of setcc's with and/or operations.
+  // As long as jumps are not expensive, this should improve performance.
+  // For example, instead of something like:
+  //     cmp A, B
+  //     C = seteq
+  //     cmp D, E
+  //     F = setle
+  //     or C, F
+  //     jnz foo
+  // Emit:
+  //     cmp A, B
+  //     je foo
+  //     cmp D, E
+  //     jle foo
+  //
+  if (const BinaryOperator *BOp = dyn_cast<BinaryOperator>(CondVal)) {
+    if (!DAG.getTargetLoweringInfo().isJumpExpensive() &&
+        BOp->hasOneUse() && (BOp->getOpcode() == Instruction::And ||
+                             BOp->getOpcode() == Instruction::Or)) {
+      FindMergedConditions(BOp, Succ0MBB, Succ1MBB, BrMBB, BrMBB,
+                           BOp->getOpcode(), getEdgeWeight(BrMBB, Succ0MBB),
+                           getEdgeWeight(BrMBB, Succ1MBB));
+      // If the compares in later blocks need to use values not currently
+      // exported from this block, export them now.  This block should always
+      // be the first entry.
+      assert(SwitchCases[0].ThisBB == BrMBB && "Unexpected lowering!");
+
+      // Allow some cases to be rejected.
+      if (ShouldEmitAsBranches(SwitchCases)) {
+        for (unsigned i = 1, e = SwitchCases.size(); i != e; ++i) {
+          ExportFromCurrentBlock(SwitchCases[i].CmpLHS);
+          ExportFromCurrentBlock(SwitchCases[i].CmpRHS);
+        }
+
+        // Emit the branch for this block.
+        visitSwitchCase(SwitchCases[0], BrMBB);
+        SwitchCases.erase(SwitchCases.begin());
+        return;
+      }
+
+      // Okay, we decided not to do this, remove any inserted MBB's and clear
+      // SwitchCases.
+      for (unsigned i = 1, e = SwitchCases.size(); i != e; ++i)
+        FuncInfo.MF->erase(SwitchCases[i].ThisBB);
+
+      SwitchCases.clear();
+    }
+  }
+
+  // Create a CaseBlock record representing this branch.
+  CaseBlock CB(ISD::SETEQ, CondVal, ConstantInt::getTrue(*DAG.getContext()),
+               nullptr, Succ0MBB, Succ1MBB, BrMBB);
+
+  // Use visitSwitchCase to actually insert the fast branch sequence for this
+  // cond branch.
+  visitSwitchCase(CB, BrMBB);
+}
 /// visitSwitchCase - Emits the necessary code to represent a single node in
 /// the binary search tree resulting from lowering a switch instruction.
 void SelectionDAGBuilder::visitSwitchCase(CaseBlock &CB,

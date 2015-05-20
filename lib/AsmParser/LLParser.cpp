@@ -4409,6 +4409,7 @@ int LLParser::ParseInstruction(Instruction *&Inst, BasicBlock *BB,
   case lltok::kw_unreachable: Inst = new UnreachableInst(Context); return false;
   case lltok::kw_ret:         return ParseRet(Inst, BB, PFS);
   case lltok::kw_br:          return ParseBr(Inst, PFS);
+  case lltok::kw_spawn:       return ParseSpawn(Inst, PFS);
   case lltok::kw_switch:      return ParseSwitch(Inst, PFS);
   case lltok::kw_indirectbr:  return ParseIndirectBr(Inst, PFS);
   case lltok::kw_invoke:      return ParseInvoke(Inst, PFS);
@@ -4603,6 +4604,20 @@ bool LLParser::ParseBr(Instruction *&Inst, PerFunctionState &PFS) {
   return false;
 }
 
+/// ParseSpawn
+///   ::= 'spawn' TypeAndValue ',' TypeAndValue
+bool LLParser::ParseSpawn(Instruction *&Inst, PerFunctionState &PFS) {
+  LocTy Loc, Loc2;
+  BasicBlock *Op1, *Op2;
+
+  if (ParseTypeAndBasicBlock(Op1, Loc, PFS) ||
+      ParseToken(lltok::comma, "expected ',' after true destination") ||
+      ParseTypeAndBasicBlock(Op2, Loc2, PFS))
+    return true;
+
+  Inst = SpawnInst::Create(Op1, Op2);
+  return false;
+}
 /// ParseSwitch
 ///  Instruction
 ///    ::= 'switch' TypeAndValue ',' TypeAndValue '[' JumpTable ']'

@@ -348,6 +348,7 @@ namespace bitc {
     FUNC_CODE_INST_STOREATOMIC = 42, // STORE: [ptrty,ptr,val, align, vol
                                      //         ordering, synchscope]
     FUNC_CODE_INST_GEP         = 43, // GEP:  [inbounds, n x operands]
+    FUNC_CODE_INST_SPAWN       = 44, // GEP:  [inbounds, n x operands]
   };
 
   enum UseListCodes {

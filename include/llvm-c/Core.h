@@ -239,6 +239,7 @@ typedef enum {
   LLVMShuffleVector  = 52,
   LLVMExtractValue   = 53,
   LLVMInsertValue    = 54,
+  LLVMSpawn          = 61,
 
   /* Atomic operators */
   LLVMFence          = 55,

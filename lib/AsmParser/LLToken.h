@@ -172,7 +172,7 @@ namespace lltok {
 
     kw_landingpad, kw_personality, kw_cleanup, kw_catch, kw_filter,
 
-    kw_ret, kw_br, kw_switch, kw_indirectbr, kw_invoke, kw_resume,
+    kw_ret, kw_br, kw_spawn, kw_switch, kw_indirectbr, kw_invoke, kw_resume,
     kw_unreachable,
 
     kw_alloca, kw_load, kw_store, kw_fence, kw_cmpxchg, kw_atomicrmw,

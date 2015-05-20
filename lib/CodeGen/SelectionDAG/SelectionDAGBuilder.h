@@ -68,6 +68,7 @@ class SExtInst;
 class SelectInst;
 class ShuffleVectorInst;
 class SIToFPInst;
+class SpawnInst;
 class StoreInst;
 class SwitchInst;
 class DataLayout;
@@ -665,6 +666,7 @@ private:
 
   // Terminator instructions.
   void visitRet(const ReturnInst &I);
+  void visitSpawn(const SpawnInst& I);
   void visitBr(const BranchInst &I);
   void visitSwitch(const SwitchInst &I);
   void visitIndirectBr(const IndirectBrInst &I);

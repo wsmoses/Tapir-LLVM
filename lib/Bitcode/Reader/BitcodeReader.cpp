@@ -3719,6 +3719,20 @@ std::error_code BitcodeReader::ParseFunctionBody(Function *F) {
       }
       break;
     }
+    case bitc::FUNC_CODE_INST_SPAWN: { // SPAWN: [bb#, bb#]
+      if (Record.size() != 2)
+        return Error("Invalid record");
+      BasicBlock *TrueDest = getBasicBlock(Record[0]);
+      if (!TrueDest)
+        return Error("Invalid record");
+
+      BasicBlock *FalseDest = getBasicBlock(Record[1]);
+      if (!FalseDest)
+        return Error("Invalid record");
+      I = SpawnInst::Create(TrueDest, FalseDest);
+      InstructionList.push_back(I);
+      break;
+    }
     case bitc::FUNC_CODE_INST_SWITCH: { // SWITCH: [opty, op0, op1, ...]
       // Check magic
       if ((Record[0] >> 16) == SWITCH_INST_MAGIC) {

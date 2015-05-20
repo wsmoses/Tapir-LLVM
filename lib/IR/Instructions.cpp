@@ -826,6 +826,73 @@ void BranchInst::setSuccessorV(unsigned idx, BasicBlock *B) {
 
 
 //===----------------------------------------------------------------------===//
+//                        SpawnInst Implementation
+//===----------------------------------------------------------------------===//
+
+void SpawnInst::AssertOK() {
+}
+
+SpawnInst::SpawnInst(BasicBlock *IfTrue, BasicBlock *IfFalse,
+                       Instruction *InsertBefore)
+  : TerminatorInst(Type::getVoidTy(IfTrue->getContext()), Instruction::Spawn,
+                   OperandTraits<SpawnInst>::op_end(this) - 2,
+                   2, InsertBefore) {
+  Op<-1>() = IfTrue;
+  Op<-2>() = IfFalse;
+#ifndef NDEBUG
+  AssertOK();
+#endif
+}
+
+SpawnInst::SpawnInst(BasicBlock *IfTrue, BasicBlock *IfFalse,
+           BasicBlock *InsertAtEnd)
+  : TerminatorInst(Type::getVoidTy(IfTrue->getContext()), Instruction::Spawn,
+                   OperandTraits<SpawnInst>::op_end(this) - 2,
+                   2, InsertAtEnd) {
+  Op<-1>() = IfTrue;
+  Op<-2>() = IfFalse;
+#ifndef NDEBUG
+  AssertOK();
+#endif
+}
+
+
+SpawnInst::SpawnInst(const SpawnInst &BI) :
+  TerminatorInst(Type::getVoidTy(BI.getContext()), Instruction::Br,
+                 OperandTraits<SpawnInst>::op_end(this) - BI.getNumOperands(),
+                 BI.getNumOperands()) {
+  Op<-1>() = BI.Op<-1>();
+  Op<-2>() = BI.Op<-2>();
+  assert(BI.getNumOperands() == 2 && "Spawn can have 2 operands!");
+  SubclassOptionalData = BI.SubclassOptionalData;
+}
+
+void SpawnInst::swapSuccessors() {
+  Op<-1>().swap(Op<-2>());
+
+  // Update profile metadata if present and it matches our structural
+  // expectations.
+  MDNode *ProfileData = getMetadata(LLVMContext::MD_prof);
+  if (!ProfileData || ProfileData->getNumOperands() != 2)
+    return;
+
+  // The first operand is the name. Fetch them backwards and build a new one.
+  Metadata *Ops[] = {ProfileData->getOperand(1), ProfileData->getOperand(1)};
+
+  setMetadata(LLVMContext::MD_prof,
+              MDNode::get(ProfileData->getContext(), Ops));
+}
+
+BasicBlock *SpawnInst::getSuccessorV(unsigned idx) const {
+  return getSuccessor(idx);
+}
+unsigned SpawnInst::getNumSuccessorsV() const {
+  return getNumSuccessors();
+}
+void SpawnInst::setSuccessorV(unsigned idx, BasicBlock *B) {
+  setSuccessor(idx, B);
+}
+//===----------------------------------------------------------------------===//
 //                        AllocaInst Implementation
 //===----------------------------------------------------------------------===//
 
@@ -3653,6 +3720,10 @@ ReturnInst *ReturnInst::clone_impl() const {
 
 BranchInst *BranchInst::clone_impl() const {
   return new(getNumOperands()) BranchInst(*this);
+}
+
+SpawnInst *SpawnInst::clone_impl() const {
+  return new(2) SpawnInst(*this);
 }
 
 SwitchInst *SwitchInst::clone_impl() const {
