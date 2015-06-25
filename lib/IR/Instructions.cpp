@@ -3679,7 +3679,7 @@ BranchInst *BranchInst::cloneImpl() const {
 SwitchInst *SwitchInst::cloneImpl() const { return new SwitchInst(*this); }
 
 SpawnInst *SpawnInst::cloneImpl() const {
-  return new(getNumOperands()) SpawnInst(*this); 
+  return new(getNumOperands()) SpawnInst(*this);
 }
 
 IndirectBrInst *IndirectBrInst::cloneImpl() const {
