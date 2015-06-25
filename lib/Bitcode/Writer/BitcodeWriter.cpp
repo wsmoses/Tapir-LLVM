@@ -1782,6 +1782,14 @@ static void WriteInstruction(const Instruction &I, unsigned InstID,
       }
     }
     break;
+  case Instruction::Spawn:
+    {
+      Code = bitc::FUNC_CODE_INST_SPAWN;
+      const SpawnInst &II = cast<SpawnInst>(I);
+      Vals.push_back(VE.getValueID(II.getSuccessor(0)));
+      Vals.push_back(VE.getValueID(II.getSuccessor(1)));
+    }
+    break;
   case Instruction::Switch:
     {
       Code = bitc::FUNC_CODE_INST_SWITCH;

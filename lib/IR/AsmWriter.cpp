@@ -2736,6 +2736,13 @@ void AssemblyWriter::printInstruction(const Instruction &I) {
     writeOperand(BI.getSuccessor(0), true);
     Out << ", ";
     writeOperand(BI.getSuccessor(1), true);
+  } else if (isa<SpawnInst>(I)) {
+    // Special case spawn instruction to get formatting nice and correct
+    const SpawnInst &SI(cast<SpawnInst>(I));
+    Out << ' ';
+    writeOperand(SI.getSuccessor(0), true);
+    Out << ", ";
+    writeOperand(SI.getSuccessor(1), true);
 
   } else if (isa<SwitchInst>(I)) {
     const SwitchInst& SI(cast<SwitchInst>(I));
