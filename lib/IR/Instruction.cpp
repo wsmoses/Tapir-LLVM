@@ -197,6 +197,7 @@ const char *Instruction::getOpcodeName(unsigned OpCode) {
   case Invoke: return "invoke";
   case Resume: return "resume";
   case Unreachable: return "unreachable";
+  case Reattach: return "reattach";
 
   // Standard binary operators...
   case Add: return "add";

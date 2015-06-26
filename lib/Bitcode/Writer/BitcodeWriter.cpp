@@ -1846,6 +1846,10 @@ static void WriteInstruction(const Instruction &I, unsigned InstID,
     Code = bitc::FUNC_CODE_INST_UNREACHABLE;
     AbbrevToUse = FUNCTION_INST_UNREACHABLE_ABBREV;
     break;
+  case Instruction::Reattach:
+    Code = bitc::FUNC_CODE_INST_REATTACH;
+    AbbrevToUse = FUNCTION_INST_REATTACH_ABBREV;
+    break;
 
   case Instruction::PHI: {
     const PHINode &PN = cast<PHINode>(I);

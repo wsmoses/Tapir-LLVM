@@ -3649,6 +3649,45 @@ private:
 };
 
 //===----------------------------------------------------------------------===//
+//                           ReattachInst Class
+//===----------------------------------------------------------------------===//
+
+//===---------------------------------------------------------------------------
+/// ReattachInst - This function has undefined behavior.  In particular, the
+/// presence of this instruction indicates some higher level knowledge that the
+/// end of the block cannot be reached.
+///
+class ReattachInst : public TerminatorInst {
+  void *operator new(size_t, unsigned) = delete;
+protected:
+  // Note: Instruction needs to be a friend here to call cloneImpl.
+  friend class Instruction;
+  ReattachInst *cloneImpl() const;
+
+public:
+  // allocate space for exactly zero operands
+  void *operator new(size_t s) {
+    return User::operator new(s, 0);
+  }
+  explicit ReattachInst(LLVMContext &C, Instruction *InsertBefore = nullptr);
+  explicit ReattachInst(LLVMContext &C, BasicBlock *InsertAtEnd);
+
+  unsigned getNumSuccessors() const { return 0; }
+
+  // Methods for support type inquiry through isa, cast, and dyn_cast:
+  static inline bool classof(const Instruction *I) {
+    return I->getOpcode() == Instruction::Reattach;
+  }
+  static inline bool classof(const Value *V) {
+    return isa<Instruction>(V) && classof(cast<Instruction>(V));
+  }
+private:
+  BasicBlock *getSuccessorV(unsigned idx) const override;
+  unsigned getNumSuccessorsV() const override;
+  void setSuccessorV(unsigned idx, BasicBlock *B) override;
+};
+
+//===----------------------------------------------------------------------===//
 //                                 TruncInst Class
 //===----------------------------------------------------------------------===//
 
