@@ -701,6 +701,10 @@ public:
     return Insert(new UnreachableInst(Context));
   }
 
+  ReattachInst *CreateReattach() {
+    return Insert(new ReattachInst(Context));
+  }
+
   //===--------------------------------------------------------------------===//
   // Instruction creation methods: Binary Operators
   //===--------------------------------------------------------------------===//
