@@ -177,6 +177,7 @@ namespace lltok {
 
     kw_ret, kw_br, kw_spawn, kw_switch, kw_indirectbr, kw_invoke, kw_resume,
     kw_unreachable,
+    kw_reattach,
 
     kw_alloca, kw_load, kw_store, kw_fence, kw_cmpxchg, kw_atomicrmw,
     kw_getelementptr,
