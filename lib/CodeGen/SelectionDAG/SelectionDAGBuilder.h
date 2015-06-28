@@ -736,6 +736,7 @@ private:
   void visitSwitch(const SwitchInst &I);
   void visitIndirectBr(const IndirectBrInst &I);
   void visitUnreachable(const UnreachableInst &I);
+  void visitReattach(const ReattachInst &I);
 
   uint32_t getEdgeWeight(const MachineBasicBlock *Src,
                          const MachineBasicBlock *Dst) const;

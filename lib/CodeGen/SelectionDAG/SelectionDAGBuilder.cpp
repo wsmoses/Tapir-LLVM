@@ -2201,6 +2201,11 @@ void SelectionDAGBuilder::visitUnreachable(const UnreachableInst &I) {
     DAG.setRoot(DAG.getNode(ISD::TRAP, getCurSDLoc(), MVT::Other, DAG.getRoot()));
 }
 
+void SelectionDAGBuilder::visitReattach(const ReattachInst &I) {
+  if (DAG.getTarget().Options.TrapUnreachable)
+    DAG.setRoot(DAG.getNode(ISD::TRAP, getCurSDLoc(), MVT::Other, DAG.getRoot()));
+}
+
 void SelectionDAGBuilder::visitFSub(const User &I) {
   // -0.0 - X --> fneg
   Type *Ty = I.getType();

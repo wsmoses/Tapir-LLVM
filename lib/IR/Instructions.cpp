@@ -3722,3 +3722,8 @@ UnreachableInst *UnreachableInst::cloneImpl() const {
   LLVMContext &Context = getContext();
   return new UnreachableInst(Context);
 }
+
+ReattachInst *ReattachInst::cloneImpl() const {
+  LLVMContext &Context = getContext();
+  return new ReattachInst(Context);
+}

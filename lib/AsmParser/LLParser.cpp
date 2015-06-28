@@ -4465,7 +4465,7 @@ int LLParser::ParseInstruction(Instruction *&Inst, BasicBlock *BB,
   default:                    return Error(Loc, "expected instruction opcode");
   // Terminator Instructions.
   case lltok::kw_unreachable: Inst = new UnreachableInst(Context); return false;
-  case lltok::kw_detach: Inst = new DetachInst(Context); return false;
+  case lltok::kw_reattach: Inst = new ReattachInst(Context); return false;
   case lltok::kw_ret:         return ParseRet(Inst, BB, PFS);
   case lltok::kw_br:          return ParseBr(Inst, PFS);
   case lltok::kw_spawn:       return ParseSpawn(Inst, PFS);
