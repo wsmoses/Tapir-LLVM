@@ -699,6 +699,32 @@ BasicBlock *UnreachableInst::getSuccessorV(unsigned idx) const {
 }
 
 //===----------------------------------------------------------------------===//
+//                      ReattachInst Implementation
+//===----------------------------------------------------------------------===//
+
+ReattachInst::ReattachInst(LLVMContext &Context, 
+                                 Instruction *InsertBefore)
+  : TerminatorInst(Type::getVoidTy(Context), Instruction::Reattach,
+                   nullptr, 0, InsertBefore) {
+}
+ReattachInst::ReattachInst(LLVMContext &Context, BasicBlock *InsertAtEnd)
+  : TerminatorInst(Type::getVoidTy(Context), Instruction::Reattach,
+                   nullptr, 0, InsertAtEnd) {
+}
+
+unsigned ReattachInst::getNumSuccessorsV() const {
+  return getNumSuccessors();
+}
+
+void ReattachInst::setSuccessorV(unsigned idx, BasicBlock *NewSucc) {
+  llvm_unreachable("ReattachInst has no successors!");
+}
+
+BasicBlock *ReattachInst::getSuccessorV(unsigned idx) const {
+  llvm_unreachable("ReattachInst has no successors!");
+}
+
+//===----------------------------------------------------------------------===//
 //                        BranchInst Implementation
 //===----------------------------------------------------------------------===//
 

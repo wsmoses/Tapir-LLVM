@@ -170,6 +170,7 @@ public:
   RetTy visitIndirectBrInst(IndirectBrInst &I)    { DELEGATE(TerminatorInst);}
   RetTy visitResumeInst(ResumeInst &I)            { DELEGATE(TerminatorInst);}
   RetTy visitUnreachableInst(UnreachableInst &I)  { DELEGATE(TerminatorInst);}
+  RetTy visitReattachInst(ReattachInst &I)        { DELEGATE(TerminatorInst);}
   RetTy visitICmpInst(ICmpInst &I)                { DELEGATE(CmpInst);}
   RetTy visitFCmpInst(FCmpInst &I)                { DELEGATE(CmpInst);}
   RetTy visitAllocaInst(AllocaInst &I)            { DELEGATE(UnaryInstruction);}

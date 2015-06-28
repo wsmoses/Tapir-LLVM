@@ -182,6 +182,7 @@ typedef enum {
   LLVMInvoke         = 5,
   /* removed 6 due to API changes */
   LLVMUnreachable    = 7,
+  LLVMReattach       = 62,
 
   /* Standard Binary Operators */
   LLVMAdd            = 8,
@@ -1215,6 +1216,7 @@ LLVMTypeRef LLVMX86MMXType(void);
         macro(ReturnInst)                   \
         macro(SwitchInst)                   \
         macro(UnreachableInst)              \
+        macro(ReattachInst)                 \
         macro(ResumeInst)                   \
       macro(UnaryInstruction)               \
         macro(AllocaInst)                   \
@@ -2665,6 +2667,7 @@ LLVMValueRef LLVMBuildLandingPad(LLVMBuilderRef B, LLVMTypeRef Ty,
                                  unsigned NumClauses, const char *Name);
 LLVMValueRef LLVMBuildResume(LLVMBuilderRef B, LLVMValueRef Exn);
 LLVMValueRef LLVMBuildUnreachable(LLVMBuilderRef);
+LLVMValueRef LLVMBuildReattach(LLVMBuilderRef);
 
 /* Add a case to the switch instruction */
 void LLVMAddCase(LLVMValueRef Switch, LLVMValueRef OnVal,

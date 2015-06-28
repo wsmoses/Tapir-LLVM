@@ -3975,6 +3975,10 @@ std::error_code BitcodeReader::parseFunctionBody(Function *F) {
       I = new UnreachableInst(Context);
       InstructionList.push_back(I);
       break;
+    case bitc::FUNC_CODE_INST_REATTACH: //REATTACH
+      I = new ReattachInst(Context);
+      InstructionList.push_back(I);
+      break;
     case bitc::FUNC_CODE_INST_PHI: { // PHI: [ty, val0,bb0, ...]
       if (Record.size() < 1 || ((Record.size()-1)&1))
         return error("Invalid record");
