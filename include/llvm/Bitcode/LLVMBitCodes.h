@@ -354,7 +354,8 @@ namespace bitc {
     FUNC_CODE_INST_CMPXCHG     = 46, // CMPXCHG: [ptrty,ptr,valty,cmp,new, align,
                                      //           vol,ordering,synchscope]
     FUNC_CODE_INST_LANDINGPAD  = 47, // LANDINGPAD: [ty,val,num,id0,val0...]
-    FUNC_CODE_INST_SPAWN       = 48, // GEP:  [inbounds, n x operands]
+    FUNC_CODE_INST_DETACH      = 48, // DETACH: [bb#, bb#]
+    FUNC_CODE_INST_REATTACH    = 49, // REATTACH
   };
 
   enum UseListCodes {

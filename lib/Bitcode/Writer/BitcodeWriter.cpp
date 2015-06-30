@@ -57,6 +57,7 @@ enum {
   FUNCTION_INST_RET_VOID_ABBREV,
   FUNCTION_INST_RET_VAL_ABBREV,
   FUNCTION_INST_UNREACHABLE_ABBREV,
+  FUNCTION_INST_REATTACH_ABBREV,
   FUNCTION_INST_GEP_ABBREV,
 };
 
@@ -1793,14 +1794,6 @@ static void WriteInstruction(const Instruction &I, unsigned InstID,
       }
     }
     break;
-  case Instruction::Spawn:
-    {
-      Code = bitc::FUNC_CODE_INST_SPAWN;
-      const SpawnInst &II = cast<SpawnInst>(I);
-      Vals.push_back(VE.getValueID(II.getSuccessor(0)));
-      Vals.push_back(VE.getValueID(II.getSuccessor(1)));
-    }
-    break;
   case Instruction::Switch:
     {
       Code = bitc::FUNC_CODE_INST_SWITCH;
@@ -1856,6 +1849,14 @@ static void WriteInstruction(const Instruction &I, unsigned InstID,
   case Instruction::Unreachable:
     Code = bitc::FUNC_CODE_INST_UNREACHABLE;
     AbbrevToUse = FUNCTION_INST_UNREACHABLE_ABBREV;
+    break;
+  case Instruction::Detach:
+    {
+      Code = bitc::FUNC_CODE_INST_DETACH;
+      const DetachInst &II = cast<DetachInst>(I);
+      Vals.push_back(VE.getValueID(II.getSuccessor(0)));
+      Vals.push_back(VE.getValueID(II.getSuccessor(1)));
+    }
     break;
   case Instruction::Reattach:
     Code = bitc::FUNC_CODE_INST_REATTACH;

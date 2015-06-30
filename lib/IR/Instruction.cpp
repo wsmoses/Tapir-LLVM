@@ -191,12 +191,12 @@ const char *Instruction::getOpcodeName(unsigned OpCode) {
   // Terminators
   case Ret:    return "ret";
   case Br:     return "br";
-  case Spawn:  return "spawn";
   case Switch: return "switch";
   case IndirectBr: return "indirectbr";
   case Invoke: return "invoke";
   case Resume: return "resume";
   case Unreachable: return "unreachable";
+  case Detach: return "detach";
   case Reattach: return "reattach";
 
   // Standard binary operators...

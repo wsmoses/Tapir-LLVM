@@ -549,7 +549,7 @@ namespace ISD {
     /// compare, rather than as a combined SetCC node.  The operands in order
     /// are chain, cc, lhs, rhs, block to branch to if condition is true.
     BR_CC,
-
+    
     /// INLINEASM - Represents an inline asm block.  This node always has two
     /// return values: a chain and a flag result.  The inputs are as follows:
     ///   Operand #0  : Input chain.

@@ -241,7 +241,7 @@ typedef enum {
   LLVMShuffleVector  = 52,
   LLVMExtractValue   = 53,
   LLVMInsertValue    = 54,
-  LLVMSpawn          = 61,
+  LLVMDetach         = 61,
 
   /* Atomic operators */
   LLVMFence          = 55,
@@ -1216,8 +1216,9 @@ LLVMTypeRef LLVMX86MMXType(void);
         macro(ReturnInst)                   \
         macro(SwitchInst)                   \
         macro(UnreachableInst)              \
-        macro(ReattachInst)                 \
         macro(ResumeInst)                   \
+        macro(DetachInst)                   \
+        macro(ReattachInst)                 \
       macro(UnaryInstruction)               \
         macro(AllocaInst)                   \
         macro(CastInst)                     \
@@ -2667,6 +2668,8 @@ LLVMValueRef LLVMBuildLandingPad(LLVMBuilderRef B, LLVMTypeRef Ty,
                                  unsigned NumClauses, const char *Name);
 LLVMValueRef LLVMBuildResume(LLVMBuilderRef B, LLVMValueRef Exn);
 LLVMValueRef LLVMBuildUnreachable(LLVMBuilderRef);
+LLVMValueRef LLVMBuildDetach(LLVMBuilderRef,
+                             LLVMBasicBlockRef Child, LLVMBasicBlockRef Parent);
 LLVMValueRef LLVMBuildReattach(LLVMBuilderRef);
 
 /* Add a case to the switch instruction */

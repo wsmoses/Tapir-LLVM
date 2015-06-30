@@ -4483,14 +4483,14 @@ int LLParser::ParseInstruction(Instruction *&Inst, BasicBlock *BB,
   default:                    return Error(Loc, "expected instruction opcode");
   // Terminator Instructions.
   case lltok::kw_unreachable: Inst = new UnreachableInst(Context); return false;
-  case lltok::kw_detach: Inst = new DetachInst(Context); return false;
   case lltok::kw_ret:         return ParseRet(Inst, BB, PFS);
   case lltok::kw_br:          return ParseBr(Inst, PFS);
-  case lltok::kw_spawn:       return ParseSpawn(Inst, PFS);
   case lltok::kw_switch:      return ParseSwitch(Inst, PFS);
   case lltok::kw_indirectbr:  return ParseIndirectBr(Inst, PFS);
   case lltok::kw_invoke:      return ParseInvoke(Inst, PFS);
   case lltok::kw_resume:      return ParseResume(Inst, PFS);
+  case lltok::kw_detach:      return ParseDetach(Inst, PFS);
+  case lltok::kw_reattach:    Inst = new ReattachInst(Context); return false;
   // Binary Operators.
   case lltok::kw_add:
   case lltok::kw_sub:
@@ -4681,9 +4681,9 @@ bool LLParser::ParseBr(Instruction *&Inst, PerFunctionState &PFS) {
   return false;
 }
 
-/// ParseSpawn
-///   ::= 'spawn' TypeAndValue ',' TypeAndValue
-bool LLParser::ParseSpawn(Instruction *&Inst, PerFunctionState &PFS) {
+/// ParseDetach
+///   ::= 'detach' TypeAndValue ',' TypeAndValue
+bool LLParser::ParseDetach(Instruction *&Inst, PerFunctionState &PFS) {
   LocTy Loc, Loc2;
   BasicBlock *Op1, *Op2;
 
@@ -4692,7 +4692,7 @@ bool LLParser::ParseSpawn(Instruction *&Inst, PerFunctionState &PFS) {
       ParseTypeAndBasicBlock(Op2, Loc2, PFS))
     return true;
 
-  Inst = SpawnInst::Create(Op1, Op2);
+  Inst = DetachInst::Create(Op1, Op2);
   return false;
 }
 

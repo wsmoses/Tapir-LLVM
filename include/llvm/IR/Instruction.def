@@ -101,7 +101,7 @@ HANDLE_TERM_INST  ( 4, IndirectBr , IndirectBrInst)
 HANDLE_TERM_INST  ( 5, Invoke     , InvokeInst)
 HANDLE_TERM_INST  ( 6, Resume     , ResumeInst)
 HANDLE_TERM_INST  ( 7, Unreachable, UnreachableInst)
-HANDLE_TERM_INST  ( 8, Spawn      , SpawnInst)
+HANDLE_TERM_INST  ( 8, Detach     , DetachInst)
 HANDLE_TERM_INST  ( 9, Reattach   , ReattachInst)
   LAST_TERM_INST  ( 9)
 

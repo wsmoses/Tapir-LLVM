@@ -1538,7 +1538,7 @@ int TargetLoweringBase::InstructionOpcodeToISD(unsigned Opcode) const {
 #include "llvm/IR/Instruction.def"
   };
   switch (static_cast<InstructionOpcodes>(Opcode)) {
-    // TODO: Add Spawn
+    // TODO: Add detach and reattach
   case Ret:            return 0;
   case Br:             return 0;
   case Switch:         return 0;

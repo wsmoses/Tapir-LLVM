@@ -699,11 +699,79 @@ BasicBlock *UnreachableInst::getSuccessorV(unsigned idx) const {
 }
 
 //===----------------------------------------------------------------------===//
+//                        DetachInst Implementation
+//===----------------------------------------------------------------------===//
+
+void DetachInst::AssertOK() {
+}
+
+DetachInst::DetachInst(BasicBlock *Child, BasicBlock *Parent,
+                       Instruction *InsertBefore)
+  : TerminatorInst(Type::getVoidTy(Child->getContext()), Instruction::Detach,
+                   OperandTraits<DetachInst>::op_end(this) - 2,
+                   2, InsertBefore) {
+  Op<-1>() = Child;
+  Op<-2>() = Parent;
+#ifndef NDEBUG
+  AssertOK();
+#endif
+}
+
+DetachInst::DetachInst(BasicBlock *Child, BasicBlock *Parent,
+                       BasicBlock *InsertAtEnd)
+  : TerminatorInst(Type::getVoidTy(Child->getContext()), Instruction::Detach,
+                   OperandTraits<DetachInst>::op_end(this) - 2,
+                   2, InsertAtEnd) {
+  Op<-1>() = Child;
+  Op<-2>() = Parent;
+#ifndef NDEBUG
+  AssertOK();
+#endif
+}
+
+
+DetachInst::DetachInst(const DetachInst &BI) :
+  TerminatorInst(Type::getVoidTy(BI.getContext()), Instruction::Detach,
+                 OperandTraits<DetachInst>::op_end(this) - BI.getNumOperands(),
+                 BI.getNumOperands()) {
+  Op<-1>() = BI.Op<-1>();
+  Op<-2>() = BI.Op<-2>();
+  assert(BI.getNumOperands() == 2 && "Detach must have 2 operands!");
+  SubclassOptionalData = BI.SubclassOptionalData;
+}
+
+void DetachInst::swapSuccessors() {
+  Op<-1>().swap(Op<-2>());
+
+  // Update profile metadata if present and it matches our structural
+  // expectations.
+  MDNode *ProfileData = getMetadata(LLVMContext::MD_prof);
+  if (!ProfileData || ProfileData->getNumOperands() != 2)
+    return;
+
+  // The first operand is the name. Fetch them backwards and build a new one.
+  Metadata *Ops[] = {ProfileData->getOperand(1), ProfileData->getOperand(1)};
+
+  setMetadata(LLVMContext::MD_prof,
+              MDNode::get(ProfileData->getContext(), Ops));
+}
+
+BasicBlock *DetachInst::getSuccessorV(unsigned idx) const {
+  return getSuccessor(idx);
+}
+unsigned DetachInst::getNumSuccessorsV() const {
+  return getNumSuccessors();
+}
+void DetachInst::setSuccessorV(unsigned idx, BasicBlock *B) {
+  setSuccessor(idx, B);
+}
+
+//===----------------------------------------------------------------------===//
 //                      ReattachInst Implementation
 //===----------------------------------------------------------------------===//
 
 ReattachInst::ReattachInst(LLVMContext &Context, 
-                                 Instruction *InsertBefore)
+                           Instruction *InsertBefore)
   : TerminatorInst(Type::getVoidTy(Context), Instruction::Reattach,
                    nullptr, 0, InsertBefore) {
 }
@@ -816,75 +884,6 @@ unsigned BranchInst::getNumSuccessorsV() const {
 void BranchInst::setSuccessorV(unsigned idx, BasicBlock *B) {
   setSuccessor(idx, B);
 }
-
-//===----------------------------------------------------------------------===//
-//                        SpawnInst Implementation
-//===----------------------------------------------------------------------===//
-
-void SpawnInst::AssertOK() {
-}
-
-SpawnInst::SpawnInst(BasicBlock *Continue, BasicBlock *Spawned,
-                     Instruction *InsertBefore)
-  : TerminatorInst(Type::getVoidTy(Continue->getContext()), Instruction::Spawn,
-                   OperandTraits<SpawnInst>::op_end(this) - 2,
-                   2, InsertBefore) {
-  Op<-1>() = Continue;
-  Op<-2>() = Spawned;
-#ifndef NDEBUG
-  AssertOK();
-#endif
-}
-
-SpawnInst::SpawnInst(BasicBlock *Continue, BasicBlock *Spawned,
-                     BasicBlock *InsertAtEnd)
-  : TerminatorInst(Type::getVoidTy(Continue->getContext()), Instruction::Spawn,
-                   OperandTraits<SpawnInst>::op_end(this) - 2,
-                   2, InsertAtEnd) {
-  Op<-1>() = Continue;
-  Op<-2>() = Spawned;
-#ifndef NDEBUG
-  AssertOK();
-#endif
-}
-
-
-SpawnInst::SpawnInst(const SpawnInst &BI) :
-  TerminatorInst(Type::getVoidTy(BI.getContext()), Instruction::Br,
-                 OperandTraits<SpawnInst>::op_end(this) - BI.getNumOperands(),
-                 BI.getNumOperands()) {
-  Op<-1>() = BI.Op<-1>();
-  Op<-2>() = BI.Op<-2>();
-  assert(BI.getNumOperands() == 2 && "Spawn can have 2 operands!");
-  SubclassOptionalData = BI.SubclassOptionalData;
-}
-
-void SpawnInst::swapSuccessors() {
-  Op<-1>().swap(Op<-2>());
-
-  // Update profile metadata if present and it matches our structural
-  // expectations.
-  MDNode *ProfileData = getMetadata(LLVMContext::MD_prof);
-  if (!ProfileData || ProfileData->getNumOperands() != 2)
-    return;
-
-  // The first operand is the name. Fetch them backwards and build a new one.
-  Metadata *Ops[] = {ProfileData->getOperand(1), ProfileData->getOperand(1)};
-
-  setMetadata(LLVMContext::MD_prof,
-              MDNode::get(ProfileData->getContext(), Ops));
-}
-
-BasicBlock *SpawnInst::getSuccessorV(unsigned idx) const {
-  return getSuccessor(idx);
-}
-unsigned SpawnInst::getNumSuccessorsV() const {
-  return getNumSuccessors();
-}
-void SpawnInst::setSuccessorV(unsigned idx, BasicBlock *B) {
-  setSuccessor(idx, B);
-}
-
 
 //===----------------------------------------------------------------------===//
 //                        AllocaInst Implementation
@@ -3704,10 +3703,6 @@ BranchInst *BranchInst::cloneImpl() const {
 
 SwitchInst *SwitchInst::cloneImpl() const { return new SwitchInst(*this); }
 
-SpawnInst *SpawnInst::cloneImpl() const {
-  return new(getNumOperands()) SpawnInst(*this);
-}
-
 IndirectBrInst *IndirectBrInst::cloneImpl() const {
   return new IndirectBrInst(*this);
 }
@@ -3721,4 +3716,13 @@ ResumeInst *ResumeInst::cloneImpl() const { return new (1) ResumeInst(*this); }
 UnreachableInst *UnreachableInst::cloneImpl() const {
   LLVMContext &Context = getContext();
   return new UnreachableInst(Context);
+}
+
+DetachInst *DetachInst::cloneImpl() const {
+  return new(getNumOperands()) DetachInst(*this);
+}
+
+ReattachInst *ReattachInst::cloneImpl() const {
+  LLVMContext &Context = getContext();
+  return new ReattachInst(Context);
 }

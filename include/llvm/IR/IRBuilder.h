@@ -643,13 +643,6 @@ public:
                                    BranchWeights));
   }
 
-  /// \brief Create a spawn 'spawn Continue, Spawned' instruction.
-  SpawnInst *CreateSpawn(BasicBlock *Continue, BasicBlock *Spawned,
-                         MDNode *BranchWeights = nullptr) {
-    return Insert(addBranchWeights(SpawnInst::Create(Continue, Spawned),
-                                   BranchWeights));
-  }
-
   /// \brief Create a switch instruction with the specified value, default dest,
   /// and with a hint for the number of cases that will be added (for efficient
   /// allocation).
@@ -699,6 +692,13 @@ public:
 
   UnreachableInst *CreateUnreachable() {
     return Insert(new UnreachableInst(Context));
+  }
+
+  /// \brief Create a detach 'detach Child, Parent' instruction.
+  DetachInst *CreateDetach(BasicBlock *Child, BasicBlock *Parent,
+                           MDNode *BranchWeights = nullptr) {
+    return Insert(addBranchWeights(DetachInst::Create(Child, Parent),
+                                   BranchWeights));
   }
 
   ReattachInst *CreateReattach() {
