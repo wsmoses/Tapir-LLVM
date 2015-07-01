@@ -127,7 +127,6 @@ class MipsAsmParser : public MCTargetAsmParser {
   bool MatchAndEmitInstruction(SMLoc IDLoc, unsigned &Opcode,
                                OperandVector &Operands, MCStreamer &Out,
                                uint64_t &ErrorInfo,
-                               FeatureBitset &ErrorMissingFeature,
                                bool MatchingInlineAsm) override;
 
   /// Parse a register as used in CFI directives
@@ -360,6 +359,16 @@ class MipsAsmParser : public MCTargetAsmParser {
           ComputeAvailableFeatures(STI.ToggleFeature(FeatureString)));
       AssemblerOptions.back()->setFeatures(STI.getFeatureBits());
     }
+  }
+
+  void setModuleFeatureBits(uint64_t Feature, StringRef FeatureString) {
+    setFeatureBits(Feature, FeatureString);
+    AssemblerOptions.front()->setFeatures(STI.getFeatureBits());
+  }
+
+  void clearModuleFeatureBits(uint64_t Feature, StringRef FeatureString) {
+    clearFeatureBits(Feature, FeatureString);
+    AssemblerOptions.front()->setFeatures(STI.getFeatureBits());
   }
 
 public:
@@ -2723,13 +2732,12 @@ bool MipsAsmParser::MatchAndEmitInstruction(SMLoc IDLoc, unsigned &Opcode,
                                             OperandVector &Operands,
                                             MCStreamer &Out,
                                             uint64_t &ErrorInfo,
-                                            FeatureBitset &ErrorMissingFeature,
                                             bool MatchingInlineAsm) {
 
   MCInst Inst;
   SmallVector<MCInst, 8> Instructions;
   unsigned MatchResult =
-      MatchInstructionImpl(Operands, Inst, ErrorInfo, ErrorMissingFeature, MatchingInlineAsm);
+      MatchInstructionImpl(Operands, Inst, ErrorInfo, MatchingInlineAsm);
 
   switch (MatchResult) {
   case Match_Success: {
@@ -4695,6 +4703,8 @@ bool MipsAsmParser::parseInsnDirective() {
 ///  ::= .module oddspreg
 ///  ::= .module nooddspreg
 ///  ::= .module fp=value
+///  ::= .module softfloat
+///  ::= .module hardfloat
 bool MipsAsmParser::parseDirectiveModule() {
   MCAsmParser &Parser = getParser();
   MCAsmLexer &Lexer = getLexer();
@@ -4713,7 +4723,7 @@ bool MipsAsmParser::parseDirectiveModule() {
   }
 
   if (Option == "oddspreg") {
-    clearFeatureBits(Mips::FeatureNoOddSPReg, "nooddspreg");
+    clearModuleFeatureBits(Mips::FeatureNoOddSPReg, "nooddspreg");
 
     // Synchronize the abiflags information with the FeatureBits information we
     // changed above.
@@ -4737,7 +4747,7 @@ bool MipsAsmParser::parseDirectiveModule() {
       return false;
     }
 
-    setFeatureBits(Mips::FeatureNoOddSPReg, "nooddspreg");
+    setModuleFeatureBits(Mips::FeatureNoOddSPReg, "nooddspreg");
 
     // Synchronize the abiflags information with the FeatureBits information we
     // changed above.
@@ -4757,6 +4767,44 @@ bool MipsAsmParser::parseDirectiveModule() {
     return false; // parseDirectiveModule has finished successfully.
   } else if (Option == "fp") {
     return parseDirectiveModuleFP();
+  } else if (Option == "softfloat") {
+    setModuleFeatureBits(Mips::FeatureSoftFloat, "soft-float");
+
+    // Synchronize the ABI Flags information with the FeatureBits information we
+    // updated above.
+    getTargetStreamer().updateABIInfo(*this);
+
+    // If printing assembly, use the recently updated ABI Flags information.
+    // If generating ELF, don't do anything (the .MIPS.abiflags section gets
+    // emitted later).
+    getTargetStreamer().emitDirectiveModuleSoftFloat();
+
+    // If this is not the end of the statement, report an error.
+    if (getLexer().isNot(AsmToken::EndOfStatement)) {
+      reportParseError("unexpected token, expected end of statement");
+      return false;
+    }
+
+    return false; // parseDirectiveModule has finished successfully.
+  } else if (Option == "hardfloat") {
+    clearModuleFeatureBits(Mips::FeatureSoftFloat, "soft-float");
+
+    // Synchronize the ABI Flags information with the FeatureBits information we
+    // updated above.
+    getTargetStreamer().updateABIInfo(*this);
+
+    // If printing assembly, use the recently updated ABI Flags information.
+    // If generating ELF, don't do anything (the .MIPS.abiflags section gets
+    // emitted later).
+    getTargetStreamer().emitDirectiveModuleHardFloat();
+
+    // If this is not the end of the statement, report an error.
+    if (getLexer().isNot(AsmToken::EndOfStatement)) {
+      reportParseError("unexpected token, expected end of statement");
+      return false;
+    }
+
+    return false; // parseDirectiveModule has finished successfully.
   } else {
     return Error(L, "'" + Twine(Option) + "' is not a valid .module option.");
   }
@@ -4802,6 +4850,7 @@ bool MipsAsmParser::parseFpABIValue(MipsABIFlagsSection::FpABIKind &FpABI,
                                     StringRef Directive) {
   MCAsmParser &Parser = getParser();
   MCAsmLexer &Lexer = getLexer();
+  bool ModuleLevelOptions = Directive == ".module";
 
   if (Lexer.is(AsmToken::Identifier)) {
     StringRef Value = Parser.getTok().getString();
@@ -4818,8 +4867,13 @@ bool MipsAsmParser::parseFpABIValue(MipsABIFlagsSection::FpABIKind &FpABI,
     }
 
     FpABI = MipsABIFlagsSection::FpABIKind::XX;
-    setFeatureBits(Mips::FeatureFPXX, "fpxx");
-    clearFeatureBits(Mips::FeatureFP64Bit, "fp64");
+    if (ModuleLevelOptions) {
+      setModuleFeatureBits(Mips::FeatureFPXX, "fpxx");
+      clearModuleFeatureBits(Mips::FeatureFP64Bit, "fp64");
+    } else {
+      setFeatureBits(Mips::FeatureFPXX, "fpxx");
+      clearFeatureBits(Mips::FeatureFP64Bit, "fp64");
+    }
     return true;
   }
 
@@ -4839,12 +4893,22 @@ bool MipsAsmParser::parseFpABIValue(MipsABIFlagsSection::FpABIKind &FpABI,
       }
 
       FpABI = MipsABIFlagsSection::FpABIKind::S32;
-      clearFeatureBits(Mips::FeatureFPXX, "fpxx");
-      clearFeatureBits(Mips::FeatureFP64Bit, "fp64");
+      if (ModuleLevelOptions) {
+        clearModuleFeatureBits(Mips::FeatureFPXX, "fpxx");
+        clearModuleFeatureBits(Mips::FeatureFP64Bit, "fp64");
+      } else {
+        clearFeatureBits(Mips::FeatureFPXX, "fpxx");
+        clearFeatureBits(Mips::FeatureFP64Bit, "fp64");
+      }
     } else {
       FpABI = MipsABIFlagsSection::FpABIKind::S64;
-      clearFeatureBits(Mips::FeatureFPXX, "fpxx");
-      setFeatureBits(Mips::FeatureFP64Bit, "fp64");
+      if (ModuleLevelOptions) {
+        clearModuleFeatureBits(Mips::FeatureFPXX, "fpxx");
+        setModuleFeatureBits(Mips::FeatureFP64Bit, "fp64");
+      } else {
+        clearFeatureBits(Mips::FeatureFPXX, "fpxx");
+        setFeatureBits(Mips::FeatureFP64Bit, "fp64");
+      }
     }
 
     return true;
