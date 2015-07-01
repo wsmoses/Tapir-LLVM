@@ -494,6 +494,7 @@ private:
   void visitCallSite      (CallSite CS);
   void visitResumeInst    (TerminatorInst &I) { /*returns void*/ }
   void visitUnreachableInst(TerminatorInst &I) { /*returns void*/ }
+  void visitReattachInst  (TerminatorInst &I) { /*returns void*/ }
   void visitFenceInst     (FenceInst &I) { /*returns void*/ }
   void visitAtomicCmpXchgInst(AtomicCmpXchgInst &I) {
     markAnythingOverdefined(&I);
@@ -571,6 +572,11 @@ void SCCPSolver::getFeasibleSuccessors(TerminatorInst &TI,
     return;
   }
 
+  if (isa<DetachInst>(&TI)) {
+    // All destinations are executable.
+    Succs.assign(TI.getNumSuccessors(), true);
+    return;
+  }
 #ifndef NDEBUG
   dbgs() << "Unknown terminator instruction: " << TI << '\n';
 #endif
