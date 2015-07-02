@@ -577,6 +577,12 @@ void SCCPSolver::getFeasibleSuccessors(TerminatorInst &TI,
     Succs.assign(TI.getNumSuccessors(), true);
     return;
   }
+
+  if (isa<SyncInst>(&TI)) {
+    // All destinations are executable.
+    Succs.assign(TI.getNumSuccessors(), true);
+    return;
+  }
 #ifndef NDEBUG
   dbgs() << "Unknown terminator instruction: " << TI << '\n';
 #endif

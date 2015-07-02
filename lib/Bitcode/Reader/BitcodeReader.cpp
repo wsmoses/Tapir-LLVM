@@ -3993,6 +3993,16 @@ std::error_code BitcodeReader::parseFunctionBody(Function *F) {
       I = new ReattachInst(Context);
       InstructionList.push_back(I);
       break;
+    case bitc::FUNC_CODE_INST_SYNC: { // Sync: [bb#]
+      if (Record.size() != 1)
+        return error("Invalid record");
+      BasicBlock *Continue = getBasicBlock(Record[0]);
+      if (!Continue)
+        return error("Invalid record");
+      I = SyncInst::Create(Continue);
+      InstructionList.push_back(I);
+      break;
+    }
     case bitc::FUNC_CODE_INST_PHI: { // PHI: [ty, val0,bb0, ...]
       if (Record.size() < 1 || ((Record.size()-1)&1))
         return error("Invalid record");

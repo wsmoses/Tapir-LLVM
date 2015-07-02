@@ -4491,6 +4491,7 @@ int LLParser::ParseInstruction(Instruction *&Inst, BasicBlock *BB,
   case lltok::kw_resume:      return ParseResume(Inst, PFS);
   case lltok::kw_detach:      return ParseDetach(Inst, PFS);
   case lltok::kw_reattach:    Inst = new ReattachInst(Context); return false;
+  case lltok::kw_sync:        return ParseSync(Inst, PFS);
   // Binary Operators.
   case lltok::kw_add:
   case lltok::kw_sub:
@@ -4693,6 +4694,19 @@ bool LLParser::ParseDetach(Instruction *&Inst, PerFunctionState &PFS) {
     return true;
 
   Inst = DetachInst::Create(Op1, Op2);
+  return false;
+}
+
+/// ParseSync
+///   ::= 'sync' TypeAndValue
+bool LLParser::ParseSync(Instruction *&Inst, PerFunctionState &PFS) {
+  LocTy Loc;
+  BasicBlock *Op;
+
+  if (ParseTypeAndBasicBlock(Op, Loc, PFS))
+    return true;
+
+  Inst = SyncInst::Create(Op);
   return false;
 }
 

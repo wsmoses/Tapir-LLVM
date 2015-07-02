@@ -2158,7 +2158,6 @@ void SelectionDAGBuilder::visitDetach(const DetachInst &I) {
 
 }
 
-
 void SelectionDAGBuilder::visitReattach(const ReattachInst &I) {
   // TODO!!!
   assert(0 && "Lowering reattach to machine instructions not completed yet!");
@@ -2166,6 +2165,24 @@ void SelectionDAGBuilder::visitReattach(const ReattachInst &I) {
   if (DAG.getTarget().Options.TrapUnreachable)
     DAG.setRoot(DAG.getNode(ISD::TRAP, getCurSDLoc(), MVT::Other, DAG.getRoot()));
 }
+
+void SelectionDAGBuilder::visitSync(const SyncInst &I) {
+  MachineBasicBlock *SyncMBB = FuncInfo.MBB;
+
+  // Update machine-CFG edges.
+  MachineBasicBlock *Continue = FuncInfo.MBBMap[I.getSuccessor(0)];
+
+  // TODO!!!
+  assert(0 && "Lowering sync to machine instructions not completed yet!");
+
+  addSuccessorWithWeight(SyncMBB, Continue);
+
+  DAG.setRoot(DAG.getNode(ISD::BR, getCurSDLoc(),
+                          MVT::Other, getControlRoot(),
+                          DAG.getBasicBlock(Continue)));
+
+}
+
 
 void SelectionDAGBuilder::visitFSub(const User &I) {
   // -0.0 - X --> fneg

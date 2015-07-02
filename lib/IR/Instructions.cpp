@@ -793,6 +793,53 @@ BasicBlock *ReattachInst::getSuccessorV(unsigned idx) const {
 }
 
 //===----------------------------------------------------------------------===//
+//                        SyncInst Implementation
+//===----------------------------------------------------------------------===//
+
+void SyncInst::AssertOK() {
+}
+
+SyncInst::SyncInst(BasicBlock *Continue, Instruction *InsertBefore)
+  : TerminatorInst(Type::getVoidTy(Continue->getContext()), Instruction::Sync,
+                   OperandTraits<SyncInst>::op_end(this) - 1,
+                   1, InsertBefore) {
+  Op<-1>() = Continue;
+#ifndef NDEBUG
+  AssertOK();
+#endif
+}
+
+SyncInst::SyncInst(BasicBlock *Continue, BasicBlock *InsertAtEnd)
+  : TerminatorInst(Type::getVoidTy(Continue->getContext()), Instruction::Sync,
+                   OperandTraits<SyncInst>::op_end(this) - 1,
+                   1, InsertAtEnd) {
+  Op<-1>() = Continue;
+#ifndef NDEBUG
+  AssertOK();
+#endif
+}
+
+
+SyncInst::SyncInst(const SyncInst &BI) :
+  TerminatorInst(Type::getVoidTy(BI.getContext()), Instruction::Sync,
+                 OperandTraits<SyncInst>::op_end(this) - BI.getNumOperands(),
+                 BI.getNumOperands()) {
+  Op<-1>() = BI.Op<-1>();
+  assert(BI.getNumOperands() == 1 && "Sync must have 1 operand!");
+  SubclassOptionalData = BI.SubclassOptionalData;
+}
+
+BasicBlock *SyncInst::getSuccessorV(unsigned idx) const {
+  return getSuccessor(idx);
+}
+unsigned SyncInst::getNumSuccessorsV() const {
+  return getNumSuccessors();
+}
+void SyncInst::setSuccessorV(unsigned idx, BasicBlock *B) {
+  setSuccessor(idx, B);
+}
+
+//===----------------------------------------------------------------------===//
 //                        BranchInst Implementation
 //===----------------------------------------------------------------------===//
 
@@ -3725,4 +3772,8 @@ DetachInst *DetachInst::cloneImpl() const {
 ReattachInst *ReattachInst::cloneImpl() const {
   LLVMContext &Context = getContext();
   return new ReattachInst(Context);
+}
+
+SyncInst *SyncInst::cloneImpl() const {
+  return new(getNumOperands()) SyncInst(*this);
 }

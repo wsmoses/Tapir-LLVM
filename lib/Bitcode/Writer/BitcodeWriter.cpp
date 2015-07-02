@@ -1862,6 +1862,13 @@ static void WriteInstruction(const Instruction &I, unsigned InstID,
     Code = bitc::FUNC_CODE_INST_REATTACH;
     AbbrevToUse = FUNCTION_INST_REATTACH_ABBREV;
     break;
+  case Instruction::Sync:
+    {
+      Code = bitc::FUNC_CODE_INST_SYNC;
+      const SyncInst &II = cast<SyncInst>(I);
+      Vals.push_back(VE.getValueID(II.getSuccessor(0)));
+    }
+    break;
 
   case Instruction::PHI: {
     const PHINode &PN = cast<PHINode>(I);

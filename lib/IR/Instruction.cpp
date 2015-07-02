@@ -198,6 +198,7 @@ const char *Instruction::getOpcodeName(unsigned OpCode) {
   case Unreachable: return "unreachable";
   case Detach: return "detach";
   case Reattach: return "reattach";
+  case Sync:   return "sync";
 
   // Standard binary operators...
   case Add: return "add";

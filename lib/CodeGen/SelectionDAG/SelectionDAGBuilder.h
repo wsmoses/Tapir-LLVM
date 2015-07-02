@@ -73,6 +73,7 @@ class ShuffleVectorInst;
 class SIToFPInst;
 class StoreInst;
 class SwitchInst;
+class SyncInst;
 class DataLayout;
 class TargetLibraryInfo;
 class TargetLowering;
@@ -738,6 +739,7 @@ private:
   void visitUnreachable(const UnreachableInst &I);
   void visitDetach(const DetachInst& I);
   void visitReattach(const ReattachInst& I);
+  void visitSync(const SyncInst& I);
 
   uint32_t getEdgeWeight(const MachineBasicBlock *Src,
                          const MachineBasicBlock *Dst) const;

@@ -101,7 +101,7 @@ bool DominatorTree::dominates(const Instruction *Def,
   // in the UseBB.
   if (isa<InvokeInst>(Def) || isa<PHINode>(User))
     return dominates(Def, UseBB);
-
+  
   if (DefBB != UseBB)
     return dominates(DefBB, UseBB);
 

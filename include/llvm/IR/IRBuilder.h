@@ -687,6 +687,10 @@ public:
     return Insert(new ReattachInst(Context));
   }
 
+  SyncInst *CreateSync(BasicBlock *Continue) {
+    return Insert(SyncInst::Create(Continue));
+  }
+
   //===--------------------------------------------------------------------===//
   // Instruction creation methods: Binary Operators
   //===--------------------------------------------------------------------===//

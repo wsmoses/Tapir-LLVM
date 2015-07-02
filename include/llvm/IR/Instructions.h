@@ -3685,6 +3685,65 @@ private:
 };
 
 //===----------------------------------------------------------------------===//
+//                           SyncInst Class
+//===----------------------------------------------------------------------===//
+
+//===---------------------------------------------------------------------------
+/// SyncInst - Sync instruction.
+///
+class SyncInst : public TerminatorInst {
+  /// Ops list - A sync is like an unconditional branch to its continuation.
+  SyncInst(const SyncInst &BI);
+  void AssertOK();
+  // SyncInst constructor (where C is a block):
+  // SyncInst(BB *C)                           - 'sync C'
+  // BranchInst(BB* C, Inst *I)                - 'sync C'        insert before I
+  // BranchInst(BB* C, BB *I)                  - 'sync C'        insert at end
+  explicit SyncInst(BasicBlock *Continue, Instruction *InsertBefore = nullptr);
+  SyncInst(BasicBlock *Continue, BasicBlock *InsertAtEnd);
+protected:
+  // Note: Instruction needs to be a friend here to call cloneImpl.
+  friend class Instruction;
+  SyncInst *cloneImpl() const;
+
+public:
+  static SyncInst *Create(BasicBlock *Continue,
+                          Instruction *InsertBefore = nullptr) {
+    return new(1) SyncInst(Continue, InsertBefore);
+  }
+  static SyncInst *Create(BasicBlock *Continue, BasicBlock *InsertAtEnd) {
+    return new(1) SyncInst(Continue, InsertAtEnd);
+  }
+
+  /// Transparently provide more efficient getOperand methods.
+  DECLARE_TRANSPARENT_OPERAND_ACCESSORS(Value);
+
+  unsigned getNumSuccessors() const { return 1; }
+  BasicBlock *getSuccessor(unsigned i) const {
+    assert(i < getNumSuccessors() && "Successor # out of range for Sync!");
+    return cast_or_null<BasicBlock>((&Op<-1>() - i)->get());
+  }
+
+  // Methods for support type inquiry through isa, cast, and dyn_cast:
+  static inline bool classof(const Instruction *I) {
+    return I->getOpcode() == Instruction::Sync;
+  }
+  static inline bool classof(const Value *V) {
+    return isa<Instruction>(V) && classof(cast<Instruction>(V));
+  }
+private:
+  BasicBlock *getSuccessorV(unsigned idx) const override;
+  unsigned getNumSuccessorsV() const override;
+  void setSuccessorV(unsigned idx, BasicBlock *B) override;
+};
+
+template <>
+struct OperandTraits<SyncInst> : public VariadicOperandTraits<SyncInst, 1> {
+};
+
+DEFINE_TRANSPARENT_OPERAND_ACCESSORS(SyncInst, Value)
+
+//===----------------------------------------------------------------------===//
 //                                 TruncInst Class
 //===----------------------------------------------------------------------===//
 
