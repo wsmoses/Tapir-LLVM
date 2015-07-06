@@ -31,10 +31,6 @@ static int compareAddress(const SymEntry *A, const SymEntry *B) {
   return A->Address - B->Address;
 }
 
-static int compareNumber(const SymEntry *A, const SymEntry *B) {
-  return A->Number - B->Number;
-}
-
 static unsigned getSectionID(const ObjectFile &O, SectionRef Sec) {
   if (auto *M = dyn_cast<MachOObjectFile>(&O))
     return M->getSectionID(Sec);
@@ -55,8 +51,8 @@ llvm::object::computeSymbolSizes(const ObjectFile &O) {
     auto Syms = E->symbols();
     if (Syms.begin() == Syms.end())
       Syms = E->getDynamicSymbolIterators();
-    for (SymbolRef Sym : Syms)
-      Ret.push_back({Sym, E->getSymbolSize(Sym)});
+    for (ELFSymbolRef Sym : Syms)
+      Ret.push_back({Sym, Sym.getSize()});
     return Ret;
   }
 
@@ -93,12 +89,12 @@ llvm::object::computeSymbolSizes(const ObjectFile &O) {
     P.Address = Size;
   }
 
-  // Put back in the original order and copy the result
-  array_pod_sort(Addresses.begin(), Addresses.end(), compareNumber);
+  // Assign the sorted symbols in the original order.
+  Ret.resize(SymNum);
   for (SymEntry &P : Addresses) {
     if (P.I == O.symbol_end())
       continue;
-    Ret.push_back({*P.I, P.Address});
+    Ret[P.Number] = {*P.I, P.Address};
   }
   return Ret;
 }

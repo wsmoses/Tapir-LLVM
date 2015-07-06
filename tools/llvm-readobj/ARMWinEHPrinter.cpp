@@ -198,13 +198,8 @@ Decoder::getSectionContaining(const COFFObjectFile &COFF, uint64_t VA) {
 ErrorOr<object::SymbolRef> Decoder::getSymbol(const COFFObjectFile &COFF,
                                               uint64_t VA, bool FunctionOnly) {
   for (const auto &Symbol : COFF.symbols()) {
-    if (FunctionOnly) {
-      SymbolRef::Type Type;
-      if (std::error_code EC = Symbol.getType(Type))
-        return EC;
-      if (Type != SymbolRef::ST_Function)
-        continue;
-    }
+    if (FunctionOnly && Symbol.getType() != SymbolRef::ST_Function)
+      continue;
 
     uint64_t Address;
     if (std::error_code EC = Symbol.getAddress(Address))
@@ -219,9 +214,7 @@ ErrorOr<SymbolRef> Decoder::getRelocatedSymbol(const COFFObjectFile &,
                                                const SectionRef &Section,
                                                uint64_t Offset) {
   for (const auto &Relocation : Section.relocations()) {
-    uint64_t RelocationOffset;
-    if (auto Error = Relocation.getOffset(RelocationOffset))
-      return Error;
+    uint64_t RelocationOffset = Relocation.getOffset();
     if (RelocationOffset == Offset)
       return *Relocation.getSymbol();
   }

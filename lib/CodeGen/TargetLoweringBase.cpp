@@ -38,6 +38,11 @@
 #include <cctype>
 using namespace llvm;
 
+static cl::opt<bool> JumpIsExpensiveOverride(
+    "jump-is-expensive", cl::init(false),
+    cl::desc("Do not create extra branches to split comparison logic."),
+    cl::Hidden);
+
 /// InitLibcallNames - Set default libcall names.
 ///
 static void InitLibcallNames(const char **Names, const Triple &TT) {
@@ -757,7 +762,7 @@ TargetLoweringBase::TargetLoweringBase(const TargetMachine &tm) : TM(tm) {
   IntDivIsCheap = false;
   FsqrtIsCheap = false;
   Pow2SDivIsCheap = false;
-  JumpIsExpensive = false;
+  JumpIsExpensive = JumpIsExpensiveOverride;
   PredictableSelectIsExpensive = false;
   MaskAndBranchFoldingIsLegal = false;
   EnableExtLdPromotion = false;
@@ -913,6 +918,12 @@ bool TargetLoweringBase::canOpTrap(unsigned Op, EVT VT) const {
   case ISD::UREM:
     return true;
   }
+}
+
+void TargetLoweringBase::setJumpIsExpensive(bool isExpensive) {
+  // If the command-line option was specified, ignore this request.
+  if (!JumpIsExpensiveOverride.getNumOccurrences())
+    JumpIsExpensive = isExpensive;
 }
 
 TargetLoweringBase::LegalizeKind
@@ -1538,7 +1549,7 @@ int TargetLoweringBase::InstructionOpcodeToISD(unsigned Opcode) const {
 #include "llvm/IR/Instruction.def"
   };
   switch (static_cast<InstructionOpcodes>(Opcode)) {
-    // TODO: Add Spawn
+    // TODO: Add detach, reattach, sync
   case Ret:            return 0;
   case Br:             return 0;
   case Switch:         return 0;

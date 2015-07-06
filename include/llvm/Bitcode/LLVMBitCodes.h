@@ -167,6 +167,7 @@ namespace bitc {
     METADATA_EXPRESSION    = 29,  // [distinct, n x element]
     METADATA_OBJC_PROPERTY = 30,  // [distinct, name, file, line, ...]
     METADATA_IMPORTED_ENTITY=31,  // [distinct, tag, scope, entity, line, name]
+    METADATA_MODULE=32,           // [distinct, scope, name, ...]
   };
 
   // The constants block (CONSTANTS_BLOCK_ID) describes emission for each
@@ -353,8 +354,9 @@ namespace bitc {
     FUNC_CODE_INST_CMPXCHG     = 46, // CMPXCHG: [ptrty,ptr,valty,cmp,new, align,
                                      //           vol,ordering,synchscope]
     FUNC_CODE_INST_LANDINGPAD  = 47, // LANDINGPAD: [ty,val,num,id0,val0...]
-    FUNC_CODE_INST_SPAWN       = 48, // Spawn:  [bb#]
-    FUNC_CODE_INST_REATTACH    = 49, // Reattach:
+    FUNC_CODE_INST_DETACH      = 48, // DETACH: [bb#, bb#]
+    FUNC_CODE_INST_REATTACH    = 49, // REATTACH
+    FUNC_CODE_INST_SYNC        = 50, // SYNC: [bb#]
   };
 
   enum UseListCodes {

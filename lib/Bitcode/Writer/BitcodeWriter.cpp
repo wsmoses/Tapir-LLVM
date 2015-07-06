@@ -1033,6 +1033,17 @@ static void WriteDINamespace(const DINamespace *N, const ValueEnumerator &VE,
   Record.clear();
 }
 
+static void WriteDIModule(const DIModule *N, const ValueEnumerator &VE,
+                          BitstreamWriter &Stream,
+                          SmallVectorImpl<uint64_t> &Record, unsigned Abbrev) {
+  Record.push_back(N->isDistinct());
+  for (auto &I : N->operands())
+    Record.push_back(VE.getMetadataOrNullID(I));
+
+  Stream.EmitRecord(bitc::METADATA_MODULE, Record, Abbrev);
+  Record.clear();
+}
+
 static void WriteDITemplateTypeParameter(const DITemplateTypeParameter *N,
                                          const ValueEnumerator &VE,
                                          BitstreamWriter &Stream,
@@ -1520,8 +1531,8 @@ static void WriteConstants(unsigned FirstVal, unsigned LastVal,
     } else if (isa<ConstantArray>(C) || isa<ConstantStruct>(C) ||
                isa<ConstantVector>(C)) {
       Code = bitc::CST_CODE_AGGREGATE;
-      for (unsigned i = 0, e = C->getNumOperands(); i != e; ++i)
-        Record.push_back(VE.getValueID(C->getOperand(i)));
+      for (const Value *Op : C->operands())
+        Record.push_back(VE.getValueID(Op));
       AbbrevToUse = AggregateAbbrev;
     } else if (const ConstantExpr *CE = dyn_cast<ConstantExpr>(C)) {
       switch (CE->getOpcode()) {
@@ -1783,14 +1794,6 @@ static void WriteInstruction(const Instruction &I, unsigned InstID,
       }
     }
     break;
-  case Instruction::Spawn:
-    {
-      Code = bitc::FUNC_CODE_INST_SPAWN;
-      const SpawnInst &II = cast<SpawnInst>(I);
-      Vals.push_back(VE.getValueID(II.getSuccessor(0)));
-      Vals.push_back(VE.getValueID(II.getSuccessor(1)));
-    }
-    break;
   case Instruction::Switch:
     {
       Code = bitc::FUNC_CODE_INST_SWITCH;
@@ -1847,9 +1850,24 @@ static void WriteInstruction(const Instruction &I, unsigned InstID,
     Code = bitc::FUNC_CODE_INST_UNREACHABLE;
     AbbrevToUse = FUNCTION_INST_UNREACHABLE_ABBREV;
     break;
+  case Instruction::Detach:
+    {
+      Code = bitc::FUNC_CODE_INST_DETACH;
+      const DetachInst &II = cast<DetachInst>(I);
+      Vals.push_back(VE.getValueID(II.getSuccessor(0)));
+      Vals.push_back(VE.getValueID(II.getSuccessor(1)));
+    }
+    break;
   case Instruction::Reattach:
     Code = bitc::FUNC_CODE_INST_REATTACH;
     AbbrevToUse = FUNCTION_INST_REATTACH_ABBREV;
+    break;
+  case Instruction::Sync:
+    {
+      Code = bitc::FUNC_CODE_INST_SYNC;
+      const SyncInst &II = cast<SyncInst>(I);
+      Vals.push_back(VE.getValueID(II.getSuccessor(0)));
+    }
     break;
 
   case Instruction::PHI: {

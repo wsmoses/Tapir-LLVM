@@ -494,6 +494,7 @@ private:
   void visitCallSite      (CallSite CS);
   void visitResumeInst    (TerminatorInst &I) { /*returns void*/ }
   void visitUnreachableInst(TerminatorInst &I) { /*returns void*/ }
+  void visitReattachInst  (TerminatorInst &I) { /*returns void*/ }
   void visitFenceInst     (FenceInst &I) { /*returns void*/ }
   void visitAtomicCmpXchgInst(AtomicCmpXchgInst &I) {
     markAnythingOverdefined(&I);
@@ -571,6 +572,17 @@ void SCCPSolver::getFeasibleSuccessors(TerminatorInst &TI,
     return;
   }
 
+  if (isa<DetachInst>(&TI)) {
+    // All destinations are executable.
+    Succs.assign(TI.getNumSuccessors(), true);
+    return;
+  }
+
+  if (isa<SyncInst>(&TI)) {
+    // All destinations are executable.
+    Succs.assign(TI.getNumSuccessors(), true);
+    return;
+  }
 #ifndef NDEBUG
   dbgs() << "Unknown terminator instruction: " << TI << '\n';
 #endif
@@ -1055,7 +1067,7 @@ void SCCPSolver::visitLoadInst(LoadInst &I) {
 
   // load null -> null
   if (isa<ConstantPointerNull>(Ptr) && I.getPointerAddressSpace() == 0)
-    return markConstant(IV, &I, Constant::getNullValue(I.getType()));
+    return markConstant(IV, &I, UndefValue::get(I.getType()));
 
   // Transform load (constant global) into the value loaded.
   if (GlobalVariable *GV = dyn_cast<GlobalVariable>(Ptr)) {

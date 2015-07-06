@@ -767,23 +767,20 @@ void RuntimeDyldELF::findOPDEntrySection(const ELFObjectFileBase &Obj,
     if (RelSectionName != ".opd")
       continue;
 
-    for (relocation_iterator i = si->relocation_begin(),
-                             e = si->relocation_end();
+    for (elf_relocation_iterator i = si->relocation_begin(),
+                                 e = si->relocation_end();
          i != e;) {
       // The R_PPC64_ADDR64 relocation indicates the first field
       // of a .opd entry
-      uint64_t TypeFunc;
-      check(i->getType(TypeFunc));
+      uint64_t TypeFunc = i->getType();
       if (TypeFunc != ELF::R_PPC64_ADDR64) {
         ++i;
         continue;
       }
 
-      uint64_t TargetSymbolOffset;
+      uint64_t TargetSymbolOffset = i->getOffset();
       symbol_iterator TargetSymbol = i->getSymbol();
-      check(i->getOffset(TargetSymbolOffset));
-      ErrorOr<int64_t> AddendOrErr =
-          Obj.getRelocationAddend(i->getRawDataRefImpl());
+      ErrorOr<int64_t> AddendOrErr = i->getAddend();
       Check(AddendOrErr.getError());
       int64_t Addend = *AddendOrErr;
 
@@ -792,8 +789,7 @@ void RuntimeDyldELF::findOPDEntrySection(const ELFObjectFileBase &Obj,
         break;
 
       // Just check if following relocation is a R_PPC64_TOC
-      uint64_t TypeTOC;
-      check(i->getType(TypeTOC));
+      uint64_t TypeTOC = i->getType();
       if (TypeTOC != ELF::R_PPC64_TOC)
         continue;
 
@@ -1061,12 +1057,10 @@ relocation_iterator RuntimeDyldELF::processRelocationRef(
     unsigned SectionID, relocation_iterator RelI, const ObjectFile &O,
     ObjSectionToIDMap &ObjSectionToID, StubMap &Stubs) {
   const auto &Obj = cast<ELFObjectFileBase>(O);
-  uint64_t RelType;
-  Check(RelI->getType(RelType));
-  int64_t Addend = 0;
-  if (Obj.hasRelocationAddend(RelI->getRawDataRefImpl()))
-    Addend = *Obj.getRelocationAddend(RelI->getRawDataRefImpl());
-  symbol_iterator Symbol = RelI->getSymbol();
+  uint64_t RelType = RelI->getType();
+  ErrorOr<int64_t> AddendOrErr = ELFRelocationRef(*RelI).getAddend();
+  int64_t Addend = AddendOrErr ? *AddendOrErr : 0;
+  elf_symbol_iterator Symbol = RelI->getSymbol();
 
   // Obtain the symbol name which is referenced in the relocation
   StringRef TargetName;
@@ -1082,7 +1076,7 @@ relocation_iterator RuntimeDyldELF::processRelocationRef(
   RTDyldSymbolTable::const_iterator gsi = GlobalSymbolTable.end();
   if (Symbol != Obj.symbol_end()) {
     gsi = GlobalSymbolTable.find(TargetName.data());
-    Symbol->getType(SymType);
+    SymType = Symbol->getType();
   }
   if (gsi != GlobalSymbolTable.end()) {
     const auto &SymInfo = gsi->second;
@@ -1124,8 +1118,7 @@ relocation_iterator RuntimeDyldELF::processRelocationRef(
     }
   }
 
-  uint64_t Offset;
-  Check(RelI->getOffset(Offset));
+  uint64_t Offset = RelI->getOffset();
 
   DEBUG(dbgs() << "\t\tSectionID: " << SectionID << " Offset: " << Offset
                << "\n");
@@ -1312,8 +1305,7 @@ relocation_iterator RuntimeDyldELF::processRelocationRef(
         } else {
           // In the ELFv2 ABI, a function symbol may provide a local entry
           // point, which must be used for direct calls.
-          uint8_t SymOther;
-          Symbol->getOther(SymOther);
+          uint8_t SymOther = Symbol->getOther();
           Value.Addend += ELF::decodePPC64LocalEntryOffset(SymOther);
         }
         uint8_t *RelocTarget = Sections[Value.SectionID].Address + Value.Addend;

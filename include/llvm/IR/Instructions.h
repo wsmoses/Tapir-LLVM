@@ -2741,84 +2741,6 @@ struct OperandTraits<BranchInst> : public VariadicOperandTraits<BranchInst, 1> {
 DEFINE_TRANSPARENT_OPERAND_ACCESSORS(BranchInst, Value)
 
 //===----------------------------------------------------------------------===//
-//                               SpawnInst Class
-//===----------------------------------------------------------------------===//
-
-//===---------------------------------------------------------------------------
-/// BranchInst - Conditional or Unconditional Branch instruction.
-///
-class SpawnInst : public TerminatorInst {
-  /// Ops list - Branches are strange.  The operands are ordered:
-  ///  [Cond, FalseDest,] TrueDest.  This makes some accessors faster because
-  /// they don't have to check for cond/uncond branchness. These are mostly
-  /// accessed relative from op_end().
-  SpawnInst(const SpawnInst &BI);
-  void AssertOK();
-  // SpawnInst constructors (where {C, S} are blocks):
-  // BranchInst(BB* C, BB *S)          - 'spawn C, S'
-  // BranchInst(BB* C, BB *S, Inst *I) - 'spawn C, S', insert before I
-  // BranchInst(BB* C, BB *S, BB *I)   - 'spawn C, S', insert at end
-  SpawnInst(BasicBlock *Continue, BasicBlock *Spawned,
-            Instruction *InsertBefore = nullptr);
-  SpawnInst(BasicBlock *Continue, BasicBlock *Spawned,
-            BasicBlock *InsertAtEnd);
-protected:
-  // Note: Instruction needs to be a friend here to call cloneImpl.
-  friend class Instruction;
-  SpawnInst *cloneImpl() const;
-
- public:
-  static SpawnInst *Create(BasicBlock *Continue, BasicBlock *Spawned,
-                           Instruction *InsertBefore = nullptr) {
-    return new(2) SpawnInst(Continue, Spawned, InsertBefore);
-  }
-  static SpawnInst *Create(BasicBlock *Continue, BasicBlock *Spawned,
-                           BasicBlock *InsertAtEnd) {
-    return new(2) SpawnInst(Continue, Spawned, InsertAtEnd);
-  }
-
-  /// Transparently provide more efficient getOperand methods.
-  DECLARE_TRANSPARENT_OPERAND_ACCESSORS(Value);
-
-  unsigned getNumSuccessors() const { return 2; }
-
-  BasicBlock *getSuccessor(unsigned i) const {
-    assert(i < 2 && "Successor # out of range for Spawn!");
-    return cast_or_null<BasicBlock>((&Op<-1>() - i)->get());
-  }
-
-  void setSuccessor(unsigned idx, BasicBlock *NewSucc) {
-    assert(idx < 2 && "Successor # out of range for Spawn!");
-    *(&Op<-1>() - idx) = (Value*)NewSucc;
-  }
-
-  /// \brief Swap the successors of this branch instruction.
-  ///
-  /// Swaps the successors of the spawn instruction. This also swaps any
-  /// branch weight metadata associated with the instruction so that it
-  /// continues to map correctly to each operand.
-  void swapSuccessors();
-
-  // Methods for support type inquiry through isa, cast, and dyn_cast:
-  static inline bool classof(const Instruction *I) {
-    return (I->getOpcode() == Instruction::Spawn);
-  }
-  static inline bool classof(const Value *V) {
-    return isa<Instruction>(V) && classof(cast<Instruction>(V));
-  }
-private:
-  BasicBlock *getSuccessorV(unsigned idx) const override;
-  unsigned getNumSuccessorsV() const override;
-  void setSuccessorV(unsigned idx, BasicBlock *B) override;
-};
-
-template <>
-struct OperandTraits<SpawnInst> : public VariadicOperandTraits<SpawnInst, 1> {
-};
-
-DEFINE_TRANSPARENT_OPERAND_ACCESSORS(SpawnInst, Value)
-
-//===----------------------------------------------------------------------===//
 //                               SwitchInst Class
 //===----------------------------------------------------------------------===//
 
@@ -3649,6 +3571,81 @@ private:
 };
 
 //===----------------------------------------------------------------------===//
+//                               DetachInst Class
+//===----------------------------------------------------------------------===//
+
+//===---------------------------------------------------------------------------
+/// DetachInst - Detach instruction
+///
+class DetachInst : public TerminatorInst {
+  /// Ops list - The operands are ordered: Child, Parent.
+  DetachInst(const DetachInst &BI);
+  void AssertOK();
+  // DetachInst constructors (where {C, P} are blocks):
+  // BranchInst(BB* C, BB *P)          - 'detach C, P'
+  // BranchInst(BB* C, BB *P, Inst *I) - 'detach C, P', insert before I
+  // BranchInst(BB* C, BB *P, BB *I)   - 'detach C, P', insert at end
+  DetachInst(BasicBlock *Continue, BasicBlock *Parent,
+            Instruction *InsertBefore = nullptr);
+  DetachInst(BasicBlock *Continue, BasicBlock *Parent,
+            BasicBlock *InsertAtEnd);
+protected:
+  // Note: Instruction needs to be a friend here to call cloneImpl.
+  friend class Instruction;
+  DetachInst *cloneImpl() const;
+
+ public:
+  static DetachInst *Create(BasicBlock *Child, BasicBlock *Parent,
+                           Instruction *InsertBefore = nullptr) {
+    return new(2) DetachInst(Child, Parent, InsertBefore);
+  }
+  static DetachInst *Create(BasicBlock *Child, BasicBlock *Parent,
+                           BasicBlock *InsertAtEnd) {
+    return new(2) DetachInst(Child, Parent, InsertAtEnd);
+  }
+
+  /// Transparently provide more efficient getOperand methods.
+  DECLARE_TRANSPARENT_OPERAND_ACCESSORS(Value);
+
+  unsigned getNumSuccessors() const { return 2; }
+
+  BasicBlock *getSuccessor(unsigned i) const {
+    assert(i < 2 && "Successor # out of range for detach!");
+    return cast_or_null<BasicBlock>((&Op<-1>() - i)->get());
+  }
+
+  void setSuccessor(unsigned idx, BasicBlock *NewSucc) {
+    assert(idx < 2 && "Successor # out of range for detach!");
+    *(&Op<-1>() - idx) = (Value*)NewSucc;
+  }
+
+  /// \brief Swap the successors of this detach instruction.
+  ///
+  /// Swaps the successors of the spawn instruction. This also swaps any
+  /// branch weight metadata associated with the instruction so that it
+  /// continues to map correctly to each operand.
+  void swapSuccessors();
+
+  // Methods for support type inquiry through isa, cast, and dyn_cast:
+  static inline bool classof(const Instruction *I) {
+    return (I->getOpcode() == Instruction::Detach);
+  }
+  static inline bool classof(const Value *V) {
+    return isa<Instruction>(V) && classof(cast<Instruction>(V));
+  }
+private:
+  BasicBlock *getSuccessorV(unsigned idx) const override;
+  unsigned getNumSuccessorsV() const override;
+  void setSuccessorV(unsigned idx, BasicBlock *B) override;
+};
+
+template <>
+struct OperandTraits<DetachInst> : public VariadicOperandTraits<DetachInst, 1> {
+};
+
+DEFINE_TRANSPARENT_OPERAND_ACCESSORS(DetachInst, Value)
+
+//===----------------------------------------------------------------------===//
 //                           ReattachInst Class
 //===----------------------------------------------------------------------===//
 
@@ -3686,6 +3683,65 @@ private:
   unsigned getNumSuccessorsV() const override;
   void setSuccessorV(unsigned idx, BasicBlock *B) override;
 };
+
+//===----------------------------------------------------------------------===//
+//                           SyncInst Class
+//===----------------------------------------------------------------------===//
+
+//===---------------------------------------------------------------------------
+/// SyncInst - Sync instruction.
+///
+class SyncInst : public TerminatorInst {
+  /// Ops list - A sync is like an unconditional branch to its continuation.
+  SyncInst(const SyncInst &BI);
+  void AssertOK();
+  // SyncInst constructor (where C is a block):
+  // SyncInst(BB *C)                           - 'sync C'
+  // BranchInst(BB* C, Inst *I)                - 'sync C'        insert before I
+  // BranchInst(BB* C, BB *I)                  - 'sync C'        insert at end
+  explicit SyncInst(BasicBlock *Continue, Instruction *InsertBefore = nullptr);
+  SyncInst(BasicBlock *Continue, BasicBlock *InsertAtEnd);
+protected:
+  // Note: Instruction needs to be a friend here to call cloneImpl.
+  friend class Instruction;
+  SyncInst *cloneImpl() const;
+
+public:
+  static SyncInst *Create(BasicBlock *Continue,
+                          Instruction *InsertBefore = nullptr) {
+    return new(1) SyncInst(Continue, InsertBefore);
+  }
+  static SyncInst *Create(BasicBlock *Continue, BasicBlock *InsertAtEnd) {
+    return new(1) SyncInst(Continue, InsertAtEnd);
+  }
+
+  /// Transparently provide more efficient getOperand methods.
+  DECLARE_TRANSPARENT_OPERAND_ACCESSORS(Value);
+
+  unsigned getNumSuccessors() const { return 1; }
+  BasicBlock *getSuccessor(unsigned i) const {
+    assert(i < getNumSuccessors() && "Successor # out of range for Sync!");
+    return cast_or_null<BasicBlock>((&Op<-1>() - i)->get());
+  }
+
+  // Methods for support type inquiry through isa, cast, and dyn_cast:
+  static inline bool classof(const Instruction *I) {
+    return I->getOpcode() == Instruction::Sync;
+  }
+  static inline bool classof(const Value *V) {
+    return isa<Instruction>(V) && classof(cast<Instruction>(V));
+  }
+private:
+  BasicBlock *getSuccessorV(unsigned idx) const override;
+  unsigned getNumSuccessorsV() const override;
+  void setSuccessorV(unsigned idx, BasicBlock *B) override;
+};
+
+template <>
+struct OperandTraits<SyncInst> : public VariadicOperandTraits<SyncInst, 1> {
+};
+
+DEFINE_TRANSPARENT_OPERAND_ACCESSORS(SyncInst, Value)
 
 //===----------------------------------------------------------------------===//
 //                                 TruncInst Class

@@ -1827,6 +1827,20 @@ std::error_code BitcodeReader::parseMetadata() {
           NextMDValueNo++);
       break;
     }
+
+    case bitc::METADATA_MODULE: {
+      if (Record.size() != 6)
+        return error("Invalid record");
+
+      MDValueList.assignValue(
+          GET_OR_DISTINCT(DIModule, Record[0],
+                          (Context, getMDOrNull(Record[1]),
+                          getMDString(Record[2]), getMDString(Record[3]),
+                          getMDString(Record[4]), getMDString(Record[5]))),
+          NextMDValueNo++);
+      break;
+    }
+
     case bitc::METADATA_FILE: {
       if (Record.size() != 3)
         return error("Invalid record");
@@ -3779,20 +3793,6 @@ std::error_code BitcodeReader::parseFunctionBody(Function *F) {
       }
       break;
     }
-    case bitc::FUNC_CODE_INST_SPAWN: { // SPAWN: [bb#, bb#]
-      if (Record.size() != 2)
-        return error("Invalid record");
-      BasicBlock *TrueDest = getBasicBlock(Record[0]);
-      if (!TrueDest)
-        return error("Invalid record");
-
-      BasicBlock *FalseDest = getBasicBlock(Record[1]);
-      if (!FalseDest)
-        return error("Invalid record");
-      I = SpawnInst::Create(TrueDest, FalseDest);
-      InstructionList.push_back(I);
-      break;
-    }
     case bitc::FUNC_CODE_INST_SWITCH: { // SWITCH: [opty, op0, op1, ...]
       // Check magic
       if ((Record[0] >> 16) == SWITCH_INST_MAGIC) {
@@ -3975,10 +3975,34 @@ std::error_code BitcodeReader::parseFunctionBody(Function *F) {
       I = new UnreachableInst(Context);
       InstructionList.push_back(I);
       break;
-    case bitc::FUNC_CODE_INST_REATTACH: //REATTACH
+    case bitc::FUNC_CODE_INST_DETACH: { // DETACH: [bb#, bb#]
+      if (Record.size() != 2)
+        return error("Invalid record");
+      BasicBlock *Child = getBasicBlock(Record[0]);
+      if (!Child)
+        return error("Invalid record");
+
+      BasicBlock *Parent = getBasicBlock(Record[1]);
+      if (!Parent)
+        return error("Invalid record");
+      I = DetachInst::Create(Child, Parent);
+      InstructionList.push_back(I);
+      break;
+    }
+    case bitc::FUNC_CODE_INST_REATTACH: // REATTACH
       I = new ReattachInst(Context);
       InstructionList.push_back(I);
       break;
+    case bitc::FUNC_CODE_INST_SYNC: { // Sync: [bb#]
+      if (Record.size() != 1)
+        return error("Invalid record");
+      BasicBlock *Continue = getBasicBlock(Record[0]);
+      if (!Continue)
+        return error("Invalid record");
+      I = SyncInst::Create(Continue);
+      InstructionList.push_back(I);
+      break;
+    }
     case bitc::FUNC_CODE_INST_PHI: { // PHI: [ty, val0,bb0, ...]
       if (Record.size() < 1 || ((Record.size()-1)&1))
         return error("Invalid record");

@@ -36,6 +36,7 @@ class BasicBlock;
 class BitCastInst;
 class BranchInst;
 class CallInst;
+class DetachInst;
 class DbgValueInst;
 class ExtractElementInst;
 class ExtractValueInst;
@@ -63,15 +64,16 @@ class MDNode;
 class MVT;
 class PHINode;
 class PtrToIntInst;
+class ReattachInst;
 class ReturnInst;
 class SDDbgValue;
 class SExtInst;
 class SelectInst;
 class ShuffleVectorInst;
 class SIToFPInst;
-class SpawnInst;
 class StoreInst;
 class SwitchInst;
+class SyncInst;
 class DataLayout;
 class TargetLibraryInfo;
 class TargetLowering;
@@ -732,11 +734,12 @@ private:
   // Terminator instructions.
   void visitRet(const ReturnInst &I);
   void visitBr(const BranchInst &I);
-  void visitSpawn(const SpawnInst& I);
   void visitSwitch(const SwitchInst &I);
   void visitIndirectBr(const IndirectBrInst &I);
   void visitUnreachable(const UnreachableInst &I);
-  void visitReattach(const ReattachInst &I);
+  void visitDetach(const DetachInst& I);
+  void visitReattach(const ReattachInst& I);
+  void visitSync(const SyncInst& I);
 
   uint32_t getEdgeWeight(const MachineBasicBlock *Src,
                          const MachineBasicBlock *Dst) const;

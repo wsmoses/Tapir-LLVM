@@ -3676,6 +3676,24 @@ bool LLParser::ParseDINamespace(MDNode *&Result, bool IsDistinct) {
   return false;
 }
 
+/// ParseDIModule:
+///   ::= !DIModule(scope: !0, name: "SomeModule", configMacros: "-DNDEBUG",
+///                 includePath: "/usr/include", isysroot: "/")
+bool LLParser::ParseDIModule(MDNode *&Result, bool IsDistinct) {
+#define VISIT_MD_FIELDS(OPTIONAL, REQUIRED)                                    \
+  REQUIRED(scope, MDField, );                                                  \
+  REQUIRED(name, MDStringField, );                                             \
+  OPTIONAL(configMacros, MDStringField, );                                     \
+  OPTIONAL(includePath, MDStringField, );                                      \
+  OPTIONAL(isysroot, MDStringField, );
+  PARSE_MD_FIELDS();
+#undef VISIT_MD_FIELDS
+
+  Result = GET_OR_DISTINCT(DIModule, (Context, scope.Val, name.Val,
+                           configMacros.Val, includePath.Val, isysroot.Val));
+  return false;
+}
+
 /// ParseDITemplateTypeParameter:
 ///   ::= !DITemplateTypeParameter(name: "Ty", type: !1)
 bool LLParser::ParseDITemplateTypeParameter(MDNode *&Result, bool IsDistinct) {
@@ -4468,11 +4486,13 @@ int LLParser::ParseInstruction(Instruction *&Inst, BasicBlock *BB,
   case lltok::kw_reattach: Inst = new ReattachInst(Context); return false;
   case lltok::kw_ret:         return ParseRet(Inst, BB, PFS);
   case lltok::kw_br:          return ParseBr(Inst, PFS);
-  case lltok::kw_spawn:       return ParseSpawn(Inst, PFS);
   case lltok::kw_switch:      return ParseSwitch(Inst, PFS);
   case lltok::kw_indirectbr:  return ParseIndirectBr(Inst, PFS);
   case lltok::kw_invoke:      return ParseInvoke(Inst, PFS);
   case lltok::kw_resume:      return ParseResume(Inst, PFS);
+  case lltok::kw_detach:      return ParseDetach(Inst, PFS);
+  case lltok::kw_reattach:    Inst = new ReattachInst(Context); return false;
+  case lltok::kw_sync:        return ParseSync(Inst, PFS);
   // Binary Operators.
   case lltok::kw_add:
   case lltok::kw_sub:
@@ -4663,9 +4683,9 @@ bool LLParser::ParseBr(Instruction *&Inst, PerFunctionState &PFS) {
   return false;
 }
 
-/// ParseSpawn
-///   ::= 'spawn' TypeAndValue ',' TypeAndValue
-bool LLParser::ParseSpawn(Instruction *&Inst, PerFunctionState &PFS) {
+/// ParseDetach
+///   ::= 'detach' TypeAndValue ',' TypeAndValue
+bool LLParser::ParseDetach(Instruction *&Inst, PerFunctionState &PFS) {
   LocTy Loc, Loc2;
   BasicBlock *Op1, *Op2;
 
@@ -4674,7 +4694,20 @@ bool LLParser::ParseSpawn(Instruction *&Inst, PerFunctionState &PFS) {
       ParseTypeAndBasicBlock(Op2, Loc2, PFS))
     return true;
 
-  Inst = SpawnInst::Create(Op1, Op2);
+  Inst = DetachInst::Create(Op1, Op2);
+  return false;
+}
+
+/// ParseSync
+///   ::= 'sync' TypeAndValue
+bool LLParser::ParseSync(Instruction *&Inst, PerFunctionState &PFS) {
+  LocTy Loc;
+  BasicBlock *Op;
+
+  if (ParseTypeAndBasicBlock(Op, Loc, PFS))
+    return true;
+
+  Inst = SyncInst::Create(Op);
   return false;
 }
 

@@ -1445,8 +1445,8 @@ void SelectionDAGBuilder::FindMergedConditions(const Value *Cond,
     // We have flexibility in setting Prob for BB1 and Prob for TmpBB.
     // The requirement is that
     //   TrueProb for BB1 + (FalseProb for BB1 * TrueProb for TmpBB)
-    //     = TrueProb for orignal BB.
-    // Assuming the orignal weights are A and B, one choice is to set BB1's
+    //     = TrueProb for original BB.
+    // Assuming the original weights are A and B, one choice is to set BB1's
     // weights to A and A+2B, and set TmpBB's weights to A and 2B. This choice
     // assumes that
     //   TrueProb for BB1 == FalseProb for BB1 * TrueProb for TmpBB.
@@ -1481,8 +1481,8 @@ void SelectionDAGBuilder::FindMergedConditions(const Value *Cond,
     // We have flexibility in setting Prob for BB1 and Prob for TmpBB.
     // The requirement is that
     //   FalseProb for BB1 + (TrueProb for BB1 * FalseProb for TmpBB)
-    //     = FalseProb for orignal BB.
-    // Assuming the orignal weights are A and B, one choice is to set BB1's
+    //     = FalseProb for original BB.
+    // Assuming the original weights are A and B, one choice is to set BB1's
     // weights to 2A+B and B, and set TmpBB's weights to 2A and B. This choice
     // assumes that
     //   FalseProb for BB1 == TrueProb for BB1 * FalseProb for TmpBB.
@@ -1558,76 +1558,6 @@ void SelectionDAGBuilder::visitBr(const BranchInst &I) {
   // now.
   const Value *CondVal = I.getCondition();
   MachineBasicBlock *Succ1MBB = FuncInfo.MBBMap[I.getSuccessor(1)];
-
-  // If this is a series of conditions that are or'd or and'd together, emit
-  // this as a sequence of branches instead of setcc's with and/or operations.
-  // As long as jumps are not expensive, this should improve performance.
-  // For example, instead of something like:
-  //     cmp A, B
-  //     C = seteq
-  //     cmp D, E
-  //     F = setle
-  //     or C, F
-  //     jnz foo
-  // Emit:
-  //     cmp A, B
-  //     je foo
-  //     cmp D, E
-  //     jle foo
-  //
-  if (const BinaryOperator *BOp = dyn_cast<BinaryOperator>(CondVal)) {
-    if (!DAG.getTargetLoweringInfo().isJumpExpensive() &&
-        BOp->hasOneUse() && (BOp->getOpcode() == Instruction::And ||
-                             BOp->getOpcode() == Instruction::Or)) {
-      FindMergedConditions(BOp, Succ0MBB, Succ1MBB, BrMBB, BrMBB,
-                           BOp->getOpcode(), getEdgeWeight(BrMBB, Succ0MBB),
-                           getEdgeWeight(BrMBB, Succ1MBB));
-      // If the compares in later blocks need to use values not currently
-      // exported from this block, export them now.  This block should always
-      // be the first entry.
-      assert(SwitchCases[0].ThisBB == BrMBB && "Unexpected lowering!");
-
-      // Allow some cases to be rejected.
-      if (ShouldEmitAsBranches(SwitchCases)) {
-        for (unsigned i = 1, e = SwitchCases.size(); i != e; ++i) {
-          ExportFromCurrentBlock(SwitchCases[i].CmpLHS);
-          ExportFromCurrentBlock(SwitchCases[i].CmpRHS);
-        }
-
-        // Emit the branch for this block.
-        visitSwitchCase(SwitchCases[0], BrMBB);
-        SwitchCases.erase(SwitchCases.begin());
-        return;
-      }
-
-      // Okay, we decided not to do this, remove any inserted MBB's and clear
-      // SwitchCases.
-      for (unsigned i = 1, e = SwitchCases.size(); i != e; ++i)
-        FuncInfo.MF->erase(SwitchCases[i].ThisBB);
-
-      SwitchCases.clear();
-    }
-  }
-
-  // Create a CaseBlock record representing this branch.
-  CaseBlock CB(ISD::SETEQ, CondVal, ConstantInt::getTrue(*DAG.getContext()),
-               nullptr, Succ0MBB, Succ1MBB, BrMBB);
-
-  // Use visitSwitchCase to actually insert the fast branch sequence for this
-  // cond branch.
-  visitSwitchCase(CB, BrMBB);
-}
-
-void SelectionDAGBuilder::visitSpawn(const SpawnInst &I) {
-  MachineBasicBlock *BrMBB = FuncInfo.MBB;
-
-  // Update machine-CFG edges.
-  MachineBasicBlock *Succ0MBB = FuncInfo.MBBMap[I.getSuccessor(0)];
-
-  MachineBasicBlock *Succ1MBB = FuncInfo.MBBMap[I.getSuccessor(1)];
-  //TODO!!!
-  assert(0 && "Lowering spawn to machine instructions not completed yet!");
-  const Value *CondVal;// = I.getCondition();
 
   // If this is a series of conditions that are or'd or and'd together, emit
   // this as a sequence of branches instead of setcc's with and/or operations.
@@ -2201,10 +2131,58 @@ void SelectionDAGBuilder::visitUnreachable(const UnreachableInst &I) {
     DAG.setRoot(DAG.getNode(ISD::TRAP, getCurSDLoc(), MVT::Other, DAG.getRoot()));
 }
 
+void SelectionDAGBuilder::visitDetach(const DetachInst &I) {
+  MachineBasicBlock *DetachMBB = FuncInfo.MBB;
+
+  // Update machine-CFG edges.
+  MachineBasicBlock *Child = FuncInfo.MBBMap[I.getSuccessor(0)];
+  MachineBasicBlock *Parent = FuncInfo.MBBMap[I.getSuccessor(1)];
+
+  // TODO!!!
+  assert(0 && "Lowering detach to machine instructions not completed yet!");
+
+  // If the value of the invoke is used outside of its defining block, make it
+  // available as a virtual register.
+  // We already took care of the exported value for the statepoint instruction
+  // during call to the LowerStatepoint.
+  if (!isStatepoint(I)) {
+    CopyToExportRegsIfNeeded(&I);
+  }
+
+  addSuccessorWithWeight(DetachMBB, Child);
+  addSuccessorWithWeight(DetachMBB, Parent);
+
+  DAG.setRoot(DAG.getNode(ISD::BR, getCurSDLoc(),
+                          MVT::Other, getControlRoot(),
+                          DAG.getBasicBlock(Parent)));
+
+}
+
 void SelectionDAGBuilder::visitReattach(const ReattachInst &I) {
+  // TODO!!!
+  assert(0 && "Lowering reattach to machine instructions not completed yet!");
+
   if (DAG.getTarget().Options.TrapUnreachable)
     DAG.setRoot(DAG.getNode(ISD::TRAP, getCurSDLoc(), MVT::Other, DAG.getRoot()));
 }
+
+void SelectionDAGBuilder::visitSync(const SyncInst &I) {
+  MachineBasicBlock *SyncMBB = FuncInfo.MBB;
+
+  // Update machine-CFG edges.
+  MachineBasicBlock *Continue = FuncInfo.MBBMap[I.getSuccessor(0)];
+
+  // TODO!!!
+  assert(0 && "Lowering sync to machine instructions not completed yet!");
+
+  addSuccessorWithWeight(SyncMBB, Continue);
+
+  DAG.setRoot(DAG.getNode(ISD::BR, getCurSDLoc(),
+                          MVT::Other, getControlRoot(),
+                          DAG.getBasicBlock(Continue)));
+
+}
+
 
 void SelectionDAGBuilder::visitFSub(const User &I) {
   // -0.0 - X --> fneg
@@ -2313,17 +2291,11 @@ void SelectionDAGBuilder::visitSDiv(const User &I) {
   SDValue Op1 = getValue(I.getOperand(0));
   SDValue Op2 = getValue(I.getOperand(1));
 
-  // Turn exact SDivs into multiplications.
-  // FIXME: This should be in DAGCombiner, but it doesn't have access to the
-  // exact bit.
-  if (isa<BinaryOperator>(&I) && cast<BinaryOperator>(&I)->isExact() &&
-      !isa<ConstantSDNode>(Op1) &&
-      isa<ConstantSDNode>(Op2) && !cast<ConstantSDNode>(Op2)->isNullValue())
-    setValue(&I, DAG.getTargetLoweringInfo()
-                     .BuildExactSDIV(Op1, Op2, getCurSDLoc(), DAG));
-  else
-    setValue(&I, DAG.getNode(ISD::SDIV, getCurSDLoc(), Op1.getValueType(),
-                             Op1, Op2));
+  SDNodeFlags Flags;
+  Flags.setExact(isa<PossiblyExactOperator>(&I) &&
+                 cast<PossiblyExactOperator>(&I)->isExact());
+  setValue(&I, DAG.getNode(ISD::SDIV, getCurSDLoc(), Op1.getValueType(), Op1,
+                           Op2, &Flags));
 }
 
 void SelectionDAGBuilder::visitICmp(const User &I) {

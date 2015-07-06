@@ -728,13 +728,14 @@ lltok::Kind LLLexer::LexIdentifier() {
   INSTKEYWORD(va_arg,      VAArg);
   INSTKEYWORD(ret,         Ret);
   INSTKEYWORD(br,          Br);
-  INSTKEYWORD(spawn,       Spawn);
   INSTKEYWORD(switch,      Switch);
   INSTKEYWORD(indirectbr,  IndirectBr);
   INSTKEYWORD(invoke,      Invoke);
   INSTKEYWORD(resume,      Resume);
   INSTKEYWORD(unreachable, Unreachable);
+  INSTKEYWORD(detach,      Detach);
   INSTKEYWORD(reattach,    Reattach);
+  INSTKEYWORD(sync,        Sync);
 
   INSTKEYWORD(alloca,      Alloca);
   INSTKEYWORD(load,        Load);
