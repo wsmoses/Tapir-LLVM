@@ -368,12 +368,8 @@ std::error_code MachOObjectFile::getIndirectName(DataRefImpl Symb,
   return std::error_code();
 }
 
-uint64_t MachOObjectFile::getSymbolValue(DataRefImpl Sym) const {
-  uint64_t NValue = getNValue(Sym);
-  MachO::nlist_base Entry = getSymbolTableEntryBase(this, Sym);
-  if ((Entry.n_type & MachO::N_TYPE) == MachO::N_UNDF && NValue == 0)
-    return UnknownAddress;
-  return NValue;
+uint64_t MachOObjectFile::getSymbolValueImpl(DataRefImpl Sym) const {
+  return getNValue(Sym);
 }
 
 ErrorOr<uint64_t> MachOObjectFile::getSymbolAddress(DataRefImpl Sym) const {
@@ -390,7 +386,7 @@ uint32_t MachOObjectFile::getSymbolAlignment(DataRefImpl DRI) const {
 }
 
 uint64_t MachOObjectFile::getCommonSymbolSizeImpl(DataRefImpl DRI) const {
-  return getSymbolValue(DRI);
+  return getNValue(DRI);
 }
 
 SymbolRef::Type MachOObjectFile::getSymbolType(DataRefImpl Symb) const {
@@ -418,9 +414,6 @@ uint32_t MachOObjectFile::getSymbolFlags(DataRefImpl DRI) const {
 
   uint32_t Result = SymbolRef::SF_None;
 
-  if ((MachOType & MachO::N_TYPE) == MachO::N_UNDF)
-    Result |= SymbolRef::SF_Undefined;
-
   if ((MachOType & MachO::N_TYPE) == MachO::N_INDR)
     Result |= SymbolRef::SF_Indirect;
 
@@ -430,9 +423,10 @@ uint32_t MachOObjectFile::getSymbolFlags(DataRefImpl DRI) const {
   if (MachOType & MachO::N_EXT) {
     Result |= SymbolRef::SF_Global;
     if ((MachOType & MachO::N_TYPE) == MachO::N_UNDF) {
-      uint64_t Value = getSymbolValue(DRI);
-      if (Value && Value != UnknownAddress)
+      if (getNValue(DRI))
         Result |= SymbolRef::SF_Common;
+      else
+        Result |= SymbolRef::SF_Undefined;
     }
 
     if (!(MachOType & MachO::N_PEXT))
