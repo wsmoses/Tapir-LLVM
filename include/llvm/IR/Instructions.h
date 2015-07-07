@@ -3713,8 +3713,8 @@ class SyncInst : public TerminatorInst {
   void AssertOK();
   // SyncInst constructor (where C is a block):
   // SyncInst(BB *C)                           - 'sync C'
-  // BranchInst(BB* C, Inst *I)                - 'sync C'        insert before I
-  // BranchInst(BB* C, BB *I)                  - 'sync C'        insert at end
+  // SyncInst(BB* C, Inst *I)                  - 'sync C'        insert before I
+  // SyncInst(BB* C, BB *I)                    - 'sync C'        insert at end
   explicit SyncInst(BasicBlock *Continue, Instruction *InsertBefore = nullptr);
   SyncInst(BasicBlock *Continue, BasicBlock *InsertAtEnd);
 protected:
