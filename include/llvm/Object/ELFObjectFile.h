@@ -225,7 +225,6 @@ protected:
   section_iterator getRelocatedSection(DataRefImpl Sec) const override;
 
   void moveRelocationNext(DataRefImpl &Rel) const override;
-  ErrorOr<uint64_t> getRelocationAddress(DataRefImpl Rel) const override;
   uint64_t getRelocationOffset(DataRefImpl Rel) const override;
   symbol_iterator getRelocationSymbol(DataRefImpl Rel) const override;
   uint64_t getRelocationType(DataRefImpl Rel) const override;
@@ -234,7 +233,6 @@ protected:
 
   uint32_t getSectionType(DataRefImpl Sec) const override;
   uint64_t getSectionFlags(DataRefImpl Sec) const override;
-  uint64_t getROffset(DataRefImpl Rel) const;
   StringRef getRelocationTypeName(uint32_t Type) const;
 
   /// \brief Get the relocation section that contains \a Rel.
@@ -683,31 +681,9 @@ ELFObjectFile<ELFT>::getRelocationSymbol(DataRefImpl Rel) const {
 }
 
 template <class ELFT>
-ErrorOr<uint64_t>
-ELFObjectFile<ELFT>::getRelocationAddress(DataRefImpl Rel) const {
-  uint64_t ROffset = getROffset(Rel);
-  const Elf_Ehdr *Header = EF.getHeader();
-
-  if (Header->e_type == ELF::ET_REL) {
-    const Elf_Shdr *RelocationSec = getRelSection(Rel);
-    ErrorOr<const Elf_Shdr *> RelocatedSec =
-        EF.getSection(RelocationSec->sh_info);
-    if (std::error_code EC = RelocatedSec.getError())
-      return EC;
-    return ROffset + (*RelocatedSec)->sh_addr;
-  }
-  return ROffset;
-}
-
-template <class ELFT>
 uint64_t ELFObjectFile<ELFT>::getRelocationOffset(DataRefImpl Rel) const {
   assert(EF.getHeader()->e_type == ELF::ET_REL &&
          "Only relocatable object files have relocation offsets");
-  return getROffset(Rel);
-}
-
-template <class ELFT>
-uint64_t ELFObjectFile<ELFT>::getROffset(DataRefImpl Rel) const {
   const Elf_Shdr *sec = getRelSection(Rel);
   if (sec->sh_type == ELF::SHT_REL)
     return getRel(Rel)->r_offset;
