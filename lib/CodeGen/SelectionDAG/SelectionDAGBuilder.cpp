@@ -2136,8 +2136,8 @@ void SelectionDAGBuilder::visitDetach(const DetachInst &I) {
   MachineBasicBlock *DetachMBB = FuncInfo.MBB;
 
   // Update machine-CFG edges.
-  MachineBasicBlock *Child = FuncInfo.MBBMap[I.getSuccessor(0)];
-  MachineBasicBlock *Parent = FuncInfo.MBBMap[I.getSuccessor(1)];
+  MachineBasicBlock *Detached = FuncInfo.MBBMap[I.getSuccessor(0)];
+  MachineBasicBlock *Continue = FuncInfo.MBBMap[I.getSuccessor(1)];
 
   // TODO!!!
   assert(0 && "Lowering detach to machine instructions not completed yet!");
@@ -2150,12 +2150,12 @@ void SelectionDAGBuilder::visitDetach(const DetachInst &I) {
     CopyToExportRegsIfNeeded(&I);
   }
 
-  addSuccessorWithWeight(DetachMBB, Child);
-  addSuccessorWithWeight(DetachMBB, Parent);
+  addSuccessorWithWeight(DetachMBB, Detached);
+  addSuccessorWithWeight(DetachMBB, Continue);
 
   DAG.setRoot(DAG.getNode(ISD::BR, getCurSDLoc(),
                           MVT::Other, getControlRoot(),
-                          DAG.getBasicBlock(Parent)));
+                          DAG.getBasicBlock(Continue)));
 
 }
 

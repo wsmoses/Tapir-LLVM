@@ -3594,16 +3594,16 @@ private:
 /// DetachInst - Detach instruction
 ///
 class DetachInst : public TerminatorInst {
-  /// Ops list - The operands are ordered: Child, Parent.
-  DetachInst(const DetachInst &BI);
+  /// Ops list - The operands are ordered: Detached, Continue.
+  DetachInst(const DetachInst &DI);
   void AssertOK();
-  // DetachInst constructors (where {C, P} are blocks):
-  // BranchInst(BB* C, BB *P)          - 'detach C, P'
-  // BranchInst(BB* C, BB *P, Inst *I) - 'detach C, P', insert before I
-  // BranchInst(BB* C, BB *P, BB *I)   - 'detach C, P', insert at end
-  DetachInst(BasicBlock *Continue, BasicBlock *Parent,
+  // DetachInst constructors (where {D, C} are blocks):
+  // DetachInst(BB *D, BB *C)          - 'detach D, C'
+  // DetachInst(BB *D, BB *C, Inst *I) - 'detach D, C', insert before I
+  // DetachInst(BB *D, BB *C, BB *I)   - 'detach D, C', insert at end
+  DetachInst(BasicBlock *Detached, BasicBlock *Continue,
             Instruction *InsertBefore = nullptr);
-  DetachInst(BasicBlock *Continue, BasicBlock *Parent,
+  DetachInst(BasicBlock *Detached, BasicBlock *Continue,
             BasicBlock *InsertAtEnd);
 protected:
   // Note: Instruction needs to be a friend here to call cloneImpl.
@@ -3611,13 +3611,13 @@ protected:
   DetachInst *cloneImpl() const;
 
  public:
-  static DetachInst *Create(BasicBlock *Child, BasicBlock *Parent,
+  static DetachInst *Create(BasicBlock *Detached, BasicBlock *Continue,
                            Instruction *InsertBefore = nullptr) {
-    return new(2) DetachInst(Child, Parent, InsertBefore);
+    return new(2) DetachInst(Detached, Continue, InsertBefore);
   }
-  static DetachInst *Create(BasicBlock *Child, BasicBlock *Parent,
+  static DetachInst *Create(BasicBlock *Detached, BasicBlock *Continue,
                            BasicBlock *InsertAtEnd) {
-    return new(2) DetachInst(Child, Parent, InsertAtEnd);
+    return new(2) DetachInst(Detached, Continue, InsertAtEnd);
   }
 
   /// Transparently provide more efficient getOperand methods.
@@ -3666,26 +3666,44 @@ DEFINE_TRANSPARENT_OPERAND_ACCESSORS(DetachInst, Value)
 //===----------------------------------------------------------------------===//
 
 //===---------------------------------------------------------------------------
-/// ReattachInst - This function has undefined behavior.  In particular, the
-/// presence of this instruction indicates some higher level knowledge that the
-/// end of the block cannot be reached.
+/// ReattachInst - Reattach instruction.  This instruction terminates
+/// a subCFG and has no successors.  The DetachContinue field
+/// maintains the continue block after the detach instruction
+/// corresponding to this reattach.
 ///
 class ReattachInst : public TerminatorInst {
-  void *operator new(size_t, unsigned) = delete;
+  ReattachInst(const ReattachInst &RI);
+  void AssertOK();
+  // ReattachInst constructors (where D is a block):
+  // ReattachInst(BB *D)          - 'reattach D'
+  // ReattachInst(BB *D, Inst *I) - 'reattach D'        insert before I
+  // ReattachInst(BB *D, BB *I)   - 'reattach D'        insert at end
+  explicit ReattachInst(LLVMContext &C, BasicBlock *DetachContinue,
+                        Instruction *InsertBefore = nullptr);
+  ReattachInst(LLVMContext &C, BasicBlock *DetachContinue, BasicBlock *InsertAtEnd);
 protected:
   // Note: Instruction needs to be a friend here to call cloneImpl.
   friend class Instruction;
   ReattachInst *cloneImpl() const;
 
 public:
-  // allocate space for exactly zero operands
-  void *operator new(size_t s) {
-    return User::operator new(s, 0);
+  static ReattachInst *Create(LLVMContext &C, BasicBlock *DetachContinue,
+                              Instruction *InsertBefore = nullptr) {
+    return new(1) ReattachInst(C, DetachContinue, InsertBefore);
   }
-  explicit ReattachInst(LLVMContext &C, Instruction *InsertBefore = nullptr);
-  explicit ReattachInst(LLVMContext &C, BasicBlock *InsertAtEnd);
+  static ReattachInst *Create(LLVMContext &C, BasicBlock *DetachContinue,
+                              BasicBlock *InsertAtEnd) {
+    return new(1) ReattachInst(C, DetachContinue, InsertAtEnd);
+  }
+
+  /// Transparently provide more efficient getOperand methods.
+  DECLARE_TRANSPARENT_OPERAND_ACCESSORS(Value);
 
   unsigned getNumSuccessors() const { return 0; }
+
+  BasicBlock *getDetachContinue() const {
+    return cast_or_null<BasicBlock>((&Op<0>())->get());
+  }
 
   // Methods for support type inquiry through isa, cast, and dyn_cast:
   static inline bool classof(const Instruction *I) {
@@ -3700,6 +3718,12 @@ private:
   void setSuccessorV(unsigned idx, BasicBlock *B) override;
 };
 
+template <>
+struct OperandTraits<ReattachInst> : public VariadicOperandTraits<ReattachInst, 1> {
+};
+
+DEFINE_TRANSPARENT_OPERAND_ACCESSORS(ReattachInst, Value)
+
 //===----------------------------------------------------------------------===//
 //                           SyncInst Class
 //===----------------------------------------------------------------------===//
@@ -3709,12 +3733,12 @@ private:
 ///
 class SyncInst : public TerminatorInst {
   /// Ops list - A sync is like an unconditional branch to its continuation.
-  SyncInst(const SyncInst &BI);
+  SyncInst(const SyncInst &SI);
   void AssertOK();
   // SyncInst constructor (where C is a block):
-  // SyncInst(BB *C)                           - 'sync C'
-  // SyncInst(BB* C, Inst *I)                  - 'sync C'        insert before I
-  // SyncInst(BB* C, BB *I)                    - 'sync C'        insert at end
+  // SyncInst(BB *C)          - 'sync C'
+  // SyncInst(BB *C, Inst *I) - 'sync C'        insert before I
+  // SyncInst(BB *C, BB *I)   - 'sync C'        insert at end
   explicit SyncInst(BasicBlock *Continue, Instruction *InsertBefore = nullptr);
   SyncInst(BasicBlock *Continue, BasicBlock *InsertAtEnd);
 protected:

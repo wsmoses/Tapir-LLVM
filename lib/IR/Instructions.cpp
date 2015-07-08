@@ -703,39 +703,39 @@ BasicBlock *UnreachableInst::getSuccessorV(unsigned idx) const {
 void DetachInst::AssertOK() {
 }
 
-DetachInst::DetachInst(BasicBlock *Child, BasicBlock *Parent,
+DetachInst::DetachInst(BasicBlock *Detached, BasicBlock *Continue,
                        Instruction *InsertBefore)
-  : TerminatorInst(Type::getVoidTy(Child->getContext()), Instruction::Detach,
+  : TerminatorInst(Type::getVoidTy(Detached->getContext()), Instruction::Detach,
                    OperandTraits<DetachInst>::op_end(this) - 2,
                    2, InsertBefore) {
-  Op<-1>() = Child;
-  Op<-2>() = Parent;
+  Op<-1>() = Detached;
+  Op<-2>() = Continue;
 #ifndef NDEBUG
   AssertOK();
 #endif
 }
 
-DetachInst::DetachInst(BasicBlock *Child, BasicBlock *Parent,
+DetachInst::DetachInst(BasicBlock *Detached, BasicBlock *Continue,
                        BasicBlock *InsertAtEnd)
-  : TerminatorInst(Type::getVoidTy(Child->getContext()), Instruction::Detach,
+  : TerminatorInst(Type::getVoidTy(Detached->getContext()), Instruction::Detach,
                    OperandTraits<DetachInst>::op_end(this) - 2,
                    2, InsertAtEnd) {
-  Op<-1>() = Child;
-  Op<-2>() = Parent;
+  Op<-1>() = Detached;
+  Op<-2>() = Continue;
 #ifndef NDEBUG
   AssertOK();
 #endif
 }
 
 
-DetachInst::DetachInst(const DetachInst &BI) :
-  TerminatorInst(Type::getVoidTy(BI.getContext()), Instruction::Detach,
-                 OperandTraits<DetachInst>::op_end(this) - BI.getNumOperands(),
-                 BI.getNumOperands()) {
-  Op<-1>() = BI.Op<-1>();
-  Op<-2>() = BI.Op<-2>();
-  assert(BI.getNumOperands() == 2 && "Detach must have 2 operands!");
-  SubclassOptionalData = BI.SubclassOptionalData;
+DetachInst::DetachInst(const DetachInst &DI) :
+  TerminatorInst(Type::getVoidTy(DI.getContext()), Instruction::Detach,
+                 OperandTraits<DetachInst>::op_end(this) - DI.getNumOperands(),
+                 DI.getNumOperands()) {
+  Op<-1>() = DI.Op<-1>();
+  Op<-2>() = DI.Op<-2>();
+  assert(DI.getNumOperands() == 2 && "Detach must have 2 operands!");
+  SubclassOptionalData = DI.SubclassOptionalData;
 }
 
 void DetachInst::swapSuccessors() {
@@ -768,14 +768,31 @@ void DetachInst::setSuccessorV(unsigned idx, BasicBlock *B) {
 //                      ReattachInst Implementation
 //===----------------------------------------------------------------------===//
 
-ReattachInst::ReattachInst(LLVMContext &Context, 
-                           Instruction *InsertBefore)
-  : TerminatorInst(Type::getVoidTy(Context), Instruction::Reattach,
-                   nullptr, 0, InsertBefore) {
+void ReattachInst::AssertOK() {
 }
-ReattachInst::ReattachInst(LLVMContext &Context, BasicBlock *InsertAtEnd)
-  : TerminatorInst(Type::getVoidTy(Context), Instruction::Reattach,
-                   nullptr, 0, InsertAtEnd) {
+
+ReattachInst::ReattachInst(LLVMContext &C, BasicBlock *DetachContinue,
+                           Instruction *InsertBefore)
+  : TerminatorInst(Type::getVoidTy(C), Instruction::Reattach,
+                   OperandTraits<ReattachInst>::op_end(this) - 1, 1,
+                   InsertBefore) {
+  Op<0>() = DetachContinue;
+}
+ReattachInst::ReattachInst(LLVMContext &C, BasicBlock *DetachContinue,
+                           BasicBlock *InsertAtEnd)
+  : TerminatorInst(Type::getVoidTy(C), Instruction::Reattach,
+                   OperandTraits<ReattachInst>::op_end(this) - 1, 1,
+                   InsertAtEnd) {
+  Op<0>() = DetachContinue;
+}
+
+ReattachInst::ReattachInst(const ReattachInst &RI) :
+  TerminatorInst(Type::getVoidTy(RI.getContext()), Instruction::Reattach,
+                 OperandTraits<ReattachInst>::op_end(this) - RI.getNumOperands(),
+                 RI.getNumOperands()) {
+  Op<0>() = RI.Op<0>();
+  assert(RI.getNumOperands() == 1 && "Reattach must have 1 operand!");
+  SubclassOptionalData = RI.SubclassOptionalData;
 }
 
 unsigned ReattachInst::getNumSuccessorsV() const {
@@ -3768,8 +3785,7 @@ DetachInst *DetachInst::cloneImpl() const {
 }
 
 ReattachInst *ReattachInst::cloneImpl() const {
-  LLVMContext &Context = getContext();
-  return new ReattachInst(Context);
+  return new(getNumOperands()) ReattachInst(*this);
 }
 
 SyncInst *SyncInst::cloneImpl() const {

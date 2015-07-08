@@ -3978,21 +3978,27 @@ std::error_code BitcodeReader::parseFunctionBody(Function *F) {
     case bitc::FUNC_CODE_INST_DETACH: { // DETACH: [bb#, bb#]
       if (Record.size() != 2)
         return error("Invalid record");
-      BasicBlock *Child = getBasicBlock(Record[0]);
-      if (!Child)
+      BasicBlock *Detached = getBasicBlock(Record[0]);
+      if (!Detached)
         return error("Invalid record");
 
-      BasicBlock *Parent = getBasicBlock(Record[1]);
-      if (!Parent)
+      BasicBlock *Continue = getBasicBlock(Record[1]);
+      if (!Continue)
         return error("Invalid record");
-      I = DetachInst::Create(Child, Parent);
+      I = DetachInst::Create(Detached, Continue);
       InstructionList.push_back(I);
       break;
     }
-    case bitc::FUNC_CODE_INST_REATTACH: // REATTACH
-      I = new ReattachInst(Context);
+      case bitc::FUNC_CODE_INST_REATTACH: { // REATTACH
+      if (Record.size() != 1)
+        return error("Invalid record");
+      BasicBlock *DetachContinue = getBasicBlock(Record[0]);
+      if (!DetachContinue)
+        return error("Invalid record");
+      I = ReattachInst::Create(Context, DetachContinue);
       InstructionList.push_back(I);
       break;
+    }
     case bitc::FUNC_CODE_INST_SYNC: { // Sync: [bb#]
       if (Record.size() != 1)
         return error("Invalid record");

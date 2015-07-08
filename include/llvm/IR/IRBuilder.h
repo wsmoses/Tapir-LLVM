@@ -677,16 +677,18 @@ public:
   }
 
   /// \brief Create a detach 'detach Child, Parent' instruction.
-  DetachInst *CreateDetach(BasicBlock *Child, BasicBlock *Parent,
+  DetachInst *CreateDetach(BasicBlock *Detached, BasicBlock *Continue,
                            MDNode *BranchWeights = nullptr) {
-    return Insert(addBranchWeights(DetachInst::Create(Child, Parent),
+    return Insert(addBranchWeights(DetachInst::Create(Detached, Continue),
                                    BranchWeights));
   }
 
-  ReattachInst *CreateReattach() {
-    return Insert(new ReattachInst(Context));
+  /// \brief Create a reattach 'reattach [DetachContinue]' instruction.
+  ReattachInst *CreateReattach(BasicBlock *DetachContinue) {
+    return Insert(ReattachInst::Create(Context, DetachContinue));
   }
 
+  /// \brief Create a sync 'sync Continue' instruction.
   SyncInst *CreateSync(BasicBlock *Continue) {
     return Insert(SyncInst::Create(Continue));
   }

@@ -1853,20 +1853,24 @@ static void WriteInstruction(const Instruction &I, unsigned InstID,
   case Instruction::Detach:
     {
       Code = bitc::FUNC_CODE_INST_DETACH;
-      const DetachInst &II = cast<DetachInst>(I);
-      Vals.push_back(VE.getValueID(II.getSuccessor(0)));
-      Vals.push_back(VE.getValueID(II.getSuccessor(1)));
+      const DetachInst &DI = cast<DetachInst>(I);
+      Vals.push_back(VE.getValueID(DI.getSuccessor(0)));
+      Vals.push_back(VE.getValueID(DI.getSuccessor(1)));
     }
     break;
   case Instruction::Reattach:
-    Code = bitc::FUNC_CODE_INST_REATTACH;
-    AbbrevToUse = FUNCTION_INST_REATTACH_ABBREV;
+    {
+      Code = bitc::FUNC_CODE_INST_REATTACH;
+      AbbrevToUse = FUNCTION_INST_REATTACH_ABBREV;
+      const ReattachInst &RI = cast<ReattachInst>(I);
+      Vals.push_back(VE.getValueID(RI.getSuccessor(0)));
+    }
     break;
   case Instruction::Sync:
     {
       Code = bitc::FUNC_CODE_INST_SYNC;
-      const SyncInst &II = cast<SyncInst>(I);
-      Vals.push_back(VE.getValueID(II.getSuccessor(0)));
+      const SyncInst &SI = cast<SyncInst>(I);
+      Vals.push_back(VE.getValueID(SI.getSuccessor(0)));
     }
     break;
 

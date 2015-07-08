@@ -2780,12 +2780,19 @@ void AssemblyWriter::printInstruction(const Instruction &I) {
     Out << ", ";
     writeOperand(BI.getSuccessor(1), true);
   } else if (isa<DetachInst>(I)) {
-    // Special case spawn instruction to get formatting nice and correct
+    // Special case detach instruction to get formatting nice and correct
     const DetachInst &DI(cast<DetachInst>(I));
     Out << ' ';
     writeOperand(DI.getSuccessor(0), true);
     Out << ", ";
     writeOperand(DI.getSuccessor(1), true);
+  } else if (isa<ReattachInst>(I)) {
+    // Special case reattach instruction to get formatting nice and correct
+    const ReattachInst &RI(cast<ReattachInst>(I));
+    Out << ' ';
+    writeOperand(RI.getDetachContinue(), true);
+    Out.PadToColumn(50);
+    Out << "; not a branch";
 
   } else if (isa<SwitchInst>(I)) {
     const SwitchInst& SI(cast<SwitchInst>(I));

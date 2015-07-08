@@ -442,6 +442,7 @@ namespace llvm {
     bool ParseInvoke(Instruction *&Inst, PerFunctionState &PFS);
     bool ParseResume(Instruction *&Inst, PerFunctionState &PFS);
     bool ParseDetach(Instruction *&Inst, PerFunctionState &PFS);
+    bool ParseReattach(Instruction *&Inst, PerFunctionState &PFS);
     bool ParseSync(Instruction *&Inst, PerFunctionState &PFS);
 
     bool ParseArithmetic(Instruction *&I, PerFunctionState &PFS, unsigned Opc,
