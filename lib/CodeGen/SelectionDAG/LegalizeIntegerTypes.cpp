@@ -310,8 +310,10 @@ SDValue DAGTypeLegalizer::PromoteIntRes_BSWAP(SDNode *N) {
   SDLoc dl(N);
 
   unsigned DiffBits = NVT.getScalarSizeInBits() - OVT.getScalarSizeInBits();
-  return DAG.getNode(ISD::SRL, dl, NVT, DAG.getNode(ISD::BSWAP, dl, NVT, Op),
-                     DAG.getConstant(DiffBits, dl, TLI.getShiftAmountTy(NVT)));
+  return DAG.getNode(
+      ISD::SRL, dl, NVT, DAG.getNode(ISD::BSWAP, dl, NVT, Op),
+      DAG.getConstant(DiffBits, dl,
+                      TLI.getShiftAmountTy(NVT, DAG.getDataLayout())));
 }
 
 SDValue DAGTypeLegalizer::PromoteIntRes_BUILD_PAIR(SDNode *N) {
@@ -809,8 +811,8 @@ SDValue DAGTypeLegalizer::PromoteIntRes_VAARG(SDNode *N) {
     SDValue Part = DAG.getNode(ISD::ZERO_EXTEND, dl, NVT, Parts[i]);
     // Shift it to the right position and "or" it in.
     Part = DAG.getNode(ISD::SHL, dl, NVT, Part,
-                       DAG.getConstant(i*RegVT.getSizeInBits(), dl,
-                                       TLI.getPointerTy()));
+                       DAG.getConstant(i * RegVT.getSizeInBits(), dl,
+                                       TLI.getPointerTy(DAG.getDataLayout())));
     Res = DAG.getNode(ISD::OR, dl, NVT, Res, Part);
   }
 
@@ -1004,7 +1006,7 @@ SDValue DAGTypeLegalizer::PromoteIntOp_BUILD_PAIR(SDNode *N) {
 
   Hi = DAG.getNode(ISD::SHL, dl, N->getValueType(0), Hi,
                    DAG.getConstant(OVT.getSizeInBits(), dl,
-                                   TLI.getPointerTy()));
+                                   TLI.getPointerTy(DAG.getDataLayout())));
   return DAG.getNode(ISD::OR, dl, N->getValueType(0), Lo, Hi);
 }
 
@@ -1063,7 +1065,7 @@ SDValue DAGTypeLegalizer::PromoteIntOp_INSERT_VECTOR_ELT(SDNode *N,
 
   // Promote the index.
   SDValue Idx = DAG.getZExtOrTrunc(N->getOperand(2), SDLoc(N),
-                                   TLI.getVectorIdxTy());
+                                   TLI.getVectorIdxTy(DAG.getDataLayout()));
   return SDValue(DAG.UpdateNodeOperands(N, N->getOperand(0),
                                 N->getOperand(1), Idx), 0);
 }
@@ -1808,7 +1810,8 @@ void DAGTypeLegalizer::ExpandIntRes_AssertSext(SDNode *N,
     Lo = DAG.getNode(ISD::AssertSext, dl, NVT, Lo, DAG.getValueType(EVT));
     // The high part replicates the sign bit of Lo, make it explicit.
     Hi = DAG.getNode(ISD::SRA, dl, NVT, Lo,
-                     DAG.getConstant(NVTBits - 1, dl, TLI.getPointerTy()));
+                     DAG.getConstant(NVTBits - 1, dl,
+                                     TLI.getPointerTy(DAG.getDataLayout())));
   }
 }
 
@@ -1975,7 +1978,8 @@ void DAGTypeLegalizer::ExpandIntRes_LOAD(LoadSDNode *N,
       // lo part.
       unsigned LoSize = Lo.getValueType().getSizeInBits();
       Hi = DAG.getNode(ISD::SRA, dl, NVT, Lo,
-                       DAG.getConstant(LoSize - 1, dl, TLI.getPointerTy()));
+                       DAG.getConstant(LoSize - 1, dl,
+                                       TLI.getPointerTy(DAG.getDataLayout())));
     } else if (ExtType == ISD::ZEXTLOAD) {
       // The high part is just a zero.
       Hi = DAG.getConstant(0, dl, NVT);
@@ -2039,15 +2043,16 @@ void DAGTypeLegalizer::ExpandIntRes_LOAD(LoadSDNode *N,
 
     if (ExcessBits < NVT.getSizeInBits()) {
       // Transfer low bits from the bottom of Hi to the top of Lo.
-      Lo = DAG.getNode(ISD::OR, dl, NVT, Lo,
-                       DAG.getNode(ISD::SHL, dl, NVT, Hi,
-                                   DAG.getConstant(ExcessBits, dl,
-                                                   TLI.getPointerTy())));
+      Lo = DAG.getNode(
+          ISD::OR, dl, NVT, Lo,
+          DAG.getNode(ISD::SHL, dl, NVT, Hi,
+                      DAG.getConstant(ExcessBits, dl,
+                                      TLI.getPointerTy(DAG.getDataLayout()))));
       // Move high bits to the right position in Hi.
-      Hi = DAG.getNode(ExtType == ISD::SEXTLOAD ? ISD::SRA : ISD::SRL, dl,
-                       NVT, Hi,
+      Hi = DAG.getNode(ExtType == ISD::SEXTLOAD ? ISD::SRA : ISD::SRL, dl, NVT,
+                       Hi,
                        DAG.getConstant(NVT.getSizeInBits() - ExcessBits, dl,
-                                       TLI.getPointerTy()));
+                                       TLI.getPointerTy(DAG.getDataLayout())));
     }
   }
 
@@ -2206,7 +2211,7 @@ void DAGTypeLegalizer::ExpandIntRes_Shift(SDNode *N,
     // have an illegal type.  Fix that first by casting the operand, otherwise
     // the new SHL_PARTS operation would need further legalization.
     SDValue ShiftOp = N->getOperand(1);
-    EVT ShiftTy = TLI.getShiftAmountTy(VT);
+    EVT ShiftTy = TLI.getShiftAmountTy(VT, DAG.getDataLayout());
     assert(ShiftTy.getScalarType().getSizeInBits() >=
            Log2_32_Ceil(VT.getScalarType().getSizeInBits()) &&
            "ShiftAmountTy is too small to cover the range of this type!");
@@ -2276,8 +2281,9 @@ void DAGTypeLegalizer::ExpandIntRes_SIGN_EXTEND(SDNode *N,
     Lo = DAG.getNode(ISD::SIGN_EXTEND, dl, NVT, N->getOperand(0));
     // The high part is obtained by SRA'ing all but one of the bits of low part.
     unsigned LoSize = NVT.getSizeInBits();
-    Hi = DAG.getNode(ISD::SRA, dl, NVT, Lo,
-                     DAG.getConstant(LoSize - 1, dl, TLI.getPointerTy()));
+    Hi = DAG.getNode(
+        ISD::SRA, dl, NVT, Lo,
+        DAG.getConstant(LoSize - 1, dl, TLI.getPointerTy(DAG.getDataLayout())));
   } else {
     // For example, extension of an i48 to an i64.  The operand type necessarily
     // promotes to the result type, so will end up being expanded too.
@@ -2312,7 +2318,7 @@ ExpandIntRes_SIGN_EXTEND_INREG(SDNode *N, SDValue &Lo, SDValue &Hi) {
     // things like sextinreg V:i64 from i8.
     Hi = DAG.getNode(ISD::SRA, dl, Hi.getValueType(), Lo,
                      DAG.getConstant(Hi.getValueType().getSizeInBits() - 1, dl,
-                                     TLI.getPointerTy()));
+                                     TLI.getPointerTy(DAG.getDataLayout())));
   } else {
     // For example, extension of an i48 to an i64.  Leave the low part alone,
     // sext_inreg the high part.
@@ -2355,10 +2361,10 @@ void DAGTypeLegalizer::ExpandIntRes_TRUNCATE(SDNode *N,
   EVT NVT = TLI.getTypeToTransformTo(*DAG.getContext(), N->getValueType(0));
   SDLoc dl(N);
   Lo = DAG.getNode(ISD::TRUNCATE, dl, NVT, N->getOperand(0));
-  Hi = DAG.getNode(ISD::SRL, dl,
-                   N->getOperand(0).getValueType(), N->getOperand(0),
+  Hi = DAG.getNode(ISD::SRL, dl, N->getOperand(0).getValueType(),
+                   N->getOperand(0),
                    DAG.getConstant(NVT.getSizeInBits(), dl,
-                                   TLI.getPointerTy()));
+                                   TLI.getPointerTy(DAG.getDataLayout())));
   Hi = DAG.getNode(ISD::TRUNCATE, dl, NVT, Hi);
 }
 
@@ -2414,7 +2420,7 @@ void DAGTypeLegalizer::ExpandIntRes_XMULO(SDNode *N,
   }
 
   Type *RetTy = VT.getTypeForEVT(*DAG.getContext());
-  EVT PtrVT = TLI.getPointerTy();
+  EVT PtrVT = TLI.getPointerTy(DAG.getDataLayout());
   Type *PtrTy = PtrVT.getTypeForEVT(*DAG.getContext());
 
   // Replace this with a libcall that will check overflow.
@@ -2882,11 +2888,12 @@ SDValue DAGTypeLegalizer::ExpandIntOp_STORE(StoreSDNode *N, unsigned OpNo) {
     // Transfer high bits from the top of Lo to the bottom of Hi.
     Hi = DAG.getNode(ISD::SHL, dl, NVT, Hi,
                      DAG.getConstant(NVT.getSizeInBits() - ExcessBits, dl,
-                                     TLI.getPointerTy()));
-    Hi = DAG.getNode(ISD::OR, dl, NVT, Hi,
-                     DAG.getNode(ISD::SRL, dl, NVT, Lo,
-                                 DAG.getConstant(ExcessBits, dl,
-                                                 TLI.getPointerTy())));
+                                     TLI.getPointerTy(DAG.getDataLayout())));
+    Hi = DAG.getNode(
+        ISD::OR, dl, NVT, Hi,
+        DAG.getNode(ISD::SRL, dl, NVT, Lo,
+                    DAG.getConstant(ExcessBits, dl,
+                                    TLI.getPointerTy(DAG.getDataLayout()))));
   }
 
   // Store both the high bits and maybe some of the low bits.
@@ -2956,9 +2963,9 @@ SDValue DAGTypeLegalizer::ExpandIntOp_UINT_TO_FP(SDNode *N) {
                                    ISD::SETLT);
 
     // Build a 64 bit pair (0, FF) in the constant pool, with FF in the lo bits.
-    SDValue FudgePtr = DAG.getConstantPool(
-                               ConstantInt::get(*DAG.getContext(), FF.zext(64)),
-                                           TLI.getPointerTy());
+    SDValue FudgePtr =
+        DAG.getConstantPool(ConstantInt::get(*DAG.getContext(), FF.zext(64)),
+                            TLI.getPointerTy(DAG.getDataLayout()));
 
     // Get a pointer to FF if the sign bit was set, or to 0 otherwise.
     SDValue Zero = DAG.getIntPtrConstant(0, dl);
@@ -3114,9 +3121,9 @@ SDValue DAGTypeLegalizer::PromoteIntRes_CONCAT_VECTORS(SDNode *N) {
   for (unsigned i = 0; i < NumOperands; ++i) {
     SDValue Op = N->getOperand(i);
     for (unsigned j = 0; j < NumElem; ++j) {
-      SDValue Ext = DAG.getNode(ISD::EXTRACT_VECTOR_ELT, dl,
-                                InElemTy, Op, DAG.getConstant(j, dl,
-                                              TLI.getVectorIdxTy()));
+      SDValue Ext = DAG.getNode(
+          ISD::EXTRACT_VECTOR_ELT, dl, InElemTy, Op,
+          DAG.getConstant(j, dl, TLI.getVectorIdxTy(DAG.getDataLayout())));
       Ops[i * NumElem + j] = DAG.getNode(ISD::ANY_EXTEND, dl, OutElemTy, Ext);
     }
   }
@@ -3143,7 +3150,8 @@ SDValue DAGTypeLegalizer::PromoteIntRes_INSERT_VECTOR_ELT(SDNode *N) {
 SDValue DAGTypeLegalizer::PromoteIntOp_EXTRACT_VECTOR_ELT(SDNode *N) {
   SDLoc dl(N);
   SDValue V0 = GetPromotedInteger(N->getOperand(0));
-  SDValue V1 = DAG.getZExtOrTrunc(N->getOperand(1), dl, TLI.getVectorIdxTy());
+  SDValue V1 = DAG.getZExtOrTrunc(N->getOperand(1), dl,
+                                  TLI.getVectorIdxTy(DAG.getDataLayout()));
   SDValue Ext = DAG.getNode(ISD::EXTRACT_VECTOR_ELT, dl,
     V0->getValueType(0).getScalarType(), V0, V1);
 
@@ -3180,8 +3188,9 @@ SDValue DAGTypeLegalizer::PromoteIntOp_CONCAT_VECTORS(SDNode *N) {
 
     for (unsigned i=0; i<NumElem; ++i) {
       // Extract element from incoming vector
-      SDValue Ex = DAG.getNode(ISD::EXTRACT_VECTOR_ELT, dl, SclrTy,
-      Incoming, DAG.getConstant(i, dl, TLI.getVectorIdxTy()));
+      SDValue Ex = DAG.getNode(
+          ISD::EXTRACT_VECTOR_ELT, dl, SclrTy, Incoming,
+          DAG.getConstant(i, dl, TLI.getVectorIdxTy(DAG.getDataLayout())));
       SDValue Tr = DAG.getNode(ISD::TRUNCATE, dl, RetSclrTy, Ex);
       NewOps.push_back(Tr);
     }

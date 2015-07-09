@@ -443,8 +443,8 @@ namespace {
       assert(LHSTy.isInteger() && "Shift amount is not an integer type!");
       if (LHSTy.isVector())
         return LHSTy;
-      return LegalTypes ? TLI.getScalarShiftAmountTy(LHSTy)
-                        : TLI.getPointerTy();
+      auto &DL = DAG.getDataLayout();
+      return LegalTypes ? TLI.getScalarShiftAmountTy(DL) : TLI.getPointerTy(DL);
     }
 
     /// This method returns true if we are running before type legalization or
@@ -456,7 +456,7 @@ namespace {
 
     /// Convenience wrapper around TargetLowering::getSetCCResultType
     EVT getSetCCResultType(EVT VT) const {
-      return TLI.getSetCCResultType(*DAG.getContext(), VT);
+      return TLI.getSetCCResultType(DAG.getDataLayout(), *DAG.getContext(), VT);
     }
   };
 }
@@ -6926,7 +6926,7 @@ SDValue DAGCombiner::visitTRUNCATE(SDNode *N) {
     SDValue EltNo = N0->getOperand(1);
     if (isa<ConstantSDNode>(EltNo) && isTypeLegal(NVT)) {
       int Elt = cast<ConstantSDNode>(EltNo)->getZExtValue();
-      EVT IndexTy = TLI.getVectorIdxTy();
+      EVT IndexTy = TLI.getVectorIdxTy(DAG.getDataLayout());
       int Index = isLE ? (Elt*SizeRatio) : (Elt*SizeRatio + (SizeRatio-1));
 
       SDValue V = DAG.getNode(ISD::BITCAST, SDLoc(N),
@@ -8406,30 +8406,29 @@ SDValue DAGCombiner::visitFREM(SDNode *N) {
 }
 
 SDValue DAGCombiner::visitFSQRT(SDNode *N) {
-  if (DAG.getTarget().Options.UnsafeFPMath &&
-      !TLI.isFsqrtCheap()) {
-    // Compute this as X * (1/sqrt(X)) = X * (X ** -0.5)
-    if (SDValue RV = BuildRsqrtEstimate(N->getOperand(0))) {
-      EVT VT = RV.getValueType();
-      SDLoc DL(N);
-      RV = DAG.getNode(ISD::FMUL, DL, VT, N->getOperand(0), RV);
-      AddToWorklist(RV.getNode());
+  if (!DAG.getTarget().Options.UnsafeFPMath || TLI.isFsqrtCheap())
+    return SDValue();
 
-      // Unfortunately, RV is now NaN if the input was exactly 0.
-      // Select out this case and force the answer to 0.
-      SDValue Zero = DAG.getConstantFP(0.0, DL, VT);
-      SDValue ZeroCmp =
-        DAG.getSetCC(DL, TLI.getSetCCResultType(*DAG.getContext(), VT),
-                     N->getOperand(0), Zero, ISD::SETEQ);
-      AddToWorklist(ZeroCmp.getNode());
-      AddToWorklist(RV.getNode());
+  // Compute this as X * (1/sqrt(X)) = X * (X ** -0.5)
+  SDValue RV = BuildRsqrtEstimate(N->getOperand(0));
+  if (!RV)
+    return SDValue();
+  
+  EVT VT = RV.getValueType();
+  SDLoc DL(N);
+  RV = DAG.getNode(ISD::FMUL, DL, VT, N->getOperand(0), RV);
+  AddToWorklist(RV.getNode());
 
-      RV = DAG.getNode(VT.isVector() ? ISD::VSELECT : ISD::SELECT,
-                       DL, VT, ZeroCmp, Zero, RV);
-      return RV;
-    }
-  }
-  return SDValue();
+  // Unfortunately, RV is now NaN if the input was exactly 0.
+  // Select out this case and force the answer to 0.
+  SDValue Zero = DAG.getConstantFP(0.0, DL, VT);
+  EVT CCVT = TLI.getSetCCResultType(DAG.getDataLayout(), *DAG.getContext(), VT);
+  SDValue ZeroCmp = DAG.getSetCC(DL, CCVT, N->getOperand(0), Zero, ISD::SETEQ);
+  AddToWorklist(ZeroCmp.getNode());
+  AddToWorklist(RV.getNode());
+
+  return DAG.getNode(VT.isVector() ? ISD::VSELECT : ISD::SELECT, DL, VT,
+                     ZeroCmp, Zero, RV);
 }
 
 SDValue DAGCombiner::visitFCOPYSIGN(SDNode *N) {
@@ -9144,7 +9143,8 @@ static bool canFoldInAddressingMode(SDNode *N, SDNode *Use,
   } else
     return false;
 
-  return TLI.isLegalAddressingMode(AM, VT.getTypeForEVT(*DAG.getContext()), AS);
+  return TLI.isLegalAddressingMode(DAG.getDataLayout(), AM,
+                                   VT.getTypeForEVT(*DAG.getContext()), AS);
 }
 
 /// Try turning a load/store into a pre-indexed load/store when the base
@@ -11648,7 +11648,7 @@ SDValue DAGCombiner::visitEXTRACT_VECTOR_ELT(SDNode *N) {
     // scalar_to_vector here as well.
 
     if (!LegalOperations) {
-      EVT IndexTy = TLI.getVectorIdxTy();
+      EVT IndexTy = TLI.getVectorIdxTy(DAG.getDataLayout());
       return DAG.getNode(ISD::EXTRACT_VECTOR_ELT, SDLoc(N), NVT, SVInVec,
                          DAG.getConstant(OrigElt, SDLoc(SVOp), IndexTy));
     }
@@ -12079,10 +12079,13 @@ SDValue DAGCombiner::visitBUILD_VECTOR(SDNode *N) {
 
         // Try to replace VecIn1 with two extract_subvectors
         // No need to update the masks, they should still be correct.
-        VecIn2 = DAG.getNode(ISD::EXTRACT_SUBVECTOR, dl, VT, VecIn1,
-          DAG.getConstant(VT.getVectorNumElements(), dl, TLI.getVectorIdxTy()));
-        VecIn1 = DAG.getNode(ISD::EXTRACT_SUBVECTOR, dl, VT, VecIn1,
-          DAG.getConstant(0, dl, TLI.getVectorIdxTy()));
+        VecIn2 = DAG.getNode(
+            ISD::EXTRACT_SUBVECTOR, dl, VT, VecIn1,
+            DAG.getConstant(VT.getVectorNumElements(), dl,
+                            TLI.getVectorIdxTy(DAG.getDataLayout())));
+        VecIn1 = DAG.getNode(
+            ISD::EXTRACT_SUBVECTOR, dl, VT, VecIn1,
+            DAG.getConstant(0, dl, TLI.getVectorIdxTy(DAG.getDataLayout())));
       } else
         return SDValue();
     }
@@ -13358,8 +13361,9 @@ SDValue DAGCombiner::SimplifySelectCC(SDLoc DL, SDValue N0, SDValue N1,
 
         // Create a ConstantArray of the two constants.
         Constant *CA = ConstantArray::get(ArrayType::get(FPTy, 2), Elts);
-        SDValue CPIdx = DAG.getConstantPool(CA, TLI.getPointerTy(),
-                                            TD.getPrefTypeAlignment(FPTy));
+        SDValue CPIdx =
+            DAG.getConstantPool(CA, TLI.getPointerTy(DAG.getDataLayout()),
+                                TD.getPrefTypeAlignment(FPTy));
         unsigned Alignment = cast<ConstantPoolSDNode>(CPIdx)->getAlignment();
 
         // Get the offsets to the 0 and 1 element of the array so that we can

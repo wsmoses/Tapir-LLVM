@@ -254,8 +254,9 @@ bool SITargetLowering::isShuffleMaskLegal(const SmallVectorImpl<int> &,
   return false;
 }
 
-bool SITargetLowering::isLegalAddressingMode(const AddrMode &AM,
-                                             Type *Ty, unsigned AS) const {
+bool SITargetLowering::isLegalAddressingMode(const DataLayout &DL,
+                                             const AddrMode &AM, Type *Ty,
+                                             unsigned AS) const {
   // No global is ever allowed as a base.
   if (AM.BaseGV)
     return false;
@@ -416,7 +417,7 @@ static EVT toIntegerVT(EVT VT) {
 SDValue SITargetLowering::LowerParameter(SelectionDAG &DAG, EVT VT, EVT MemVT,
                                          SDLoc SL, SDValue Chain,
                                          unsigned Offset, bool Signed) const {
-  const DataLayout *DL = getDataLayout();
+  const DataLayout &DL = DAG.getDataLayout();
   MachineFunction &MF = DAG.getMachineFunction();
   const SIRegisterInfo *TRI =
       static_cast<const SIRegisterInfo*>(Subtarget->getRegisterInfo());
@@ -425,16 +426,16 @@ SDValue SITargetLowering::LowerParameter(SelectionDAG &DAG, EVT VT, EVT MemVT,
   Type *Ty = VT.getTypeForEVT(*DAG.getContext());
 
   MachineRegisterInfo &MRI = DAG.getMachineFunction().getRegInfo();
-  MVT PtrVT = getPointerTy(AMDGPUAS::CONSTANT_ADDRESS);
+  MVT PtrVT = getPointerTy(DL, AMDGPUAS::CONSTANT_ADDRESS);
   PointerType *PtrTy = PointerType::get(Ty, AMDGPUAS::CONSTANT_ADDRESS);
   SDValue BasePtr = DAG.getCopyFromReg(Chain, SL,
                                        MRI.getLiveInVirtReg(InputPtrReg), PtrVT);
   SDValue Ptr = DAG.getNode(ISD::ADD, SL, PtrVT, BasePtr,
                             DAG.getConstant(Offset, SL, PtrVT));
-  SDValue PtrOffset = DAG.getUNDEF(getPointerTy(AMDGPUAS::CONSTANT_ADDRESS));
+  SDValue PtrOffset = DAG.getUNDEF(PtrVT);
   MachinePointerInfo PtrInfo(UndefValue::get(PtrTy));
 
-  unsigned Align = DL->getABITypeAlignment(Ty);
+  unsigned Align = DL.getABITypeAlignment(Ty);
 
   if (VT != MemVT && VT.isFloatingPoint()) {
     // Do an integer load and convert.
@@ -695,14 +696,15 @@ bool SITargetLowering::enableAggressiveFMAFusion(EVT VT) const {
   return true;
 }
 
-EVT SITargetLowering::getSetCCResultType(LLVMContext &Ctx, EVT VT) const {
+EVT SITargetLowering::getSetCCResultType(const DataLayout &DL, LLVMContext &Ctx,
+                                         EVT VT) const {
   if (!VT.isVector()) {
     return MVT::i1;
   }
   return EVT::getVectorVT(Ctx, MVT::i1, VT.getVectorNumElements());
 }
 
-MVT SITargetLowering::getScalarShiftAmountTy(EVT VT) const {
+MVT SITargetLowering::getScalarShiftAmountTy(const DataLayout &) const {
   return MVT::i32;
 }
 
@@ -888,7 +890,7 @@ SDValue SITargetLowering::LowerGlobalAddress(AMDGPUMachineFunction *MFI,
 
   SDLoc DL(GSD);
   const GlobalValue *GV = GSD->getGlobal();
-  MVT PtrVT = getPointerTy(GSD->getAddressSpace());
+  MVT PtrVT = getPointerTy(DAG.getDataLayout(), GSD->getAddressSpace());
 
   SDValue Ptr = DAG.getNode(AMDGPUISD::CONST_DATA_PTR, DL, PtrVT);
   SDValue GA = DAG.getTargetGlobalAddress(GV, DL, MVT::i32);
@@ -1213,7 +1215,8 @@ SDValue SITargetLowering::LowerFDIV32(SDValue Op, SelectionDAG &DAG) const {
 
   const SDValue One = DAG.getConstantFP(1.0, SL, MVT::f32);
 
-  EVT SetCCVT = getSetCCResultType(*DAG.getContext(), MVT::f32);
+  EVT SetCCVT =
+      getSetCCResultType(DAG.getDataLayout(), *DAG.getContext(), MVT::f32);
 
   SDValue r2 = DAG.getSetCC(SL, SetCCVT, r1, K0, ISD::SETOGT);
 
@@ -1411,7 +1414,7 @@ SDValue SITargetLowering::performUCharToFloatCombine(SDNode *N,
     unsigned AS = Load->getAddressSpace();
     unsigned Align = Load->getAlignment();
     Type *Ty = LoadVT.getTypeForEVT(*DAG.getContext());
-    unsigned ABIAlignment = getDataLayout()->getABITypeAlignment(Ty);
+    unsigned ABIAlignment = DAG.getDataLayout().getABITypeAlignment(Ty);
 
     // Don't try to replace the load if we have to expand it due to alignment
     // problems. Otherwise we will end up scalarizing the load, and trying to

@@ -127,9 +127,9 @@ void MIRPrinter::convert(ModuleSlotTracker &MST,
   YamlMBB.ID = (unsigned)MBB.getNumber();
   // TODO: Serialize unnamed BB references.
   if (const auto *BB = MBB.getBasicBlock())
-    YamlMBB.Name = BB->hasName() ? BB->getName() : "<unnamed bb>";
+    YamlMBB.Name.Value = BB->hasName() ? BB->getName() : "<unnamed bb>";
   else
-    YamlMBB.Name = "";
+    YamlMBB.Name.Value = "";
   YamlMBB.Alignment = MBB.getAlignment();
   YamlMBB.AddressTaken = MBB.hasAddressTaken();
   YamlMBB.IsLandingPad = MBB.isLandingPad();
@@ -218,6 +218,10 @@ void MIPrinter::print(const MachineOperand &Op, const TargetRegisterInfo *TRI) {
       OS << (Op.isDef() ? "implicit-def " : "implicit ");
     if (Op.isDead())
       OS << "dead ";
+    if (Op.isKill())
+      OS << "killed ";
+    if (Op.isUndef())
+      OS << "undef ";
     printReg(Op.getReg(), OS, TRI);
     // TODO: Print sub register.
     break;

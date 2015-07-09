@@ -598,7 +598,9 @@ namespace llvm {
     unsigned getJumpTableEncoding() const override;
     bool useSoftFloat() const override;
 
-    MVT getScalarShiftAmountTy(EVT LHSTy) const override { return MVT::i8; }
+    MVT getScalarShiftAmountTy(const DataLayout &) const override {
+      return MVT::i8;
+    }
 
     const MCExpr *
     LowerCustomJumpTableEntry(const MachineJumpTableInfo *MJTI,
@@ -616,7 +618,8 @@ namespace llvm {
     /// function arguments in the caller parameter area. For X86, aggregates
     /// that contains are placed at 16-byte boundaries while the rest are at
     /// 4-byte boundaries.
-    unsigned getByValTypeAlignment(Type *Ty) const override;
+    unsigned getByValTypeAlignment(Type *Ty,
+                                   const DataLayout &DL) const override;
 
     /// Returns the target specific optimal type for load
     /// and store operations as a result of memset, memcpy, and memmove
@@ -684,7 +687,8 @@ namespace llvm {
     bool isCheapToSpeculateCtlz() const override;
 
     /// Return the value type to use for ISD::SETCC.
-    EVT getSetCCResultType(LLVMContext &Context, EVT VT) const override;
+    EVT getSetCCResultType(const DataLayout &DL, LLVMContext &Context,
+                           EVT VT) const override;
 
     /// Determine which of the bits specified in Mask are known to be either
     /// zero or one and return them in the KnownZero/KnownOne bitsets.
@@ -747,8 +751,8 @@ namespace llvm {
 
     /// Return true if the addressing mode represented
     /// by AM is legal for this target, for a load/store of the specified type.
-    bool isLegalAddressingMode(const AddrMode &AM, Type *Ty,
-                               unsigned AS) const override;
+    bool isLegalAddressingMode(const DataLayout &DL, const AddrMode &AM,
+                               Type *Ty, unsigned AS) const override;
 
     /// Return true if the specified immediate is legal
     /// icmp immediate, that is the target has icmp instructions which can
@@ -767,7 +771,7 @@ namespace llvm {
     /// of the specified type.
     /// If the AM is supported, the return value must be >= 0.
     /// If the AM is not supported, it returns a negative value.
-    int getScalingFactorCost(const AddrMode &AM, Type *Ty,
+    int getScalingFactorCost(const DataLayout &DL, const AddrMode &AM, Type *Ty,
                              unsigned AS) const override;
 
     bool isVectorShiftByScalarCheap(Type *Ty) const override;

@@ -165,7 +165,8 @@ bool isPositiveHalfWord(SDNode *N);
 
     SDValue LowerVASTART(SDValue Op, SelectionDAG &DAG) const;
     SDValue LowerConstantPool(SDValue Op, SelectionDAG &DAG) const;
-    EVT getSetCCResultType(LLVMContext &C, EVT VT) const override {
+    EVT getSetCCResultType(const DataLayout &, LLVMContext &C,
+                           EVT VT) const override {
       if (!VT.isVector())
         return MVT::i1;
       else
@@ -197,8 +198,8 @@ bool isPositiveHalfWord(SDNode *N);
     /// The type may be VoidTy, in which case only return true if the addressing
     /// mode is legal for a load/store of any legal type.
     /// TODO: Handle pre/postinc as well.
-    bool isLegalAddressingMode(const AddrMode &AM, Type *Ty,
-                               unsigned AS) const override;
+    bool isLegalAddressingMode(const DataLayout &DL, const AddrMode &AM,
+                               Type *Ty, unsigned AS) const override;
     bool isFPImmLegal(const APFloat &Imm, EVT VT) const override;
 
     /// isLegalICmpImmediate - Return true if the specified immediate is legal

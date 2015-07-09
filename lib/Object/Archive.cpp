@@ -207,7 +207,8 @@ ErrorOr<std::unique_ptr<Archive>> Archive::create(MemoryBufferRef Source) {
 }
 
 Archive::Archive(MemoryBufferRef Source, std::error_code &ec)
-    : Binary(Binary::ID_Archive, Source), SymbolTable(child_end()) {
+    : Binary(Binary::ID_Archive, Source), SymbolTable(child_end()),
+      StringTable(child_end()), FirstRegular(child_end()) {
   StringRef Buffer = Data.getBuffer();
   // Check for sufficient magic.
   if (Buffer.startswith(ThinMagic)) {
@@ -287,7 +288,7 @@ Archive::Archive(MemoryBufferRef Source, std::error_code &ec)
 
     ++i;
     if (i == e) {
-      ec = object_error::parse_failed;
+      ec = std::error_code();
       return;
     }
     Name = i->getRawName();
