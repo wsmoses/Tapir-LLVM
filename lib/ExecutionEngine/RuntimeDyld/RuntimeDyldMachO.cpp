@@ -63,8 +63,10 @@ RelocationValueRef RuntimeDyldMachO::getRelocationValueRef(
   bool IsExternal = Obj.getPlainRelocationExternal(RelInfo);
   if (IsExternal) {
     symbol_iterator Symbol = RI->getSymbol();
-    StringRef TargetName;
-    Symbol->getName(TargetName);
+    ErrorOr<StringRef> TargetNameOrErr = Symbol->getName();
+    if (std::error_code EC = TargetNameOrErr.getError())
+      report_fatal_error(EC.message());
+    StringRef TargetName = *TargetNameOrErr;
     RTDyldSymbolTable::const_iterator SI =
       GlobalSymbolTable.find(TargetName.data());
     if (SI != GlobalSymbolTable.end()) {
@@ -87,19 +89,11 @@ RelocationValueRef RuntimeDyldMachO::getRelocationValueRef(
 }
 
 void RuntimeDyldMachO::makeValueAddendPCRel(RelocationValueRef &Value,
-                                            const ObjectFile &BaseTObj,
                                             const relocation_iterator &RI,
                                             unsigned OffsetToNextPC) {
-  const MachOObjectFile &Obj =
-      static_cast<const MachOObjectFile &>(BaseTObj);
-  MachO::any_relocation_info RelInfo =
-      Obj.getRelocation(RI->getRawDataRefImpl());
-
-  bool IsPCRel = Obj.getAnyRelocationPCRel(RelInfo);
-  if (IsPCRel) {
-    ErrorOr<uint64_t> RelocAddr = RI->getAddress();
-    Value.Offset += *RelocAddr + OffsetToNextPC;
-  }
+  auto &O = *cast<MachOObjectFile>(RI->getObject());
+  section_iterator SecI = O.getRelocationRelocatedSection(RI);
+  Value.Offset += RI->getOffset() + OffsetToNextPC + SecI->getAddress();
 }
 
 void RuntimeDyldMachO::dumpRelocationToResolve(const RelocationEntry &RE,
@@ -162,8 +156,10 @@ void RuntimeDyldMachO::populateIndirectSymbolPointersSection(
     unsigned SymbolIndex =
       Obj.getIndirectSymbolTableEntry(DySymTabCmd, FirstIndirectSymbol + i);
     symbol_iterator SI = Obj.getSymbolByIndex(SymbolIndex);
-    StringRef IndirectSymbolName;
-    SI->getName(IndirectSymbolName);
+    ErrorOr<StringRef> IndirectSymbolNameOrErr = SI->getName();
+    if (std::error_code EC = IndirectSymbolNameOrErr.getError())
+      report_fatal_error(EC.message());
+    StringRef IndirectSymbolName = *IndirectSymbolNameOrErr;
     DEBUG(dbgs() << "  " << IndirectSymbolName << ": index " << SymbolIndex
           << ", PT offset: " << PTEntryOffset << "\n");
     RelocationEntry RE(PTSectionID, PTEntryOffset,

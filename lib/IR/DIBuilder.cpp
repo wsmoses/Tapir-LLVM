@@ -58,8 +58,7 @@ public:
 }
 
 DIBuilder::DIBuilder(Module &m, bool AllowUnresolvedNodes)
-    : M(m), VMContext(M.getContext()), TempEnumTypes(nullptr),
-      TempRetainTypes(nullptr), TempSubprograms(nullptr), TempGVs(nullptr),
+  : M(m), VMContext(M.getContext()), CUNode(nullptr),
       DeclareFn(nullptr), ValueFn(nullptr),
       AllowUnresolvedNodes(AllowUnresolvedNodes) {}
 
@@ -74,7 +73,13 @@ void DIBuilder::trackIfUnresolved(MDNode *N) {
 }
 
 void DIBuilder::finalize() {
-  TempEnumTypes->replaceAllUsesWith(MDTuple::get(VMContext, AllEnumTypes));
+  if (!CUNode) {
+    assert(!AllowUnresolvedNodes &&
+           "creating type nodes without a CU is not supported");
+    return;
+  }
+
+  CUNode->replaceEnumTypes(MDTuple::get(VMContext, AllEnumTypes));
 
   SmallVector<Metadata *, 16> RetainValues;
   // Declarations and definitions of the same type may be retained. Some
@@ -85,10 +90,14 @@ void DIBuilder::finalize() {
   for (unsigned I = 0, E = AllRetainTypes.size(); I < E; I++)
     if (RetainSet.insert(AllRetainTypes[I]).second)
       RetainValues.push_back(AllRetainTypes[I]);
-  TempRetainTypes->replaceAllUsesWith(MDTuple::get(VMContext, RetainValues));
+
+  if (!RetainValues.empty())
+    CUNode->replaceRetainedTypes(MDTuple::get(VMContext, RetainValues));
 
   DISubprogramArray SPs = MDTuple::get(VMContext, AllSubprograms);
-  TempSubprograms->replaceAllUsesWith(SPs.get());
+  if (!AllSubprograms.empty())
+    CUNode->replaceSubprograms(SPs.get());
+
   for (auto *SP : SPs) {
     if (MDTuple *Temp = SP->getVariables().get()) {
       const auto &PV = PreservedVariables.lookup(SP);
@@ -98,11 +107,13 @@ void DIBuilder::finalize() {
     }
   }
 
-  TempGVs->replaceAllUsesWith(MDTuple::get(VMContext, AllGVs));
+  if (!AllGVs.empty())
+    CUNode->replaceGlobalVariables(MDTuple::get(VMContext, AllGVs));
 
-  TempImportedModules->replaceAllUsesWith(MDTuple::get(
-      VMContext, SmallVector<Metadata *, 16>(AllImportedModules.begin(),
-                                             AllImportedModules.end())));
+  if (!AllImportedModules.empty())
+    CUNode->replaceImportedEntities(MDTuple::get(
+        VMContext, SmallVector<Metadata *, 16>(AllImportedModules.begin(),
+                                               AllImportedModules.end())));
 
   // Now that all temp nodes have been replaced or deleted, resolve remaining
   // cycles.
@@ -133,19 +144,11 @@ DICompileUnit *DIBuilder::createCompileUnit(
   assert(!Filename.empty() &&
          "Unable to create compile unit without filename");
 
-  // TODO: Once we make DICompileUnit distinct, stop using temporaries here
-  // (just start with operands assigned to nullptr).
-  TempEnumTypes = MDTuple::getTemporary(VMContext, None);
-  TempRetainTypes = MDTuple::getTemporary(VMContext, None);
-  TempSubprograms = MDTuple::getTemporary(VMContext, None);
-  TempGVs = MDTuple::getTemporary(VMContext, None);
-  TempImportedModules = MDTuple::getTemporary(VMContext, None);
-
-  DICompileUnit *CUNode = DICompileUnit::getDistinct(
+  assert(!CUNode && "Can only make one compile unit per DIBuilder instance");
+  CUNode = DICompileUnit::getDistinct(
       VMContext, Lang, DIFile::get(VMContext, Filename, Directory), Producer,
-      isOptimized, Flags, RunTimeVer, SplitName, Kind, TempEnumTypes.get(),
-      TempRetainTypes.get(), TempSubprograms.get(), TempGVs.get(),
-      TempImportedModules.get(), DWOId);
+      isOptimized, Flags, RunTimeVer, SplitName, Kind, nullptr,
+      nullptr, nullptr, nullptr, nullptr, DWOId);
 
   // Create a named metadata so that it is easier to find cu in a module.
   // Note that we only generate this when the caller wants to actually

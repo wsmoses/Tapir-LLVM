@@ -22,6 +22,7 @@
 #include "llvm/IR/Attributes.h"
 #include "llvm/IR/CallingConv.h"
 #include "llvm/IR/DerivedTypes.h"
+#include "llvm/IR/Function.h"
 #include "llvm/IR/InstrTypes.h"
 #include "llvm/Support/ErrorHandling.h"
 #include <iterator>
@@ -1508,6 +1509,9 @@ public:
   /// addAttribute - adds the attribute to the list of attributes.
   void addAttribute(unsigned i, Attribute::AttrKind attr);
 
+  /// addAttribute - adds the attribute to the list of attributes.
+  void addAttribute(unsigned i, StringRef Kind, StringRef Value);
+
   /// removeAttribute - removes the attribute from the list of attributes.
   void removeAttribute(unsigned i, Attribute attr);
 
@@ -1522,6 +1526,11 @@ public:
   bool hasFnAttr(Attribute::AttrKind A) const {
     assert(A != Attribute::NoBuiltin &&
            "Use CallInst::isNoBuiltin() to check for Attribute::NoBuiltin");
+    return hasFnAttrImpl(A);
+  }
+
+  /// \brief Determine whether this call has the given attribute.
+  bool hasFnAttr(StringRef A) const {
     return hasFnAttrImpl(A);
   }
 
@@ -1651,7 +1660,14 @@ public:
   }
 private:
 
-  bool hasFnAttrImpl(Attribute::AttrKind A) const;
+  template<typename AttrKind>
+  bool hasFnAttrImpl(AttrKind A) const {
+    if (AttributeList.hasAttribute(AttributeSet::FunctionIndex, A))
+      return true;
+    if (const Function *F = getCalledFunction())
+      return F->getAttributes().hasAttribute(AttributeSet::FunctionIndex, A);
+    return false;
+  }
 
   // Shadow Instruction::setInstructionSubclassData with a private forwarding
   // method so that subclasses cannot accidentally use it.
@@ -3697,8 +3713,8 @@ class SyncInst : public TerminatorInst {
   void AssertOK();
   // SyncInst constructor (where C is a block):
   // SyncInst(BB *C)                           - 'sync C'
-  // BranchInst(BB* C, Inst *I)                - 'sync C'        insert before I
-  // BranchInst(BB* C, BB *I)                  - 'sync C'        insert at end
+  // SyncInst(BB* C, Inst *I)                  - 'sync C'        insert before I
+  // SyncInst(BB* C, BB *I)                    - 'sync C'        insert at end
   explicit SyncInst(BasicBlock *Continue, Instruction *InsertBefore = nullptr);
   SyncInst(BasicBlock *Continue, BasicBlock *InsertAtEnd);
 protected:

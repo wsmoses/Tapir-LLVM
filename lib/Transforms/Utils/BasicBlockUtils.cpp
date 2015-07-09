@@ -121,6 +121,9 @@ bool llvm::MergeBlockIntoPredecessor(BasicBlock *BB, DominatorTree *DT,
   if (PredBB == BB) return false;
   // Don't break invokes.
   if (isa<InvokeInst>(PredBB->getTerminator())) return false;
+  // For now, don't break syncs.
+  // TODO: Don't break syncs unless they don't sync anything.
+  if (isa<SyncInst>(PredBB->getTerminator())) return false;
 
   succ_iterator SI(succ_begin(PredBB)), SE(succ_end(PredBB));
   BasicBlock *OnlySucc = BB;
