@@ -21,6 +21,7 @@
 #include "llvm/AsmParser/Parser.h"
 #include "llvm/AsmParser/SlotMapping.h"
 #include "llvm/CodeGen/MachineFunction.h"
+#include "llvm/CodeGen/MachineFrameInfo.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
 #include "llvm/CodeGen/MIRYamlMapping.h"
 #include "llvm/IR/BasicBlock.h"
@@ -48,6 +49,8 @@ class MIRParserImpl {
   LLVMContext &Context;
   StringMap<std::unique_ptr<yaml::MachineFunction>> Functions;
   SlotMapping IRSlots;
+  /// Maps from register class names to register classes.
+  StringMap<const TargetRegisterClass *> Names2RegClasses;
 
 public:
   MIRParserImpl(std::unique_ptr<MemoryBuffer> Contents, StringRef Filename,
@@ -99,8 +102,12 @@ public:
                                    const yaml::MachineBasicBlock &YamlMBB,
                                    const PerFunctionMIParsingState &PFS);
 
-  bool initializeRegisterInfo(MachineRegisterInfo &RegInfo,
+  bool initializeRegisterInfo(const MachineFunction &MF,
+                              MachineRegisterInfo &RegInfo,
                               const yaml::MachineFunction &YamlMF);
+
+  bool initializeFrameInfo(MachineFrameInfo &MFI,
+                           const yaml::MachineFrameInfo &YamlMFI);
 
 private:
   /// Return a MIR diagnostic converted from an MI string diagnostic.
@@ -113,6 +120,14 @@ private:
 
   /// Create an empty function with the given name.
   void createDummyFunction(StringRef Name, Module &M);
+
+  void initNames2RegClasses(const MachineFunction &MF);
+
+  /// Check if the given identifier is a name of a register class.
+  ///
+  /// Return null if the name isn't a register class.
+  const TargetRegisterClass *getRegClass(const MachineFunction &MF,
+                                         StringRef Name);
 };
 
 } // end namespace llvm
@@ -243,7 +258,9 @@ bool MIRParserImpl::initializeMachineFunction(MachineFunction &MF) {
     MF.setAlignment(YamlMF.Alignment);
   MF.setExposesReturnsTwice(YamlMF.ExposesReturnsTwice);
   MF.setHasInlineAsm(YamlMF.HasInlineAsm);
-  if (initializeRegisterInfo(MF.getRegInfo(), YamlMF))
+  if (initializeRegisterInfo(MF, MF.getRegInfo(), YamlMF))
+    return true;
+  if (initializeFrameInfo(*MF.getFrameInfo(), YamlMF.FrameInfo))
     return true;
 
   PerFunctionMIParsingState PFS;
@@ -269,6 +286,9 @@ bool MIRParserImpl::initializeMachineFunction(MachineFunction &MF) {
                    Twine(YamlMBB.ID));
   }
 
+  if (YamlMF.BasicBlocks.empty())
+    return error(Twine("machine function '") + Twine(MF.getName()) +
+                 "' requires at least one machine basic block in its body");
   // Initialize the machine basic blocks after creating them all so that the
   // machine instructions parser can resolve the MBB references.
   unsigned I = 0;
@@ -309,7 +329,8 @@ bool MIRParserImpl::initializeMachineBasicBlock(
 }
 
 bool MIRParserImpl::initializeRegisterInfo(
-    MachineRegisterInfo &RegInfo, const yaml::MachineFunction &YamlMF) {
+    const MachineFunction &MF, MachineRegisterInfo &RegInfo,
+    const yaml::MachineFunction &YamlMF) {
   assert(RegInfo.isSSA());
   if (!YamlMF.IsSSA)
     RegInfo.leaveSSA();
@@ -317,6 +338,37 @@ bool MIRParserImpl::initializeRegisterInfo(
   if (!YamlMF.TracksRegLiveness)
     RegInfo.invalidateLiveness();
   RegInfo.enableSubRegLiveness(YamlMF.TracksSubRegLiveness);
+
+  // Parse the virtual register information.
+  for (const auto &VReg : YamlMF.VirtualRegisters) {
+    const auto *RC = getRegClass(MF, VReg.Class.Value);
+    if (!RC)
+      return error(VReg.Class.SourceRange.Start,
+                   Twine("use of undefined register class '") +
+                       VReg.Class.Value + "'");
+    // TODO: create the mapping from IDs to registers so that the virtual
+    // register references can be parsed correctly.
+    RegInfo.createVirtualRegister(RC);
+  }
+  return false;
+}
+
+bool MIRParserImpl::initializeFrameInfo(MachineFrameInfo &MFI,
+                                        const yaml::MachineFrameInfo &YamlMFI) {
+  MFI.setFrameAddressIsTaken(YamlMFI.IsFrameAddressTaken);
+  MFI.setReturnAddressIsTaken(YamlMFI.IsReturnAddressTaken);
+  MFI.setHasStackMap(YamlMFI.HasStackMap);
+  MFI.setHasPatchPoint(YamlMFI.HasPatchPoint);
+  MFI.setStackSize(YamlMFI.StackSize);
+  MFI.setOffsetAdjustment(YamlMFI.OffsetAdjustment);
+  if (YamlMFI.MaxAlignment)
+    MFI.ensureMaxAlignment(YamlMFI.MaxAlignment);
+  MFI.setAdjustsStack(YamlMFI.AdjustsStack);
+  MFI.setHasCalls(YamlMFI.HasCalls);
+  MFI.setMaxCallFrameSize(YamlMFI.MaxCallFrameSize);
+  MFI.setHasOpaqueSPAdjustment(YamlMFI.HasOpaqueSPAdjustment);
+  MFI.setHasVAStart(YamlMFI.HasVAStart);
+  MFI.setHasMustTailInVarArgFunc(YamlMFI.HasMustTailInVarArgFunc);
   return false;
 }
 
@@ -365,6 +417,26 @@ SMDiagnostic MIRParserImpl::diagFromLLVMAssemblyDiag(const SMDiagnostic &Error,
   return SMDiagnostic(SM, Loc, Filename, Line, Column, Error.getKind(),
                       Error.getMessage(), LineStr, Error.getRanges(),
                       Error.getFixIts());
+}
+
+void MIRParserImpl::initNames2RegClasses(const MachineFunction &MF) {
+  if (!Names2RegClasses.empty())
+    return;
+  const TargetRegisterInfo *TRI = MF.getSubtarget().getRegisterInfo();
+  for (unsigned I = 0, E = TRI->getNumRegClasses(); I < E; ++I) {
+    const auto *RC = TRI->getRegClass(I);
+    Names2RegClasses.insert(
+        std::make_pair(StringRef(TRI->getRegClassName(RC)).lower(), RC));
+  }
+}
+
+const TargetRegisterClass *MIRParserImpl::getRegClass(const MachineFunction &MF,
+                                                      StringRef Name) {
+  initNames2RegClasses(MF);
+  auto RegClassInfo = Names2RegClasses.find(Name);
+  if (RegClassInfo == Names2RegClasses.end())
+    return nullptr;
+  return RegClassInfo->getValue();
 }
 
 MIRParser::MIRParser(std::unique_ptr<MIRParserImpl> Impl)

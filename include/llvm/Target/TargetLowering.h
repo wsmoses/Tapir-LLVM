@@ -170,7 +170,10 @@ public:
   MVT getPointerTy(const DataLayout &DL, uint32_t AS = 0) const {
     return MVT::getIntegerVT(DL.getPointerSizeInBits(AS));
   }
-  virtual MVT getScalarShiftAmountTy(const DataLayout &) const;
+
+  /// EVT is not used in-tree, but is used by out-of-tree target.
+  /// A documentation for this function would be nice...
+  virtual MVT getScalarShiftAmountTy(const DataLayout &, EVT) const;
 
   EVT getShiftAmountTy(EVT LHSTy, const DataLayout &DL) const;
 
@@ -2484,7 +2487,8 @@ public:
   /// Return the register ID of the name passed in. Used by named register
   /// global variables extension. There is no target-independent behaviour
   /// so the default action is to bail.
-  virtual unsigned getRegisterByName(const char* RegName, EVT VT) const {
+  virtual unsigned getRegisterByName(const char* RegName, EVT VT,
+                                     SelectionDAG &DAG) const {
     report_fatal_error("Named registers not implemented for this target");
   }
 

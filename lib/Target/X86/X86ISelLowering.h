@@ -598,7 +598,7 @@ namespace llvm {
     unsigned getJumpTableEncoding() const override;
     bool useSoftFloat() const override;
 
-    MVT getScalarShiftAmountTy(const DataLayout &) const override {
+    MVT getScalarShiftAmountTy(const DataLayout &, EVT) const override {
       return MVT::i8;
     }
 
@@ -873,7 +873,8 @@ namespace llvm {
       return nullptr; // nothing to do, move along.
     }
 
-    unsigned getRegisterByName(const char* RegName, EVT VT) const override;
+    unsigned getRegisterByName(const char* RegName, EVT VT,
+                               SelectionDAG &DAG) const override;
 
     /// This method returns a target specific FastISel object,
     /// or null if the target does not support "fast" ISel.

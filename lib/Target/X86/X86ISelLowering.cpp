@@ -3258,9 +3258,24 @@ X86TargetLowering::LowerCall(TargetLowering::CallLoweringInfo &CLI,
                                   RegsToPass[i].second.getValueType()));
 
   // Add a register mask operand representing the call-preserved registers.
-  const TargetRegisterInfo *TRI = Subtarget->getRegisterInfo();
-  const uint32_t *Mask = TRI->getCallPreservedMask(MF, CallConv);
+  const uint32_t *Mask = RegInfo->getCallPreservedMask(MF, CallConv);
   assert(Mask && "Missing call preserved mask for calling convention");
+
+  // If this is an invoke in a 32-bit function using an MSVC personality, assume
+  // the function clobbers all registers. If an exception is thrown, the runtime
+  // will not restore CSRs.
+  // FIXME: Model this more precisely so that we can register allocate across
+  // the normal edge and spill and fill across the exceptional edge.
+  if (!Is64Bit && CLI.CS && CLI.CS->isInvoke()) {
+    const Function *CallerFn = MF.getFunction();
+    EHPersonality Pers =
+        CallerFn->hasPersonalityFn()
+            ? classifyEHPersonality(CallerFn->getPersonalityFn())
+            : EHPersonality::Unknown;
+    if (isMSVCEHPersonality(Pers))
+      Mask = RegInfo->getNoPreservedMask();
+  }
+
   Ops.push_back(DAG.getRegisterMask(Mask));
 
   if (InFlag.getNode())
@@ -4852,7 +4867,7 @@ static SDValue getVShift(bool isLeft, EVT VT, SDValue SrcOp,
   MVT ShVT = MVT::v2i64;
   unsigned Opc = isLeft ? X86ISD::VSHLDQ : X86ISD::VSRLDQ;
   SrcOp = DAG.getBitcast(ShVT, SrcOp);
-  MVT ScalarShiftTy = TLI.getScalarShiftAmountTy(DAG.getDataLayout());
+  MVT ScalarShiftTy = TLI.getScalarShiftAmountTy(DAG.getDataLayout(), VT);
   assert(NumBits % 8 == 0 && "Only support byte sized shifts");
   SDValue ShiftVal = DAG.getConstant(NumBits/8, dl, ScalarShiftTy);
   return DAG.getBitcast(VT, DAG.getNode(Opc, dl, ShVT, SrcOp, ShiftVal));
@@ -7409,7 +7424,7 @@ static SDValue lowerVectorShuffleAsElementInsertion(
           X86ISD::VSHLDQ, DL, MVT::v2i64, V2,
           DAG.getConstant(V2Index * EltVT.getSizeInBits() / 8, DL,
                           DAG.getTargetLoweringInfo().getScalarShiftAmountTy(
-                              DAG.getDataLayout())));
+                              DAG.getDataLayout(), VT)));
       V2 = DAG.getBitcast(VT, V2);
     }
   }
@@ -16262,14 +16277,36 @@ SDValue X86TargetLowering::LowerFRAMEADDR(SDValue Op, SelectionDAG &DAG) const {
 
 // FIXME? Maybe this could be a TableGen attribute on some registers and
 // this table could be generated automatically from RegInfo.
-unsigned X86TargetLowering::getRegisterByName(const char* RegName,
-                                              EVT VT) const {
+unsigned X86TargetLowering::getRegisterByName(const char* RegName, EVT VT,
+                                              SelectionDAG &DAG) const {
+  const TargetFrameLowering &TFI = *Subtarget->getFrameLowering();
+  const MachineFunction &MF = DAG.getMachineFunction();
+
   unsigned Reg = StringSwitch<unsigned>(RegName)
                        .Case("esp", X86::ESP)
                        .Case("rsp", X86::RSP)
+                       .Case("ebp", X86::EBP)
+                       .Case("rbp", X86::RBP)
                        .Default(0);
+
+  if (Reg == X86::EBP || Reg == X86::RBP) {
+    if (!TFI.hasFP(MF))
+      report_fatal_error("register " + StringRef(RegName) +
+                         " is allocatable: function has no frame pointer");
+#ifndef NDEBUG
+    else {
+      const X86RegisterInfo *RegInfo = Subtarget->getRegisterInfo();
+      unsigned FrameReg =
+          RegInfo->getPtrSizedFrameRegister(DAG.getMachineFunction());
+      assert((FrameReg == X86::EBP || FrameReg == X86::RBP) &&
+             "Invalid Frame Register!");
+    }
+#endif
+  }
+
   if (Reg)
     return Reg;
+
   report_fatal_error("Invalid register name global variable");
 }
 
@@ -23167,7 +23204,7 @@ static SDValue PerformSHLCombine(SDNode *N, SelectionDAG &DAG) {
       // We shift all of the values by one. In many cases we do not have
       // hardware support for this operation. This is better expressed as an ADD
       // of two values.
-      if (N1SplatC->getZExtValue() == 1)
+      if (N1SplatC->getAPIntValue() == 1)
         return DAG.getNode(ISD::ADD, SDLoc(N), VT, N0, N0);
     }
 

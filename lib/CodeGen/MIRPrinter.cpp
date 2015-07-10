@@ -15,6 +15,7 @@
 #include "MIRPrinter.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/CodeGen/MachineFunction.h"
+#include "llvm/CodeGen/MachineFrameInfo.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
 #include "llvm/CodeGen/MIRYamlMapping.h"
 #include "llvm/IR/BasicBlock.h"
@@ -41,7 +42,9 @@ public:
 
   void print(const MachineFunction &MF);
 
-  void convert(yaml::MachineFunction &MF, const MachineRegisterInfo &RegInfo);
+  void convert(yaml::MachineFunction &MF, const MachineRegisterInfo &RegInfo,
+               const TargetRegisterInfo *TRI);
+  void convert(yaml::MachineFrameInfo &YamlMFI, const MachineFrameInfo &MFI);
   void convert(ModuleSlotTracker &MST, yaml::MachineBasicBlock &YamlMBB,
                const MachineBasicBlock &MBB);
 
@@ -93,7 +96,8 @@ void MIRPrinter::print(const MachineFunction &MF) {
   YamlMF.Alignment = MF.getAlignment();
   YamlMF.ExposesReturnsTwice = MF.exposesReturnsTwice();
   YamlMF.HasInlineAsm = MF.hasInlineAsm();
-  convert(YamlMF, MF.getRegInfo());
+  convert(YamlMF, MF.getRegInfo(), MF.getSubtarget().getRegisterInfo());
+  convert(YamlMF.FrameInfo, *MF.getFrameInfo());
 
   int I = 0;
   ModuleSlotTracker MST(MF.getFunction()->getParent());
@@ -114,10 +118,38 @@ void MIRPrinter::print(const MachineFunction &MF) {
 }
 
 void MIRPrinter::convert(yaml::MachineFunction &MF,
-                         const MachineRegisterInfo &RegInfo) {
+                         const MachineRegisterInfo &RegInfo,
+                         const TargetRegisterInfo *TRI) {
   MF.IsSSA = RegInfo.isSSA();
   MF.TracksRegLiveness = RegInfo.tracksLiveness();
   MF.TracksSubRegLiveness = RegInfo.subRegLivenessEnabled();
+
+  // Print the virtual register definitions.
+  for (unsigned I = 0, E = RegInfo.getNumVirtRegs(); I < E; ++I) {
+    unsigned Reg = TargetRegisterInfo::index2VirtReg(I);
+    yaml::VirtualRegisterDefinition VReg;
+    VReg.ID = I;
+    VReg.Class =
+        StringRef(TRI->getRegClassName(RegInfo.getRegClass(Reg))).lower();
+    MF.VirtualRegisters.push_back(VReg);
+  }
+}
+
+void MIRPrinter::convert(yaml::MachineFrameInfo &YamlMFI,
+                         const MachineFrameInfo &MFI) {
+  YamlMFI.IsFrameAddressTaken = MFI.isFrameAddressTaken();
+  YamlMFI.IsReturnAddressTaken = MFI.isReturnAddressTaken();
+  YamlMFI.HasStackMap = MFI.hasStackMap();
+  YamlMFI.HasPatchPoint = MFI.hasPatchPoint();
+  YamlMFI.StackSize = MFI.getStackSize();
+  YamlMFI.OffsetAdjustment = MFI.getOffsetAdjustment();
+  YamlMFI.MaxAlignment = MFI.getMaxAlignment();
+  YamlMFI.AdjustsStack = MFI.adjustsStack();
+  YamlMFI.HasCalls = MFI.hasCalls();
+  YamlMFI.MaxCallFrameSize = MFI.getMaxCallFrameSize();
+  YamlMFI.HasOpaqueSPAdjustment = MFI.hasOpaqueSPAdjustment();
+  YamlMFI.HasVAStart = MFI.hasVAStart();
+  YamlMFI.HasMustTailInVarArgFunc = MFI.hasMustTailInVarArgFunc();
 }
 
 void MIRPrinter::convert(ModuleSlotTracker &MST,

@@ -233,7 +233,7 @@ public:
                                      APInt &KnownOne, const SelectionDAG &DAG,
                                      unsigned Depth = 0) const override;
 
-  MVT getScalarShiftAmountTy(const DataLayout &DL) const override;
+  MVT getScalarShiftAmountTy(const DataLayout &DL, EVT) const override;
 
   /// allowsMisalignedMemoryAccesses - Returns true if the target allows
   /// unaligned memory accesses of the specified type.
@@ -473,7 +473,8 @@ private:
   bool combineRepeatedFPDivisors(unsigned NumUsers) const override;
 
   ConstraintType getConstraintType(StringRef Constraint) const override;
-  unsigned getRegisterByName(const char* RegName, EVT VT) const override;
+  unsigned getRegisterByName(const char* RegName, EVT VT,
+                             SelectionDAG &DAG) const override;
 
   /// Examine constraint string and operand type and determine a weight value.
   /// The operand object must already have been set up with the operand type.

@@ -81,6 +81,21 @@ LLVM_YAML_IS_FLOW_SEQUENCE_VECTOR(llvm::yaml::FlowStringValue)
 namespace llvm {
 namespace yaml {
 
+struct VirtualRegisterDefinition {
+  unsigned ID;
+  StringValue Class;
+  // TODO: Serialize the virtual register hints.
+};
+
+template <> struct MappingTraits<VirtualRegisterDefinition> {
+  static void mapping(IO &YamlIO, VirtualRegisterDefinition &Reg) {
+    YamlIO.mapRequired("id", Reg.ID);
+    YamlIO.mapRequired("class", Reg.Class);
+  }
+
+  static const bool flow = true;
+};
+
 struct MachineBasicBlock {
   unsigned ID;
   StringValue Name;
@@ -109,10 +124,57 @@ template <> struct MappingTraits<MachineBasicBlock> {
 } // end namespace yaml
 } // end namespace llvm
 
+LLVM_YAML_IS_SEQUENCE_VECTOR(llvm::yaml::VirtualRegisterDefinition)
 LLVM_YAML_IS_SEQUENCE_VECTOR(llvm::yaml::MachineBasicBlock)
 
 namespace llvm {
 namespace yaml {
+
+/// Serializable representation of MachineFrameInfo.
+///
+/// Doesn't serialize attributes like 'StackAlignment', 'IsStackRealignable' and
+/// 'RealignOption' as they are determined by the target and LLVM function
+/// attributes.
+/// It also doesn't serialize attributes like 'NumFixedObject' and
+/// 'HasVarSizedObjects' as they are determined by the frame objects themselves.
+struct MachineFrameInfo {
+  // TODO: Serialize stack objects.
+  bool IsFrameAddressTaken = false;
+  bool IsReturnAddressTaken = false;
+  bool HasStackMap = false;
+  bool HasPatchPoint = false;
+  uint64_t StackSize = 0;
+  int OffsetAdjustment = 0;
+  unsigned MaxAlignment = 0;
+  bool AdjustsStack = false;
+  bool HasCalls = false;
+  // TODO: Serialize StackProtectorIdx and FunctionContextIdx
+  unsigned MaxCallFrameSize = 0;
+  // TODO: Serialize callee saved info.
+  // TODO: Serialize local frame objects.
+  bool HasOpaqueSPAdjustment = false;
+  bool HasVAStart = false;
+  bool HasMustTailInVarArgFunc = false;
+  // TODO: Serialize save and restore MBB references.
+};
+
+template <> struct MappingTraits<MachineFrameInfo> {
+  static void mapping(IO &YamlIO, MachineFrameInfo &MFI) {
+    YamlIO.mapOptional("isFrameAddressTaken", MFI.IsFrameAddressTaken);
+    YamlIO.mapOptional("isReturnAddressTaken", MFI.IsReturnAddressTaken);
+    YamlIO.mapOptional("hasStackMap", MFI.HasStackMap);
+    YamlIO.mapOptional("hasPatchPoint", MFI.HasPatchPoint);
+    YamlIO.mapOptional("stackSize", MFI.StackSize);
+    YamlIO.mapOptional("offsetAdjustment", MFI.OffsetAdjustment);
+    YamlIO.mapOptional("maxAlignment", MFI.MaxAlignment);
+    YamlIO.mapOptional("adjustsStack", MFI.AdjustsStack);
+    YamlIO.mapOptional("hasCalls", MFI.HasCalls);
+    YamlIO.mapOptional("maxCallFrameSize", MFI.MaxCallFrameSize);
+    YamlIO.mapOptional("hasOpaqueSPAdjustment", MFI.HasOpaqueSPAdjustment);
+    YamlIO.mapOptional("hasVAStart", MFI.HasVAStart);
+    YamlIO.mapOptional("hasMustTailInVarArgFunc", MFI.HasMustTailInVarArgFunc);
+  }
+};
 
 struct MachineFunction {
   StringRef Name;
@@ -123,9 +185,11 @@ struct MachineFunction {
   bool IsSSA = false;
   bool TracksRegLiveness = false;
   bool TracksSubRegLiveness = false;
-  // TODO: Serialize virtual register definitions.
+  std::vector<VirtualRegisterDefinition> VirtualRegisters;
   // TODO: Serialize the various register masks.
   // TODO: Serialize live in registers.
+  // Frame information
+  MachineFrameInfo FrameInfo;
 
   std::vector<MachineBasicBlock> BasicBlocks;
 };
@@ -139,6 +203,8 @@ template <> struct MappingTraits<MachineFunction> {
     YamlIO.mapOptional("isSSA", MF.IsSSA);
     YamlIO.mapOptional("tracksRegLiveness", MF.TracksRegLiveness);
     YamlIO.mapOptional("tracksSubRegLiveness", MF.TracksSubRegLiveness);
+    YamlIO.mapOptional("registers", MF.VirtualRegisters);
+    YamlIO.mapOptional("frameInfo", MF.FrameInfo);
     YamlIO.mapOptional("body", MF.BasicBlocks);
   }
 };

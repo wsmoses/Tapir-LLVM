@@ -222,18 +222,40 @@ void LoopAccessInfo::RuntimePointerCheck::groupChecks(
   for (unsigned Pointer = 0; Pointer < Pointers.size(); ++Pointer)
     PositionMap[Pointers[Pointer]] = Pointer;
 
+  // We need to keep track of what pointers we've already seen so we
+  // don't process them twice.
+  SmallSet<unsigned, 2> Seen;
+
   // Go through all equivalence classes, get the the "pointer check groups"
-  // and add them to the overall solution.
-  for (auto DI = DepCands.begin(), DE = DepCands.end(); DI != DE; ++DI) {
-    if (!DI->isLeader())
+  // and add them to the overall solution. We use the order in which accesses
+  // appear in 'Pointers' to enforce determinism.
+  for (unsigned I = 0; I < Pointers.size(); ++I) {
+    // We've seen this pointer before, and therefore already processed
+    // its equivalence class.
+    if (Seen.count(I))
       continue;
 
-    SmallVector<CheckingPtrGroup, 2> Groups;
+    MemoryDepChecker::MemAccessInfo Access(Pointers[I], IsWritePtr[I]);
 
-    for (auto MI = DepCands.member_begin(DI), ME = DepCands.member_end();
+    SmallVector<CheckingPtrGroup, 2> Groups;
+    auto LeaderI = DepCands.findValue(DepCands.getLeaderValue(Access));
+
+    SmallVector<unsigned, 2> MemberIndices;
+
+    // Get all indeces of the members of this equivalence class and sort them.
+    // This will allow us to process all accesses in the order in which they
+    // were added to the RuntimePointerCheck.
+    for (auto MI = DepCands.member_begin(LeaderI), ME = DepCands.member_end();
          MI != ME; ++MI) {
       unsigned Pointer = PositionMap[MI->getPointer()];
+      MemberIndices.push_back(Pointer);
+    }
+    std::sort(MemberIndices.begin(), MemberIndices.end());
+
+    for (unsigned Pointer : MemberIndices) {
       bool Merged = false;
+      // Mark this pointer as seen.
+      Seen.insert(Pointer);
 
       // Go through all the existing sets and see if we can find one
       // which can include this pointer.
@@ -393,10 +415,12 @@ public:
   }
 
   /// \brief Check whether we can check the pointers at runtime for
-  /// non-intersection. Returns true when we have 0 pointers
-  /// (a check on 0 pointers for non-intersection will always return true).
+  /// non-intersection.
+  ///
+  /// Returns true if we need no check or if we do and we can generate them
+  /// (i.e. the pointers have computable bounds).
   bool canCheckPtrAtRT(LoopAccessInfo::RuntimePointerCheck &RtCheck,
-                       bool &NeedRTCheck, ScalarEvolution *SE, Loop *TheLoop,
+                       ScalarEvolution *SE, Loop *TheLoop,
                        const ValueToValueMap &Strides,
                        bool ShouldCheckStride = false);
 
@@ -474,14 +498,13 @@ static bool hasComputableBounds(ScalarEvolution *SE,
 }
 
 bool AccessAnalysis::canCheckPtrAtRT(
-    LoopAccessInfo::RuntimePointerCheck &RtCheck, bool &NeedRTCheck,
-    ScalarEvolution *SE, Loop *TheLoop, const ValueToValueMap &StridesMap,
-    bool ShouldCheckStride) {
+    LoopAccessInfo::RuntimePointerCheck &RtCheck, ScalarEvolution *SE,
+    Loop *TheLoop, const ValueToValueMap &StridesMap, bool ShouldCheckStride) {
   // Find pointers with computable bounds. We are going to use this information
   // to place a runtime bound check.
   bool CanDoRT = true;
 
-  NeedRTCheck = false;
+  bool NeedRTCheck = false;
   if (!IsRTCheckAnalysisNeeded) return true;
 
   bool IsDepCheckNeeded = isDependencyCheckNeeded();
@@ -581,7 +604,15 @@ bool AccessAnalysis::canCheckPtrAtRT(
   if (NeedRTCheck && CanDoRT)
     RtCheck.groupChecks(DepCands, IsDepCheckNeeded);
 
-  return CanDoRT;
+  DEBUG(dbgs() << "LAA: We need to do " << RtCheck.getNumberOfChecks(nullptr)
+               << " pointer comparisons.\n");
+
+  RtCheck.Need = NeedRTCheck;
+
+  bool CanDoRTIfNeeded = !NeedRTCheck || CanDoRT;
+  if (!CanDoRTIfNeeded)
+    RtCheck.reset();
+  return CanDoRTIfNeeded;
 }
 
 void AccessAnalysis::processMemAccesses() {
@@ -1454,28 +1485,17 @@ void LoopAccessInfo::analyzeLoop(const ValueToValueMap &Strides) {
 
   // Find pointers with computable bounds. We are going to use this information
   // to place a runtime bound check.
-  bool NeedRTCheck;
-  bool CanDoRT = Accesses.canCheckPtrAtRT(PtrRtCheck,
-                                          NeedRTCheck, SE,
-                                          TheLoop, Strides);
-
-  DEBUG(dbgs() << "LAA: We need to do "
-               << PtrRtCheck.getNumberOfChecks(nullptr)
-               << " pointer comparisons.\n");
-
-  // Check that we found the bounds for the pointer.
-  if (CanDoRT)
-    DEBUG(dbgs() << "LAA: We can perform a memory runtime check if needed.\n");
-  else if (NeedRTCheck) {
+  bool CanDoRTIfNeeded =
+      Accesses.canCheckPtrAtRT(PtrRtCheck, SE, TheLoop, Strides);
+  if (!CanDoRTIfNeeded) {
     emitAnalysis(LoopAccessReport() << "cannot identify array bounds");
-    DEBUG(dbgs() << "LAA: We can't vectorize because we can't find " <<
-          "the array bounds.\n");
-    PtrRtCheck.reset();
+    DEBUG(dbgs() << "LAA: We can't vectorize because we can't find "
+                 << "the array bounds.\n");
     CanVecMem = false;
     return;
   }
 
-  PtrRtCheck.Need = NeedRTCheck;
+  DEBUG(dbgs() << "LAA: We can perform a memory runtime check if needed.\n");
 
   CanVecMem = true;
   if (Accesses.isDependencyCheckNeeded()) {
@@ -1486,7 +1506,6 @@ void LoopAccessInfo::analyzeLoop(const ValueToValueMap &Strides) {
 
     if (!CanVecMem && DepChecker.shouldRetryWithRuntimeCheck()) {
       DEBUG(dbgs() << "LAA: Retrying with memory checks\n");
-      NeedRTCheck = true;
 
       // Clear the dependency checks. We assume they are not needed.
       Accesses.resetDepChecks(DepChecker);
@@ -1494,15 +1513,14 @@ void LoopAccessInfo::analyzeLoop(const ValueToValueMap &Strides) {
       PtrRtCheck.reset();
       PtrRtCheck.Need = true;
 
-      CanDoRT = Accesses.canCheckPtrAtRT(PtrRtCheck, NeedRTCheck, SE,
-                                         TheLoop, Strides, true);
+      CanDoRTIfNeeded =
+          Accesses.canCheckPtrAtRT(PtrRtCheck, SE, TheLoop, Strides, true);
 
       // Check that we found the bounds for the pointer.
-      if (NeedRTCheck && !CanDoRT) {
+      if (!CanDoRTIfNeeded) {
         emitAnalysis(LoopAccessReport()
                      << "cannot check memory dependencies at runtime");
         DEBUG(dbgs() << "LAA: Can't vectorize with memory checks\n");
-        PtrRtCheck.reset();
         CanVecMem = false;
         return;
       }
@@ -1513,8 +1531,8 @@ void LoopAccessInfo::analyzeLoop(const ValueToValueMap &Strides) {
 
   if (CanVecMem)
     DEBUG(dbgs() << "LAA: No unsafe dependent memory operations in loop.  We"
-                 << (NeedRTCheck ? "" : " don't")
-                 << " need a runtime memory check.\n");
+                 << (PtrRtCheck.Need ? "" : " don't")
+                 << " need runtime memory checks.\n");
   else {
     emitAnalysis(LoopAccessReport() <<
                  "unsafe dependent memory operations in loop");
