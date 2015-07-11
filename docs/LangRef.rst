@@ -1326,6 +1326,14 @@ example:
     On an argument, this attribute indicates that the function does not write
     through this pointer argument, even though it may write to the memory that
     the pointer points to.
+``argmemonly``
+    This attribute indicates that the only memory accesses inside function are
+    loads and stores from objects pointed to by its pointer-typed arguments,
+    with arbitrary offsets. Or in other words, all memory operations in the
+    function can refer to memory only using pointers based on its function
+    arguments.
+    Note that ``argmemonly`` can be used together with ``readonly`` attribute
+    in order to specify that function reads only from its arguments.
 ``returns_twice``
     This attribute indicates that this function can return twice. The C
     ``setjmp`` is an example of such a function. The compiler disables
@@ -1837,8 +1845,8 @@ Fast-Math Flags
 
 LLVM IR floating-point binary ops (:ref:`fadd <i_fadd>`,
 :ref:`fsub <i_fsub>`, :ref:`fmul <i_fmul>`, :ref:`fdiv <i_fdiv>`,
-:ref:`frem <i_frem>`) have the following flags that can be set to enable
-otherwise unsafe floating point operations
+:ref:`frem <i_frem>`, :ref:`fcmp <i_fcmp>`) have the following flags that can
+be set to enable otherwise unsafe floating point operations
 
 ``nnan``
    No NaNs - Allow optimizations to assume the arguments and result are not
@@ -7573,7 +7581,7 @@ Syntax:
 
 ::
 
-      <result> = fcmp <cond> <ty> <op1>, <op2>     ; yields i1 or <N x i1>:result
+      <result> = fcmp [fast-math flags]* <cond> <ty> <op1>, <op2>     ; yields i1 or <N x i1>:result
 
 Overview:
 """""""""
@@ -7655,6 +7663,15 @@ always yields an :ref:`i1 <t_integer>` result, as follows:
    not equal to ``op2``.
 #. ``uno``: yields ``true`` if either operand is a QNAN.
 #. ``true``: always yields ``true``, regardless of operands.
+
+The ``fcmp`` instruction can also optionally take any number of
+:ref:`fast-math flags <fastmath>`, which are optimization hints to enable
+otherwise unsafe floating point optimizations.
+
+Any set of fast-math flags are legal on an ``fcmp`` instruction, but the
+only flags that have any effect on its semantics are those that allow
+assumptions to be made about the values of input arguments; namely
+``nnan``, ``ninf``, and ``nsz``. See :ref:`fastmath` for more information.
 
 Example:
 """"""""
@@ -10189,6 +10206,75 @@ Examples:
 
 Specialised Arithmetic Intrinsics
 ---------------------------------
+
+'``llvm.canonicalize.*``' Intrinsic
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Syntax:
+"""""""
+
+::
+
+      declare float @llvm.canonicalize.f32(float %a)
+      declare double @llvm.canonicalize.f64(double %b)
+
+Overview:
+"""""""""
+
+The '``llvm.canonicalize.*``' intrinsic returns the platform specific canonical
+encoding of a floating point number.  This canonicalization is useful for
+implementing certain numeric primitives such as frexp. The canonical encoding is
+defined by IEEE-754-2008 to be:
+
+::
+
+      2.1.8 canonical encoding: The preferred encoding of a floating-point
+      representation in a format.  Applied to declets, significands of finite
+      numbers, infinities, and NaNs, especially in decimal formats.
+
+This operation can also be considered equivalent to the IEEE-754-2008
+conversion of a floating-point value to the same format.  NaNs are handled
+according to section 6.2.
+
+Examples of non-canonical encodings:
+
+- x87 pseudo denormals, pseudo NaNs, pseudo Infinity, Unnormals.  These are
+  converted to a canonical representation per hardware-specific protocol.
+- Many normal decimal floating point numbers have non-canonical alternative
+  encodings.
+- Some machines, like GPUs or ARMv7 NEON, do not support subnormal values.
+  These are treated as non-canonical encodings of zero and with be flushed to
+  a zero of the same sign by this operation.
+
+Note that per IEEE-754-2008 6.2, systems that support signaling NaNs with
+default exception handling must signal an invalid exception, and produce a
+quiet NaN result.
+
+This function should always be implementable as multiplication by 1.0, provided
+that the compiler does not constant fold the operation.  Likewise, division by
+1.0 and ``llvm.minnum(x, x)`` are possible implementations.  Addition with
+-0.0 is also sufficient provided that the rounding mode is not -Infinity.
+
+``@llvm.canonicalize`` must preserve the equality relation.  That is:
+
+- ``(@llvm.canonicalize(x) == x)`` is equivalent to ``(x == x)``
+- ``(@llvm.canonicalize(x) == @llvm.canonicalize(y))`` is equivalent to
+  to ``(x == y)``
+
+Additionally, the sign of zero must be conserved:
+``@llvm.canonicalize(-0.0) = -0.0`` and ``@llvm.canonicalize(+0.0) = +0.0``
+
+The payload bits of a NaN must be conserved, with two exceptions.
+First, environments which use only a single canonical representation of NaN
+must perform said canonicalization.  Second, SNaNs must be quieted per the
+usual methods.
+
+The canonicalization operation may be optimized away if:
+
+- The input is known to be canonical.  For example, it was produced by a
+  floating-point operation that is required by the standard to be canonical.
+- The result is consumed only by (or fused with) other floating-point
+  operations.  That is, the bits of the floating point value are not examined.
 
 '``llvm.fmuladd.*``' Intrinsic
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

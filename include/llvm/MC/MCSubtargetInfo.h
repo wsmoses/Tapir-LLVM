@@ -37,22 +37,26 @@ class MCSubtargetInfo {
   const MCWriteProcResEntry *WriteProcResTable;
   const MCWriteLatencyEntry *WriteLatencyTable;
   const MCReadAdvanceEntry *ReadAdvanceTable;
-  MCSchedModel CPUSchedModel;
+  const MCSchedModel *CPUSchedModel;
 
   const InstrStage *Stages;            // Instruction itinerary stages
   const unsigned *OperandCycles;       // Itinerary operand cycles
   const unsigned *ForwardingPaths;     // Forwarding paths
   FeatureBitset FeatureBits;           // Feature bits for current CPU + FS
 
+  MCSubtargetInfo() = delete;
+  MCSubtargetInfo &operator=(MCSubtargetInfo &&) = delete;
+  MCSubtargetInfo &operator=(const MCSubtargetInfo &) = delete;
+
 public:
-  void InitMCSubtargetInfo(const Triple &TT, StringRef CPU, StringRef FS,
-                           ArrayRef<SubtargetFeatureKV> PF,
-                           ArrayRef<SubtargetFeatureKV> PD,
-                           const SubtargetInfoKV *ProcSched,
-                           const MCWriteProcResEntry *WPR,
-                           const MCWriteLatencyEntry *WL,
-                           const MCReadAdvanceEntry *RA, const InstrStage *IS,
-                           const unsigned *OC, const unsigned *FP);
+  MCSubtargetInfo(const MCSubtargetInfo &) = default;
+  MCSubtargetInfo(const Triple &TT, StringRef CPU, StringRef FS,
+                  ArrayRef<SubtargetFeatureKV> PF,
+                  ArrayRef<SubtargetFeatureKV> PD,
+                  const SubtargetInfoKV *ProcSched,
+                  const MCWriteProcResEntry *WPR, const MCWriteLatencyEntry *WL,
+                  const MCReadAdvanceEntry *RA, const InstrStage *IS,
+                  const unsigned *OC, const unsigned *FP);
 
   /// getTargetTriple - Return the target triple string.
   const Triple &getTargetTriple() const { return TargetTriple; }
@@ -74,12 +78,16 @@ public:
     FeatureBits = FeatureBits_;
   }
 
-  /// InitMCProcessorInfo - Set or change the CPU (optionally supplemented with
-  /// feature string). Recompute feature bits and scheduling model.
+protected:
+  /// Initialize the scheduling model and feature bits.
+  ///
+  /// FIXME: Find a way to stick this in the constructor, since it should only
+  /// be called during initialization.
   void InitMCProcessorInfo(StringRef CPU, StringRef FS);
 
-  /// InitCPUSchedModel - Recompute scheduling model based on CPU.
-  void InitCPUSchedModel(StringRef CPU);
+public:
+  /// Set the features to the default for the given CPU.
+  void setDefaultFeatures(StringRef CPU);
 
   /// ToggleFeature - Toggle a feature and returns the re-computed feature
   /// bits. This version does not change the implied bits.
@@ -99,11 +107,10 @@ public:
 
   /// getSchedModelForCPU - Get the machine model of a CPU.
   ///
-  MCSchedModel getSchedModelForCPU(StringRef CPU) const;
+  const MCSchedModel &getSchedModelForCPU(StringRef CPU) const;
 
-  /// getSchedModel - Get the machine model for this subtarget's CPU.
-  ///
-  const MCSchedModel &getSchedModel() const { return CPUSchedModel; }
+  /// Get the machine model for this subtarget's CPU.
+  const MCSchedModel &getSchedModel() const { return *CPUSchedModel; }
 
   /// Return an iterator at the first process resource consumed by the given
   /// scheduling class.
