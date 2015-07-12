@@ -676,14 +676,14 @@ public:
     return Insert(new UnreachableInst(Context));
   }
 
-  /// \brief Create a detach 'detach Child, Parent' instruction.
+  /// \brief Create a detach 'detach Detached, Continue' instruction.
   DetachInst *CreateDetach(BasicBlock *Detached, BasicBlock *Continue,
                            MDNode *BranchWeights = nullptr) {
     return Insert(addBranchWeights(DetachInst::Create(Detached, Continue),
                                    BranchWeights));
   }
 
-  /// \brief Create a reattach 'reattach [DetachContinue]' instruction.
+  /// \brief Create a reattach 'reattach DetachContinue' instruction.
   ReattachInst *CreateReattach(BasicBlock *DetachContinue) {
     return Insert(ReattachInst::Create(Context, DetachContinue));
   }
