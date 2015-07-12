@@ -53,6 +53,11 @@ bool llvm::isAllocaPromotable(const AllocaInst *AI) {
   // assignments to subsections of the memory unit.
   unsigned AS = AI->getType()->getAddressSpace();
 
+  // Alloca's whose values are stored in a detached block and loaded
+  // after the corresponding reattach are not promotable.
+  if (AI->isDetachedUse())
+    return false;
+
   // Only allow direct and non-volatile loads and stores...
   for (const User *U : AI->users()) {
     if (const LoadInst *LI = dyn_cast<LoadInst>(U)) {
@@ -573,6 +578,40 @@ void PromoteMem2Reg::run() {
         BBNumbers[&BB] = ID++;
     }
 
+    // Unique the set of defining blocks for efficient lookup.
+    SmallPtrSet<BasicBlock *, 32> DefBlocks;
+    DefBlocks.insert(Info.DefiningBlocks.begin(), Info.DefiningBlocks.end());
+
+    // Determine which blocks the value is live in.  These are blocks which lead
+    // to uses.
+    SmallPtrSet<BasicBlock *, 32> LiveInBlocks;
+    ComputeLiveInBlocks(AI, Info, DefBlocks, LiveInBlocks);
+
+    // Determine which blocks need phi nodes and see if we can
+    // optimize out some work by avoiding insertion of dead phi nodes.
+    IDF.setLiveInBlocks(LiveInBlocks);
+    IDF.setDefiningBlocks(DefBlocks);
+    SmallVector<BasicBlock *, 32> PHIBlocks;
+    IDF.calculate(PHIBlocks);
+    // Determine which phi nodes want to use a value from a reattached
+    // predecessor.  Because register state is not preserved across a
+    // reattach, these alloca's cannot be promoted.
+    bool ReattachPred = false;
+    for (unsigned i = 0, e = PHIBlocks.size(); i != e && !ReattachPred; ++i) {
+      BasicBlock *BB = PHIBlocks[i];
+      for (pred_iterator PI = pred_begin(BB), E = pred_end(BB);
+           PI != E && !ReattachPred; ++PI) {
+        BasicBlock *P = *PI;
+        if (isa<ReattachInst>(P->getTerminator()))
+          ReattachPred = true;
+      }
+    }
+    if (ReattachPred) {
+      AI->setDetachedUse(true);
+      RemoveFromAllocasList(AllocaNum);
+      continue;
+    }
+
     // If we have an AST to keep updated, remember some pointer value that is
     // stored into the alloca.
     if (AST)
@@ -586,28 +625,7 @@ void PromoteMem2Reg::run() {
     AllocaLookup[Allocas[AllocaNum]] = AllocaNum;
 
     // At this point, we're committed to promoting the alloca using IDF's, and
-    // the standard SSA construction algorithm.  Determine which blocks need PHI
-    // nodes and see if we can optimize out some work by avoiding insertion of
-    // dead phi nodes.
-
-
-    // Unique the set of defining blocks for efficient lookup.
-    SmallPtrSet<BasicBlock *, 32> DefBlocks;
-    DefBlocks.insert(Info.DefiningBlocks.begin(), Info.DefiningBlocks.end());
-
-    // Determine which blocks the value is live in.  These are blocks which lead
-    // to uses.
-    SmallPtrSet<BasicBlock *, 32> LiveInBlocks;
-    ComputeLiveInBlocks(AI, Info, DefBlocks, LiveInBlocks);
-
-    // At this point, we're committed to promoting the alloca using IDF's, and
-    // the standard SSA construction algorithm.  Determine which blocks need phi
-    // nodes and see if we can optimize out some work by avoiding insertion of
-    // dead phi nodes.
-    IDF.setLiveInBlocks(LiveInBlocks);
-    IDF.setDefiningBlocks(DefBlocks);
-    SmallVector<BasicBlock *, 32> PHIBlocks;
-    IDF.calculate(PHIBlocks);
+    // the standard SSA construction algorithm.
     if (PHIBlocks.size() > 1)
       std::sort(PHIBlocks.begin(), PHIBlocks.end(),
                 [this](BasicBlock *A, BasicBlock *B) {
