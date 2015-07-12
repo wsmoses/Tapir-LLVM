@@ -151,6 +151,17 @@ public:
                                (V ? 32 : 0));
   }
 
+  /// \brief Return true if this alloca is used in a detached block.
+  bool isDetachedUse() const {
+    return getSubclassDataFromInstruction() & 64;
+  }
+
+  /// \brief Specify whether this alloca is used in a detached block.
+  void setDetachedUse(bool V) {
+    setInstructionSubclassData((getSubclassDataFromInstruction() & ~64) |
+                               (V ? 64 : 0));
+  }
+
   // Methods for support type inquiry through isa, cast, and dyn_cast:
   static inline bool classof(const Instruction *I) {
     return (I->getOpcode() == Instruction::Alloca);
@@ -3721,10 +3732,14 @@ public:
   /// Transparently provide more efficient getOperand methods.
   DECLARE_TRANSPARENT_OPERAND_ACCESSORS(Value);
 
-  unsigned getNumSuccessors() const { return 0; }
+  unsigned getNumSuccessors() const { return 1; }
+  BasicBlock *getSuccessor(unsigned i) const {
+    assert(i < getNumSuccessors() && "Successor # out of range for Reattach!");
+    return cast_or_null<BasicBlock>((&Op<-1>() - i)->get());
+  }
 
   BasicBlock *getDetachContinue() const {
-    return cast_or_null<BasicBlock>((&Op<0>())->get());
+    return cast_or_null<BasicBlock>((&Op<-1>())->get());
   }
 
   // Methods for support type inquiry through isa, cast, and dyn_cast:

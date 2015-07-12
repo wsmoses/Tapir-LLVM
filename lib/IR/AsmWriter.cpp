@@ -2786,13 +2786,6 @@ void AssemblyWriter::printInstruction(const Instruction &I) {
     writeOperand(DI.getSuccessor(0), true);
     Out << ", ";
     writeOperand(DI.getSuccessor(1), true);
-  } else if (isa<ReattachInst>(I)) {
-    // Special case reattach instruction to get formatting nice and correct
-    const ReattachInst &RI(cast<ReattachInst>(I));
-    Out << ' ';
-    writeOperand(RI.getDetachContinue(), true);
-    Out.PadToColumn(50);
-    Out << "; not a branch";
 
   } else if (isa<SwitchInst>(I)) {
     const SwitchInst& SI(cast<SwitchInst>(I));

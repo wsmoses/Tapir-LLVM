@@ -776,21 +776,27 @@ ReattachInst::ReattachInst(LLVMContext &C, BasicBlock *DetachContinue,
   : TerminatorInst(Type::getVoidTy(C), Instruction::Reattach,
                    OperandTraits<ReattachInst>::op_end(this) - 1, 1,
                    InsertBefore) {
-  Op<0>() = DetachContinue;
+  Op<-1>() = DetachContinue;
+#ifndef NDEBUG
+  AssertOK();
+#endif
 }
 ReattachInst::ReattachInst(LLVMContext &C, BasicBlock *DetachContinue,
                            BasicBlock *InsertAtEnd)
   : TerminatorInst(Type::getVoidTy(C), Instruction::Reattach,
                    OperandTraits<ReattachInst>::op_end(this) - 1, 1,
                    InsertAtEnd) {
-  Op<0>() = DetachContinue;
+  Op<-1>() = DetachContinue;
+#ifndef NDEBUG
+  AssertOK();
+#endif
 }
 
 ReattachInst::ReattachInst(const ReattachInst &RI) :
   TerminatorInst(Type::getVoidTy(RI.getContext()), Instruction::Reattach,
                  OperandTraits<ReattachInst>::op_end(this) - RI.getNumOperands(),
                  RI.getNumOperands()) {
-  Op<0>() = RI.Op<0>();
+  Op<-1>() = RI.Op<-1>();
   assert(RI.getNumOperands() == 1 && "Reattach must have 1 operand!");
   SubclassOptionalData = RI.SubclassOptionalData;
 }
@@ -799,12 +805,12 @@ unsigned ReattachInst::getNumSuccessorsV() const {
   return getNumSuccessors();
 }
 
-void ReattachInst::setSuccessorV(unsigned idx, BasicBlock *NewSucc) {
-  llvm_unreachable("ReattachInst has no successors!");
+BasicBlock *ReattachInst::getSuccessorV(unsigned idx) const {
+  return getSuccessor(idx);
 }
 
-BasicBlock *ReattachInst::getSuccessorV(unsigned idx) const {
-  llvm_unreachable("ReattachInst has no successors!");
+void ReattachInst::setSuccessorV(unsigned idx, BasicBlock *B) {
+  setSuccessor(idx, B);
 }
 
 //===----------------------------------------------------------------------===//
