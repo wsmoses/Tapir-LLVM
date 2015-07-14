@@ -264,12 +264,12 @@ unsigned X86TTIImpl::getArithmeticInstrCost(
 
     { ISD::SRL,  MVT::v16i8,    26 }, // cmpgtb sequence.
     { ISD::SRL,  MVT::v8i16,    32 }, // cmpgtb sequence.
-    { ISD::SRL,  MVT::v4i32,  4*10 }, // Scalarized.
+    { ISD::SRL,  MVT::v4i32,    16 }, // Shift each lane + blend.
     { ISD::SRL,  MVT::v2i64,  2*10 }, // Scalarized.
 
     { ISD::SRA,  MVT::v16i8,    54 }, // unpacked cmpgtb sequence.
     { ISD::SRA,  MVT::v8i16,    32 }, // cmpgtb sequence.
-    { ISD::SRA,  MVT::v4i32,  4*10 }, // Scalarized.
+    { ISD::SRA,  MVT::v4i32,    16 }, // Shift each lane + blend.
     { ISD::SRA,  MVT::v2i64,  2*10 }, // Scalarized.
 
     // It is not a good idea to vectorize division. We have to scalarize it and
@@ -1120,11 +1120,11 @@ unsigned X86TTIImpl::getIntImmCost(Intrinsic::ID IID, unsigned Idx,
 
 bool X86TTIImpl::isLegalMaskedLoad(Type *DataTy, int Consecutive) {
   int DataWidth = DataTy->getPrimitiveSizeInBits();
-  
+
   // Todo: AVX512 allows gather/scatter, works with strided and random as well
   if ((DataWidth < 32) || (Consecutive == 0))
     return false;
-  if (ST->hasAVX512() || ST->hasAVX2()) 
+  if (ST->hasAVX512() || ST->hasAVX2())
     return true;
   return false;
 }

@@ -129,9 +129,8 @@ template <> struct MappingTraits<MachineBasicBlock> {
 ///
 /// TODO: Determine isPreallocated flag by mapping between objects and local
 /// objects (Serialize local objects).
-/// TODO: Serialize variable sized and fixed stack objects.
 struct MachineStackObject {
-  enum ObjectType { DefaultType, SpillSlot };
+  enum ObjectType { DefaultType, SpillSlot, VariableSized };
   // TODO: Serialize LLVM alloca reference.
   unsigned ID;
   ObjectType Type = DefaultType;
@@ -144,6 +143,7 @@ template <> struct ScalarEnumerationTraits<MachineStackObject::ObjectType> {
   static void enumeration(yaml::IO &IO, MachineStackObject::ObjectType &Type) {
     IO.enumCase(Type, "default", MachineStackObject::DefaultType);
     IO.enumCase(Type, "spill-slot", MachineStackObject::SpillSlot);
+    IO.enumCase(Type, "variable-sized", MachineStackObject::VariableSized);
   }
 };
 
@@ -154,8 +154,49 @@ template <> struct MappingTraits<MachineStackObject> {
         "type", Object.Type,
         MachineStackObject::DefaultType); // Don't print the default type.
     YamlIO.mapOptional("offset", Object.Offset);
-    YamlIO.mapRequired("size", Object.Size);
+    if (Object.Type != MachineStackObject::VariableSized)
+      YamlIO.mapRequired("size", Object.Size);
     YamlIO.mapOptional("alignment", Object.Alignment);
+  }
+
+  static const bool flow = true;
+};
+
+/// Serializable representation of the fixed stack object from the
+/// MachineFrameInfo class.
+struct FixedMachineStackObject {
+  enum ObjectType { DefaultType, SpillSlot };
+  unsigned ID;
+  ObjectType Type = DefaultType;
+  int64_t Offset = 0;
+  uint64_t Size = 0;
+  unsigned Alignment = 0;
+  bool IsImmutable = false;
+  bool IsAliased = false;
+};
+
+template <>
+struct ScalarEnumerationTraits<FixedMachineStackObject::ObjectType> {
+  static void enumeration(yaml::IO &IO,
+                          FixedMachineStackObject::ObjectType &Type) {
+    IO.enumCase(Type, "default", FixedMachineStackObject::DefaultType);
+    IO.enumCase(Type, "spill-slot", FixedMachineStackObject::SpillSlot);
+  }
+};
+
+template <> struct MappingTraits<FixedMachineStackObject> {
+  static void mapping(yaml::IO &YamlIO, FixedMachineStackObject &Object) {
+    YamlIO.mapRequired("id", Object.ID);
+    YamlIO.mapOptional(
+        "type", Object.Type,
+        FixedMachineStackObject::DefaultType); // Don't print the default type.
+    YamlIO.mapOptional("offset", Object.Offset);
+    YamlIO.mapOptional("size", Object.Size);
+    YamlIO.mapOptional("alignment", Object.Alignment);
+    if (Object.Type != FixedMachineStackObject::SpillSlot) {
+      YamlIO.mapOptional("isImmutable", Object.IsImmutable);
+      YamlIO.mapOptional("isAliased", Object.IsAliased);
+    }
   }
 
   static const bool flow = true;
@@ -167,6 +208,7 @@ template <> struct MappingTraits<MachineStackObject> {
 LLVM_YAML_IS_SEQUENCE_VECTOR(llvm::yaml::VirtualRegisterDefinition)
 LLVM_YAML_IS_SEQUENCE_VECTOR(llvm::yaml::MachineBasicBlock)
 LLVM_YAML_IS_SEQUENCE_VECTOR(llvm::yaml::MachineStackObject)
+LLVM_YAML_IS_SEQUENCE_VECTOR(llvm::yaml::FixedMachineStackObject)
 
 namespace llvm {
 namespace yaml {
@@ -230,6 +272,7 @@ struct MachineFunction {
   // TODO: Serialize live in registers.
   // Frame information
   MachineFrameInfo FrameInfo;
+  std::vector<FixedMachineStackObject> FixedStackObjects;
   std::vector<MachineStackObject> StackObjects;
 
   std::vector<MachineBasicBlock> BasicBlocks;
@@ -246,6 +289,7 @@ template <> struct MappingTraits<MachineFunction> {
     YamlIO.mapOptional("tracksSubRegLiveness", MF.TracksSubRegLiveness);
     YamlIO.mapOptional("registers", MF.VirtualRegisters);
     YamlIO.mapOptional("frameInfo", MF.FrameInfo);
+    YamlIO.mapOptional("fixedStack", MF.FixedStackObjects);
     YamlIO.mapOptional("stack", MF.StackObjects);
     YamlIO.mapOptional("body", MF.BasicBlocks);
   }

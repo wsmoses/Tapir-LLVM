@@ -4551,7 +4551,7 @@ static bool getTargetShuffleMask(SDNode *N, MVT VT,
     DecodeVPERM2X128Mask(VT, cast<ConstantSDNode>(ImmN)->getZExtValue(), Mask);
     if (Mask.empty()) return false;
     // Mask only contains negative index if an element is zero.
-    if (std::any_of(Mask.begin(), Mask.end(), 
+    if (std::any_of(Mask.begin(), Mask.end(),
                     [](int M){ return M == SM_SentinelZero; }))
       return false;
     break;
@@ -15412,7 +15412,7 @@ static SDValue LowerINTRINSIC_WO_CHAIN(SDValue Op, const X86Subtarget *Subtarget
       SDValue Rnd;
       if (Op.getNumOperands() == 6)
         Rnd = Op.getOperand(5);
-      else 
+      else
         Rnd = DAG.getConstant(X86::STATIC_ROUNDING::CUR_DIRECTION, dl, MVT::i32);
       return getVectorMaskingNode(DAG.getNode(IntrData->Opc0, dl, VT,
                                               Src1, Src2, Rnd),
@@ -15442,7 +15442,7 @@ static SDValue LowerINTRINSIC_WO_CHAIN(SDValue Op, const X86Subtarget *Subtarget
                                               Src1, Src2, Src3),
                                   Mask, PassThru, Subtarget, DAG);
     }
-    case VPERM_3OP_MASKZ: 
+    case VPERM_3OP_MASKZ:
     case VPERM_3OP_MASK:
     case FMA_OP_MASK3:
     case FMA_OP_MASKZ:
@@ -17417,6 +17417,53 @@ static SDValue LowerShift(SDValue Op, const X86Subtarget* Subtarget,
     }
   }
 
+  // v4i32 Non Uniform Shifts.
+  // If the shift amount is constant we can shift each lane using the SSE2
+  // immediate shifts, else we need to zero-extend each lane to the lower i64
+  // and shift using the SSE2 variable shifts.
+  // The separate results can then be blended together.
+  if (VT == MVT::v4i32) {
+    unsigned Opc = Op.getOpcode();
+    SDValue Amt0, Amt1, Amt2, Amt3;
+    if (ISD::isBuildVectorOfConstantSDNodes(Amt.getNode())) {
+      Amt0 = DAG.getVectorShuffle(VT, dl, Amt, DAG.getUNDEF(VT), {0, 0, 0, 0});
+      Amt1 = DAG.getVectorShuffle(VT, dl, Amt, DAG.getUNDEF(VT), {1, 1, 1, 1});
+      Amt2 = DAG.getVectorShuffle(VT, dl, Amt, DAG.getUNDEF(VT), {2, 2, 2, 2});
+      Amt3 = DAG.getVectorShuffle(VT, dl, Amt, DAG.getUNDEF(VT), {3, 3, 3, 3});
+    } else {
+      // ISD::SHL is handled above but we include it here for completeness.
+      switch (Opc) {
+      default:
+        llvm_unreachable("Unknown target vector shift node");
+      case ISD::SHL:
+        Opc = X86ISD::VSHL;
+        break;
+      case ISD::SRL:
+        Opc = X86ISD::VSRL;
+        break;
+      case ISD::SRA:
+        Opc = X86ISD::VSRA;
+        break;
+      }
+      // The SSE2 shifts use the lower i64 as the same shift amount for
+      // all lanes and the upper i64 is ignored. These shuffle masks
+      // optimally zero-extend each lanes on SSE2/SSE41/AVX targets.
+      SDValue Z = getZeroVector(VT, Subtarget, DAG, dl);
+      Amt0 = DAG.getVectorShuffle(VT, dl, Amt, Z, {0, 4, -1, -1});
+      Amt1 = DAG.getVectorShuffle(VT, dl, Amt, Z, {1, 5, -1, -1});
+      Amt2 = DAG.getVectorShuffle(VT, dl, Amt, Z, {2, 6, -1, -1});
+      Amt3 = DAG.getVectorShuffle(VT, dl, Amt, Z, {3, 7, -1, -1});
+    }
+
+    SDValue R0 = DAG.getNode(Opc, dl, VT, R, Amt0);
+    SDValue R1 = DAG.getNode(Opc, dl, VT, R, Amt1);
+    SDValue R2 = DAG.getNode(Opc, dl, VT, R, Amt2);
+    SDValue R3 = DAG.getNode(Opc, dl, VT, R, Amt3);
+    SDValue R02 = DAG.getVectorShuffle(VT, dl, R0, R2, {0, -1, 6, -1});
+    SDValue R13 = DAG.getVectorShuffle(VT, dl, R1, R3, {-1, 1, -1, 7});
+    return DAG.getVectorShuffle(VT, dl, R02, R13, {0, 5, 2, 7});
+  }
+
   if (VT == MVT::v16i8 || (VT == MVT::v32i8 && Subtarget->hasInt256())) {
     MVT ExtVT = MVT::getVectorVT(MVT::i16, VT.getVectorNumElements() / 2);
     unsigned ShiftOpcode = Op->getOpcode();
@@ -18852,6 +18899,7 @@ const char *X86TargetLowering::getTargetNodeName(unsigned Opcode) const {
   case X86ISD::VFPEXT:             return "X86ISD::VFPEXT";
   case X86ISD::VFPROUND:           return "X86ISD::VFPROUND";
   case X86ISD::CVTDQ2PD:           return "X86ISD::CVTDQ2PD";
+  case X86ISD::CVTUDQ2PD:          return "X86ISD::CVTUDQ2PD";
   case X86ISD::VSHLDQ:             return "X86ISD::VSHLDQ";
   case X86ISD::VSRLDQ:             return "X86ISD::VSRLDQ";
   case X86ISD::VSHL:               return "X86ISD::VSHL";
@@ -18971,6 +19019,8 @@ const char *X86TargetLowering::getTargetNodeName(unsigned Opcode) const {
   case X86ISD::MULHRS:             return "X86ISD::MULHRS";
   case X86ISD::SINT_TO_FP_RND:     return "X86ISD::SINT_TO_FP_RND";
   case X86ISD::UINT_TO_FP_RND:     return "X86ISD::UINT_TO_FP_RND";
+  case X86ISD::FP_TO_SINT_RND:     return "X86ISD::FP_TO_SINT_RND";
+  case X86ISD::FP_TO_UINT_RND:     return "X86ISD::FP_TO_UINT_RND";
   }
   return nullptr;
 }

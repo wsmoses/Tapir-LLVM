@@ -157,7 +157,29 @@ void MIRPrinter::convert(yaml::MachineFrameInfo &YamlMFI,
 
 void MIRPrinter::convertStackObjects(yaml::MachineFunction &MF,
                                      const MachineFrameInfo &MFI) {
+  // Process fixed stack objects.
   unsigned ID = 0;
+  for (int I = MFI.getObjectIndexBegin(); I < 0; ++I) {
+    if (MFI.isDeadObjectIndex(I))
+      continue;
+
+    yaml::FixedMachineStackObject YamlObject;
+    YamlObject.ID = ID++;
+    YamlObject.Type = MFI.isSpillSlotObjectIndex(I)
+                          ? yaml::FixedMachineStackObject::SpillSlot
+                          : yaml::FixedMachineStackObject::DefaultType;
+    YamlObject.Offset = MFI.getObjectOffset(I);
+    YamlObject.Size = MFI.getObjectSize(I);
+    YamlObject.Alignment = MFI.getObjectAlignment(I);
+    YamlObject.IsImmutable = MFI.isImmutableObjectIndex(I);
+    YamlObject.IsAliased = MFI.isAliasedObjectIndex(I);
+    MF.FixedStackObjects.push_back(YamlObject);
+    // TODO: Store the mapping between fixed object IDs and object indices to
+    // print the fixed stack object references correctly.
+  }
+
+  // Process ordinary stack objects.
+  ID = 0;
   for (int I = 0, E = MFI.getObjectIndexEnd(); I < E; ++I) {
     if (MFI.isDeadObjectIndex(I))
       continue;
@@ -166,7 +188,9 @@ void MIRPrinter::convertStackObjects(yaml::MachineFunction &MF,
     YamlObject.ID = ID++;
     YamlObject.Type = MFI.isSpillSlotObjectIndex(I)
                           ? yaml::MachineStackObject::SpillSlot
-                          : yaml::MachineStackObject::DefaultType;
+                          : MFI.isVariableSizedObjectIndex(I)
+                                ? yaml::MachineStackObject::VariableSized
+                                : yaml::MachineStackObject::DefaultType;
     YamlObject.Offset = MFI.getObjectOffset(I);
     YamlObject.Size = MFI.getObjectSize(I);
     YamlObject.Alignment = MFI.getObjectAlignment(I);
@@ -281,7 +305,9 @@ void MIPrinter::print(const MachineOperand &Op, const TargetRegisterInfo *TRI) {
     if (Op.isUndef())
       OS << "undef ";
     printReg(Op.getReg(), OS, TRI);
-    // TODO: Print sub register.
+    // Print the sub register.
+    if (Op.getSubReg() != 0)
+      OS << ':' << TRI->getSubRegIndexName(Op.getSubReg());
     break;
   case MachineOperand::MO_Immediate:
     OS << Op.getImm();

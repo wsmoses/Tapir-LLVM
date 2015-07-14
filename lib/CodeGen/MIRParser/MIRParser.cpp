@@ -376,11 +376,29 @@ bool MIRParserImpl::initializeFrameInfo(MachineFrameInfo &MFI,
   MFI.setHasVAStart(YamlMFI.HasVAStart);
   MFI.setHasMustTailInVarArgFunc(YamlMFI.HasMustTailInVarArgFunc);
 
-  // Initialize the frame objects.
+  // Initialize the fixed frame objects.
+  for (const auto &Object : YamlMF.FixedStackObjects) {
+    int ObjectIdx;
+    if (Object.Type != yaml::FixedMachineStackObject::SpillSlot)
+      ObjectIdx = MFI.CreateFixedObject(Object.Size, Object.Offset,
+                                        Object.IsImmutable, Object.IsAliased);
+    else
+      ObjectIdx = MFI.CreateFixedSpillStackObject(Object.Size, Object.Offset);
+    MFI.setObjectAlignment(ObjectIdx, Object.Alignment);
+    // TODO: Store the mapping between fixed object IDs and object indices to
+    // parse fixed stack object references correctly.
+  }
+
+  // Initialize the ordinary frame objects.
   for (const auto &Object : YamlMF.StackObjects) {
-    int ObjectIdx = MFI.CreateStackObject(
-        Object.Size, Object.Alignment,
-        Object.Type == yaml::MachineStackObject::SpillSlot);
+    int ObjectIdx;
+    if (Object.Type == yaml::MachineStackObject::VariableSized)
+      ObjectIdx =
+          MFI.CreateVariableSizedObject(Object.Alignment, /*Alloca=*/nullptr);
+    else
+      ObjectIdx = MFI.CreateStackObject(
+          Object.Size, Object.Alignment,
+          Object.Type == yaml::MachineStackObject::SpillSlot);
     MFI.setObjectOffset(ObjectIdx, Object.Offset);
     // TODO: Store the mapping between object IDs and object indices to parse
     // stack object references correctly.
