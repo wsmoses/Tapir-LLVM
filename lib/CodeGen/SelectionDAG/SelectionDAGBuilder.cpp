@@ -319,9 +319,7 @@ static SDValue getCopyFromPartsVector(SelectionDAG &DAG, SDLoc DL,
     assert(PartEVT.getVectorNumElements() == ValueVT.getVectorNumElements() &&
       "Cannot handle this kind of promotion");
     // Promoted vector extract
-    bool Smaller = ValueVT.bitsLE(PartEVT);
-    return DAG.getNode((Smaller ? ISD::TRUNCATE : ISD::ANY_EXTEND),
-                       DL, ValueVT, Val);
+    return DAG.getAnyExtOrTrunc(Val, DL, ValueVT);
 
   }
 
@@ -339,11 +337,8 @@ static SDValue getCopyFromPartsVector(SelectionDAG &DAG, SDLoc DL,
   }
 
   if (ValueVT.getVectorNumElements() == 1 &&
-      ValueVT.getVectorElementType() != PartEVT) {
-    bool Smaller = ValueVT.bitsLE(PartEVT);
-    Val = DAG.getNode((Smaller ? ISD::TRUNCATE : ISD::ANY_EXTEND),
-                       DL, ValueVT.getScalarType(), Val);
-  }
+      ValueVT.getVectorElementType() != PartEVT)
+    Val = DAG.getAnyExtOrTrunc(Val, DL, ValueVT.getScalarType());
 
   return DAG.getNode(ISD::BUILD_VECTOR, DL, ValueVT, Val);
 }
@@ -520,9 +515,7 @@ static void getCopyToPartsVector(SelectionDAG &DAG, SDLoc DL,
                PartEVT.getVectorNumElements() == ValueVT.getVectorNumElements()) {
 
       // Promoted vector extract
-      bool Smaller = PartEVT.bitsLE(ValueVT);
-      Val = DAG.getNode((Smaller ? ISD::TRUNCATE : ISD::ANY_EXTEND),
-                        DL, PartVT, Val);
+      Val = DAG.getAnyExtOrTrunc(Val, DL, PartVT);
     } else{
       // Vector -> scalar conversion.
       assert(ValueVT.getVectorNumElements() == 1 &&
@@ -531,9 +524,7 @@ static void getCopyToPartsVector(SelectionDAG &DAG, SDLoc DL,
           ISD::EXTRACT_VECTOR_ELT, DL, PartVT, Val,
           DAG.getConstant(0, DL, TLI.getVectorIdxTy(DAG.getDataLayout())));
 
-      bool Smaller = ValueVT.bitsLE(PartVT);
-      Val = DAG.getNode((Smaller ? ISD::TRUNCATE : ISD::ANY_EXTEND),
-                         DL, PartVT, Val);
+      Val = DAG.getAnyExtOrTrunc(Val, DL, PartVT);
     }
 
     Parts[0] = Val;
@@ -595,8 +586,7 @@ RegsForValue::RegsForValue(LLVMContext &Context, const TargetLowering &TLI,
                            const DataLayout &DL, unsigned Reg, Type *Ty) {
   ComputeValueVTs(TLI, DL, Ty, ValueVTs);
 
-  for (unsigned Value = 0, e = ValueVTs.size(); Value != e; ++Value) {
-    EVT ValueVT = ValueVTs[Value];
+  for (EVT ValueVT : ValueVTs) {
     unsigned NumRegs = TLI.getNumRegisters(Context, ValueVT);
     MVT RegisterVT = TLI.getRegisterType(Context, ValueVT);
     for (unsigned i = 0; i != NumRegs; ++i)
@@ -1385,13 +1375,11 @@ SelectionDAGBuilder::EmitBranchForMergedCondition(const Value *Cond,
       ISD::CondCode Condition;
       if (const ICmpInst *IC = dyn_cast<ICmpInst>(Cond)) {
         Condition = getICmpCondCode(IC->getPredicate());
-      } else if (const FCmpInst *FC = dyn_cast<FCmpInst>(Cond)) {
+      } else {
+        const FCmpInst *FC = cast<FCmpInst>(Cond);
         Condition = getFCmpCondCode(FC->getPredicate());
         if (TM.Options.NoNaNsFPMath)
           Condition = getFCmpCodeWithoutNaN(Condition);
-      } else {
-        (void)Condition; // silence warning.
-        llvm_unreachable("Unknown compare instruction");
       }
 
       CaseBlock CB(Condition, BOp->getOperand(0), BOp->getOperand(1), nullptr,
@@ -1421,7 +1409,8 @@ void SelectionDAGBuilder::FindMergedConditions(const Value *Cond,
                                                MachineBasicBlock *FBB,
                                                MachineBasicBlock *CurBB,
                                                MachineBasicBlock *SwitchBB,
-                                               unsigned Opc, uint32_t TWeight,
+                                               Instruction::BinaryOps Opc,
+                                               uint32_t TWeight,
                                                uint32_t FWeight) {
   // If this node is not part of the or/and tree, emit it as a branch.
   const Instruction *BOp = dyn_cast<Instruction>(Cond);

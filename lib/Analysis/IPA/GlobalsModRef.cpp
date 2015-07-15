@@ -207,35 +207,34 @@ Pass *llvm::createGlobalsModRefPass() { return new GlobalsModRef(); }
 /// and record the functions that they are used directly in.
 void GlobalsModRef::AnalyzeGlobals(Module &M) {
   std::vector<Function *> Readers, Writers;
-  for (Module::iterator I = M.begin(), E = M.end(); I != E; ++I)
-    if (I->hasLocalLinkage()) {
-      if (!AnalyzeUsesOfPointer(I, Readers, Writers)) {
+  for (Function &F : M)
+    if (F.hasLocalLinkage()) {
+      if (!AnalyzeUsesOfPointer(&F, Readers, Writers)) {
         // Remember that we are tracking this global.
-        NonAddressTakenGlobals.insert(I);
+        NonAddressTakenGlobals.insert(&F);
         ++NumNonAddrTakenFunctions;
       }
       Readers.clear();
       Writers.clear();
     }
 
-  for (Module::global_iterator I = M.global_begin(), E = M.global_end(); I != E;
-       ++I)
-    if (I->hasLocalLinkage()) {
-      if (!AnalyzeUsesOfPointer(I, Readers, Writers)) {
+  for (GlobalVariable &GV : M.globals())
+    if (GV.hasLocalLinkage()) {
+      if (!AnalyzeUsesOfPointer(&GV, Readers, Writers)) {
         // Remember that we are tracking this global, and the mod/ref fns
-        NonAddressTakenGlobals.insert(I);
+        NonAddressTakenGlobals.insert(&GV);
 
-        for (unsigned i = 0, e = Readers.size(); i != e; ++i)
-          FunctionInfo[Readers[i]].GlobalInfo[I] |= Ref;
+        for (Function *Reader : Readers)
+          FunctionInfo[Reader].GlobalInfo[&GV] |= Ref;
 
-        if (!I->isConstant()) // No need to keep track of writers to constants
-          for (unsigned i = 0, e = Writers.size(); i != e; ++i)
-            FunctionInfo[Writers[i]].GlobalInfo[I] |= Mod;
+        if (!GV.isConstant()) // No need to keep track of writers to constants
+          for (Function *Writer : Writers)
+            FunctionInfo[Writer].GlobalInfo[&GV] |= Mod;
         ++NumNonAddrTakenGlobalVars;
 
         // If this global holds a pointer type, see if it is an indirect global.
-        if (I->getType()->getElementType()->isPointerTy() &&
-            AnalyzeIndirectGlobalMemory(I))
+        if (GV.getType()->getElementType()->isPointerTy() &&
+            AnalyzeIndirectGlobalMemory(&GV))
           ++NumIndirectGlobalVars;
       }
       Readers.clear();
@@ -370,8 +369,8 @@ void GlobalsModRef::AnalyzeCallGraph(CallGraph &CG, Module &M) {
     if (!SCC[0]->getFunction()) {
       // Calls externally - can't say anything useful.  Remove any existing
       // function records (may have been created when scanning globals).
-      for (unsigned i = 0, e = SCC.size(); i != e; ++i)
-        FunctionInfo.erase(SCC[i]->getFunction());
+      for (auto *Node : SCC)
+        FunctionInfo.erase(Node->getFunction());
       continue;
     }
 
@@ -434,36 +433,45 @@ void GlobalsModRef::AnalyzeCallGraph(CallGraph &CG, Module &M) {
     // If we can't say anything useful about this SCC, remove all SCC functions
     // from the FunctionInfo map.
     if (KnowNothing) {
-      for (unsigned i = 0, e = SCC.size(); i != e; ++i)
-        FunctionInfo.erase(SCC[i]->getFunction());
+      for (auto *Node : SCC)
+        FunctionInfo.erase(Node->getFunction());
       continue;
     }
 
     // Scan the function bodies for explicit loads or stores.
-    for (unsigned i = 0, e = SCC.size(); i != e && FunctionEffect != ModRef;
-         ++i)
-      for (inst_iterator II = inst_begin(SCC[i]->getFunction()),
-                         E = inst_end(SCC[i]->getFunction());
-           II != E && FunctionEffect != ModRef; ++II)
-        if (LoadInst *LI = dyn_cast<LoadInst>(&*II)) {
-          FunctionEffect |= Ref;
-          if (LI->isVolatile())
-            // Volatile loads may have side-effects, so mark them as writing
-            // memory (for example, a flag inside the processor).
-            FunctionEffect |= Mod;
-        } else if (StoreInst *SI = dyn_cast<StoreInst>(&*II)) {
-          FunctionEffect |= Mod;
-          if (SI->isVolatile())
-            // Treat volatile stores as reading memory somewhere.
-            FunctionEffect |= Ref;
-        } else if (isAllocationFn(&*II, TLI) || isFreeCall(&*II, TLI)) {
-          FunctionEffect |= ModRef;
-        } else if (IntrinsicInst *Intrinsic = dyn_cast<IntrinsicInst>(&*II)) {
-          // The callgraph doesn't include intrinsic calls.
-          Function *Callee = Intrinsic->getCalledFunction();
-          ModRefBehavior Behaviour = AliasAnalysis::getModRefBehavior(Callee);
-          FunctionEffect |= (Behaviour & ModRef);
+    for (auto *Node : SCC) {
+      if (FunctionEffect == ModRef)
+        break; // The mod/ref lattice saturates here.
+      for (Instruction &I : inst_range(Node->getFunction())) {
+        if (FunctionEffect == ModRef)
+          break; // The mod/ref lattice saturates here.
+
+        // We handle calls specially because the graph-relevant aspects are
+        // handled above.
+        if (auto CS = CallSite(&I)) {
+          if (isAllocationFn(&I, TLI) || isFreeCall(&I, TLI)) {
+            // FIXME: It is completely unclear why this is necessary and not
+            // handled by the above graph code.
+            FunctionEffect |= ModRef;
+          } else if (Function *Callee = CS.getCalledFunction()) {
+            // The callgraph doesn't include intrinsic calls.
+            if (Callee->isIntrinsic()) {
+              ModRefBehavior Behaviour =
+                  AliasAnalysis::getModRefBehavior(Callee);
+              FunctionEffect |= (Behaviour & ModRef);
+            }
+          }
+          continue;
         }
+
+        // All non-call instructions we use the primary predicates for whether
+        // thay read or write memory.
+        if (I.mayReadFromMemory())
+          FunctionEffect |= Ref;
+        if (I.mayWriteToMemory())
+          FunctionEffect |= Mod;
+      }
+    }
 
     if ((FunctionEffect & Mod) == 0)
       ++NumReadMemFunctions;

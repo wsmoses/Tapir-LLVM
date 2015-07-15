@@ -90,6 +90,19 @@ template <> struct BlockScalarTraits<Module> {
 } // end namespace yaml
 } // end namespace llvm
 
+static void printReg(unsigned Reg, raw_ostream &OS,
+                     const TargetRegisterInfo *TRI) {
+  // TODO: Print Stack Slots.
+  if (!Reg)
+    OS << '_';
+  else if (TargetRegisterInfo::isVirtualRegister(Reg))
+    OS << '%' << TargetRegisterInfo::virtReg2Index(Reg);
+  else if (Reg < TRI->getNumRegs())
+    OS << '%' << StringRef(TRI->getName(Reg)).lower();
+  else
+    llvm_unreachable("Can't print this kind of register yet");
+}
+
 void MIRPrinter::print(const MachineFunction &MF) {
   initRegisterMaskIds(MF);
 
@@ -220,7 +233,15 @@ void MIRPrinter::convert(ModuleSlotTracker &MST,
     MIPrinter(StrOS, MST, RegisterMaskIds).printMBBReference(*SuccMBB);
     YamlMBB.Successors.push_back(StrOS.str());
   }
-
+  // Print the live in registers.
+  const auto *TRI = MBB.getParent()->getSubtarget().getRegisterInfo();
+  assert(TRI && "Expected target register info");
+  for (auto I = MBB.livein_begin(), E = MBB.livein_end(); I != E; ++I) {
+    std::string Str;
+    raw_string_ostream StrOS(Str);
+    printReg(*I, StrOS, TRI);
+    YamlMBB.LiveIns.push_back(StrOS.str());
+  }
   // Print the machine instructions.
   YamlMBB.Instructions.reserve(MBB.size());
   std::string Str;
@@ -269,19 +290,6 @@ void MIPrinter::print(const MachineInstr &MI) {
     print(MI.getOperand(I), TRI);
     NeedComma = true;
   }
-}
-
-static void printReg(unsigned Reg, raw_ostream &OS,
-                     const TargetRegisterInfo *TRI) {
-  // TODO: Print Stack Slots.
-  if (!Reg)
-    OS << '_';
-  else if (TargetRegisterInfo::isVirtualRegister(Reg))
-    OS << '%' << TargetRegisterInfo::virtReg2Index(Reg);
-  else if (Reg < TRI->getNumRegs())
-    OS << '%' << StringRef(TRI->getName(Reg)).lower();
-  else
-    llvm_unreachable("Can't print this kind of register yet");
 }
 
 void MIPrinter::printMBBReference(const MachineBasicBlock &MBB) {
