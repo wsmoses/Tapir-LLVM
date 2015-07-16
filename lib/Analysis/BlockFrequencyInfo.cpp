@@ -110,7 +110,7 @@ void BlockFrequencyInfo::calculate(const Function &F,
                                    const LoopInfo &LI) {
   if (!BFI)
     BFI.reset(new ImplType);
-  BFI->doFunction(&F, &BPI, &LI);
+  BFI->calculate(F, BPI, LI);
 #ifndef NDEBUG
   if (ViewBlockFreqPropagationDAG != GVDT_None)
     view();
@@ -162,7 +162,7 @@ void BlockFrequencyInfo::print(raw_ostream &OS) const {
 
 INITIALIZE_PASS_BEGIN(BlockFrequencyInfoWrapperPass, "block-freq",
                       "Block Frequency Analysis", true, true)
-INITIALIZE_PASS_DEPENDENCY(BranchProbabilityInfo)
+INITIALIZE_PASS_DEPENDENCY(BranchProbabilityInfoWrapperPass)
 INITIALIZE_PASS_DEPENDENCY(LoopInfoWrapperPass)
 INITIALIZE_PASS_END(BlockFrequencyInfoWrapperPass, "block-freq",
                     "Block Frequency Analysis", true, true)
@@ -183,7 +183,7 @@ void BlockFrequencyInfoWrapperPass::print(raw_ostream &OS,
 }
 
 void BlockFrequencyInfoWrapperPass::getAnalysisUsage(AnalysisUsage &AU) const {
-  AU.addRequired<BranchProbabilityInfo>();
+  AU.addRequired<BranchProbabilityInfoWrapperPass>();
   AU.addRequired<LoopInfoWrapperPass>();
   AU.setPreservesAll();
 }
@@ -191,7 +191,8 @@ void BlockFrequencyInfoWrapperPass::getAnalysisUsage(AnalysisUsage &AU) const {
 void BlockFrequencyInfoWrapperPass::releaseMemory() { BFI.releaseMemory(); }
 
 bool BlockFrequencyInfoWrapperPass::runOnFunction(Function &F) {
-  BranchProbabilityInfo &BPI = getAnalysis<BranchProbabilityInfo>();
+  BranchProbabilityInfo &BPI =
+      getAnalysis<BranchProbabilityInfoWrapperPass>().getBPI();
   LoopInfo &LI = getAnalysis<LoopInfoWrapperPass>().getLoopInfo();
   BFI.calculate(F, BPI, LI);
   return false;

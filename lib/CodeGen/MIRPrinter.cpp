@@ -19,6 +19,7 @@
 #include "llvm/CodeGen/MachineRegisterInfo.h"
 #include "llvm/CodeGen/MIRYamlMapping.h"
 #include "llvm/IR/BasicBlock.h"
+#include "llvm/IR/Instructions.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/ModuleSlotTracker.h"
 #include "llvm/Support/MemoryBuffer.h"
@@ -45,6 +46,8 @@ public:
   void convert(yaml::MachineFunction &MF, const MachineRegisterInfo &RegInfo,
                const TargetRegisterInfo *TRI);
   void convert(yaml::MachineFrameInfo &YamlMFI, const MachineFrameInfo &MFI);
+  void convert(ModuleSlotTracker &MST, yaml::MachineJumpTable &YamlJTI,
+               const MachineJumpTableInfo &JTI);
   void convert(ModuleSlotTracker &MST, yaml::MachineBasicBlock &YamlMBB,
                const MachineBasicBlock &MBB);
   void convertStackObjects(yaml::MachineFunction &MF,
@@ -115,8 +118,10 @@ void MIRPrinter::print(const MachineFunction &MF) {
   convert(YamlMF.FrameInfo, *MF.getFrameInfo());
   convertStackObjects(YamlMF, *MF.getFrameInfo());
 
-  int I = 0;
   ModuleSlotTracker MST(MF.getFunction()->getParent());
+  if (const auto *JumpTableInfo = MF.getJumpTableInfo())
+    convert(MST, YamlMF.JumpTableInfo, *JumpTableInfo);
+  int I = 0;
   for (const auto &MBB : MF) {
     // TODO: Allow printing of non sequentially numbered MBBs.
     // This is currently needed as the basic block references get their index
@@ -199,6 +204,9 @@ void MIRPrinter::convertStackObjects(yaml::MachineFunction &MF,
 
     yaml::MachineStackObject YamlObject;
     YamlObject.ID = ID++;
+    if (const auto *Alloca = MFI.getObjectAllocation(I))
+      YamlObject.Name.Value =
+          Alloca->hasName() ? Alloca->getName() : "<unnamed alloca>";
     YamlObject.Type = MFI.isSpillSlotObjectIndex(I)
                           ? yaml::MachineStackObject::SpillSlot
                           : MFI.isVariableSizedObjectIndex(I)
@@ -211,6 +219,25 @@ void MIRPrinter::convertStackObjects(yaml::MachineFunction &MF,
     MF.StackObjects.push_back(YamlObject);
     // TODO: Store the mapping between object IDs and object indices to print
     // the stack object references correctly.
+  }
+}
+
+void MIRPrinter::convert(ModuleSlotTracker &MST,
+                         yaml::MachineJumpTable &YamlJTI,
+                         const MachineJumpTableInfo &JTI) {
+  YamlJTI.Kind = JTI.getEntryKind();
+  unsigned ID = 0;
+  for (const auto &Table : JTI.getJumpTables()) {
+    std::string Str;
+    yaml::MachineJumpTable::Entry Entry;
+    Entry.ID = ID++;
+    for (const auto *MBB : Table.MBBs) {
+      raw_string_ostream StrOS(Str);
+      MIPrinter(StrOS, MST, RegisterMaskIds).printMBBReference(*MBB);
+      Entry.Blocks.push_back(StrOS.str());
+      Str.clear();
+    }
+    YamlJTI.Entries.push_back(Entry);
   }
 }
 
@@ -322,6 +349,10 @@ void MIPrinter::print(const MachineOperand &Op, const TargetRegisterInfo *TRI) {
     break;
   case MachineOperand::MO_MachineBasicBlock:
     printMBBReference(*Op.getMBB());
+    break;
+  case MachineOperand::MO_JumpTableIndex:
+    OS << "%jump-table." << Op.getIndex();
+    // TODO: Print target flags.
     break;
   case MachineOperand::MO_GlobalAddress:
     Op.getGlobal()->printAsOperand(OS, /*PrintType=*/false, MST);

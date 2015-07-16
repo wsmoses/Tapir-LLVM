@@ -2962,7 +2962,7 @@ void SelectionDAGBuilder::visitLoad(const LoadInst &I) {
   // throughout the function's lifetime.
 
   bool isInvariant = I.getMetadata(LLVMContext::MD_invariant_load) != nullptr &&
-    isDereferenceablePointer(SV, *DAG.getTarget().getDataLayout());
+                     isDereferenceablePointer(SV, DAG.getDataLayout());
   unsigned Alignment = I.getAlignment();
 
   AAMDNodes AAInfo;
