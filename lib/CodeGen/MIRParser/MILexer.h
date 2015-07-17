@@ -43,11 +43,14 @@ struct MIToken {
     kw_dead,
     kw_killed,
     kw_undef,
+    kw_frame_setup,
 
     // Identifier tokens
     Identifier,
     NamedRegister,
     MachineBasicBlock,
+    StackObject,
+    FixedStackObject,
     NamedGlobalValue,
     GlobalValue,
 
@@ -97,6 +100,7 @@ public:
 
   bool hasIntegerValue() const {
     return Kind == IntegerLiteral || Kind == MachineBasicBlock ||
+           Kind == StackObject || Kind == FixedStackObject ||
            Kind == GlobalValue || Kind == VirtualRegister ||
            Kind == JumpTableIndex;
   }

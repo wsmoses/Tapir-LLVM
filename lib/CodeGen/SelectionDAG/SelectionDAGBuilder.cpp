@@ -4463,6 +4463,11 @@ SelectionDAGBuilder::visitIntrinsicCall(const CallInst &I, unsigned Intrinsic) {
                             getRoot(), getValue(I.getArgOperand(0))));
     return nullptr;
   }
+  case Intrinsic::eh_sjlj_setup_dispatch: {
+    DAG.setRoot(DAG.getNode(ISD::EH_SJLJ_SETUP_DISPATCH, sdl, MVT::Other,
+                            getRoot()));
+    return nullptr;
+  }
 
   case Intrinsic::masked_gather:
     visitMaskedGather(I);
@@ -4698,6 +4703,18 @@ SelectionDAGBuilder::visitIntrinsicCall(const CallInst &I, unsigned Intrinsic) {
     setValue(&I, DAG.getNode(ISD::BSWAP, sdl,
                              getValue(I.getArgOperand(0)).getValueType(),
                              getValue(I.getArgOperand(0))));
+    return nullptr;
+  case Intrinsic::uabsdiff:
+    setValue(&I, DAG.getNode(ISD::UABSDIFF, sdl,
+                             getValue(I.getArgOperand(0)).getValueType(),
+                             getValue(I.getArgOperand(0)),
+                             getValue(I.getArgOperand(1))));
+    return nullptr;
+  case Intrinsic::sabsdiff:
+    setValue(&I, DAG.getNode(ISD::SABSDIFF, sdl,
+                             getValue(I.getArgOperand(0)).getValueType(),
+                             getValue(I.getArgOperand(0)),
+                             getValue(I.getArgOperand(1))));
     return nullptr;
   case Intrinsic::cttz: {
     SDValue Arg = getValue(I.getArgOperand(0));

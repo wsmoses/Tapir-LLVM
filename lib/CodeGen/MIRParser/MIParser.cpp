@@ -17,8 +17,10 @@
 #include "llvm/AsmParser/SlotMapping.h"
 #include "llvm/CodeGen/MachineBasicBlock.h"
 #include "llvm/CodeGen/MachineFunction.h"
+#include "llvm/CodeGen/MachineFrameInfo.h"
 #include "llvm/CodeGen/MachineInstr.h"
 #include "llvm/CodeGen/MachineInstrBuilder.h"
+#include "llvm/IR/Instructions.h"
 #include "llvm/IR/Module.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Support/SourceMgr.h"
@@ -87,6 +89,8 @@ public:
   bool parseImmediateOperand(MachineOperand &Dest);
   bool parseMBBReference(MachineBasicBlock *&MBB);
   bool parseMBBOperand(MachineOperand &Dest);
+  bool parseStackObjectOperand(MachineOperand &Dest);
+  bool parseFixedStackObjectOperand(MachineOperand &Dest);
   bool parseGlobalAddressOperand(MachineOperand &Dest);
   bool parseJumpTableIndexOperand(MachineOperand &Dest);
   bool parseMachineOperand(MachineOperand &Dest);
@@ -103,7 +107,7 @@ private:
   /// instruction name is invalid.
   bool parseInstrName(StringRef InstrName, unsigned &OpCode);
 
-  bool parseInstruction(unsigned &OpCode);
+  bool parseInstruction(unsigned &OpCode, unsigned &Flags);
 
   bool verifyImplicitOperands(ArrayRef<MachineOperandWithLocation> Operands,
                               const MCInstrDesc &MCID);
@@ -171,11 +175,11 @@ bool MIParser::parse(MachineInstr *&MI) {
     lex();
   }
 
-  unsigned OpCode;
-  if (Token.isError() || parseInstruction(OpCode))
+  unsigned OpCode, Flags = 0;
+  if (Token.isError() || parseInstruction(OpCode, Flags))
     return true;
 
-  // TODO: Parse the instruction flags and memory operands.
+  // TODO: Parse the bundle instruction flags and memory operands.
 
   // Parse the remaining machine operands.
   while (Token.isNot(MIToken::Eof)) {
@@ -199,6 +203,7 @@ bool MIParser::parse(MachineInstr *&MI) {
 
   // TODO: Check for extraneous machine operands.
   MI = MF.CreateMachineInstr(MCID, DebugLoc(), /*NoImplicit=*/true);
+  MI->setFlags(Flags);
   for (const auto &Operand : Operands)
     MI->addOperand(MF, Operand.Operand);
   return false;
@@ -291,7 +296,11 @@ bool MIParser::verifyImplicitOperands(
   return false;
 }
 
-bool MIParser::parseInstruction(unsigned &OpCode) {
+bool MIParser::parseInstruction(unsigned &OpCode, unsigned &Flags) {
+  if (Token.is(MIToken::kw_frame_setup)) {
+    Flags |= MachineInstr::FrameSetup;
+    lex();
+  }
   if (Token.isNot(MIToken::Identifier))
     return error("expected a machine instruction");
   StringRef InstrName = Token.stringValue();
@@ -439,6 +448,41 @@ bool MIParser::parseMBBOperand(MachineOperand &Dest) {
   return false;
 }
 
+bool MIParser::parseStackObjectOperand(MachineOperand &Dest) {
+  assert(Token.is(MIToken::StackObject));
+  unsigned ID;
+  if (getUnsigned(ID))
+    return true;
+  auto ObjectInfo = PFS.StackObjectSlots.find(ID);
+  if (ObjectInfo == PFS.StackObjectSlots.end())
+    return error(Twine("use of undefined stack object '%stack.") + Twine(ID) +
+                 "'");
+  StringRef Name;
+  if (const auto *Alloca =
+          MF.getFrameInfo()->getObjectAllocation(ObjectInfo->second))
+    Name = Alloca->getName();
+  if (!Token.stringValue().empty() && Token.stringValue() != Name)
+    return error(Twine("the name of the stack object '%stack.") + Twine(ID) +
+                 "' isn't '" + Token.stringValue() + "'");
+  lex();
+  Dest = MachineOperand::CreateFI(ObjectInfo->second);
+  return false;
+}
+
+bool MIParser::parseFixedStackObjectOperand(MachineOperand &Dest) {
+  assert(Token.is(MIToken::FixedStackObject));
+  unsigned ID;
+  if (getUnsigned(ID))
+    return true;
+  auto ObjectInfo = PFS.FixedStackObjectSlots.find(ID);
+  if (ObjectInfo == PFS.FixedStackObjectSlots.end())
+    return error(Twine("use of undefined fixed stack object '%fixed-stack.") +
+                 Twine(ID) + "'");
+  lex();
+  Dest = MachineOperand::CreateFI(ObjectInfo->second);
+  return false;
+}
+
 bool MIParser::parseGlobalAddressOperand(MachineOperand &Dest) {
   switch (Token.kind()) {
   case MIToken::NamedGlobalValue: {
@@ -498,6 +542,10 @@ bool MIParser::parseMachineOperand(MachineOperand &Dest) {
     return parseImmediateOperand(Dest);
   case MIToken::MachineBasicBlock:
     return parseMBBOperand(Dest);
+  case MIToken::StackObject:
+    return parseStackObjectOperand(Dest);
+  case MIToken::FixedStackObject:
+    return parseFixedStackObjectOperand(Dest);
   case MIToken::GlobalValue:
   case MIToken::NamedGlobalValue:
     return parseGlobalAddressOperand(Dest);
