@@ -2521,8 +2521,12 @@ bool GVN::performScalarPRE(Instruction *CurInst) {
   Instruction *PREInstr = nullptr;
 
   if (NumWithout != 0) {
-    // Don't do PRE across indirect branch.
-    if (isa<IndirectBrInst>(PREPred->getTerminator()))
+    // Don't do PRE across indirect branch, detach, or reattach.
+    // (Detach-reattach pairs create unsplittable critical edges in
+    // the CFG.)
+    if (isa<IndirectBrInst>(PREPred->getTerminator()) ||
+        isa<DetachInst>(PREPred->getTerminator()) ||
+        isa<ReattachInst>(PREPred->getTerminator()))
       return false;
 
     // We can't do PRE safely on a critical edge, so instead we schedule
