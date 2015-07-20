@@ -16,7 +16,6 @@
 
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/DenseMap.h"
-#include "llvm/ADT/IntervalMap.h"
 #include "llvm/ADT/PointerIntPair.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringSwitch.h"
@@ -349,18 +348,20 @@ public:
   }
 
   /// \brief Iterate over program header table.
-  typedef ELFEntityIterator<const Elf_Phdr> Elf_Phdr_Iter;
-
-  Elf_Phdr_Iter program_header_begin() const {
-    return Elf_Phdr_Iter(Header->e_phentsize,
-                         (const char*)base() + Header->e_phoff);
+  const Elf_Phdr *program_header_begin() const {
+    if (Header->e_phnum && Header->e_phentsize != sizeof(Elf_Phdr))
+      report_fatal_error("Invalid program header size");
+    return reinterpret_cast<const Elf_Phdr *>(base() + Header->e_phoff);
   }
 
-  Elf_Phdr_Iter program_header_end() const {
-    return Elf_Phdr_Iter(Header->e_phentsize,
-                         (const char*)base() +
-                           Header->e_phoff +
-                           (Header->e_phnum * Header->e_phentsize));
+  const Elf_Phdr *program_header_end() const {
+    return program_header_begin() + Header->e_phnum;
+  }
+
+  typedef iterator_range<const Elf_Phdr *> Elf_Phdr_Range;
+
+  const Elf_Phdr_Range program_headers() const {
+    return make_range(program_header_begin(), program_header_end());
   }
 
   uint64_t getNumSections() const;
@@ -649,15 +650,6 @@ ELFFile<ELFT>::ELFFile(StringRef Object, std::error_code &EC)
         return;
       }
       DotDynSymSec = &Sec;
-      ErrorOr<const Elf_Shdr *> SectionOrErr = getSection(Sec.sh_link);
-      if ((EC = SectionOrErr.getError()))
-        return;
-      ErrorOr<StringRef> SymtabOrErr = getStringTable(*SectionOrErr);
-      if ((EC = SymtabOrErr.getError()))
-        return;
-      DynStrRegion.Addr = SymtabOrErr->data();
-      DynStrRegion.Size = SymtabOrErr->size();
-      DynStrRegion.EntSize = 1;
       break;
     }
     case ELF::SHT_DYNAMIC:
@@ -724,39 +716,35 @@ ELFFile<ELFT>::ELFFile(StringRef Object, std::error_code &EC)
 }
 
 template <class ELFT>
-void ELFFile<ELFT>::scanDynamicTable() {
-  // Build load-address to file-offset map.
-  typedef IntervalMap<
-      uintX_t, uintptr_t,
-      IntervalMapImpl::NodeSizer<uintX_t, uintptr_t>::LeafSize,
-      IntervalMapHalfOpenInfo<uintX_t>> LoadMapT;
-  typename LoadMapT::Allocator Alloc;
-  // Allocate the IntervalMap on the heap to work around MSVC bug where the
-  // stack doesn't get realigned despite LoadMap having alignment 8 (PR24113).
-  std::unique_ptr<LoadMapT> LoadMap(new LoadMapT(Alloc));
+static bool compareAddr(uint64_t VAddr, const Elf_Phdr_Impl<ELFT> *Phdr) {
+  return VAddr < Phdr->p_vaddr;
+}
 
-  for (Elf_Phdr_Iter PhdrI = program_header_begin(),
-                     PhdrE = program_header_end();
-       PhdrI != PhdrE; ++PhdrI) {
-    if (PhdrI->p_type == ELF::PT_DYNAMIC) {
-      DynamicRegion.Addr = base() + PhdrI->p_offset;
-      DynamicRegion.Size = PhdrI->p_filesz;
+template <class ELFT> void ELFFile<ELFT>::scanDynamicTable() {
+  SmallVector<const Elf_Phdr *, 4> LoadSegments;
+  for (const Elf_Phdr &Phdr : program_headers()) {
+    if (Phdr.p_type == ELF::PT_DYNAMIC) {
+      DynamicRegion.Addr = base() + Phdr.p_offset;
+      DynamicRegion.Size = Phdr.p_filesz;
       DynamicRegion.EntSize = sizeof(Elf_Dyn);
       continue;
     }
-    if (PhdrI->p_type != ELF::PT_LOAD)
+    if (Phdr.p_type != ELF::PT_LOAD || Phdr.p_filesz == 0)
       continue;
-    if (PhdrI->p_filesz == 0)
-      continue;
-    LoadMap->insert(PhdrI->p_vaddr, PhdrI->p_vaddr + PhdrI->p_filesz,
-                    PhdrI->p_offset);
+    LoadSegments.push_back(&Phdr);
   }
 
   auto toMappedAddr = [&](uint64_t VAddr) -> const uint8_t * {
-    auto I = LoadMap->find(VAddr);
-    if (I == LoadMap->end())
-      return nullptr;
-    return this->base() + I.value() + (VAddr - I.start());
+    const Elf_Phdr **I = std::upper_bound(
+        LoadSegments.begin(), LoadSegments.end(), VAddr, compareAddr<ELFT>);
+    if (I == LoadSegments.begin())
+      report_fatal_error("Virtual address is not in any segment");
+    --I;
+    const Elf_Phdr &Phdr = **I;
+    uint64_t Delta = VAddr - Phdr.p_vaddr;
+    if (Delta >= Phdr.p_filesz)
+      report_fatal_error("Virtual address is not in any segment");
+    return this->base() + Phdr.p_offset + Delta;
   };
 
   for (Elf_Dyn_Iter DynI = dynamic_table_begin(), DynE = dynamic_table_end();

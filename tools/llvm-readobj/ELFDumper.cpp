@@ -164,8 +164,8 @@ getSectionNameIndex(const ELFO &Obj, const typename ELFO::Elf_Sym *Symbol,
     if (SectionIndex == SHN_XINDEX)
       SectionIndex = Obj.getExtendedSymbolTableIndex(&*Symbol);
     ErrorOr<const typename ELFO::Elf_Shdr *> Sec = Obj.getSection(SectionIndex);
-    if (!error(Sec.getError()))
-      SectionName = errorOrDefault(Obj.getSectionName(*Sec));
+    error(Sec.getError());
+    SectionName = errorOrDefault(Obj.getSectionName(*Sec));
   }
 }
 
@@ -752,19 +752,17 @@ void ELFDumper<ELFT>::printRelocation(const Elf_Shdr *Sec,
       Obj->getRelocationSymbol(Sec, &Rel);
   if (Sym.second && Sym.second->getType() == ELF::STT_SECTION) {
     ErrorOr<const Elf_Shdr *> Sec = Obj->getSection(Sym.second);
-    if (!error(Sec.getError())) {
-      ErrorOr<StringRef> SecName = Obj->getSectionName(*Sec);
-      if (SecName)
-        TargetName = SecName.get();
-    }
+    error(Sec.getError());
+    ErrorOr<StringRef> SecName = Obj->getSectionName(*Sec);
+    if (SecName)
+      TargetName = SecName.get();
   } else if (Sym.first) {
     const Elf_Shdr *SymTable = Sym.first;
     ErrorOr<const Elf_Shdr *> StrTableSec = Obj->getSection(SymTable->sh_link);
-    if (!error(StrTableSec.getError())) {
-      ErrorOr<StringRef> StrTableOrErr = Obj->getStringTable(*StrTableSec);
-      if (!error(StrTableOrErr.getError()))
-        TargetName = errorOrDefault(Sym.second->getName(*StrTableOrErr));
-    }
+    error(StrTableSec.getError());
+    ErrorOr<StringRef> StrTableOrErr = Obj->getStringTable(*StrTableSec);
+    error(StrTableOrErr.getError());
+    TargetName = errorOrDefault(Sym.second->getName(*StrTableOrErr));
   }
 
   if (opts::ExpandRelocs) {
@@ -956,6 +954,14 @@ void printFlags(T Value, ArrayRef<EnumEntry<TFlag>> Flags, raw_ostream &OS) {
 }
 
 template <class ELFT>
+static const char *getDynamicString(const ELFFile<ELFT> &O, uint64_t Value) {
+  const char *Ret = O.getDynamicString(Value);
+  if (!Ret)
+    reportError("Invalid dynamic string table reference");
+  return Ret;
+}
+
+template <class ELFT>
 static void printValue(const ELFFile<ELFT> *O, uint64_t Type, uint64_t Value,
                        bool Is64, raw_ostream &OS) {
   switch (Type) {
@@ -1013,14 +1019,14 @@ static void printValue(const ELFFile<ELFT> *O, uint64_t Type, uint64_t Value,
     OS << Value << " (bytes)";
     break;
   case DT_NEEDED:
-    OS << "SharedLibrary (" << O->getDynamicString(Value) << ")";
+    OS << "SharedLibrary (" << getDynamicString(*O, Value) << ")";
     break;
   case DT_SONAME:
-    OS << "LibrarySoname (" << O->getDynamicString(Value) << ")";
+    OS << "LibrarySoname (" << getDynamicString(*O, Value) << ")";
     break;
   case DT_RPATH:
   case DT_RUNPATH:
-    OS << O->getDynamicString(Value);
+    OS << getDynamicString(*O, Value);
     break;
   case DT_MIPS_FLAGS:
     printFlags(Value, makeArrayRef(ElfDynamicDTMipsFlags), OS);
@@ -1090,7 +1096,7 @@ void ELFDumper<ELFT>::printNeededLibraries() {
 
   for (const auto &Entry : Obj->dynamic_table())
     if (Entry.d_tag == ELF::DT_NEEDED)
-      Libs.push_back(Obj->getDynamicString(Entry.d_un.d_val));
+      Libs.push_back(getDynamicString(*Obj, Entry.d_un.d_val));
 
   std::stable_sort(Libs.begin(), Libs.end());
 
@@ -1103,20 +1109,18 @@ template<class ELFT>
 void ELFDumper<ELFT>::printProgramHeaders() {
   ListScope L(W, "ProgramHeaders");
 
-  for (typename ELFO::Elf_Phdr_Iter PI = Obj->program_header_begin(),
-                                    PE = Obj->program_header_end();
-       PI != PE; ++PI) {
+  for (const typename ELFO::Elf_Phdr &Phdr : Obj->program_headers()) {
     DictScope P(W, "ProgramHeader");
-    W.printHex   ("Type",
-                  getElfSegmentType(Obj->getHeader()->e_machine, PI->p_type),
-                  PI->p_type);
-    W.printHex   ("Offset", PI->p_offset);
-    W.printHex   ("VirtualAddress", PI->p_vaddr);
-    W.printHex   ("PhysicalAddress", PI->p_paddr);
-    W.printNumber("FileSize", PI->p_filesz);
-    W.printNumber("MemSize", PI->p_memsz);
-    W.printFlags ("Flags", PI->p_flags, makeArrayRef(ElfSegmentFlags));
-    W.printNumber("Alignment", PI->p_align);
+    W.printHex("Type",
+               getElfSegmentType(Obj->getHeader()->e_machine, Phdr.p_type),
+               Phdr.p_type);
+    W.printHex("Offset", Phdr.p_offset);
+    W.printHex("VirtualAddress", Phdr.p_vaddr);
+    W.printHex("PhysicalAddress", Phdr.p_paddr);
+    W.printNumber("FileSize", Phdr.p_filesz);
+    W.printNumber("MemSize", Phdr.p_memsz);
+    W.printFlags("Flags", Phdr.p_flags, makeArrayRef(ElfSegmentFlags));
+    W.printNumber("Alignment", Phdr.p_align);
   }
 }
 
