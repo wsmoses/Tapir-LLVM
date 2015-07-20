@@ -670,6 +670,7 @@ bool JumpThreading::ProcessBlock(BasicBlock *BB) {
   // predecessors of our predecessor block.
   if (BasicBlock *SinglePred = BB->getSinglePredecessor()) {
     if (SinglePred->getTerminator()->getNumSuccessors() == 1 &&
+        !isa<SyncInst>(SinglePred->getTerminator()) &&  // Can't remove syncs
         SinglePred != BB && !hasAddressTakenAndUsed(BB)) {
       // If SinglePred was a loop header, BB becomes one.
       if (LoopHeaders.erase(SinglePred))

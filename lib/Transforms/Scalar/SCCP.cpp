@@ -468,6 +468,14 @@ private:
   // Terminators
   void visitReturnInst(ReturnInst &I);
   void visitTerminatorInst(TerminatorInst &TI);
+  void visitReattachInst(ReattachInst &I) {
+    markAnythingOverdefined(&I);
+    visitTerminatorInst(I);
+  }
+  void visitSyncInst(SyncInst &I) {
+    markAnythingOverdefined(&I);
+    visitTerminatorInst(I);
+  }
 
   void visitCastInst(CastInst &I);
   void visitSelectInst(SelectInst &I);
@@ -494,7 +502,6 @@ private:
   void visitCallSite      (CallSite CS);
   void visitResumeInst    (TerminatorInst &I) { /*returns void*/ }
   void visitUnreachableInst(TerminatorInst &I) { /*returns void*/ }
-  void visitReattachInst  (TerminatorInst &I) { /*returns void*/ }
   void visitFenceInst     (FenceInst &I) { /*returns void*/ }
   void visitAtomicCmpXchgInst(AtomicCmpXchgInst &I) {
     markAnythingOverdefined(&I);
@@ -572,13 +579,9 @@ void SCCPSolver::getFeasibleSuccessors(TerminatorInst &TI,
     return;
   }
 
-  if (isa<DetachInst>(&TI)) {
-    // All destinations are executable.
-    Succs.assign(TI.getNumSuccessors(), true);
-    return;
-  }
-
-  if (isa<SyncInst>(&TI)) {
+  if (isa<DetachInst>(&TI) ||
+      isa<ReattachInst>(&TI) ||
+      isa<SyncInst>(&TI)) {
     // All destinations are executable.
     Succs.assign(TI.getNumSuccessors(), true);
     return;
@@ -637,6 +640,9 @@ bool SCCPSolver::isEdgeFeasible(BasicBlock *From, BasicBlock *To) {
   // Just mark all destinations executable!
   // TODO: This could be improved if the operand is a [cast of a] BlockAddress.
   if (isa<IndirectBrInst>(TI))
+    return true;
+
+  if (isa<ReattachInst>(TI))
     return true;
 
 #ifndef NDEBUG

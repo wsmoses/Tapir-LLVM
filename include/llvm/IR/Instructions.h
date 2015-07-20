@@ -152,12 +152,12 @@ public:
   }
 
   /// \brief Return true if this alloca is used in a detached block.
-  bool isDetachedUse() const {
+  bool hasDetachedUse() const {
     return getSubclassDataFromInstruction() & 64;
   }
 
   /// \brief Specify whether this alloca is used in a detached block.
-  void setDetachedUse(bool V) {
+  void setHasDetachedUse(bool V) {
     setInstructionSubclassData((getSubclassDataFromInstruction() & ~64) |
                                (V ? 64 : 0));
   }
@@ -249,6 +249,21 @@ public:
                                (V ? 1 : 0));
   }
 
+  /// usesDetachedDef - Return true if this is a load from a memory
+  /// location defined in a detached block.
+  ///
+  bool usesDetachedDef() const {
+    return ((getSubclassDataFromInstruction() >> 10) & 1);
+  }
+
+  /// setDetachedDef - Specify whether or not this load uses a
+  /// location defined in a detached block.
+  ///
+  void setDetachedDef(bool V) {
+    setInstructionSubclassData((getSubclassDataFromInstruction() & ~(1 << 10)) |
+                               ((V ? 1 : 0) << 10));
+  }
+
   /// getAlignment - Return the alignment of the access that is being performed
   ///
   unsigned getAlignment() const {
@@ -287,9 +302,11 @@ public:
     setSynchScope(SynchScope);
   }
 
-  bool isSimple() const { return !isAtomic() && !isVolatile(); }
+  bool isSimple() const {
+    return !isAtomic() && !isVolatile() && !usesDetachedDef();
+  }
   bool isUnordered() const {
-    return getOrdering() <= Unordered && !isVolatile();
+    return getOrdering() <= Unordered && !isVolatile() && !usesDetachedDef();
   }
 
   Value *getPointerOperand() { return getOperand(0); }
@@ -368,6 +385,21 @@ public:
                                (V ? 1 : 0));
   }
 
+  /// isDetachedDef - Return true if this is a store in a detached
+  /// block.
+  ///
+  bool isDetachedDef() const {
+    return ((getSubclassDataFromInstruction() >> 10) & 1);
+  }
+
+  /// setDetachedDef - Specify whether or not this store is in a
+  /// detached block.
+  ///
+  void setDetachedDef(bool V) {
+    setInstructionSubclassData((getSubclassDataFromInstruction() & ~(1 << 10)) |
+                               ((V ? 1 : 0) << 10));
+  }
+
   /// Transparently provide more efficient getOperand methods.
   DECLARE_TRANSPARENT_OPERAND_ACCESSORS(Value);
 
@@ -409,9 +441,11 @@ public:
     setSynchScope(SynchScope);
   }
 
-  bool isSimple() const { return !isAtomic() && !isVolatile(); }
+  bool isSimple() const {
+    return !isAtomic() && !isVolatile() && !isDetachedDef();
+  }
   bool isUnordered() const {
-    return getOrdering() <= Unordered && !isVolatile();
+    return getOrdering() <= Unordered && !isVolatile() && !isDetachedDef();
   }
 
   Value *getValueOperand() { return getOperand(0); }

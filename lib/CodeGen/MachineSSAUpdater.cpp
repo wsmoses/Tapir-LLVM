@@ -292,6 +292,16 @@ public:
     return NewDef->getOperand(0).getReg();
   }
 
+  static bool BlockReattaches(MachineBasicBlock *BB,
+                              MachineSSAUpdater *Updater) {
+    return false;
+  }
+
+  static bool BlockDetaches(MachineBasicBlock *BB,
+                            MachineSSAUpdater *Updater) {
+    return false;
+  }
+
   /// CreateEmptyPHI - Create a PHI instruction that defines a new register.
   /// Add it into the specified block and return the register.
   static unsigned CreateEmptyPHI(MachineBasicBlock *BB, unsigned NumPreds,
@@ -338,6 +348,12 @@ public:
   static unsigned GetPHIValue(MachineInstr *PHI) {
     return PHI->getOperand(0).getReg();
   }
+
+  static void MarkDetachedDef(unsigned Val, MachineBasicBlock *BB,
+                              MachineSSAUpdater *Updater) {
+    return;
+  }
+
 };
 
 } // End llvm namespace

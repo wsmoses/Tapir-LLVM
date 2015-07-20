@@ -55,7 +55,7 @@ bool llvm::isAllocaPromotable(const AllocaInst *AI) {
 
   // Alloca's whose values are stored in a detached block and loaded
   // after the corresponding reattach are not promotable.
-  if (AI->isDetachedUse())
+  if (AI->hasDetachedUse())
     return false;
 
   // Only allow direct and non-volatile loads and stores...
@@ -65,12 +65,16 @@ bool llvm::isAllocaPromotable(const AllocaInst *AI) {
       // not have any meaning for a local alloca.
       if (LI->isVolatile())
         return false;
+      if (LI->usesDetachedDef())
+        return false;
     } else if (const StoreInst *SI = dyn_cast<StoreInst>(U)) {
       if (SI->getOperand(0) == AI)
         return false; // Don't allow a store OF the AI, only INTO the AI.
       // Note that atomic stores can be transformed; atomic semantics do
       // not have any meaning for a local alloca.
       if (SI->isVolatile())
+        return false;
+      if (SI->isDetachedDef())
         return false;
     } else if (const IntrinsicInst *II = dyn_cast<IntrinsicInst>(U)) {
       if (II->getIntrinsicID() != Intrinsic::lifetime_start &&
@@ -593,21 +597,21 @@ void PromoteMem2Reg::run() {
     IDF.setDefiningBlocks(DefBlocks);
     SmallVector<BasicBlock *, 32> PHIBlocks;
     IDF.calculate(PHIBlocks);
-    // Determine which phi nodes want to use a value from a reattached
+    // Determine which phi nodes want to use a value from a detached
     // predecessor.  Because register state is not preserved across a
     // reattach, these alloca's cannot be promoted.
-    bool ReattachPred = false;
-    for (unsigned i = 0, e = PHIBlocks.size(); i != e && !ReattachPred; ++i) {
+    bool DetachedPred = false;
+    for (unsigned i = 0, e = PHIBlocks.size(); i != e && !DetachedPred; ++i) {
       BasicBlock *BB = PHIBlocks[i];
       for (pred_iterator PI = pred_begin(BB), E = pred_end(BB);
-           PI != E && !ReattachPred; ++PI) {
+           PI != E && !DetachedPred; ++PI) {
         BasicBlock *P = *PI;
         if (isa<ReattachInst>(P->getTerminator()))
-          ReattachPred = true;
+          DetachedPred = true;
       }
     }
-    if (ReattachPred) {
-      AI->setDetachedUse(true);
+    if (DetachedPred) {
+      AI->setHasDetachedUse(true);
       RemoveFromAllocasList(AllocaNum);
       continue;
     }

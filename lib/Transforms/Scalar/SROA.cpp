@@ -4094,6 +4094,9 @@ AllocaInst *SROA::rewritePartition(AllocaInst &AI, AllocaSlices &AS,
 
   if (Promotable) {
     if (PHIUsers.empty() && SelectUsers.empty()) {
+      // We don't yet know if NewAI has a detached use.  Assume it
+      // does not and let the promotion process figure it out.
+      NewAI->setHasDetachedUse(false);
       // Promote the alloca.
       PromotableAllocas.push_back(NewAI);
     } else {
@@ -4429,9 +4432,20 @@ bool SROA::promoteAllocas(Function &F) {
       enqueueUsersInWorklist(*I, Worklist, Visited);
     }
     AllocaPromoter(Insts, SSA, *AI, DIB).run(Insts);
-    while (!DeadInsts.empty())
-      DeadInsts.pop_back_val()->eraseFromParent();
-    AI->eraseFromParent();
+    while (!DeadInsts.empty()) {
+      Instruction *I = DeadInsts.pop_back_val();
+      if (AllocaInst *AI = dyn_cast<AllocaInst>(I))
+        if (AI->hasDetachedUse()) continue;
+
+      if (LoadInst *LI = dyn_cast<LoadInst>(I))
+        if (LI->usesDetachedDef()) continue;
+
+      if (StoreInst *SI = dyn_cast<StoreInst>(I))
+        if (SI->isDetachedDef()) continue;
+      I->eraseFromParent();
+    }
+    if (!AI->hasDetachedUse())
+      AI->eraseFromParent();
   }
 
   PromotableAllocas.clear();

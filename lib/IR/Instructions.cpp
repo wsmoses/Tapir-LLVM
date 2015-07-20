@@ -1077,6 +1077,7 @@ LoadInst::LoadInst(Type *Ty, Value *Ptr, const Twine &Name, bool isVolatile,
   setVolatile(isVolatile);
   setAlignment(Align);
   setAtomic(Order, SynchScope);
+  setDetachedDef(false);
   AssertOK();
   setName(Name);
 }
@@ -1090,6 +1091,7 @@ LoadInst::LoadInst(Value *Ptr, const Twine &Name, bool isVolatile,
   setVolatile(isVolatile);
   setAlignment(Align);
   setAtomic(Order, SynchScope);
+  setDetachedDef(false);
   AssertOK();
   setName(Name);
 }
@@ -1100,6 +1102,7 @@ LoadInst::LoadInst(Value *Ptr, const char *Name, Instruction *InsertBef)
   setVolatile(false);
   setAlignment(0);
   setAtomic(NotAtomic);
+  setDetachedDef(false);
   AssertOK();
   if (Name && Name[0]) setName(Name);
 }
@@ -1110,6 +1113,7 @@ LoadInst::LoadInst(Value *Ptr, const char *Name, BasicBlock *InsertAE)
   setVolatile(false);
   setAlignment(0);
   setAtomic(NotAtomic);
+  setDetachedDef(false);
   AssertOK();
   if (Name && Name[0]) setName(Name);
 }
@@ -1121,6 +1125,7 @@ LoadInst::LoadInst(Type *Ty, Value *Ptr, const char *Name, bool isVolatile,
   setVolatile(isVolatile);
   setAlignment(0);
   setAtomic(NotAtomic);
+  setDetachedDef(false);
   AssertOK();
   if (Name && Name[0]) setName(Name);
 }
@@ -1132,6 +1137,7 @@ LoadInst::LoadInst(Value *Ptr, const char *Name, bool isVolatile,
   setVolatile(isVolatile);
   setAlignment(0);
   setAtomic(NotAtomic);
+  setDetachedDef(false);
   AssertOK();
   if (Name && Name[0]) setName(Name);
 }
@@ -1197,6 +1203,7 @@ StoreInst::StoreInst(Value *val, Value *addr, bool isVolatile,
   setVolatile(isVolatile);
   setAlignment(Align);
   setAtomic(Order, SynchScope);
+  setDetachedDef(false);
   AssertOK();
 }
 
@@ -1213,6 +1220,7 @@ StoreInst::StoreInst(Value *val, Value *addr, bool isVolatile,
   setVolatile(isVolatile);
   setAlignment(Align);
   setAtomic(Order, SynchScope);
+  setDetachedDef(false);
   AssertOK();
 }
 
@@ -3647,13 +3655,17 @@ AllocaInst *AllocaInst::cloneImpl() const {
 }
 
 LoadInst *LoadInst::cloneImpl() const {
-  return new LoadInst(getOperand(0), Twine(), isVolatile(),
-                      getAlignment(), getOrdering(), getSynchScope());
+  LoadInst *LI = new LoadInst(getOperand(0), Twine(), isVolatile(),
+                              getAlignment(), getOrdering(), getSynchScope());
+  LI->setDetachedDef(usesDetachedDef());
+  return LI;
 }
 
 StoreInst *StoreInst::cloneImpl() const {
-  return new StoreInst(getOperand(0), getOperand(1), isVolatile(),
-                       getAlignment(), getOrdering(), getSynchScope());
+  StoreInst *SI = new StoreInst(getOperand(0), getOperand(1), isVolatile(),
+                                getAlignment(), getOrdering(), getSynchScope());
+  SI->setDetachedDef(isDetachedDef());
+  return SI;
   
 }
 
