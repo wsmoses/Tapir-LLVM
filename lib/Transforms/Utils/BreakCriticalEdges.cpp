@@ -201,7 +201,6 @@ BasicBlock *llvm::SplitCriticalEdge(TerminatorInst *TI, unsigned SuccNum,
   }
 
   // If we have nothing to update, just return.
-  auto *AA = Options.AA;
   auto *DT = Options.DT;
   auto *LI = Options.LI;
   if (!DT && !LI)
@@ -326,7 +325,7 @@ BasicBlock *llvm::SplitCriticalEdge(TerminatorInst *TI, unsigned SuccNum,
           assert(!DestBB->isLandingPad() &&
                  "We don't split edges to landing pads!");
           BasicBlock *NewExitBB = SplitBlockPredecessors(
-              DestBB, LoopPreds, "split", AA, DT, LI, Options.PreserveLCSSA);
+              DestBB, LoopPreds, "split", DT, LI, Options.PreserveLCSSA);
           if (Options.PreserveLCSSA)
             createPHIsForSplitLoopExit(LoopPreds, NewExitBB, DestBB);
         }

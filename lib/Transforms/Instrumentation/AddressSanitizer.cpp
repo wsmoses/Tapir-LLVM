@@ -18,6 +18,7 @@
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/DepthFirstIterator.h"
+#include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/SmallSet.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/SmallVector.h"
@@ -453,6 +454,16 @@ struct AddressSanitizer : public FunctionPass {
   bool isSafeAccess(ObjectSizeOffsetVisitor &ObjSizeVis, Value *Addr,
                     uint64_t TypeSize) const;
 
+  /// Helper to cleanup per-function state.
+  struct FunctionStateRAII {
+    AddressSanitizer *Pass;
+    FunctionStateRAII(AddressSanitizer *Pass) : Pass(Pass) {
+      assert(Pass->ProcessedAllocas.empty() &&
+             "last pass forgot to clear cache");
+    }
+    ~FunctionStateRAII() { Pass->ProcessedAllocas.clear(); }
+  };
+
   LLVMContext *C;
   Triple TargetTriple;
   int LongSize;
@@ -528,7 +539,7 @@ struct FunctionStackPoisoner : public InstVisitor<FunctionStackPoisoner> {
   ShadowMapping Mapping;
 
   SmallVector<AllocaInst *, 16> AllocaVec;
-  SmallVector<AllocaInst *, 16> NonInstrumentedStaticAllocaVec;
+  SmallSetVector<AllocaInst *, 16> NonInstrumentedStaticAllocaVec;
   SmallVector<Instruction *, 8> RetVec;
   unsigned StackAlignment;
 
@@ -631,7 +642,7 @@ struct FunctionStackPoisoner : public InstVisitor<FunctionStackPoisoner> {
   /// \brief Collect Alloca instructions we want (and can) handle.
   void visitAllocaInst(AllocaInst &AI) {
     if (!ASan.isInterestingAlloca(AI)) {
-      if (AI.isStaticAlloca()) NonInstrumentedStaticAllocaVec.push_back(&AI);
+      if (AI.isStaticAlloca()) NonInstrumentedStaticAllocaVec.insert(&AI);
       return;
     }
 
@@ -1525,6 +1536,8 @@ bool AddressSanitizer::runOnFunction(Function &F) {
 
   if (!ClDebugFunc.empty() && ClDebugFunc != F.getName()) return false;
 
+  FunctionStateRAII CleanupObj(this);
+
   // We can't instrument allocas used with llvm.localescape. Only static allocas
   // can be passed to that intrinsic.
   markEscapedLocalAllocas(F);
@@ -1618,8 +1631,6 @@ bool AddressSanitizer::runOnFunction(Function &F) {
   bool res = NumInstrumented > 0 || ChangedStack || !NoReturnCalls.empty();
 
   DEBUG(dbgs() << "ASAN done instrumenting: " << res << " " << F << "\n");
-
-  ProcessedAllocas.clear();
 
   return res;
 }
@@ -1777,10 +1788,15 @@ void FunctionStackPoisoner::poisonStack() {
   IRBuilder<> IRB(InsBefore);
   IRB.SetCurrentDebugLocation(EntryDebugLocation);
 
-  // Make sure non-instrumented allocas stay in the first basic block.
-  // Otherwise, debug info is broken, because only first-basic-block allocas are
-  // treated as regular stack slots.
-  for (auto *AI : NonInstrumentedStaticAllocaVec) AI->moveBefore(InsBefore);
+  // Make sure non-instrumented allocas stay in the entry block. Otherwise,
+  // debug info is broken, because only entry-block allocas are treated as
+  // regular stack slots.
+  auto InsBeforeB = InsBefore->getParent();
+  assert(InsBeforeB == &F.getEntryBlock());
+  for (BasicBlock::iterator I = InsBefore; I != InsBeforeB->end(); ++I)
+    if (auto *AI = dyn_cast_or_null<AllocaInst>(I))
+      if (NonInstrumentedStaticAllocaVec.count(AI) > 0)
+        AI->moveBefore(InsBefore);
 
   // If we have a call to llvm.localescape, keep it in the entry block.
   if (LocalEscapeCall) LocalEscapeCall->moveBefore(InsBefore);
