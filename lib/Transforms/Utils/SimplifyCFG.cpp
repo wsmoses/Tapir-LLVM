@@ -4611,6 +4611,39 @@ static bool removeUndefIntroducingPredecessor(BasicBlock *BB) {
   return false;
 }
 
+/// If BB immediately reattaches, serialize the blocks.  This will
+/// allow normal serial optimization passes to remove the blocks
+/// appropriately.  Return false if BB does not terminate with a
+/// reattach.
+static bool serializeTrivialDetachedBlock(BasicBlock *BB) {
+  Instruction *I = BB->getFirstNonPHIOrDbgOrLifetime();
+  if (ReattachInst *RI = dyn_cast<ReattachInst>(I)) {
+    // This detached block is empty
+    BasicBlock *PredBB = BB->getUniquePredecessor();
+    assert(PredBB && "Detached block has no predecessor.");
+    DetachInst *DI = dyn_cast_or_null<DetachInst>(PredBB->getTerminator());
+    assert(DI && "Detached block predecessor does not terminate with a detach.");
+    BasicBlock *Detached = DI->getSuccessor(0);
+    BasicBlock *Continue = DI->getSuccessor(1);
+    assert(RI->getSuccessor(0) == Continue &&
+           "Reattach destination does not match continue block of associated detach.");
+    {
+      // Replace the detach with an unconditional branch.
+      IRBuilder<> Builder(DI);
+      Builder.CreateBr(Detached);
+      DI->eraseFromParent();
+    }      
+    {
+      // Replace the reattach with an unconditional branch.
+      IRBuilder<> Builder(RI);
+      Builder.CreateBr(Continue);
+      RI->eraseFromParent();
+    }
+    return true;
+  }
+  return false;
+}
+
 bool SimplifyCFGOpt::run(BasicBlock *BB) {
   bool Changed = false;
 
@@ -4636,6 +4669,9 @@ bool SimplifyCFGOpt::run(BasicBlock *BB) {
 
   // Check for and remove branches that will always cause undefined behavior.
   Changed |= removeUndefIntroducingPredecessor(BB);
+
+  // Check for and remove trivial detached blocks.
+  Changed |= serializeTrivialDetachedBlock(BB);
 
   // Merge basic blocks into their predecessor if there is only one distinct
   // pred, and if there is only one distinct successor of the predecessor, and
