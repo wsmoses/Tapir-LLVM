@@ -4611,35 +4611,75 @@ static bool removeUndefIntroducingPredecessor(BasicBlock *BB) {
   return false;
 }
 
-/// If BB immediately reattaches, serialize the blocks.  This will
-/// allow normal serial optimization passes to remove the blocks
-/// appropriately.  Return false if BB does not terminate with a
-/// reattach.
+
+/// If BB immediately syncs and BB's predecessor detaches, serialize
+/// the sync and detach.  This will allow normal serial
+/// optimization passes to remove the blocks appropriately.  Return
+/// false if BB does not terminate with a reattach.
+static bool serializeDetachesToImmediateSync(BasicBlock *BB) {
+  Instruction *I = BB->getFirstNonPHIOrDbgOrLifetime();
+  if (isa<SyncInst>(I)) {
+    // This block is empty
+    bool Changed = false;
+    SmallSet<DetachInst *, 16> DetachPreds;
+    for (BasicBlock *PredBB : predecessors(BB)) {
+      if (DetachInst *DI = dyn_cast<DetachInst>(PredBB->getTerminator())) {
+        DetachPreds.insert(DI);
+      }
+      if (ReattachInst *RI = dyn_cast<ReattachInst>(PredBB->getTerminator())) {
+        // Replace the reattach with an unconditional branch.
+        IRBuilder<> Builder(RI);
+        Builder.CreateBr(BB);
+        RI->eraseFromParent();
+        Changed = true;
+      }
+    }
+    for (DetachInst *DI : DetachPreds) {
+      BasicBlock *Detached = DI->getSuccessor(0);
+      BB->removePredecessor(DI->getParent());
+      IRBuilder<> Builder(DI);
+      Builder.CreateBr(Detached);
+      DI->eraseFromParent();
+      Changed = true;
+    }
+    return Changed;
+  }
+  return false;
+}
+
+/// If BB immediately reattaches and BB's predecessor detaches,
+/// serialize the reattach and detach.  This will allow normal serial
+/// optimization passes to remove the blocks appropriately.  Return
+/// false if BB does not terminate with a reattach or predecessor does
+/// terminate with detach.
 static bool serializeTrivialDetachedBlock(BasicBlock *BB) {
   Instruction *I = BB->getFirstNonPHIOrDbgOrLifetime();
   if (ReattachInst *RI = dyn_cast<ReattachInst>(I)) {
     // This detached block is empty
     BasicBlock *PredBB = BB->getUniquePredecessor();
-    assert(PredBB && "Detached block has no predecessor.");
-    DetachInst *DI = dyn_cast_or_null<DetachInst>(PredBB->getTerminator());
-    assert(DI && "Detached block predecessor does not terminate with a detach.");
-    BasicBlock *Detached = DI->getSuccessor(0);
-    BasicBlock *Continue = DI->getSuccessor(1);
-    assert(RI->getSuccessor(0) == Continue &&
-           "Reattach destination does not match continue block of associated detach.");
-    {
-      // Replace the detach with an unconditional branch.
-      IRBuilder<> Builder(DI);
-      Builder.CreateBr(Detached);
-      DI->eraseFromParent();
-    }      
-    {
-      // Replace the reattach with an unconditional branch.
-      IRBuilder<> Builder(RI);
-      Builder.CreateBr(Continue);
-      RI->eraseFromParent();
+    assert(PredBB && "Detached block does not have a unique predecessor.");
+    if (DetachInst *DI = dyn_cast<DetachInst>(PredBB->getTerminator())) {
+      BasicBlock *Detached = DI->getSuccessor(0);
+      BasicBlock *Continue = DI->getSuccessor(1);
+      assert(RI->getSuccessor(0) == Continue &&
+             "Reattach destination does not match continue block of associated detach.");
+      // Remove the predecessor through the detach from the continue
+      // block.
+      Continue->removePredecessor(PredBB);
+      {
+        // Replace the detach with an unconditional branch.
+        IRBuilder<> Builder(DI);
+        Builder.CreateBr(Detached);
+        DI->eraseFromParent();
+      }
+      {
+        // Replace the reattach with an unconditional branch.
+        IRBuilder<> Builder(RI);
+        Builder.CreateBr(Continue);
+        RI->eraseFromParent();
+      }
+      return true;
     }
-    return true;
   }
   return false;
 }
@@ -4672,6 +4712,7 @@ bool SimplifyCFGOpt::run(BasicBlock *BB) {
 
   // Check for and remove trivial detached blocks.
   Changed |= serializeTrivialDetachedBlock(BB);
+  Changed |= serializeDetachesToImmediateSync(BB);
 
   // Merge basic blocks into their predecessor if there is only one distinct
   // pred, and if there is only one distinct successor of the predecessor, and
