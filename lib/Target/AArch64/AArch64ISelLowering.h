@@ -397,6 +397,8 @@ private:
                           SelectionDAG &DAG, SmallVectorImpl<SDValue> &InVals,
                           bool isThisReturn, SDValue ThisVal) const;
 
+  SDValue LowerINTRINSIC_WO_CHAIN(SDValue Op, SelectionDAG &DAG) const;
+
   bool isEligibleForTailCallOptimization(
       SDValue Callee, CallingConv::ID CalleeCC, bool isVarArg,
       bool isCalleeStructRet, bool isCallerStructRet,
@@ -475,7 +477,7 @@ private:
 
   SDValue BuildSDIVPow2(SDNode *N, const APInt &Divisor, SelectionDAG &DAG,
                         std::vector<SDNode *> *Created) const override;
-  bool combineRepeatedFPDivisors(unsigned NumUsers) const override;
+  unsigned combineRepeatedFPDivisors() const override;
 
   ConstraintType getConstraintType(StringRef Constraint) const override;
   unsigned getRegisterByName(const char* RegName, EVT VT,

@@ -1993,7 +1993,7 @@ protected:
   unsigned MaxStoresPerMemmove;
 
   /// Maximum number of store instructions that may be substituted for a call to
-  /// memmove, used for functions with OpSize attribute.
+  /// memmove, used for functions with OptSize attribute.
   unsigned MaxStoresPerMemmoveOptSize;
 
   /// Tells the code generator that select is more expensive than a branch if
@@ -2732,10 +2732,12 @@ public:
     return SDValue();
   }
 
-  /// Indicate whether this target prefers to combine the given number of FDIVs
-  /// with the same divisor.
-  virtual bool combineRepeatedFPDivisors(unsigned NumUsers) const {
-    return false;
+  /// Indicate whether this target prefers to combine FDIVs with the same
+  /// divisor. If the transform should never be done, return zero. If the
+  /// transform should be done, return the minimum number of divisor uses
+  /// that must exist.
+  virtual unsigned combineRepeatedFPDivisors() const {
+    return 0;
   }
 
   /// Hooks for building estimates in place of slower divisions and square
@@ -2821,6 +2823,10 @@ public:
   virtual bool useLoadStackGuardNode() const {
     return false;
   }
+
+  /// Lower TLS global address SDNode for target independent emulated TLS model.
+  virtual SDValue LowerToTLSEmulatedModel(const GlobalAddressSDNode *GA,
+                                          SelectionDAG &DAG) const;
 };
 
 /// Given an LLVM IR type and return type attributes, compute the return value

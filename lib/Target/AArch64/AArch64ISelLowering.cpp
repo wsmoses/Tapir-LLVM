@@ -519,6 +519,8 @@ AArch64TargetLowering::AArch64TargetLowering(const TargetMachine &TM,
 
   setHasExtractBitsInsn(true);
 
+  setOperationAction(ISD::INTRINSIC_WO_CHAIN, MVT::Other, Custom);
+
   if (Subtarget->hasNEON()) {
     // FIXME: v1f64 shouldn't be legal if we can avoid it, because it leads to
     // silliness like this:
@@ -2158,6 +2160,19 @@ static SDValue LowerMUL(SDValue Op, SelectionDAG &DAG) {
                                DAG.getNode(ISD::BITCAST, DL, Op1VT, N01), Op1));
 }
 
+SDValue AArch64TargetLowering::LowerINTRINSIC_WO_CHAIN(SDValue Op,
+                                                     SelectionDAG &DAG) const {
+  unsigned IntNo = cast<ConstantSDNode>(Op.getOperand(0))->getZExtValue();
+  SDLoc dl(Op);
+  switch (IntNo) {
+  default: return SDValue();    // Don't custom lower most intrinsics.
+  case Intrinsic::aarch64_thread_pointer: {
+    EVT PtrVT = getPointerTy(DAG.getDataLayout());
+    return DAG.getNode(AArch64ISD::THREAD_POINTER, dl, PtrVT);
+  }
+  }
+}
+
 SDValue AArch64TargetLowering::LowerOperation(SDValue Op,
                                               SelectionDAG &DAG) const {
   switch (Op.getOpcode()) {
@@ -2259,6 +2274,8 @@ SDValue AArch64TargetLowering::LowerOperation(SDValue Op,
     return LowerFSINCOS(Op, DAG);
   case ISD::MUL:
     return LowerMUL(Op, DAG);
+  case ISD::INTRINSIC_WO_CHAIN:
+    return LowerINTRINSIC_WO_CHAIN(Op, DAG);
   }
 }
 
@@ -3387,6 +3404,10 @@ AArch64TargetLowering::LowerELFGlobalTLSAddress(SDValue Op,
   const GlobalAddressSDNode *GA = cast<GlobalAddressSDNode>(Op);
 
   TLSModel::Model Model = getTargetMachine().getTLSModel(GA->getGlobal());
+
+  if (DAG.getTarget().Options.EmulatedTLS)
+    return LowerToTLSEmulatedModel(GA, DAG);
+
   if (!EnableAArch64ELFLocalDynamicTLSGeneration) {
     if (Model == TLSModel::LocalDynamic)
       Model = TLSModel::GeneralDynamic;
@@ -9406,10 +9427,10 @@ bool AArch64TargetLowering::useLoadStackGuardNode() const {
   return true;
 }
 
-bool AArch64TargetLowering::combineRepeatedFPDivisors(unsigned NumUsers) const {
+unsigned AArch64TargetLowering::combineRepeatedFPDivisors() const {
   // Combine multiple FDIVs with the same divisor into multiple FMULs by the
   // reciprocal if there are three or more FDIVs.
-  return NumUsers > 2;
+  return 3;
 }
 
 TargetLoweringBase::LegalizeTypeAction

@@ -148,6 +148,23 @@ void RuntimePointerChecking::insert(Loop *Lp, Value *Ptr, bool WritePtr,
   Pointers.emplace_back(Ptr, ScStart, ScEnd, WritePtr, DepSetId, ASId, Sc);
 }
 
+SmallVector<RuntimePointerChecking::PointerCheck, 4>
+RuntimePointerChecking::generateChecks(
+    const SmallVectorImpl<int> *PtrPartition) const {
+  SmallVector<PointerCheck, 4> Checks;
+
+  for (unsigned I = 0; I < CheckingGroups.size(); ++I) {
+    for (unsigned J = I + 1; J < CheckingGroups.size(); ++J) {
+      const RuntimePointerChecking::CheckingPtrGroup &CGI = CheckingGroups[I];
+      const RuntimePointerChecking::CheckingPtrGroup &CGJ = CheckingGroups[J];
+
+      if (needsChecking(CGI, CGJ, PtrPartition))
+        Checks.push_back(std::make_pair(&CGI, &CGJ));
+    }
+  }
+  return Checks;
+}
+
 bool RuntimePointerChecking::needsChecking(
     const CheckingPtrGroup &M, const CheckingPtrGroup &N,
     const SmallVectorImpl<int> *PtrPartition) const {
@@ -220,8 +237,31 @@ void RuntimePointerChecking::groupChecks(
 
   CheckingGroups.clear();
 
+  // If we need to check two pointers to the same underlying object
+  // with a non-constant difference, we shouldn't perform any pointer
+  // grouping with those pointers. This is because we can easily get
+  // into cases where the resulting check would return false, even when
+  // the accesses are safe.
+  //
+  // The following example shows this:
+  // for (i = 0; i < 1000; ++i)
+  //   a[5000 + i * m] = a[i] + a[i + 9000]
+  //
+  // Here grouping gives a check of (5000, 5000 + 1000 * m) against
+  // (0, 10000) which is always false. However, if m is 1, there is no
+  // dependence. Not grouping the checks for a[i] and a[i + 9000] allows
+  // us to perform an accurate check in this case.
+  //
+  // The above case requires that we have an UnknownDependence between
+  // accesses to the same underlying object. This cannot happen unless
+  // ShouldRetryWithRuntimeCheck is set, and therefore UseDependencies
+  // is also false. In this case we will use the fallback path and create
+  // separate checking groups for all pointers.
+ 
   // If we don't have the dependency partitions, construct a new
-  // checking pointer group for each pointer.
+  // checking pointer group for each pointer. This is also required
+  // for correctness, because in this case we can have checking between
+  // pointers to the same underlying object.
   if (!UseDependencies) {
     for (unsigned I = 0; I < Pointers.size(); ++I)
       CheckingGroups.push_back(CheckingPtrGroup(I, *this));
@@ -327,48 +367,41 @@ bool RuntimePointerChecking::needsChecking(
   return true;
 }
 
+void RuntimePointerChecking::printChecks(
+    raw_ostream &OS, const SmallVectorImpl<PointerCheck> &Checks,
+    unsigned Depth) const {
+  unsigned N = 0;
+  for (const auto &Check : Checks) {
+    const auto &First = Check.first->Members, &Second = Check.second->Members;
+
+    OS.indent(Depth) << "Check " << N++ << ":\n";
+
+    OS.indent(Depth + 2) << "Comparing group (" << Check.first << "):\n";
+    for (unsigned K = 0; K < First.size(); ++K)
+      OS.indent(Depth + 2) << *Pointers[First[K]].PointerValue << "\n";
+
+    OS.indent(Depth + 2) << "Against group (" << Check.second << "):\n";
+    for (unsigned K = 0; K < Second.size(); ++K)
+      OS.indent(Depth + 2) << *Pointers[Second[K]].PointerValue << "\n";
+  }
+}
+
 void RuntimePointerChecking::print(
     raw_ostream &OS, unsigned Depth,
     const SmallVectorImpl<int> *PtrPartition) const {
 
   OS.indent(Depth) << "Run-time memory checks:\n";
-
-  unsigned N = 0;
-  for (unsigned I = 0; I < CheckingGroups.size(); ++I)
-    for (unsigned J = I + 1; J < CheckingGroups.size(); ++J)
-      if (needsChecking(CheckingGroups[I], CheckingGroups[J], PtrPartition)) {
-        OS.indent(Depth) << "Check " << N++ << ":\n";
-        OS.indent(Depth + 2) << "Comparing group " << I << ":\n";
-
-        for (unsigned K = 0; K < CheckingGroups[I].Members.size(); ++K) {
-          OS.indent(Depth + 2)
-              << *Pointers[CheckingGroups[I].Members[K]].PointerValue << "\n";
-          if (PtrPartition)
-            OS << " (Partition: "
-               << (*PtrPartition)[CheckingGroups[I].Members[K]] << ")"
-               << "\n";
-        }
-
-        OS.indent(Depth + 2) << "Against group " << J << ":\n";
-
-        for (unsigned K = 0; K < CheckingGroups[J].Members.size(); ++K) {
-          OS.indent(Depth + 2)
-              << *Pointers[CheckingGroups[J].Members[K]].PointerValue << "\n";
-          if (PtrPartition)
-            OS << " (Partition: "
-               << (*PtrPartition)[CheckingGroups[J].Members[K]] << ")"
-               << "\n";
-        }
-      }
+  printChecks(OS, generateChecks(PtrPartition), Depth);
 
   OS.indent(Depth) << "Grouped accesses:\n";
   for (unsigned I = 0; I < CheckingGroups.size(); ++I) {
-    OS.indent(Depth + 2) << "Group " << I << ":\n";
-    OS.indent(Depth + 4) << "(Low: " << *CheckingGroups[I].Low
-                         << " High: " << *CheckingGroups[I].High << ")\n";
-    for (unsigned J = 0; J < CheckingGroups[I].Members.size(); ++J) {
-      OS.indent(Depth + 6) << "Member: "
-                           << *Pointers[CheckingGroups[I].Members[J]].Expr
+    const auto &CG = CheckingGroups[I];
+
+    OS.indent(Depth + 2) << "Group " << &CG << ":\n";
+    OS.indent(Depth + 4) << "(Low: " << *CG.Low << " High: " << *CG.High
+                         << ")\n";
+    for (unsigned J = 0; J < CG.Members.size(); ++J) {
+      OS.indent(Depth + 6) << "Member: " << *Pointers[CG.Members[J]].Expr
                            << "\n";
     }
   }
@@ -1708,20 +1741,7 @@ std::pair<Instruction *, Instruction *> LoopAccessInfo::addRuntimeCheck(
   if (!PtrRtChecking.Need)
     return std::make_pair(nullptr, nullptr);
 
-  SmallVector<RuntimePointerChecking::PointerCheck, 4> Checks;
-  for (unsigned i = 0; i < PtrRtChecking.CheckingGroups.size(); ++i) {
-    for (unsigned j = i + 1; j < PtrRtChecking.CheckingGroups.size(); ++j) {
-      const RuntimePointerChecking::CheckingPtrGroup &CGI =
-          PtrRtChecking.CheckingGroups[i];
-      const RuntimePointerChecking::CheckingPtrGroup &CGJ =
-          PtrRtChecking.CheckingGroups[j];
-
-      if (PtrRtChecking.needsChecking(CGI, CGJ, PtrPartition))
-        Checks.push_back(std::make_pair(&CGI, &CGJ));
-    }
-  }
-
-  return addRuntimeCheck(Loc, Checks);
+  return addRuntimeCheck(Loc, PtrRtChecking.generateChecks(PtrPartition));
 }
 
 LoopAccessInfo::LoopAccessInfo(Loop *L, ScalarEvolution *SE,
