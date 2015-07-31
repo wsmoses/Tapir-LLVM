@@ -735,11 +735,11 @@ ARMTargetLowering::ARMTargetLowering(const TargetMachine &TM,
     setOperationAction(ISD::UDIV,  MVT::i32, Expand);
   }
 
-  // FIXME: Also set divmod for SREM on EABI
+  // FIXME: Also set divmod for SREM on EABI/androideabi
   setOperationAction(ISD::SREM,  MVT::i32, Expand);
   setOperationAction(ISD::UREM,  MVT::i32, Expand);
   // Register based DivRem for AEABI (RTABI 4.2)
-  if (Subtarget->isTargetAEABI()) {
+  if (Subtarget->isTargetAEABI() || Subtarget->isTargetAndroid()) {
     setLibcallName(RTLIB::SDIVREM_I8,  "__aeabi_idivmod");
     setLibcallName(RTLIB::SDIVREM_I16, "__aeabi_idivmod");
     setLibcallName(RTLIB::SDIVREM_I32, "__aeabi_idivmod");
@@ -964,11 +964,11 @@ ARMTargetLowering::ARMTargetLowering(const TargetMachine &TM,
 
   //// temporary - rewrite interface to use type
   MaxStoresPerMemset = 8;
-  MaxStoresPerMemsetOptSize = Subtarget->isTargetDarwin() ? 8 : 4;
+  MaxStoresPerMemsetOptSize = 4;
   MaxStoresPerMemcpy = 4; // For @llvm.memcpy -> sequence of stores
-  MaxStoresPerMemcpyOptSize = Subtarget->isTargetDarwin() ? 4 : 2;
+  MaxStoresPerMemcpyOptSize = 2;
   MaxStoresPerMemmove = 4; // For @llvm.memmove -> sequence of stores
-  MaxStoresPerMemmoveOptSize = Subtarget->isTargetDarwin() ? 4 : 2;
+  MaxStoresPerMemmoveOptSize = 2;
 
   // On ARM arguments smaller than 4 bytes are extended, so all arguments
   // are at least 4 bytes aligned.
@@ -11159,7 +11159,8 @@ void ARMTargetLowering::LowerAsmOperandForConstraint(SDValue Op,
 }
 
 SDValue ARMTargetLowering::LowerDivRem(SDValue Op, SelectionDAG &DAG) const {
-  assert(Subtarget->isTargetAEABI() && "Register-based DivRem lowering only");
+  assert((Subtarget->isTargetAEABI() || Subtarget->isTargetAndroid()) &&
+         "Register-based DivRem lowering only");
   unsigned Opcode = Op->getOpcode();
   assert((Opcode == ISD::SDIVREM || Opcode == ISD::UDIVREM) &&
          "Invalid opcode for Div/Rem lowering");

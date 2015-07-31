@@ -56,6 +56,10 @@ struct FrameIndexOperand {
   }
 };
 
+} // end anonymous namespace
+
+namespace llvm {
+
 /// This class prints out the machine functions using the MIR serialization
 /// format.
 class MIRPrinter {
@@ -72,7 +76,8 @@ public:
 
   void convert(yaml::MachineFunction &MF, const MachineRegisterInfo &RegInfo,
                const TargetRegisterInfo *TRI);
-  void convert(yaml::MachineFrameInfo &YamlMFI, const MachineFrameInfo &MFI);
+  void convert(ModuleSlotTracker &MST, yaml::MachineFrameInfo &YamlMFI,
+               const MachineFrameInfo &MFI);
   void convert(yaml::MachineFunction &MF,
                const MachineConstantPool &ConstantPool);
   void convert(ModuleSlotTracker &MST, yaml::MachineJumpTable &YamlJTI,
@@ -86,6 +91,10 @@ public:
 private:
   void initRegisterMaskIds(const MachineFunction &MF);
 };
+
+} // end namespace llvm
+
+namespace {
 
 /// This class prints out the machine instructions using the MIR serialization
 /// format.
@@ -158,14 +167,13 @@ void MIRPrinter::print(const MachineFunction &MF) {
   YamlMF.ExposesReturnsTwice = MF.exposesReturnsTwice();
   YamlMF.HasInlineAsm = MF.hasInlineAsm();
   convert(YamlMF, MF.getRegInfo(), MF.getSubtarget().getRegisterInfo());
-  convert(YamlMF.FrameInfo, *MF.getFrameInfo());
+  ModuleSlotTracker MST(MF.getFunction()->getParent());
+  MST.incorporateFunction(*MF.getFunction());
+  convert(MST, YamlMF.FrameInfo, *MF.getFrameInfo());
   convertStackObjects(YamlMF, *MF.getFrameInfo(),
                       MF.getSubtarget().getRegisterInfo());
   if (const auto *ConstantPool = MF.getConstantPool())
     convert(YamlMF, *ConstantPool);
-
-  ModuleSlotTracker MST(MF.getFunction()->getParent());
-  MST.incorporateFunction(*MF.getFunction());
   if (const auto *JumpTableInfo = MF.getJumpTableInfo())
     convert(MST, YamlMF.JumpTableInfo, *JumpTableInfo);
   for (const auto &MBB : MF) {
@@ -207,7 +215,8 @@ void MIRPrinter::convert(yaml::MachineFunction &MF,
   }
 }
 
-void MIRPrinter::convert(yaml::MachineFrameInfo &YamlMFI,
+void MIRPrinter::convert(ModuleSlotTracker &MST,
+                         yaml::MachineFrameInfo &YamlMFI,
                          const MachineFrameInfo &MFI) {
   YamlMFI.IsFrameAddressTaken = MFI.isFrameAddressTaken();
   YamlMFI.IsReturnAddressTaken = MFI.isReturnAddressTaken();
@@ -222,6 +231,16 @@ void MIRPrinter::convert(yaml::MachineFrameInfo &YamlMFI,
   YamlMFI.HasOpaqueSPAdjustment = MFI.hasOpaqueSPAdjustment();
   YamlMFI.HasVAStart = MFI.hasVAStart();
   YamlMFI.HasMustTailInVarArgFunc = MFI.hasMustTailInVarArgFunc();
+  if (MFI.getSavePoint()) {
+    raw_string_ostream StrOS(YamlMFI.SavePoint.Value);
+    MIPrinter(StrOS, MST, RegisterMaskIds, StackObjectOperandMapping)
+        .printMBBReference(*MFI.getSavePoint());
+  }
+  if (MFI.getRestorePoint()) {
+    raw_string_ostream StrOS(YamlMFI.RestorePoint.Value);
+    MIPrinter(StrOS, MST, RegisterMaskIds, StackObjectOperandMapping)
+        .printMBBReference(*MFI.getRestorePoint());
+  }
 }
 
 void MIRPrinter::convertStackObjects(yaml::MachineFunction &MF,
@@ -351,6 +370,11 @@ void MIRPrinter::convert(ModuleSlotTracker &MST,
     MIPrinter(StrOS, MST, RegisterMaskIds, StackObjectOperandMapping)
         .printMBBReference(*SuccMBB);
     YamlMBB.Successors.push_back(StrOS.str());
+  }
+  if (MBB.hasSuccessorWeights()) {
+    for (auto I = MBB.succ_begin(), E = MBB.succ_end(); I != E; ++I)
+      YamlMBB.SuccessorWeights.push_back(
+          yaml::UnsignedValue(MBB.getSuccWeight(I)));
   }
   // Print the live in registers.
   const auto *TRI = MBB.getParent()->getSubtarget().getRegisterInfo();
@@ -585,6 +609,13 @@ void MIPrinter::print(const MCCFIInstruction &CFI,
     if (CFI.getLabel())
       OS << "<mcsymbol> ";
     OS << CFI.getOffset();
+    break;
+  case MCCFIInstruction::OpDefCfa:
+    OS << ".cfi_def_cfa ";
+    if (CFI.getLabel())
+      OS << "<mcsymbol> ";
+    printCFIRegister(CFI.getRegister(), OS, TRI);
+    OS << ", " << CFI.getOffset();
     break;
   default:
     // TODO: Print the other CFI Operations.

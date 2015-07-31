@@ -214,6 +214,8 @@ static const char *toString(MIToken::TokenKind TokenKind) {
   switch (TokenKind) {
   case MIToken::comma:
     return "','";
+  case MIToken::equal:
+    return "'='";
   case MIToken::lparen:
     return "'('";
   case MIToken::rparen:
@@ -234,18 +236,19 @@ bool MIParser::parse(MachineInstr *&MI) {
   lex();
 
   // Parse any register operands before '='
-  // TODO: Allow parsing of multiple operands before '='
   MachineOperand MO = MachineOperand::CreateImm(0);
   SmallVector<MachineOperandWithLocation, 8> Operands;
-  if (Token.isRegister() || Token.isRegisterFlag()) {
+  while (Token.isRegister() || Token.isRegisterFlag()) {
     auto Loc = Token.location();
     if (parseRegisterOperand(MO, /*IsDef=*/true))
       return true;
     Operands.push_back(MachineOperandWithLocation(MO, Loc, Token.location()));
-    if (Token.isNot(MIToken::equal))
-      return error("expected '='");
+    if (Token.isNot(MIToken::comma))
+      break;
     lex();
   }
+  if (!Operands.empty() && expectAndConsume(MIToken::equal))
+    return true;
 
   unsigned OpCode, Flags = 0;
   if (Token.isError() || parseInstruction(OpCode, Flags))
@@ -751,6 +754,14 @@ bool MIParser::parseCFIOperand(MachineOperand &Dest) {
     CFIIndex = MMI.addFrameInst(
         MCCFIInstruction::createDefCfaOffset(nullptr, -Offset));
     break;
+  case MIToken::kw_cfi_def_cfa:
+    if (parseCFIRegister(Reg) || expectAndConsume(MIToken::comma) ||
+        parseCFIOffset(Offset))
+      return true;
+    // NB: MCCFIInstruction::createDefCfa negates the offset.
+    CFIIndex =
+        MMI.addFrameInst(MCCFIInstruction::createDefCfa(nullptr, Reg, -Offset));
+    break;
   default:
     // TODO: Parse the other CFI operands.
     llvm_unreachable("The current token should be a cfi operand");
@@ -871,6 +882,7 @@ bool MIParser::parseMachineOperand(MachineOperand &Dest) {
   case MIToken::kw_cfi_offset:
   case MIToken::kw_cfi_def_cfa_register:
   case MIToken::kw_cfi_def_cfa_offset:
+  case MIToken::kw_cfi_def_cfa:
     return parseCFIOperand(Dest);
   case MIToken::kw_blockaddress:
     return parseBlockAddressOperand(Dest);
