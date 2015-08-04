@@ -523,7 +523,7 @@ bool AArch64FastISel::computeAddress(const Value *Obj, Address &Addr, Type *Ty)
     U = C;
   }
 
-  if (const PointerType *Ty = dyn_cast<PointerType>(Obj->getType()))
+  if (auto *Ty = dyn_cast<PointerType>(Obj->getType()))
     if (Ty->getAddressSpace() > 255)
       // Fast instruction selection doesn't support the special
       // address spaces.
@@ -2954,8 +2954,7 @@ bool AArch64FastISel::processCallArgs(CallLoweringInfo &CLI,
     .addImm(NumBytes);
 
   // Process the args.
-  for (unsigned i = 0, e = ArgLocs.size(); i != e; ++i) {
-    CCValAssign &VA = ArgLocs[i];
+  for (CCValAssign &VA : ArgLocs) {
     const Value *ArgVal = CLI.OutVals[VA.getValNo()];
     MVT ArgVT = OutVTs[VA.getValNo()];
 
@@ -3763,8 +3762,8 @@ bool AArch64FastISel::selectRet(const Instruction *I) {
 
   MachineInstrBuilder MIB = BuildMI(*FuncInfo.MBB, FuncInfo.InsertPt, DbgLoc,
                                     TII.get(AArch64::RET_ReallyLR));
-  for (unsigned i = 0, e = RetRegs.size(); i != e; ++i)
-    MIB.addReg(RetRegs[i], RegState::Implicit);
+  for (unsigned RetReg : RetRegs)
+    MIB.addReg(RetReg, RegState::Implicit);
   return true;
 }
 

@@ -398,10 +398,6 @@ public:
   bool needsChecking(const CheckingPtrGroup &M, const CheckingPtrGroup &N,
                      const SmallVectorImpl<int> *PtrPartition) const;
 
-  /// \brief Return true if any pointer requires run-time checking according
-  /// to needsChecking.
-  bool needsAnyChecking(const SmallVectorImpl<int> *PtrPartition) const;
-
   /// \brief Returns the number of run-time checks required according to
   /// needsChecking.
   unsigned getNumberOfChecks(const SmallVectorImpl<int> *PtrPartition) const;
@@ -502,13 +498,8 @@ public:
   /// Returns a pair of instructions where the first element is the first
   /// instruction generated in possibly a sequence of instructions and the
   /// second value is the final comparator value or NULL if no check is needed.
-  ///
-  /// If \p PtrPartition is set, it contains the partition number for pointers
-  /// (-1 if the pointer belongs to multiple partitions).  In this case omit
-  /// checks between pointers belonging to the same partition.
   std::pair<Instruction *, Instruction *>
-  addRuntimeCheck(Instruction *Loc,
-                  const SmallVectorImpl<int> *PtrPartition = nullptr) const;
+  addRuntimeCheck(Instruction *Loc) const;
 
   /// \brief Generete the instructions for the checks in \p PointerChecks.
   ///

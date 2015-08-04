@@ -354,9 +354,16 @@ namespace bitc {
     FUNC_CODE_INST_CMPXCHG     = 46, // CMPXCHG: [ptrty,ptr,valty,cmp,new, align,
                                      //           vol,ordering,synchscope]
     FUNC_CODE_INST_LANDINGPAD  = 47, // LANDINGPAD: [ty,val,num,id0,val0...]
-    FUNC_CODE_INST_DETACH      = 48, // DETACH: [bb#, bb#]
-    FUNC_CODE_INST_REATTACH    = 49, // REATTACH
-    FUNC_CODE_INST_SYNC        = 50, // SYNC: [bb#]
+    FUNC_CODE_INST_CLEANUPRET  = 48, // CLEANUPRET: [] or [val] or [bb#] or [val,bb#]
+    FUNC_CODE_INST_CATCHRET    = 49, // CATCHRET: [bb#]
+    FUNC_CODE_INST_CATCHPAD  = 50, // CATCHPAD: [ty,val,val,num,args...]
+    FUNC_CODE_INST_TERMINATEPAD = 51, // TERMINATEPAD: [bb#,num,args...]
+    FUNC_CODE_INST_CLEANUPPAD = 52, // CLEANUPPAD: [num,args...]
+    FUNC_CODE_INST_CATCHENDPAD = 53, // CATCHENDPAD: [] or [bb#]
+
+    FUNC_CODE_INST_DETACH      = 54, // DETACH: [bb#, bb#]
+    FUNC_CODE_INST_REATTACH    = 55, // REATTACH
+    FUNC_CODE_INST_SYNC        = 56, // SYNC: [bb#]
   };
 
   enum UseListCodes {

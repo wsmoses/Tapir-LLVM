@@ -5189,6 +5189,7 @@ static SDValue LowerVectorBroadcast(SDValue Op, const X86Subtarget* Subtarget,
   // it may be detrimental to overall size. There needs to be a way to detect
   // that condition to know if this is truly a size win.
   const Function *F = DAG.getMachineFunction().getFunction();
+  // FIXME: Use Function::optForSize().
   bool OptForSize = F->hasFnAttribute(Attribute::OptimizeForSize);
 
   // Handle broadcasting a single constant scalar from the constant pool
@@ -11118,8 +11119,7 @@ SDValue X86TargetLowering::LowerINSERT_VECTOR_ELT(SDValue Op,
       // Bits [3:0] of the constant are the zero mask. The DAG Combiner may
       //   combine either bitwise AND or insert of float 0.0 to set these bits.
 
-      const Function *F = DAG.getMachineFunction().getFunction();
-      bool MinSize = F->hasFnAttribute(Attribute::MinSize);
+      bool MinSize = DAG.getMachineFunction().getFunction()->optForMinSize();
       if (IdxVal == 0 && (!MinSize || !MayFoldLoad(N1))) {
         // If this is an insertion of 32-bits into the low 32-bits of
         // a vector, we prefer to generate a blend with immediate rather
@@ -13195,8 +13195,7 @@ SDValue X86TargetLowering::EmitCmp(SDValue Op0, SDValue Op1, unsigned X86CC,
     // if we're optimizing for size, however, as that'll allow better folding
     // of memory operations.
     if (Op0.getValueType() != MVT::i32 && Op0.getValueType() != MVT::i64 &&
-        !DAG.getMachineFunction().getFunction()->hasFnAttribute(
-            Attribute::MinSize) &&
+        !DAG.getMachineFunction().getFunction()->optForMinSize() &&
         !Subtarget->isAtom()) {
       unsigned ExtendOp =
           isX86CCUnsigned(X86CC) ? ISD::ZERO_EXTEND : ISD::SIGN_EXTEND;
@@ -17971,7 +17970,7 @@ static SDValue LowerXALUO(SDValue Op, SelectionDAG &DAG) {
 /// the corresponding cmpxchg8b or cmpxchg16b instruction is available.
 /// Used to know whether to use cmpxchg8/16b when expanding atomic operations
 /// (otherwise we leave them alone to become __sync_fetch_and_... calls).
-bool X86TargetLowering::needsCmpXchgNb(const Type *MemType) const {
+bool X86TargetLowering::needsCmpXchgNb(Type *MemType) const {
   unsigned OpWidth = MemType->getPrimitiveSizeInBits();
 
   if (OpWidth == 64)
@@ -17996,7 +17995,7 @@ bool X86TargetLowering::shouldExpandAtomicLoadInIR(LoadInst *LI) const {
 TargetLoweringBase::AtomicRMWExpansionKind
 X86TargetLowering::shouldExpandAtomicRMWInIR(AtomicRMWInst *AI) const {
   unsigned NativeWidth = Subtarget->is64Bit() ? 64 : 32;
-  const Type *MemType = AI->getType();
+  Type *MemType = AI->getType();
 
   // If the operand is too big, we must see if cmpxchg8/16b is available
   // and default to library calls otherwise.
@@ -18042,7 +18041,7 @@ static bool hasMFENCE(const X86Subtarget& Subtarget) {
 LoadInst *
 X86TargetLowering::lowerIdempotentRMWIntoFencedLoad(AtomicRMWInst *AI) const {
   unsigned NativeWidth = Subtarget->is64Bit() ? 64 : 32;
-  const Type *MemType = AI->getType();
+  Type *MemType = AI->getType();
   // Accesses larger than the native width are turned into cmpxchg/libcalls, so
   // there is no benefit in turning such RMWs into loads, and it is actually
   // harmful as it introduces a mfence.
@@ -23962,6 +23961,7 @@ static SDValue PerformOrCombine(SDNode *N, SelectionDAG &DAG,
 
   // fold (or (x << c) | (y >> (64 - c))) ==> (shld64 x, y, c)
   MachineFunction &MF = DAG.getMachineFunction();
+  // FIXME: Use Function::optForSize().
   bool OptForSize =
       MF.getFunction()->hasFnAttribute(Attribute::OptimizeForSize);
 

@@ -171,77 +171,71 @@ ARMTargetLowering::ARMTargetLowering(const TargetMachine &TM,
     // Uses VFP for Thumb libfuncs if available.
     if (Subtarget->isThumb() && Subtarget->hasVFP2() &&
         Subtarget->hasARMOps() && !Subtarget->useSoftFloat()) {
-      // Single-precision floating-point arithmetic.
-      setLibcallName(RTLIB::ADD_F32, "__addsf3vfp");
-      setLibcallName(RTLIB::SUB_F32, "__subsf3vfp");
-      setLibcallName(RTLIB::MUL_F32, "__mulsf3vfp");
-      setLibcallName(RTLIB::DIV_F32, "__divsf3vfp");
+      static const struct {
+        const RTLIB::Libcall Op;
+        const char * const Name;
+        const ISD::CondCode Cond;
+      } LibraryCalls[] = {
+        // Single-precision floating-point arithmetic.
+        { RTLIB::ADD_F32, "__addsf3vfp", ISD::SETCC_INVALID },
+        { RTLIB::SUB_F32, "__subsf3vfp", ISD::SETCC_INVALID },
+        { RTLIB::MUL_F32, "__mulsf3vfp", ISD::SETCC_INVALID },
+        { RTLIB::DIV_F32, "__divsf3vfp", ISD::SETCC_INVALID },
 
-      // Double-precision floating-point arithmetic.
-      setLibcallName(RTLIB::ADD_F64, "__adddf3vfp");
-      setLibcallName(RTLIB::SUB_F64, "__subdf3vfp");
-      setLibcallName(RTLIB::MUL_F64, "__muldf3vfp");
-      setLibcallName(RTLIB::DIV_F64, "__divdf3vfp");
+        // Double-precision floating-point arithmetic.
+        { RTLIB::ADD_F64, "__adddf3vfp", ISD::SETCC_INVALID },
+        { RTLIB::SUB_F64, "__subdf3vfp", ISD::SETCC_INVALID },
+        { RTLIB::MUL_F64, "__muldf3vfp", ISD::SETCC_INVALID },
+        { RTLIB::DIV_F64, "__divdf3vfp", ISD::SETCC_INVALID },
 
-      // Single-precision comparisons.
-      setLibcallName(RTLIB::OEQ_F32, "__eqsf2vfp");
-      setLibcallName(RTLIB::UNE_F32, "__nesf2vfp");
-      setLibcallName(RTLIB::OLT_F32, "__ltsf2vfp");
-      setLibcallName(RTLIB::OLE_F32, "__lesf2vfp");
-      setLibcallName(RTLIB::OGE_F32, "__gesf2vfp");
-      setLibcallName(RTLIB::OGT_F32, "__gtsf2vfp");
-      setLibcallName(RTLIB::UO_F32,  "__unordsf2vfp");
-      setLibcallName(RTLIB::O_F32,   "__unordsf2vfp");
+        // Single-precision comparisons.
+        { RTLIB::OEQ_F32, "__eqsf2vfp",    ISD::SETNE },
+        { RTLIB::UNE_F32, "__nesf2vfp",    ISD::SETNE },
+        { RTLIB::OLT_F32, "__ltsf2vfp",    ISD::SETNE },
+        { RTLIB::OLE_F32, "__lesf2vfp",    ISD::SETNE },
+        { RTLIB::OGE_F32, "__gesf2vfp",    ISD::SETNE },
+        { RTLIB::OGT_F32, "__gtsf2vfp",    ISD::SETNE },
+        { RTLIB::UO_F32,  "__unordsf2vfp", ISD::SETNE },
+        { RTLIB::O_F32,   "__unordsf2vfp", ISD::SETEQ },
 
-      setCmpLibcallCC(RTLIB::OEQ_F32, ISD::SETNE);
-      setCmpLibcallCC(RTLIB::UNE_F32, ISD::SETNE);
-      setCmpLibcallCC(RTLIB::OLT_F32, ISD::SETNE);
-      setCmpLibcallCC(RTLIB::OLE_F32, ISD::SETNE);
-      setCmpLibcallCC(RTLIB::OGE_F32, ISD::SETNE);
-      setCmpLibcallCC(RTLIB::OGT_F32, ISD::SETNE);
-      setCmpLibcallCC(RTLIB::UO_F32,  ISD::SETNE);
-      setCmpLibcallCC(RTLIB::O_F32,   ISD::SETEQ);
+        // Double-precision comparisons.
+        { RTLIB::OEQ_F64, "__eqdf2vfp",    ISD::SETNE },
+        { RTLIB::UNE_F64, "__nedf2vfp",    ISD::SETNE },
+        { RTLIB::OLT_F64, "__ltdf2vfp",    ISD::SETNE },
+        { RTLIB::OLE_F64, "__ledf2vfp",    ISD::SETNE },
+        { RTLIB::OGE_F64, "__gedf2vfp",    ISD::SETNE },
+        { RTLIB::OGT_F64, "__gtdf2vfp",    ISD::SETNE },
+        { RTLIB::UO_F64,  "__unorddf2vfp", ISD::SETNE },
+        { RTLIB::O_F64,   "__unorddf2vfp", ISD::SETEQ },
 
-      // Double-precision comparisons.
-      setLibcallName(RTLIB::OEQ_F64, "__eqdf2vfp");
-      setLibcallName(RTLIB::UNE_F64, "__nedf2vfp");
-      setLibcallName(RTLIB::OLT_F64, "__ltdf2vfp");
-      setLibcallName(RTLIB::OLE_F64, "__ledf2vfp");
-      setLibcallName(RTLIB::OGE_F64, "__gedf2vfp");
-      setLibcallName(RTLIB::OGT_F64, "__gtdf2vfp");
-      setLibcallName(RTLIB::UO_F64,  "__unorddf2vfp");
-      setLibcallName(RTLIB::O_F64,   "__unorddf2vfp");
+        // Floating-point to integer conversions.
+        // i64 conversions are done via library routines even when generating VFP
+        // instructions, so use the same ones.
+        { RTLIB::FPTOSINT_F64_I32, "__fixdfsivfp",    ISD::SETCC_INVALID },
+        { RTLIB::FPTOUINT_F64_I32, "__fixunsdfsivfp", ISD::SETCC_INVALID },
+        { RTLIB::FPTOSINT_F32_I32, "__fixsfsivfp",    ISD::SETCC_INVALID },
+        { RTLIB::FPTOUINT_F32_I32, "__fixunssfsivfp", ISD::SETCC_INVALID },
 
-      setCmpLibcallCC(RTLIB::OEQ_F64, ISD::SETNE);
-      setCmpLibcallCC(RTLIB::UNE_F64, ISD::SETNE);
-      setCmpLibcallCC(RTLIB::OLT_F64, ISD::SETNE);
-      setCmpLibcallCC(RTLIB::OLE_F64, ISD::SETNE);
-      setCmpLibcallCC(RTLIB::OGE_F64, ISD::SETNE);
-      setCmpLibcallCC(RTLIB::OGT_F64, ISD::SETNE);
-      setCmpLibcallCC(RTLIB::UO_F64,  ISD::SETNE);
-      setCmpLibcallCC(RTLIB::O_F64,   ISD::SETEQ);
+        // Conversions between floating types.
+        { RTLIB::FPROUND_F64_F32, "__truncdfsf2vfp",  ISD::SETCC_INVALID },
+        { RTLIB::FPEXT_F32_F64,   "__extendsfdf2vfp", ISD::SETCC_INVALID },
 
-      // Floating-point to integer conversions.
-      // i64 conversions are done via library routines even when generating VFP
-      // instructions, so use the same ones.
-      setLibcallName(RTLIB::FPTOSINT_F64_I32, "__fixdfsivfp");
-      setLibcallName(RTLIB::FPTOUINT_F64_I32, "__fixunsdfsivfp");
-      setLibcallName(RTLIB::FPTOSINT_F32_I32, "__fixsfsivfp");
-      setLibcallName(RTLIB::FPTOUINT_F32_I32, "__fixunssfsivfp");
+        // Integer to floating-point conversions.
+        // i64 conversions are done via library routines even when generating VFP
+        // instructions, so use the same ones.
+        // FIXME: There appears to be some naming inconsistency in ARM libgcc:
+        // e.g., __floatunsidf vs. __floatunssidfvfp.
+        { RTLIB::SINTTOFP_I32_F64, "__floatsidfvfp",    ISD::SETCC_INVALID },
+        { RTLIB::UINTTOFP_I32_F64, "__floatunssidfvfp", ISD::SETCC_INVALID },
+        { RTLIB::SINTTOFP_I32_F32, "__floatsisfvfp",    ISD::SETCC_INVALID },
+        { RTLIB::UINTTOFP_I32_F32, "__floatunssisfvfp", ISD::SETCC_INVALID },
+      };
 
-      // Conversions between floating types.
-      setLibcallName(RTLIB::FPROUND_F64_F32, "__truncdfsf2vfp");
-      setLibcallName(RTLIB::FPEXT_F32_F64,   "__extendsfdf2vfp");
-
-      // Integer to floating-point conversions.
-      // i64 conversions are done via library routines even when generating VFP
-      // instructions, so use the same ones.
-      // FIXME: There appears to be some naming inconsistency in ARM libgcc:
-      // e.g., __floatunsidf vs. __floatunssidfvfp.
-      setLibcallName(RTLIB::SINTTOFP_I32_F64, "__floatsidfvfp");
-      setLibcallName(RTLIB::UINTTOFP_I32_F64, "__floatunssidfvfp");
-      setLibcallName(RTLIB::SINTTOFP_I32_F32, "__floatsisfvfp");
-      setLibcallName(RTLIB::UINTTOFP_I32_F32, "__floatunssisfvfp");
+      for (const auto &LC : LibraryCalls) {
+        setLibcallName(LC.Op, LC.Name);
+        if (LC.Cond != ISD::SETCC_INVALID)
+          setCmpLibcallCC(LC.Op, LC.Cond);
+      }
     }
   }
 
@@ -369,6 +363,11 @@ ARMTargetLowering::ARMTargetLowering(const TargetMachine &TM,
       { RTLIB::SINTTOFP_I64_F64, "__i64tod", CallingConv::ARM_AAPCS_VFP },
       { RTLIB::UINTTOFP_I64_F32, "__u64tos", CallingConv::ARM_AAPCS_VFP },
       { RTLIB::UINTTOFP_I64_F64, "__u64tod", CallingConv::ARM_AAPCS_VFP },
+
+      { RTLIB::SDIV_I32, "__rt_sdiv",   CallingConv::ARM_AAPCS_VFP },
+      { RTLIB::UDIV_I32, "__rt_udiv",   CallingConv::ARM_AAPCS_VFP },
+      { RTLIB::SDIV_I64, "__rt_sdiv64", CallingConv::ARM_AAPCS_VFP },
+      { RTLIB::UDIV_I64, "__rt_udiv64", CallingConv::ARM_AAPCS_VFP },
     };
 
     for (const auto &LC : LibraryCalls) {
@@ -1827,7 +1826,6 @@ ARMTargetLowering::LowerCall(TargetLowering::CallLoweringInfo &CLI,
 
   // FIXME: handle tail calls differently.
   unsigned CallOpc;
-  bool HasMinSizeAttr = MF.getFunction()->hasFnAttribute(Attribute::MinSize);
   if (Subtarget->isThumb()) {
     if ((!isDirect || isARMFunc) && !Subtarget->hasV5TOps())
       CallOpc = ARMISD::CALL_NOLINK;
@@ -1837,8 +1835,8 @@ ARMTargetLowering::LowerCall(TargetLowering::CallLoweringInfo &CLI,
     if (!isDirect && !Subtarget->hasV5TOps())
       CallOpc = ARMISD::CALL_NOLINK;
     else if (doesNotRet && isDirect && Subtarget->hasRAS() &&
-               // Emit regular call when code size is the priority
-               !HasMinSizeAttr)
+             // Emit regular call when code size is the priority
+             !MF.getFunction()->optForMinSize())
       // "mov lr, pc; b _foo" to avoid confusing the RSP
       CallOpc = ARMISD::CALL_NOLINK;
     else
@@ -11797,14 +11795,14 @@ enum HABaseType {
 
 static bool isHomogeneousAggregate(Type *Ty, HABaseType &Base,
                                    uint64_t &Members) {
-  if (const StructType *ST = dyn_cast<StructType>(Ty)) {
+  if (auto *ST = dyn_cast<StructType>(Ty)) {
     for (unsigned i = 0; i < ST->getNumElements(); ++i) {
       uint64_t SubMembers = 0;
       if (!isHomogeneousAggregate(ST->getElementType(i), Base, SubMembers))
         return false;
       Members += SubMembers;
     }
-  } else if (const ArrayType *AT = dyn_cast<ArrayType>(Ty)) {
+  } else if (auto *AT = dyn_cast<ArrayType>(Ty)) {
     uint64_t SubMembers = 0;
     if (!isHomogeneousAggregate(AT->getElementType(), Base, SubMembers))
       return false;
@@ -11819,7 +11817,7 @@ static bool isHomogeneousAggregate(Type *Ty, HABaseType &Base,
       return false;
     Members = 1;
     Base = HA_DOUBLE;
-  } else if (const VectorType *VT = dyn_cast<VectorType>(Ty)) {
+  } else if (auto *VT = dyn_cast<VectorType>(Ty)) {
     Members = 1;
     switch (Base) {
     case HA_FLOAT:

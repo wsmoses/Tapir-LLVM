@@ -150,6 +150,13 @@ static MIToken::TokenKind getIdentifierKind(StringRef Identifier) {
       .Case(".cfi_def_cfa", MIToken::kw_cfi_def_cfa)
       .Case("blockaddress", MIToken::kw_blockaddress)
       .Case("target-index", MIToken::kw_target_index)
+      .Case("half", MIToken::kw_half)
+      .Case("float", MIToken::kw_float)
+      .Case("double", MIToken::kw_double)
+      .Case("x86_fp80", MIToken::kw_x86_fp80)
+      .Case("fp128", MIToken::kw_fp128)
+      .Case("ppc_fp128", MIToken::kw_ppc_fp128)
+      .Case("volatile", MIToken::kw_volatile)
       .Default(MIToken::Identifier);
 }
 
@@ -254,6 +261,16 @@ static Cursor maybeLexIRBlock(
                  Rule.size(), ErrorCallback);
 }
 
+static Cursor maybeLexIRValue(
+    Cursor C, MIToken &Token,
+    function_ref<void(StringRef::iterator Loc, const Twine &)> ErrorCallback) {
+  const StringRef Rule = "%ir.";
+  if (!C.remaining().startswith(Rule))
+    return None;
+  return lexName(C, Token, MIToken::NamedIRValue, MIToken::QuotedNamedIRValue,
+                 Rule.size(), ErrorCallback);
+}
+
 static Cursor lexVirtualRegister(Cursor C, MIToken &Token) {
   auto Range = C;
   C.advance(); // Skip '%'
@@ -308,13 +325,48 @@ static Cursor maybeLexExternalSymbol(
                  /*PrefixLength=*/1, ErrorCallback);
 }
 
-static Cursor maybeLexIntegerLiteral(Cursor C, MIToken &Token) {
+static bool isValidHexFloatingPointPrefix(char C) {
+  return C == 'H' || C == 'K' || C == 'L' || C == 'M';
+}
+
+static Cursor maybeLexHexFloatingPointLiteral(Cursor C, MIToken &Token) {
+  if (C.peek() != '0' || C.peek(1) != 'x')
+    return None;
+  Cursor Range = C;
+  C.advance(2); // Skip '0x'
+  if (isValidHexFloatingPointPrefix(C.peek()))
+    C.advance();
+  while (isxdigit(C.peek()))
+    C.advance();
+  Token = MIToken(MIToken::FloatingPointLiteral, Range.upto(C));
+  return C;
+}
+
+static Cursor lexFloatingPointLiteral(Cursor Range, Cursor C, MIToken &Token) {
+  C.advance();
+  // Skip over [0-9]*([eE][-+]?[0-9]+)?
+  while (isdigit(C.peek()))
+    C.advance();
+  if ((C.peek() == 'e' || C.peek() == 'E') &&
+      (isdigit(C.peek(1)) ||
+       ((C.peek(1) == '-' || C.peek(1) == '+') && isdigit(C.peek(2))))) {
+    C.advance(2);
+    while (isdigit(C.peek()))
+      C.advance();
+  }
+  Token = MIToken(MIToken::FloatingPointLiteral, Range.upto(C));
+  return C;
+}
+
+static Cursor maybeLexNumericalLiteral(Cursor C, MIToken &Token) {
   if (!isdigit(C.peek()) && (C.peek() != '-' || !isdigit(C.peek(1))))
     return None;
   auto Range = C;
   C.advance();
   while (isdigit(C.peek()))
     C.advance();
+  if (C.peek() == '.')
+    return lexFloatingPointLiteral(Range, C, Token);
   StringRef StrVal = Range.upto(C);
   Token = MIToken(MIToken::IntegerLiteral, StrVal, APSInt(StrVal));
   return C;
@@ -340,11 +392,17 @@ static MIToken::TokenKind symbolToken(char C) {
 }
 
 static Cursor maybeLexSymbol(Cursor C, MIToken &Token) {
-  auto Kind = symbolToken(C.peek());
+  MIToken::TokenKind Kind;
+  unsigned Length = 1;
+  if (C.peek() == ':' && C.peek(1) == ':') {
+    Kind = MIToken::coloncolon;
+    Length = 2;
+  } else
+    Kind = symbolToken(C.peek());
   if (Kind == MIToken::Error)
     return None;
   auto Range = C;
-  C.advance();
+  C.advance(Length);
   Token = MIToken(Kind, Range.upto(C));
   return C;
 }
@@ -372,13 +430,17 @@ StringRef llvm::lexMIToken(
     return R.remaining();
   if (Cursor R = maybeLexIRBlock(C, Token, ErrorCallback))
     return R.remaining();
+  if (Cursor R = maybeLexIRValue(C, Token, ErrorCallback))
+    return R.remaining();
   if (Cursor R = maybeLexRegister(C, Token))
     return R.remaining();
   if (Cursor R = maybeLexGlobalValue(C, Token, ErrorCallback))
     return R.remaining();
   if (Cursor R = maybeLexExternalSymbol(C, Token, ErrorCallback))
     return R.remaining();
-  if (Cursor R = maybeLexIntegerLiteral(C, Token))
+  if (Cursor R = maybeLexHexFloatingPointLiteral(C, Token))
+    return R.remaining();
+  if (Cursor R = maybeLexNumericalLiteral(C, Token))
     return R.remaining();
   if (Cursor R = maybeLexSymbol(C, Token))
     return R.remaining();

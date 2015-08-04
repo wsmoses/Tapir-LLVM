@@ -420,17 +420,6 @@ unsigned RuntimePointerChecking::getNumberOfChecks(
   return CheckCount;
 }
 
-bool RuntimePointerChecking::needsAnyChecking(
-    const SmallVectorImpl<int> *PtrPartition) const {
-  unsigned NumPointers = Pointers.size();
-
-  for (unsigned I = 0; I < NumPointers; ++I)
-    for (unsigned J = I + 1; J < NumPointers; ++J)
-      if (needsChecking(I, J, PtrPartition))
-        return true;
-  return false;
-}
-
 namespace {
 /// \brief Analyses memory accesses in a loop.
 ///
@@ -830,11 +819,11 @@ static bool isNoWrapAddRec(Value *Ptr, const SCEVAddRecExpr *AR,
 /// \brief Check whether the access through \p Ptr has a constant stride.
 int llvm::isStridedPtr(ScalarEvolution *SE, Value *Ptr, const Loop *Lp,
                        const ValueToValueMap &StridesMap) {
-  const Type *Ty = Ptr->getType();
+  Type *Ty = Ptr->getType();
   assert(Ty->isPointerTy() && "Unexpected non-ptr");
 
   // Make sure that the pointer does not point to aggregate types.
-  const PointerType *PtrTy = cast<PointerType>(Ty);
+  auto *PtrTy = cast<PointerType>(Ty);
   if (PtrTy->getElementType()->isAggregateType()) {
     DEBUG(dbgs() << "LAA: Bad stride - Not a pointer to a scalar type"
           << *Ptr << "\n");
@@ -1737,11 +1726,11 @@ std::pair<Instruction *, Instruction *> LoopAccessInfo::addRuntimeCheck(
 }
 
 std::pair<Instruction *, Instruction *> LoopAccessInfo::addRuntimeCheck(
-    Instruction *Loc, const SmallVectorImpl<int> *PtrPartition) const {
+    Instruction *Loc) const {
   if (!PtrRtChecking.Need)
     return std::make_pair(nullptr, nullptr);
 
-  return addRuntimeCheck(Loc, PtrRtChecking.generateChecks(PtrPartition));
+  return addRuntimeCheck(Loc, PtrRtChecking.generateChecks());
 }
 
 LoopAccessInfo::LoopAccessInfo(Loop *L, ScalarEvolution *SE,

@@ -738,6 +738,12 @@ private:
   void visitSwitch(const SwitchInst &I);
   void visitIndirectBr(const IndirectBrInst &I);
   void visitUnreachable(const UnreachableInst &I);
+  void visitCleanupRet(const CleanupReturnInst &I);
+  void visitCatchEndPad(const CatchEndPadInst &I);
+  void visitCatchRet(const CatchReturnInst &I);
+  void visitCatchPad(const CatchPadInst &I);
+  void visitTerminatePad(const TerminatePadInst &TPI);
+  void visitCleanupPad(const CleanupPadInst &CPI);
   void visitDetach(const DetachInst& I);
   void visitReattach(const ReattachInst& I);
   void visitSync(const SyncInst& I);

@@ -36,6 +36,7 @@ struct MIToken {
     equal,
     underscore,
     colon,
+    coloncolon,
     exclaim,
     lparen,
     rparen,
@@ -54,6 +55,13 @@ struct MIToken {
     kw_cfi_def_cfa,
     kw_blockaddress,
     kw_target_index,
+    kw_half,
+    kw_float,
+    kw_double,
+    kw_x86_fp80,
+    kw_fp128,
+    kw_ppc_fp128,
+    kw_volatile,
 
     // Identifier tokens
     Identifier,
@@ -69,12 +77,15 @@ struct MIToken {
 
     // Other tokens
     IntegerLiteral,
+    FloatingPointLiteral,
     VirtualRegister,
     ConstantPoolItem,
     JumpTableIndex,
     NamedIRBlock,
     QuotedNamedIRBlock,
     IRBlock,
+    NamedIRValue,
+    QuotedNamedIRValue,
   };
 
 private:
@@ -105,6 +116,8 @@ public:
            Kind == kw_dead || Kind == kw_killed || Kind == kw_undef;
   }
 
+  bool isMemoryOperandFlag() const { return Kind == kw_volatile; }
+
   bool is(TokenKind K) const { return Kind == K; }
 
   bool isNot(TokenKind K) const { return Kind != K; }
@@ -113,7 +126,7 @@ public:
 
   bool isStringValueQuoted() const {
     return Kind == QuotedNamedGlobalValue || Kind == QuotedExternalSymbol ||
-           Kind == QuotedNamedIRBlock;
+           Kind == QuotedNamedIRBlock || Kind == QuotedNamedIRValue;
   }
 
   /// Return the token's raw string value.
