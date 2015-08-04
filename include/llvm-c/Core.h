@@ -182,9 +182,6 @@ typedef enum {
   LLVMInvoke         = 5,
   /* removed 6 due to API changes */
   LLVMUnreachable    = 7,
-  LLVMDetach         = 61,
-  LLVMReattach       = 62,
-  LLVMSync           = 63,
 
   /* Standard Binary Operators */
   LLVMAdd            = 8,
@@ -257,7 +254,12 @@ typedef enum {
   LLVMCatchPad     = 63,
   LLVMTerminatePad = 64,
   LLVMCleanupPad   = 65,
-  LLVMCatchEndPad  = 66
+  LLVMCatchEndPad  = 66,
+
+  /* Parallel operators */
+  LLVMDetach         = 67,
+  LLVMReattach       = 68,
+  LLVMSync           = 69,
 
 } LLVMOpcode;
 

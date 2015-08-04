@@ -149,7 +149,6 @@ HANDLE_MEMORY_INST(40, AtomicRMW , AtomicRMWInst )
 // Cast operators ...
 // NOTE: The order matters here because CastInst::isEliminableCastPair 
 // NOTE: (see Instructions.cpp) encodes a table based on this ordering.
-<<<<<<< HEAD
  FIRST_CAST_INST(41)
 HANDLE_CAST_INST(41, Trunc   , TruncInst   )  // Truncate integers
 HANDLE_CAST_INST(42, ZExt    , ZExtInst    )  // Zero extend integers
