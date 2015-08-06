@@ -1628,6 +1628,8 @@ dnl===-----------------------------------------------------------------------===
 
 AC_CHECK_LIB(m,sin)
 if test "$llvm_cv_os_type" = "MingW" ; then
+  dnl mingw-gcc's driver doesn't imply -lole32 by default so we may need this
+  dnl when being built with gcc for bootstrapping purposes.
   AC_CHECK_LIB(ole32, main)
   AC_CHECK_LIB(psapi, main)
   AC_CHECK_LIB(shell32, main)
@@ -1797,7 +1799,6 @@ AC_LANG_POP([C++])
 
 AC_CHECK_HEADERS([dlfcn.h execinfo.h fcntl.h inttypes.h link.h])
 AC_CHECK_HEADERS([malloc.h setjmp.h signal.h stdint.h termios.h unistd.h])
-AC_CHECK_HEADERS([utime.h])
 AC_CHECK_HEADERS([sys/mman.h sys/param.h sys/resource.h sys/time.h sys/uio.h])
 AC_CHECK_HEADERS([sys/ioctl.h malloc/malloc.h mach/mach.h])
 AC_CHECK_HEADERS([valgrind/valgrind.h])
@@ -1875,10 +1876,9 @@ AC_CHECK_FUNCS([isatty mkdtemp mkstemp ])
 AC_CHECK_FUNCS([mktemp posix_spawn pread realpath sbrk setrlimit ])
 AC_CHECK_FUNCS([strerror strerror_r setenv ])
 AC_CHECK_FUNCS([strtoll strtoq sysconf malloc_zone_statistics ])
-AC_CHECK_FUNCS([setjmp longjmp sigsetjmp siglongjmp writev])
+AC_CHECK_FUNCS([setjmp longjmp writev])
 AC_CHECK_FUNCS([futimes futimens])
 AC_C_PRINTF_A
-AC_FUNC_RAND48
 
 dnl Check for arc4random accessible via AC_INCLUDES_DEFAULT.
 AC_CHECK_DECLS([arc4random])
