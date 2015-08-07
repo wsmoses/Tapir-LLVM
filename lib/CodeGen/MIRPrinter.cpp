@@ -476,7 +476,16 @@ void MIPrinter::printIRBlockReference(const BasicBlock &BB) {
     printLLVMNameWithoutPrefix(OS, BB.getName());
     return;
   }
-  int Slot = MST.getLocalSlot(&BB);
+  const Function *F = BB.getParent();
+  int Slot;
+  if (F == MST.getCurrentFunction()) {
+    Slot = MST.getLocalSlot(&BB);
+  } else {
+    ModuleSlotTracker CustomMST(F->getParent(),
+                                /*ShouldInitializeAllMetadata=*/false);
+    CustomMST.incorporateFunction(*F);
+    Slot = CustomMST.getLocalSlot(&BB);
+  }
   if (Slot == -1)
     OS << "<badref>";
   else
@@ -652,9 +661,13 @@ void MIPrinter::print(const MachineOperand &Op, const TargetRegisterInfo *TRI) {
 
 void MIPrinter::print(const MachineMemOperand &Op) {
   OS << '(';
-  // TODO: Print operand's other flags.
+  // TODO: Print operand's target specific flags.
   if (Op.isVolatile())
     OS << "volatile ";
+  if (Op.isNonTemporal())
+    OS << "non-temporal ";
+  if (Op.isInvariant())
+    OS << "invariant ";
   if (Op.isLoad())
     OS << "load ";
   else {

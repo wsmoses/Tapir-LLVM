@@ -174,9 +174,8 @@ private:
   /// Return 0 if the name isn't a subregister index class.
   unsigned getSubRegIndex(StringRef Name);
 
-  void initSlots2BasicBlocks();
-
   const BasicBlock *getIRBlock(unsigned Slot);
+  const BasicBlock *getIRBlock(unsigned Slot, const Function &F);
 
   void initNames2TargetIndices();
 
@@ -200,7 +199,7 @@ MIParser::MIParser(SourceMgr &SM, MachineFunction &MF, SMDiagnostic &Error,
                    StringRef Source, const PerFunctionMIParsingState &PFS,
                    const SlotMapping &IRSlots)
     : SM(SM), MF(MF), Error(Error), Source(Source), CurrentSource(Source),
-      Token(MIToken::Error, StringRef()), PFS(PFS), IRSlots(IRSlots) {}
+      PFS(PFS), IRSlots(IRSlots) {}
 
 void MIParser::lex() {
   CurrentSource = lexMIToken(
@@ -571,7 +570,7 @@ bool MIParser::parseImmediateOperand(MachineOperand &Dest) {
 }
 
 bool MIParser::parseIRConstant(StringRef::iterator Loc, const Constant *&C) {
-  auto Source = StringRef(Loc, Token.stringValue().end() - Loc).str();
+  auto Source = StringRef(Loc, Token.range().end() - Loc).str();
   lex();
   SMDiagnostic Err;
   C = parseConstantValue(Source.c_str(), Err, *MF.getFunction()->getParent());
@@ -681,8 +680,8 @@ bool MIParser::parseGlobalValue(GlobalValue *&GV) {
     const Module *M = MF.getFunction()->getParent();
     GV = M->getNamedValue(Token.stringValue());
     if (!GV)
-      return error(Twine("use of undefined global value '@") +
-                   Token.rawStringValue() + "'");
+      return error(Twine("use of undefined global value '") + Token.range() +
+                   "'");
     break;
   }
   case MIToken::GlobalValue: {
@@ -851,15 +850,14 @@ bool MIParser::parseIRBlock(BasicBlock *&BB, const Function &F) {
     BB = dyn_cast_or_null<BasicBlock>(
         F.getValueSymbolTable().lookup(Token.stringValue()));
     if (!BB)
-      return error(Twine("use of undefined IR block '%ir-block.") +
-                   Token.rawStringValue() + "'");
+      return error(Twine("use of undefined IR block '") + Token.range() + "'");
     break;
   }
   case MIToken::IRBlock: {
     unsigned SlotNumber = 0;
     if (getUnsigned(SlotNumber))
       return true;
-    BB = const_cast<BasicBlock *>(getIRBlock(SlotNumber));
+    BB = const_cast<BasicBlock *>(getIRBlock(SlotNumber, F));
     if (!BB)
       return error(Twine("use of undefined IR block '%ir-block.") +
                    Twine(SlotNumber) + "'");
@@ -1019,7 +1017,7 @@ bool MIParser::parseMachineOperandAndTargetFlags(MachineOperand &Dest) {
 bool MIParser::parseOperandsOffset(MachineOperand &Op) {
   if (Token.isNot(MIToken::plus) && Token.isNot(MIToken::minus))
     return false;
-  StringRef Sign = Token.stringValue();
+  StringRef Sign = Token.range();
   bool IsNegative = Token.is(MIToken::minus);
   lex();
   if (Token.isNot(MIToken::IntegerLiteral))
@@ -1039,8 +1037,7 @@ bool MIParser::parseIRValue(Value *&V) {
   case MIToken::NamedIRValue: {
     V = MF.getFunction()->getValueSymbolTable().lookup(Token.stringValue());
     if (!V)
-      return error(Twine("use of undefined IR value '%ir.") +
-                   Token.rawStringValue() + "'");
+      return error(Twine("use of undefined IR value '") + Token.range() + "'");
     break;
   }
   // TODO: Parse unnamed IR value references.
@@ -1059,15 +1056,25 @@ bool MIParser::getUint64(uint64_t &Result) {
 }
 
 bool MIParser::parseMemoryOperandFlag(unsigned &Flags) {
+  const unsigned OldFlags = Flags;
   switch (Token.kind()) {
   case MIToken::kw_volatile:
     Flags |= MachineMemOperand::MOVolatile;
     break;
-  // TODO: report an error when we specify the same flag more than once.
-  // TODO: parse the other memory operand flags.
+  case MIToken::kw_non_temporal:
+    Flags |= MachineMemOperand::MONonTemporal;
+    break;
+  case MIToken::kw_invariant:
+    Flags |= MachineMemOperand::MOInvariant;
+    break;
+  // TODO: parse the target specific memory operand flags.
   default:
     llvm_unreachable("The current token should be a memory operand flag");
   }
+  if (OldFlags == Flags)
+    // We know that the same flag is specified more than once when the flags
+    // weren't modified.
+    return error("duplicate '" + Token.stringValue() + "' memory operand flag");
   lex();
   return false;
 }
@@ -1200,11 +1207,10 @@ unsigned MIParser::getSubRegIndex(StringRef Name) {
   return SubRegInfo->getValue();
 }
 
-void MIParser::initSlots2BasicBlocks() {
-  if (!Slots2BasicBlocks.empty())
-    return;
-  const auto &F = *MF.getFunction();
-  ModuleSlotTracker MST(F.getParent());
+static void initSlots2BasicBlocks(
+    const Function &F,
+    DenseMap<unsigned, const BasicBlock *> &Slots2BasicBlocks) {
+  ModuleSlotTracker MST(F.getParent(), /*ShouldInitializeAllMetadata=*/false);
   MST.incorporateFunction(F);
   for (auto &BB : F) {
     if (BB.hasName())
@@ -1216,12 +1222,27 @@ void MIParser::initSlots2BasicBlocks() {
   }
 }
 
-const BasicBlock *MIParser::getIRBlock(unsigned Slot) {
-  initSlots2BasicBlocks();
+static const BasicBlock *getIRBlockFromSlot(
+    unsigned Slot,
+    const DenseMap<unsigned, const BasicBlock *> &Slots2BasicBlocks) {
   auto BlockInfo = Slots2BasicBlocks.find(Slot);
   if (BlockInfo == Slots2BasicBlocks.end())
     return nullptr;
   return BlockInfo->second;
+}
+
+const BasicBlock *MIParser::getIRBlock(unsigned Slot) {
+  if (Slots2BasicBlocks.empty())
+    initSlots2BasicBlocks(*MF.getFunction(), Slots2BasicBlocks);
+  return getIRBlockFromSlot(Slot, Slots2BasicBlocks);
+}
+
+const BasicBlock *MIParser::getIRBlock(unsigned Slot, const Function &F) {
+  if (&F == MF.getFunction())
+    return getIRBlock(Slot);
+  DenseMap<unsigned, const BasicBlock *> CustomSlots2BasicBlocks;
+  initSlots2BasicBlocks(F, CustomSlots2BasicBlocks);
+  return getIRBlockFromSlot(Slot, CustomSlots2BasicBlocks);
 }
 
 void MIParser::initNames2TargetIndices() {

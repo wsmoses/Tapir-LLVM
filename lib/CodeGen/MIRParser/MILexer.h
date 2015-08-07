@@ -67,6 +67,8 @@ struct MIToken {
     kw_ppc_fp128,
     kw_target_flags,
     kw_volatile,
+    kw_non_temporal,
+    kw_invariant,
 
     // Identifier tokens
     Identifier,
@@ -92,26 +94,19 @@ struct MIToken {
 
 private:
   TokenKind Kind;
-  unsigned StringOffset;
-  bool HasStringValue;
   StringRef Range;
-  std::string StringValue;
+  StringRef StringValue;
+  std::string StringValueStorage;
   APSInt IntVal;
 
 public:
-  MIToken(TokenKind Kind, StringRef Range, unsigned StringOffset = 0)
-      : Kind(Kind), StringOffset(StringOffset), HasStringValue(false),
-        Range(Range) {}
+  MIToken() : Kind(Error) {}
 
-  MIToken(TokenKind Kind, StringRef Range, std::string StringValue,
-          unsigned StringOffset = 0)
-      : Kind(Kind), StringOffset(StringOffset), HasStringValue(true),
-        Range(Range), StringValue(std::move(StringValue)) {}
+  MIToken &reset(TokenKind Kind, StringRef Range);
 
-  MIToken(TokenKind Kind, StringRef Range, const APSInt &IntVal,
-          unsigned StringOffset = 0)
-      : Kind(Kind), StringOffset(StringOffset), HasStringValue(false),
-        Range(Range), IntVal(IntVal) {}
+  MIToken &setStringValue(StringRef StrVal);
+  MIToken &setOwnedStringValue(std::string StrVal);
+  MIToken &setIntegerValue(APSInt IntVal);
 
   TokenKind kind() const { return Kind; }
 
@@ -128,7 +123,10 @@ public:
            Kind == kw_early_clobber || Kind == kw_debug_use;
   }
 
-  bool isMemoryOperandFlag() const { return Kind == kw_volatile; }
+  bool isMemoryOperandFlag() const {
+    return Kind == kw_volatile || Kind == kw_non_temporal ||
+           Kind == kw_invariant;
+  }
 
   bool is(TokenKind K) const { return Kind == K; }
 
@@ -136,17 +134,10 @@ public:
 
   StringRef::iterator location() const { return Range.begin(); }
 
-  /// Return the token's raw string value.
-  ///
-  /// If the string value is quoted, this method returns that quoted string as
-  /// it is, without unescaping the string value.
-  StringRef rawStringValue() const { return Range.drop_front(StringOffset); }
+  StringRef range() const { return Range; }
 
   /// Return the token's string value.
-  StringRef stringValue() const {
-    return HasStringValue ? StringRef(StringValue)
-                          : Range.drop_front(StringOffset);
-  }
+  StringRef stringValue() const { return StringValue; }
 
   const APSInt &integerValue() const { return IntVal; }
 
