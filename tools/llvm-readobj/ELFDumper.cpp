@@ -104,10 +104,20 @@ private:
   const Elf_Rela *dyn_rela_end() const;
   Elf_Rela_Range dyn_relas() const;
   StringRef getDynamicString(uint64_t Offset) const;
-  const Elf_Dyn *dynamic_table_begin() const;
-  const Elf_Dyn *dynamic_table_end() const;
+  const Elf_Dyn *dynamic_table_begin() const {
+    ErrorOr<const Elf_Dyn *> Ret = Obj->dynamic_table_begin(DynamicProgHeader);
+    error(Ret.getError());
+    return *Ret;
+  }
+  const Elf_Dyn *dynamic_table_end() const {
+    ErrorOr<const Elf_Dyn *> Ret = Obj->dynamic_table_end(DynamicProgHeader);
+    error(Ret.getError());
+    return *Ret;
+  }
   Elf_Dyn_Range dynamic_table() const {
-    return make_range(dynamic_table_begin(), dynamic_table_end());
+    ErrorOr<Elf_Dyn_Range> Ret = Obj->dynamic_table(DynamicProgHeader);
+    error(Ret.getError());
+    return *Ret;
   }
 
   StringRef getSymbolVersion(StringRef StrTab, const Elf_Sym *symb,
@@ -118,11 +128,12 @@ private:
 
   const ELFO *Obj;
   DynRegionInfo DynRelaRegion;
-  DynRegionInfo DynamicRegion;
+  const Elf_Phdr *DynamicProgHeader = nullptr;
   StringRef DynamicStringTable;
   const Elf_Sym *DynSymStart = nullptr;
   StringRef SOName;
   const Elf_Hash *HashTable = nullptr;
+  const Elf_Shdr *DotDynSymSec = nullptr;
 
   const Elf_Shdr *dot_gnu_version_sec = nullptr;   // .gnu.version
   const Elf_Shdr *dot_gnu_version_r_sec = nullptr; // .gnu.version_r
@@ -154,6 +165,7 @@ private:
 public:
   std::string getFullSymbolName(const Elf_Sym *Symbol, StringRef StrTable,
                                 bool IsDynamic);
+  const Elf_Shdr *getDotDynSymSec() const { return DotDynSymSec; }
 };
 
 template <class T> T errorOrDefault(ErrorOr<T> Val, T Default = T()) {
@@ -798,11 +810,7 @@ ELFDumper<ELFT>::ELFDumper(const ELFFile<ELFT> *Obj, StreamWriter &Writer)
   SmallVector<const Elf_Phdr *, 4> LoadSegments;
   for (const Elf_Phdr &Phdr : Obj->program_headers()) {
     if (Phdr.p_type == ELF::PT_DYNAMIC) {
-      DynamicRegion.Addr = Obj->base() + Phdr.p_offset;
-      uint64_t Size = Phdr.p_filesz;
-      if (Size % sizeof(Elf_Dyn))
-        report_fatal_error("Invalid dynamic table size");
-      DynamicRegion.Size = Phdr.p_filesz;
+      DynamicProgHeader = &Phdr;
       continue;
     }
     if (Phdr.p_type != ELF::PT_LOAD || Phdr.p_filesz == 0)
@@ -878,6 +886,11 @@ ELFDumper<ELFT>::ELFDumper(const ELFFile<ELFT> *Obj, StreamWriter &Writer)
         reportError("Multilpe SHT_GNU_verneed");
       dot_gnu_version_r_sec = &Sec;
       break;
+    case ELF::SHT_DYNSYM:
+      if (DotDynSymSec != nullptr)
+        reportError("Multilpe SHT_DYNSYM");
+      DotDynSymSec = &Sec;
+      break;
     }
   }
 }
@@ -902,19 +915,6 @@ ELFDumper<ELFT>::dyn_rela_end() const {
 template <typename ELFT>
 typename ELFDumper<ELFT>::Elf_Rela_Range ELFDumper<ELFT>::dyn_relas() const {
   return make_range(dyn_rela_begin(), dyn_rela_end());
-}
-
-template <typename ELFT>
-const typename ELFDumper<ELFT>::Elf_Dyn *
-ELFDumper<ELFT>::dynamic_table_begin() const {
-  return reinterpret_cast<const Elf_Dyn *>(DynamicRegion.Addr);
-}
-
-template <typename ELFT>
-const typename ELFDumper<ELFT>::Elf_Dyn *
-ELFDumper<ELFT>::dynamic_table_end() const {
-  uint64_t Size = DynamicRegion.Size;
-  return dynamic_table_begin() + Size / sizeof(Elf_Dyn);
 }
 
 template<class ELFT>
@@ -1002,7 +1002,7 @@ void ELFDumper<ELFT>::printSections() {
       error(StrTableOrErr.getError());
       StringRef StrTable = *StrTableOrErr;
 
-      for (const Elf_Sym &Sym : Obj->symbols()) {
+      for (const Elf_Sym &Sym : Obj->symbols(Symtab)) {
         ErrorOr<const Elf_Shdr *> SymSec = Obj->getSection(&Sym);
         if (!SymSec)
           continue;
@@ -1133,7 +1133,7 @@ void ELFDumper<ELFT>::printSymbols() {
   ErrorOr<StringRef> StrTableOrErr = Obj->getStringTableForSymtab(*Symtab);
   error(StrTableOrErr.getError());
   StringRef StrTable = *StrTableOrErr;
-  for (const Elf_Sym &Sym : Obj->symbols())
+  for (const Elf_Sym &Sym : Obj->symbols(Symtab))
     printSymbol(&Sym, StrTable, false);
 }
 
@@ -1141,7 +1141,7 @@ template<class ELFT>
 void ELFDumper<ELFT>::printDynamicSymbols() {
   ListScope Group(W, "DynamicSymbols");
 
-  const Elf_Shdr *Symtab = Obj->getDotDynSymSec();
+  const Elf_Shdr *Symtab = DotDynSymSec;
   ErrorOr<StringRef> StrTableOrErr = Obj->getStringTableForSymtab(*Symtab);
   error(StrTableOrErr.getError());
   StringRef StrTable = *StrTableOrErr;
@@ -1650,7 +1650,7 @@ template <class ELFT> void MipsGOTParser<ELFT>::parseGOT() {
     return;
   }
 
-  const Elf_Shdr *DynSymSec = Obj->getDotDynSymSec();
+  const Elf_Shdr *DynSymSec = Dumper->getDotDynSymSec();
   ErrorOr<StringRef> StrTable = Obj->getStringTableForSymtab(*DynSymSec);
   error(StrTable.getError());
   const Elf_Sym *DynSymBegin = Obj->symbol_begin(DynSymSec);

@@ -182,8 +182,6 @@ class RegImmMatcher<string name> : AsmOperandClass {
   let RenderMethod = "addRegOrImmOperands";
 }
 
-def VCCReg : RegisterClass<"AMDGPU", [i64, i1], 64, (add VCC)>;
-
 // Register class for all scalar registers (SGPRs + Special Registers)
 def SReg_32 : RegisterClass<"AMDGPU", [i32, f32], 32,
   (add SGPR_32, M0, VCC_LO, VCC_HI, EXEC_LO, EXEC_HI, FLAT_SCR_LO, FLAT_SCR_HI)
@@ -192,7 +190,7 @@ def SReg_32 : RegisterClass<"AMDGPU", [i32, f32], 32,
 def SGPR_64 : RegisterClass<"AMDGPU", [v2i32, i64, f64], 64, (add SGPR_64Regs)>;
 
 def SReg_64 : RegisterClass<"AMDGPU", [v2i32, i64, f64, i1], 64,
-  (add SGPR_64, VCCReg, EXEC, FLAT_SCR)
+  (add SGPR_64, VCC, EXEC, FLAT_SCR)
 >;
 
 def SReg_128 : RegisterClass<"AMDGPU", [v4i32, v16i8], 128, (add SGPR_128)>;
