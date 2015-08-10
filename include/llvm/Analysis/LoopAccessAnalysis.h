@@ -388,8 +388,8 @@ public:
 
   /// \brief Decide if we need to add a check between two groups of pointers,
   /// according to needsChecking.
-  bool needsChecking(const CheckingPtrGroup &M, const CheckingPtrGroup &N,
-                     const SmallVectorImpl<int> *PtrPartition) const;
+  bool needsChecking(const CheckingPtrGroup &M,
+                     const CheckingPtrGroup &N) const;
 
   /// \brief Returns the number of run-time checks required according to
   /// needsChecking.
@@ -421,12 +421,7 @@ public:
 
   /// \brief Decide whether we need to issue a run-time check for pointer at
   /// index \p I and \p J to prove their independence.
-  ///
-  /// If \p PtrPartition is set, it contains the partition number for
-  /// pointers (-1 if the pointer belongs to multiple partitions).  In this
-  /// case omit checks between pointers belonging to the same partition.
-  bool needsChecking(unsigned I, unsigned J,
-                     const SmallVectorImpl<int> *PtrPartition = nullptr) const;
+  bool needsChecking(unsigned I, unsigned J) const;
 
 private:
   /// \brief Groups pointers such that a single memcheck is required
@@ -437,13 +432,8 @@ private:
                    bool UseDependencies);
 
   /// Generate the checks and return them.
-  ///
-  /// \p PtrToPartition contains the partition number for pointers.  If passed,
-  /// omit checks between pointers belonging to the same partition.  Partition
-  /// number -1 means that the pointer is used in multiple partitions.  In this
-  /// case we can't safely omit the check.
   SmallVector<PointerCheck, 4>
-  generateChecks(const SmallVectorImpl<int> *PtrPartition = nullptr) const;
+  generateChecks() const;
 
   /// Holds a pointer to the ScalarEvolution analysis.
   ScalarEvolution *SE;

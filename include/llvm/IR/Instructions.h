@@ -3729,9 +3729,9 @@ class CatchEndPadInst : public TerminatorInst {
 private:
   void init(BasicBlock *UnwindBB);
   CatchEndPadInst(LLVMContext &C, BasicBlock *UnwindBB, unsigned Values,
-                    Instruction *InsertBefore = nullptr);
+                  Instruction *InsertBefore = nullptr);
   CatchEndPadInst(LLVMContext &C, BasicBlock *UnwindBB, unsigned Values,
-                    BasicBlock *InsertAtEnd);
+                  BasicBlock *InsertAtEnd);
 
 protected:
   // Note: Instruction needs to be a friend here to call cloneImpl.
@@ -3739,14 +3739,13 @@ protected:
   CatchEndPadInst *cloneImpl() const;
 
 public:
-  static CatchEndPadInst *Create(LLVMContext &C,
-                                   BasicBlock *UnwindBB = nullptr,
-                                   Instruction *InsertBefore = nullptr) {
+  static CatchEndPadInst *Create(LLVMContext &C, BasicBlock *UnwindBB = nullptr,
+                                 Instruction *InsertBefore = nullptr) {
     unsigned Values = UnwindBB ? 1 : 0;
     return new (Values) CatchEndPadInst(C, UnwindBB, Values, InsertBefore);
   }
   static CatchEndPadInst *Create(LLVMContext &C, BasicBlock *UnwindBB,
-                                   BasicBlock *InsertAtEnd) {
+                                 BasicBlock *InsertAtEnd) {
     unsigned Values = UnwindBB ? 1 : 0;
     return new (Values) CatchEndPadInst(C, UnwindBB, Values, InsertAtEnd);
   }
@@ -3807,13 +3806,13 @@ private:
   CatchPadInst(const CatchPadInst &CPI);
 
   explicit CatchPadInst(Type *RetTy, BasicBlock *IfNormal,
-                          BasicBlock *IfException, ArrayRef<Value *> Args,
-                          unsigned Values, const Twine &NameStr,
-                          Instruction *InsertBefore);
+                        BasicBlock *IfException, ArrayRef<Value *> Args,
+                        unsigned Values, const Twine &NameStr,
+                        Instruction *InsertBefore);
   explicit CatchPadInst(Type *RetTy, BasicBlock *IfNormal,
-                          BasicBlock *IfException, ArrayRef<Value *> Args,
-                          unsigned Values, const Twine &NameStr,
-                          BasicBlock *InsertAtEnd);
+                        BasicBlock *IfException, ArrayRef<Value *> Args,
+                        unsigned Values, const Twine &NameStr,
+                        BasicBlock *InsertAtEnd);
 
 protected:
   // Note: Instruction needs to be a friend here to call cloneImpl.
@@ -3822,19 +3821,19 @@ protected:
 
 public:
   static CatchPadInst *Create(Type *RetTy, BasicBlock *IfNormal,
-                                BasicBlock *IfException, ArrayRef<Value *> Args,
-                                const Twine &NameStr = "",
-                                Instruction *InsertBefore = nullptr) {
+                              BasicBlock *IfException, ArrayRef<Value *> Args,
+                              const Twine &NameStr = "",
+                              Instruction *InsertBefore = nullptr) {
     unsigned Values = unsigned(Args.size()) + 2;
-    return new (Values) CatchPadInst(RetTy, IfNormal, IfException, Args,
-                                       Values, NameStr, InsertBefore);
+    return new (Values) CatchPadInst(RetTy, IfNormal, IfException, Args, Values,
+                                     NameStr, InsertBefore);
   }
   static CatchPadInst *Create(Type *RetTy, BasicBlock *IfNormal,
-                                BasicBlock *IfException, ArrayRef<Value *> Args,
-                                const Twine &NameStr, BasicBlock *InsertAtEnd) {
+                              BasicBlock *IfException, ArrayRef<Value *> Args,
+                              const Twine &NameStr, BasicBlock *InsertAtEnd) {
     unsigned Values = unsigned(Args.size()) + 2;
-    return new (Values) CatchPadInst(RetTy, IfNormal, IfException, Args,
-                                       Values, NameStr, InsertAtEnd);
+    return new (Values) CatchPadInst(RetTy, IfNormal, IfException, Args, Values,
+                                     NameStr, InsertAtEnd);
   }
 
   /// Provide fast operand accessors
@@ -4037,9 +4036,9 @@ private:
   CleanupPadInst(const CleanupPadInst &CPI);
 
   explicit CleanupPadInst(Type *RetTy, ArrayRef<Value *> Args,
-                            const Twine &NameStr, Instruction *InsertBefore);
+                          const Twine &NameStr, Instruction *InsertBefore);
   explicit CleanupPadInst(Type *RetTy, ArrayRef<Value *> Args,
-                            const Twine &NameStr, BasicBlock *InsertAtEnd);
+                          const Twine &NameStr, BasicBlock *InsertAtEnd);
 
 protected:
   // Note: Instruction needs to be a friend here to call cloneImpl.
@@ -4048,16 +4047,13 @@ protected:
 
 public:
   static CleanupPadInst *Create(Type *RetTy, ArrayRef<Value *> Args,
-                                  const Twine &NameStr = "",
-                                  Instruction *InsertBefore = nullptr) {
-    return new (Args.size())
-        CleanupPadInst(RetTy, Args, NameStr, InsertBefore);
+                                const Twine &NameStr = "",
+                                Instruction *InsertBefore = nullptr) {
+    return new (Args.size()) CleanupPadInst(RetTy, Args, NameStr, InsertBefore);
   }
   static CleanupPadInst *Create(Type *RetTy, ArrayRef<Value *> Args,
-                                  const Twine &NameStr,
-                                  BasicBlock *InsertAtEnd) {
-    return new (Args.size())
-        CleanupPadInst(RetTy, Args, NameStr, InsertAtEnd);
+                                const Twine &NameStr, BasicBlock *InsertAtEnd) {
+    return new (Args.size()) CleanupPadInst(RetTy, Args, NameStr, InsertAtEnd);
   }
 
   /// Provide fast operand accessors
@@ -4086,7 +4082,6 @@ class CatchReturnInst : public TerminatorInst {
   CatchReturnInst(const CatchReturnInst &RI);
 
 private:
-  void init(Value *RetVal, BasicBlock *UnwindBB);
   CatchReturnInst(BasicBlock *BB, Instruction *InsertBefore = nullptr);
   CatchReturnInst(BasicBlock *BB, BasicBlock *InsertAtEnd);
 

@@ -149,8 +149,7 @@ void RuntimePointerChecking::insert(Loop *Lp, Value *Ptr, bool WritePtr,
 }
 
 SmallVector<RuntimePointerChecking::PointerCheck, 4>
-RuntimePointerChecking::generateChecks(
-    const SmallVectorImpl<int> *PtrPartition) const {
+RuntimePointerChecking::generateChecks() const {
   SmallVector<PointerCheck, 4> Checks;
 
   for (unsigned I = 0; I < CheckingGroups.size(); ++I) {
@@ -158,7 +157,7 @@ RuntimePointerChecking::generateChecks(
       const RuntimePointerChecking::CheckingPtrGroup &CGI = CheckingGroups[I];
       const RuntimePointerChecking::CheckingPtrGroup &CGJ = CheckingGroups[J];
 
-      if (needsChecking(CGI, CGJ, PtrPartition))
+      if (needsChecking(CGI, CGJ))
         Checks.push_back(std::make_pair(&CGI, &CGJ));
     }
   }
@@ -172,12 +171,11 @@ void RuntimePointerChecking::generateChecks(
   Checks = generateChecks();
 }
 
-bool RuntimePointerChecking::needsChecking(
-    const CheckingPtrGroup &M, const CheckingPtrGroup &N,
-    const SmallVectorImpl<int> *PtrPartition) const {
+bool RuntimePointerChecking::needsChecking(const CheckingPtrGroup &M,
+                                           const CheckingPtrGroup &N) const {
   for (unsigned I = 0, EI = M.Members.size(); EI != I; ++I)
     for (unsigned J = 0, EJ = N.Members.size(); EJ != J; ++J)
-      if (needsChecking(M.Members[I], N.Members[J], PtrPartition))
+      if (needsChecking(M.Members[I], N.Members[J]))
         return true;
   return false;
 }
@@ -350,8 +348,7 @@ bool RuntimePointerChecking::arePointersInSamePartition(
           PtrToPartition[PtrIdx1] == PtrToPartition[PtrIdx2]);
 }
 
-bool RuntimePointerChecking::needsChecking(
-    unsigned I, unsigned J, const SmallVectorImpl<int> *PtrPartition) const {
+bool RuntimePointerChecking::needsChecking(unsigned I, unsigned J) const {
   const PointerInfo &PointerI = Pointers[I];
   const PointerInfo &PointerJ = Pointers[J];
 
@@ -365,10 +362,6 @@ bool RuntimePointerChecking::needsChecking(
 
   // Only need to check pointers in the same alias set.
   if (PointerI.AliasSetId != PointerJ.AliasSetId)
-    return false;
-
-  // If PtrPartition is set omit checks between pointers of the same partition.
-  if (PtrPartition && arePointersInSamePartition(*PtrPartition, I, J))
     return false;
 
   return true;
