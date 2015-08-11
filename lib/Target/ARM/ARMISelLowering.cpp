@@ -932,6 +932,13 @@ ARMTargetLowering::ARMTargetLowering(const TargetMachine &TM,
     setOperationAction(ISD::FTRUNC, MVT::f32, Legal);
     setOperationAction(ISD::FNEARBYINT, MVT::f32, Legal);
     setOperationAction(ISD::FRINT, MVT::f32, Legal);
+    setOperationAction(ISD::FMINNUM, MVT::f32, Legal);
+    setOperationAction(ISD::FMAXNUM, MVT::f32, Legal);
+    setOperationAction(ISD::FMINNUM, MVT::v2f32, Legal);
+    setOperationAction(ISD::FMAXNUM, MVT::v2f32, Legal);
+    setOperationAction(ISD::FMINNUM, MVT::v4f32, Legal);
+    setOperationAction(ISD::FMAXNUM, MVT::v4f32, Legal);
+
     if (!Subtarget->isFPOnlySP()) {
       setOperationAction(ISD::FFLOOR, MVT::f64, Legal);
       setOperationAction(ISD::FCEIL, MVT::f64, Legal);
@@ -939,8 +946,24 @@ ARMTargetLowering::ARMTargetLowering(const TargetMachine &TM,
       setOperationAction(ISD::FTRUNC, MVT::f64, Legal);
       setOperationAction(ISD::FNEARBYINT, MVT::f64, Legal);
       setOperationAction(ISD::FRINT, MVT::f64, Legal);
+      setOperationAction(ISD::FMINNUM, MVT::f64, Legal);
+      setOperationAction(ISD::FMAXNUM, MVT::f64, Legal);
     }
   }
+
+  if (Subtarget->hasVFP3()) {
+    setOperationAction(ISD::FMINNAN, MVT::f32, Legal);
+    setOperationAction(ISD::FMAXNAN, MVT::f32, Legal);
+    setOperationAction(ISD::FMINNAN, MVT::f64, Legal);
+    setOperationAction(ISD::FMAXNAN, MVT::f64, Legal);
+  }
+  if (Subtarget->hasNEON()) {
+    setOperationAction(ISD::FMINNAN, MVT::v2f32, Legal);
+    setOperationAction(ISD::FMAXNAN, MVT::v2f32, Legal);
+    setOperationAction(ISD::FMINNAN, MVT::v4f32, Legal);
+    setOperationAction(ISD::FMAXNAN, MVT::v4f32, Legal);
+  }
+
   // We have target-specific dag combine patterns for the following nodes:
   // ARMISD::VMOVRRD  - No need to call setTargetDAGCombine
   setTargetDAGCombine(ISD::ADD);
@@ -1138,10 +1161,6 @@ const char *ARMTargetLowering::getTargetNodeName(unsigned Opcode) const {
   case ARMISD::UMLAL:         return "ARMISD::UMLAL";
   case ARMISD::SMLAL:         return "ARMISD::SMLAL";
   case ARMISD::BUILD_VECTOR:  return "ARMISD::BUILD_VECTOR";
-  case ARMISD::FMAX:          return "ARMISD::FMAX";
-  case ARMISD::FMIN:          return "ARMISD::FMIN";
-  case ARMISD::VMAXNM:        return "ARMISD::VMAX";
-  case ARMISD::VMINNM:        return "ARMISD::VMIN";
   case ARMISD::BFI:           return "ARMISD::BFI";
   case ARMISD::VORRIMM:       return "ARMISD::VORRIMM";
   case ARMISD::VBICIMM:       return "ARMISD::VBICIMM";
@@ -2783,6 +2802,23 @@ ARMTargetLowering::LowerINTRINSIC_WO_CHAIN(SDValue Op, SelectionDAG &DAG,
     return DAG.getNode(NewOpc, SDLoc(Op), Op.getValueType(),
                        Op.getOperand(1), Op.getOperand(2));
   }
+  case Intrinsic::arm_neon_vminnm:
+  case Intrinsic::arm_neon_vmaxnm: {
+    unsigned NewOpc = (IntNo == Intrinsic::arm_neon_vminnm)
+      ? ISD::FMINNUM : ISD::FMAXNUM;
+    return DAG.getNode(NewOpc, SDLoc(Op), Op.getValueType(),
+                       Op.getOperand(1), Op.getOperand(2));
+  }
+  case Intrinsic::arm_neon_vmins:
+  case Intrinsic::arm_neon_vmaxs: {
+    // v{min,max}s is overloaded between signed integers and floats.
+    if (!Op.getValueType().isFloatingPoint())
+      return SDValue();
+    unsigned NewOpc = (IntNo == Intrinsic::arm_neon_vmins)
+      ? ISD::FMINNAN : ISD::FMAXNAN;
+    return DAG.getNode(NewOpc, SDLoc(Op), Op.getValueType(),
+                       Op.getOperand(1), Op.getOperand(2));
+  }
   }
 }
 
@@ -3655,26 +3691,26 @@ SDValue ARMTargetLowering::LowerSELECT_CC(SDValue Op, SelectionDAG &DAG) const {
         case ISD::SETOGE:
           if (!DAG.isKnownNeverNaN(RHS))
             break;
-          return DAG.getNode(ARMISD::VMAXNM, dl, VT, LHS, RHS);
+          return DAG.getNode(ISD::FMAXNUM, dl, VT, LHS, RHS);
         case ISD::SETUGT:
         case ISD::SETUGE:
           if (!DAG.isKnownNeverNaN(LHS))
             break;
         case ISD::SETGT:
         case ISD::SETGE:
-          return DAG.getNode(ARMISD::VMAXNM, dl, VT, LHS, RHS);
+          return DAG.getNode(ISD::FMAXNUM, dl, VT, LHS, RHS);
         case ISD::SETOLT:
         case ISD::SETOLE:
           if (!DAG.isKnownNeverNaN(RHS))
             break;
-          return DAG.getNode(ARMISD::VMINNM, dl, VT, LHS, RHS);
+          return DAG.getNode(ISD::FMINNUM, dl, VT, LHS, RHS);
         case ISD::SETULT:
         case ISD::SETULE:
           if (!DAG.isKnownNeverNaN(LHS))
             break;
         case ISD::SETLT:
         case ISD::SETLE:
-          return DAG.getNode(ARMISD::VMINNM, dl, VT, LHS, RHS);
+          return DAG.getNode(ISD::FMINNUM, dl, VT, LHS, RHS);
         }
       }
     }
@@ -10170,7 +10206,7 @@ static SDValue PerformSELECT_CCCombine(SDNode *N, SelectionDAG &DAG,
         !DAG.getTarget().Options.UnsafeFPMath &&
         !(DAG.isKnownNeverZero(LHS) || DAG.isKnownNeverZero(RHS)))
       break;
-    Opcode = IsReversed ? ARMISD::FMAX : ARMISD::FMIN;
+    Opcode = IsReversed ? ISD::FMAXNAN : ISD::FMINNAN;
     break;
 
   case ISD::SETOGT:
@@ -10192,7 +10228,7 @@ static SDValue PerformSELECT_CCCombine(SDNode *N, SelectionDAG &DAG,
         !DAG.getTarget().Options.UnsafeFPMath &&
         !(DAG.isKnownNeverZero(LHS) || DAG.isKnownNeverZero(RHS)))
       break;
-    Opcode = IsReversed ? ARMISD::FMIN : ARMISD::FMAX;
+    Opcode = IsReversed ? ISD::FMINNAN : ISD::FMAXNAN;
     break;
   }
 

@@ -2351,7 +2351,8 @@ void SelectionDAGBuilder::visitSelect(const User &I) {
   // Min/max matching is only viable if all output VTs are the same.
   if (std::equal(ValueVTs.begin(), ValueVTs.end(), ValueVTs.begin())) {
     Value *LHS, *RHS;
-    SelectPatternFlavor SPF = matchSelectPattern(const_cast<User*>(&I), LHS, RHS);
+    SelectPatternFlavor SPF =
+      matchSelectPattern(const_cast<User*>(&I), LHS, RHS).Flavor;
     ISD::NodeType Opc = ISD::DELETED_NODE;
     switch (SPF) {
     case SPF_UMAX: Opc = ISD::UMAX; break;
@@ -4023,10 +4024,9 @@ static SDValue ExpandPowI(SDLoc DL, SDValue LHS, SDValue RHS,
       return DAG.getConstantFP(1.0, DL, LHS.getValueType());
 
     const Function *F = DAG.getMachineFunction().getFunction();
-    // FIXME: Use Function::optForSize().
-    if (!F->hasFnAttribute(Attribute::OptimizeForSize) ||
-        // If optimizing for size, don't insert too many multiplies.  This
-        // inserts up to 5 multiplies.
+    if (!F->optForSize() ||
+        // If optimizing for size, don't insert too many multiplies.
+        // This inserts up to 5 multiplies.
         countPopulation(Val) + Log2_32(Val) < 7) {
       // We use the simple binary decomposition method to generate the multiply
       // sequence.  There are more optimal ways to do this (for example,
