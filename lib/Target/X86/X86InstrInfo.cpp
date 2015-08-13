@@ -2456,7 +2456,7 @@ inline static unsigned getTruncatedShiftCount(MachineInstr *MI,
 inline static bool isTruncatedShiftCountForLEA(unsigned ShAmt) {
   // Left shift instructions can be transformed into load-effective-address
   // instructions if we can encode them appropriately.
-  // A LEA instruction utilizes a SIB byte to encode it's scale factor.
+  // A LEA instruction utilizes a SIB byte to encode its scale factor.
   // The SIB.scale field is two bits wide which means that we can encode any
   // shift amount less than 4.
   return ShAmt < 4 && ShAmt > 0;
@@ -4763,8 +4763,8 @@ static void expandLoadStackGuard(MachineInstrBuilder &MIB,
   const GlobalValue *GV =
       cast<GlobalValue>((*MIB->memoperands_begin())->getValue());
   unsigned Flag = MachineMemOperand::MOLoad | MachineMemOperand::MOInvariant;
-  MachineMemOperand *MMO = MBB.getParent()->
-      getMachineMemOperand(MachinePointerInfo::getGOT(), Flag, 8, 8);
+  MachineMemOperand *MMO = MBB.getParent()->getMachineMemOperand(
+      MachinePointerInfo::getGOT(*MBB.getParent()), Flag, 8, 8);
   MachineBasicBlock::iterator I = MIB.getInstr();
 
   BuildMI(MBB, I, DL, TII.get(X86::MOV64rm), Reg).addReg(X86::RIP).addImm(1)
@@ -6395,12 +6395,20 @@ static bool isAssociativeAndCommutative(const MachineInstr &Inst) {
   case X86::ADDPSrr:
   case X86::ADDSDrr:
   case X86::ADDSSrr:
-  case X86::VADDPDrr:
-  case X86::VADDPSrr:
-  case X86::VADDSDrr:
-  case X86::VADDSSrr:
+  case X86::MULPDrr:
+  case X86::MULPSrr:
   case X86::MULSDrr:
   case X86::MULSSrr:
+  case X86::VADDPDrr:
+  case X86::VADDPSrr:
+  case X86::VADDPDYrr:
+  case X86::VADDPSYrr:
+  case X86::VADDSDrr:
+  case X86::VADDSSrr:
+  case X86::VMULPDrr:
+  case X86::VMULPSrr:
+  case X86::VMULPDYrr:
+  case X86::VMULPSYrr:
   case X86::VMULSDrr:
   case X86::VMULSSrr:
     return Inst.getParent()->getParent()->getTarget().Options.UnsafeFPMath;

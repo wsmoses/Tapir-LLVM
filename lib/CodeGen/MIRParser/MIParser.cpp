@@ -107,6 +107,7 @@ public:
   bool parseMBBReference(MachineBasicBlock *&MBB);
   bool parseMBBOperand(MachineOperand &Dest);
   bool parseStackObjectOperand(MachineOperand &Dest);
+  bool parseFixedStackFrameIndex(int &FI);
   bool parseFixedStackObjectOperand(MachineOperand &Dest);
   bool parseGlobalValue(GlobalValue *&GV);
   bool parseGlobalAddressOperand(MachineOperand &Dest);
@@ -128,6 +129,8 @@ public:
   bool parseOperandsOffset(MachineOperand &Op);
   bool parseIRValue(Value *&V);
   bool parseMemoryOperandFlag(unsigned &Flags);
+  bool parseMemoryPseudoSourceValue(const PseudoSourceValue *&PSV);
+  bool parseMachinePointerInfo(MachinePointerInfo &Dest);
   bool parseMachineMemoryOperand(MachineMemOperand *&Dest);
 
 private:
@@ -662,7 +665,7 @@ bool MIParser::parseStackObjectOperand(MachineOperand &Dest) {
   return false;
 }
 
-bool MIParser::parseFixedStackObjectOperand(MachineOperand &Dest) {
+bool MIParser::parseFixedStackFrameIndex(int &FI) {
   assert(Token.is(MIToken::FixedStackObject));
   unsigned ID;
   if (getUnsigned(ID))
@@ -672,7 +675,15 @@ bool MIParser::parseFixedStackObjectOperand(MachineOperand &Dest) {
     return error(Twine("use of undefined fixed stack object '%fixed-stack.") +
                  Twine(ID) + "'");
   lex();
-  Dest = MachineOperand::CreateFI(ObjectInfo->second);
+  FI = ObjectInfo->second;
+  return false;
+}
+
+bool MIParser::parseFixedStackObjectOperand(MachineOperand &Dest) {
+  int FI;
+  if (parseFixedStackFrameIndex(FI))
+    return true;
+  Dest = MachineOperand::CreateFI(FI);
   return false;
 }
 
@@ -1075,6 +1086,9 @@ bool MIParser::parseIRValue(Value *&V) {
   case MIToken::NamedIRValue: {
     V = MF.getFunction()->getValueSymbolTable().lookup(Token.stringValue());
     if (!V)
+      V = MF.getFunction()->getParent()->getValueSymbolTable().lookup(
+          Token.stringValue());
+    if (!V)
       return error(Twine("use of undefined IR value '") + Token.range() + "'");
     break;
   }
@@ -1117,6 +1131,64 @@ bool MIParser::parseMemoryOperandFlag(unsigned &Flags) {
   return false;
 }
 
+bool MIParser::parseMemoryPseudoSourceValue(const PseudoSourceValue *&PSV) {
+  switch (Token.kind()) {
+  case MIToken::kw_stack:
+    PSV = MF.getPSVManager().getStack();
+    break;
+  case MIToken::kw_got:
+    PSV = MF.getPSVManager().getGOT();
+    break;
+  case MIToken::kw_jump_table:
+    PSV = MF.getPSVManager().getJumpTable();
+    break;
+  case MIToken::kw_constant_pool:
+    PSV = MF.getPSVManager().getConstantPool();
+    break;
+  case MIToken::FixedStackObject: {
+    int FI;
+    if (parseFixedStackFrameIndex(FI))
+      return true;
+    PSV = MF.getPSVManager().getFixedStack(FI);
+    // The token was already consumed, so use return here instead of break.
+    return false;
+  }
+  // TODO: Parse the other pseudo source values.
+  default:
+    llvm_unreachable("The current token should be pseudo source value");
+  }
+  lex();
+  return false;
+}
+
+bool MIParser::parseMachinePointerInfo(MachinePointerInfo &Dest) {
+  if (Token.is(MIToken::kw_constant_pool) || Token.is(MIToken::kw_stack) ||
+      Token.is(MIToken::kw_got) || Token.is(MIToken::kw_jump_table) ||
+      Token.is(MIToken::FixedStackObject)) {
+    const PseudoSourceValue *PSV = nullptr;
+    if (parseMemoryPseudoSourceValue(PSV))
+      return true;
+    int64_t Offset = 0;
+    if (parseOffset(Offset))
+      return true;
+    Dest = MachinePointerInfo(PSV, Offset);
+    return false;
+  }
+  if (Token.isNot(MIToken::NamedIRValue))
+    return error("expected an IR value reference");
+  Value *V = nullptr;
+  if (parseIRValue(V))
+    return true;
+  if (!V->getType()->isPointerTy())
+    return error("expected a pointer IR value");
+  lex();
+  int64_t Offset = 0;
+  if (parseOffset(Offset))
+    return true;
+  Dest = MachinePointerInfo(V, Offset);
+  return false;
+}
+
 bool MIParser::parseMachineMemoryOperand(MachineMemOperand *&Dest) {
   if (expectAndConsume(MIToken::lparen))
     return true;
@@ -1146,17 +1218,8 @@ bool MIParser::parseMachineMemoryOperand(MachineMemOperand *&Dest) {
     return error(Twine("expected '") + Word + "'");
   lex();
 
-  // TODO: Parse pseudo source values.
-  if (Token.isNot(MIToken::NamedIRValue))
-    return error("expected an IR value reference");
-  Value *V = nullptr;
-  if (parseIRValue(V))
-    return true;
-  if (!V->getType()->isPointerTy())
-    return error("expected a pointer IR value");
-  lex();
-  int64_t Offset = 0;
-  if (parseOffset(Offset))
+  MachinePointerInfo Ptr = MachinePointerInfo();
+  if (parseMachinePointerInfo(Ptr))
     return true;
   unsigned BaseAlignment = Size;
   if (Token.is(MIToken::comma)) {
@@ -1173,9 +1236,7 @@ bool MIParser::parseMachineMemoryOperand(MachineMemOperand *&Dest) {
   // TODO: Parse the attached metadata nodes.
   if (expectAndConsume(MIToken::rparen))
     return true;
-
-  Dest = MF.getMachineMemOperand(MachinePointerInfo(V, Offset), Flags, Size,
-                                 BaseAlignment);
+  Dest = MF.getMachineMemOperand(Ptr, Flags, Size, BaseAlignment);
   return false;
 }
 

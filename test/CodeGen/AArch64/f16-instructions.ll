@@ -677,6 +677,46 @@ define half @test_copysign(half %a, half %b) #0 {
   ret half %r
 }
 
+; CHECK-LABEL: test_copysign_f32:
+; CHECK-NEXT: fcvt s0, h0
+; CHECK-NEXT: movi.4s v2, #0x80, lsl #24
+; CHECK-NEXT: bit.16b v0, v1, v2
+; CHECK-NEXT: fcvt h0, s0
+; CHECK-NEXT: ret
+define half @test_copysign_f32(half %a, float %b) #0 {
+  %tb = fptrunc float %b to half
+  %r = call half @llvm.copysign.f16(half %a, half %tb)
+  ret half %r
+}
+
+; CHECK-LABEL: test_copysign_f64:
+; CHECK-NEXT: fcvt s1, d1
+; CHECK-NEXT: fcvt s0, h0
+; CHECK-NEXT: movi.4s v2, #0x80, lsl #24
+; CHECK-NEXT: bit.16b v0, v1, v2
+; CHECK-NEXT: fcvt h0, s0
+; CHECK-NEXT: ret
+define half @test_copysign_f64(half %a, double %b) #0 {
+  %tb = fptrunc double %b to half
+  %r = call half @llvm.copysign.f16(half %a, half %tb)
+  ret half %r
+}
+
+; Check that the FP promotion will use a truncating FP_ROUND, so we can fold
+; away the (fpext (fp_round <result>)) here.
+
+; CHECK-LABEL: test_copysign_extended:
+; CHECK-NEXT: fcvt s1, h1
+; CHECK-NEXT: fcvt s0, h0
+; CHECK-NEXT: movi.4s v2, #0x80, lsl #24
+; CHECK-NEXT: bit.16b v0, v1, v2
+; CHECK-NEXT: ret
+define float @test_copysign_extended(half %a, half %b) #0 {
+  %r = call half @llvm.copysign.f16(half %a, half %b)
+  %xr = fpext half %r to float
+  ret float %xr
+}
+
 ; CHECK-LABEL: test_floor:
 ; CHECK-NEXT: fcvt [[FLOAT32:s[0-9]+]], h0
 ; CHECK-NEXT: frintm [[INT32:s[0-9]+]], [[FLOAT32]]
