@@ -13,12 +13,10 @@
 
 #include "llvm/Analysis/LibCallAliasAnalysis.h"
 #include "llvm/Analysis/LibCallSemantics.h"
-#include "llvm/Analysis/Passes.h"
 #include "llvm/IR/Function.h"
 #include "llvm/Pass.h"
 using namespace llvm;
   
-// Register this pass...
 char LibCallAliasAnalysis::ID = 0;
 INITIALIZE_AG_PASS(LibCallAliasAnalysis, AliasAnalysis, "libcall-aa",
                    "LibCall Alias Analysis", false, true, false)
@@ -27,13 +25,11 @@ FunctionPass *llvm::createLibCallAliasAnalysisPass(LibCallInfo *LCI) {
   return new LibCallAliasAnalysis(LCI);
 }
 
-LibCallAliasAnalysis::~LibCallAliasAnalysis() {
-  delete LCI;
-}
+LibCallAliasAnalysis::~LibCallAliasAnalysis() { delete LCI; }
 
 void LibCallAliasAnalysis::getAnalysisUsage(AnalysisUsage &AU) const {
   AliasAnalysis::getAnalysisUsage(AU);
-  AU.setPreservesAll();                         // Does not transform code
+  AU.setPreservesAll(); // Does not transform code
 }
 
 bool LibCallAliasAnalysis::runOnFunction(Function &F) {
@@ -42,9 +38,9 @@ bool LibCallAliasAnalysis::runOnFunction(Function &F) {
   return false;
 }
 
-/// AnalyzeLibCallDetails - Given a call to a function with the specified
-/// LibCallFunctionInfo, see if we can improve the mod/ref footprint of the call
-/// vs the specified pointer/size.
+/// Given a call to a function with the specified LibCallFunctionInfo, see if
+/// we can improve the mod/ref footprint of the call vs the specified
+/// pointer/size.
 ModRefInfo
 LibCallAliasAnalysis::AnalyzeLibCallDetails(const LibCallFunctionInfo *FI,
                                             ImmutableCallSite CS,
@@ -61,52 +57,54 @@ LibCallAliasAnalysis::AnalyzeLibCallDetails(const LibCallFunctionInfo *FI,
   const LibCallFunctionInfo::LocationMRInfo *Details = FI->LocationDetails;
   if (Details == nullptr)
     return MRInfo;
-  
+
   // If the details array is of the 'DoesNot' kind, we only know something if
   // the pointer is a match for one of the locations in 'Details'.  If we find a
   // match, we can prove some interactions cannot happen.
-  // 
+  //
   if (FI->DetailsType == LibCallFunctionInfo::DoesNot) {
     // Find out if the pointer refers to a known location.
     for (unsigned i = 0; Details[i].LocationID != ~0U; ++i) {
       const LibCallLocationInfo &LocInfo =
-      LCI->getLocationInfo(Details[i].LocationID);
+          LCI->getLocationInfo(Details[i].LocationID);
       LibCallLocationInfo::LocResult Res = LocInfo.isLocation(CS, Loc);
-      if (Res != LibCallLocationInfo::Yes) continue;
-      
+      if (Res != LibCallLocationInfo::Yes)
+        continue;
+
       // If we find a match against a location that we 'do not' interact with,
       // learn this info into MRInfo.
       return ModRefInfo(MRInfo & ~Details[i].MRInfo);
     }
     return MRInfo;
   }
-  
+
   // If the details are of the 'DoesOnly' sort, we know something if the pointer
   // is a match for one of the locations in 'Details'.  Also, if we can prove
   // that the pointers is *not* one of the locations in 'Details', we know that
   // the call is MRI_NoModRef.
   assert(FI->DetailsType == LibCallFunctionInfo::DoesOnly);
-  
+
   // Find out if the pointer refers to a known location.
   bool NoneMatch = true;
   for (unsigned i = 0; Details[i].LocationID != ~0U; ++i) {
     const LibCallLocationInfo &LocInfo =
-    LCI->getLocationInfo(Details[i].LocationID);
+        LCI->getLocationInfo(Details[i].LocationID);
     LibCallLocationInfo::LocResult Res = LocInfo.isLocation(CS, Loc);
-    if (Res == LibCallLocationInfo::No) continue;
-    
+    if (Res == LibCallLocationInfo::No)
+      continue;
+
     // If we don't know if this pointer points to the location, then we have to
     // assume it might alias in some case.
     if (Res == LibCallLocationInfo::Unknown) {
       NoneMatch = false;
       continue;
     }
-    
+
     // If we know that this pointer definitely is pointing into the location,
     // merge in this information.
     return ModRefInfo(MRInfo & Details[i].MRInfo);
   }
-  
+
   // If we found that the pointer is guaranteed to not match any of the
   // locations in our 'DoesOnly' rule, then we know that the pointer must point
   // to some other location.  Since the libcall doesn't mod/ref any other
@@ -118,9 +116,8 @@ LibCallAliasAnalysis::AnalyzeLibCallDetails(const LibCallFunctionInfo *FI,
   return MRInfo;
 }
 
-// getModRefInfo - Check to see if the specified callsite can clobber the
-// specified memory object.
-//
+/// Check to see if the specified callsite can clobber the specified memory
+/// object.
 ModRefInfo LibCallAliasAnalysis::getModRefInfo(ImmutableCallSite CS,
                                                const MemoryLocation &Loc) {
   ModRefInfo MRInfo = MRI_ModRef;
@@ -136,7 +133,7 @@ ModRefInfo LibCallAliasAnalysis::getModRefInfo(ImmutableCallSite CS,
       }
     }
   }
-  
+
   // The AliasAnalysis base class has some smarts, lets use them.
   return (ModRefInfo)(MRInfo | AliasAnalysis::getModRefInfo(CS, Loc));
 }

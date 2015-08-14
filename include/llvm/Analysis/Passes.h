@@ -26,20 +26,6 @@ namespace llvm {
 
   //===--------------------------------------------------------------------===//
   //
-  // createGlobalsModRefPass - This pass provides alias and mod/ref info for
-  // global values that do not have their addresses taken.
-  //
-  Pass *createGlobalsModRefPass();
-
-  //===--------------------------------------------------------------------===//
-  //
-  // createAliasAnalysisCounterPass - This pass counts alias queries and how the
-  // alias analysis implementation responds.
-  //
-  ModulePass *createAliasAnalysisCounterPass();
-
-  //===--------------------------------------------------------------------===//
-  //
   // createAAEvalPass - This pass implements a simple N^2 alias analysis
   // accuracy evaluator.
   //
@@ -50,42 +36,6 @@ namespace llvm {
   // createNoAAPass - This pass implements a "I don't know" alias analysis.
   //
   ImmutablePass *createNoAAPass();
-
-  //===--------------------------------------------------------------------===//
-  //
-  // createCFLAliasAnalysisPass - This pass implements a set-based approach to
-  // alias analysis.
-  //
-  ImmutablePass *createCFLAliasAnalysisPass();
-
-  //===--------------------------------------------------------------------===//
-  //
-  /// createLibCallAliasAnalysisPass - Create an alias analysis pass that knows
-  /// about the semantics of a set of libcalls specified by LCI.  The newly
-  /// constructed pass takes ownership of the pointer that is provided.
-  ///
-  FunctionPass *createLibCallAliasAnalysisPass(LibCallInfo *LCI);
-
-  //===--------------------------------------------------------------------===//
-  //
-  // createScalarEvolutionAliasAnalysisPass - This pass implements a simple
-  // alias analysis using ScalarEvolution queries.
-  //
-  FunctionPass *createScalarEvolutionAliasAnalysisPass();
-
-  //===--------------------------------------------------------------------===//
-  //
-  // createTypeBasedAliasAnalysisPass - This pass implements metadata-based
-  // type-based alias analysis.
-  //
-  ImmutablePass *createTypeBasedAliasAnalysisPass();
-
-  //===--------------------------------------------------------------------===//
-  //
-  // createScopedNoAliasAAPass - This pass implements metadata-based
-  // scoped noalias analysis.
-  //
-  ImmutablePass *createScopedNoAliasAAPass();
 
   //===--------------------------------------------------------------------===//
   //
