@@ -191,10 +191,12 @@ static MIToken::TokenKind getIdentifierKind(StringRef Identifier) {
       .Case("dead", MIToken::kw_dead)
       .Case("killed", MIToken::kw_killed)
       .Case("undef", MIToken::kw_undef)
+      .Case("internal", MIToken::kw_internal)
       .Case("early-clobber", MIToken::kw_early_clobber)
       .Case("debug-use", MIToken::kw_debug_use)
       .Case("frame-setup", MIToken::kw_frame_setup)
       .Case("debug-location", MIToken::kw_debug_location)
+      .Case(".cfi_same_value", MIToken::kw_cfi_same_value)
       .Case(".cfi_offset", MIToken::kw_cfi_offset)
       .Case(".cfi_def_cfa_register", MIToken::kw_cfi_def_cfa_register)
       .Case(".cfi_def_cfa_offset", MIToken::kw_cfi_def_cfa_offset)
@@ -454,6 +456,10 @@ static MIToken::TokenKind symbolToken(char C) {
     return MIToken::lparen;
   case ')':
     return MIToken::rparen;
+  case '{':
+    return MIToken::lbrace;
+  case '}':
+    return MIToken::rbrace;
   case '+':
     return MIToken::plus;
   case '-':

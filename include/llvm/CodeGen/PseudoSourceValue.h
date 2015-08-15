@@ -118,6 +118,10 @@ class GlobalValuePseudoSourceValue : public CallEntryPseudoSourceValue {
 public:
   GlobalValuePseudoSourceValue(const GlobalValue *GV);
 
+  static inline bool classof(const PseudoSourceValue *V) {
+    return V->kind() == GlobalValueCallEntry;
+  }
+
   const GlobalValue *getValue() const { return GV; }
 };
 
@@ -127,6 +131,10 @@ class ExternalSymbolPseudoSourceValue : public CallEntryPseudoSourceValue {
 
 public:
   ExternalSymbolPseudoSourceValue(const char *ES);
+
+  static inline bool classof(const PseudoSourceValue *V) {
+    return V->kind() == ExternalSymbolCallEntry;
+  }
 
   const char *getSymbol() const { return ES; }
 };

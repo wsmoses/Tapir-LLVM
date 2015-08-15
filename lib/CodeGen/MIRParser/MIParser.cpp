@@ -351,6 +351,7 @@ bool MIParser::parseBasicBlockDefinitions(
     return Token.isError();
   if (Token.isNot(MIToken::MachineBasicBlockLabel))
     return error("expected a basic block definition before instructions");
+  unsigned BraceDepth = 0;
   do {
     if (parseBasicBlockDefinition(MBBSlots))
       return true;
@@ -363,12 +364,23 @@ bool MIParser::parseBasicBlockDefinitions(
       else if (Token.is(MIToken::MachineBasicBlockLabel))
         return error("basic block definition should be located at the start of "
                      "the line");
-      if (Token.is(MIToken::Newline))
+      else if (consumeIfPresent(MIToken::Newline)) {
         IsAfterNewline = true;
-      else
-        IsAfterNewline = false;
+        continue;
+      }
+      IsAfterNewline = false;
+      if (Token.is(MIToken::lbrace))
+        ++BraceDepth;
+      if (Token.is(MIToken::rbrace)) {
+        if (!BraceDepth)
+          return error("extraneous closing brace ('}')");
+        --BraceDepth;
+      }
       lex();
     }
+    // Verify that we closed all of the '{' at the end of a file or a block.
+    if (!Token.isError() && BraceDepth)
+      return error("expected '}'"); // FIXME: Report a note that shows '{'.
   } while (!Token.isErrorOrEOF());
   return Token.isError();
 }
@@ -458,15 +470,40 @@ bool MIParser::parseBasicBlock(MachineBasicBlock &MBB) {
   }
 
   // Parse the instructions.
+  bool IsInBundle = false;
+  MachineInstr *PrevMI = nullptr;
   while (true) {
     if (Token.is(MIToken::MachineBasicBlockLabel) || Token.is(MIToken::Eof))
       return false;
     else if (consumeIfPresent(MIToken::Newline))
       continue;
+    if (consumeIfPresent(MIToken::rbrace)) {
+      // The first parsing pass should verify that all closing '}' have an
+      // opening '{'.
+      assert(IsInBundle);
+      IsInBundle = false;
+      continue;
+    }
     MachineInstr *MI = nullptr;
     if (parse(MI))
       return true;
     MBB.insert(MBB.end(), MI);
+    if (IsInBundle) {
+      PrevMI->setFlag(MachineInstr::BundledSucc);
+      MI->setFlag(MachineInstr::BundledPred);
+    }
+    PrevMI = MI;
+    if (Token.is(MIToken::lbrace)) {
+      if (IsInBundle)
+        return error("nested instruction bundles are not allowed");
+      lex();
+      // This instruction is the start of the bundle.
+      MI->setFlag(MachineInstr::BundledSucc);
+      IsInBundle = true;
+      if (!Token.is(MIToken::Newline))
+        // The next instruction can be on the same line.
+        continue;
+    }
     assert(Token.isNewlineOrEOF() && "MI is not fully parsed");
     lex();
   }
@@ -516,16 +553,15 @@ bool MIParser::parse(MachineInstr *&MI) {
   if (Token.isError() || parseInstruction(OpCode, Flags))
     return true;
 
-  // TODO: Parse the bundle instruction flags.
-
   // Parse the remaining machine operands.
   while (!Token.isNewlineOrEOF() && Token.isNot(MIToken::kw_debug_location) &&
-         Token.isNot(MIToken::coloncolon)) {
+         Token.isNot(MIToken::coloncolon) && Token.isNot(MIToken::lbrace)) {
     auto Loc = Token.location();
     if (parseMachineOperandAndTargetFlags(MO))
       return true;
     Operands.push_back(MachineOperandWithLocation(MO, Loc, Token.location()));
-    if (Token.isNewlineOrEOF() || Token.is(MIToken::coloncolon))
+    if (Token.isNewlineOrEOF() || Token.is(MIToken::coloncolon) ||
+        Token.is(MIToken::lbrace))
       break;
     if (Token.isNot(MIToken::comma))
       return error("expected ',' before the next machine operand");
@@ -741,13 +777,15 @@ bool MIParser::parseRegisterFlag(unsigned &Flags) {
   case MIToken::kw_undef:
     Flags |= RegState::Undef;
     break;
+  case MIToken::kw_internal:
+    Flags |= RegState::InternalRead;
+    break;
   case MIToken::kw_early_clobber:
     Flags |= RegState::EarlyClobber;
     break;
   case MIToken::kw_debug_use:
     Flags |= RegState::Debug;
     break;
-  // TODO: parse the other register flags.
   default:
     llvm_unreachable("The current token should be a register flag");
   }
@@ -792,7 +830,8 @@ bool MIParser::parseRegisterOperand(MachineOperand &Dest, bool IsDef) {
   Dest = MachineOperand::CreateReg(
       Reg, Flags & RegState::Define, Flags & RegState::Implicit,
       Flags & RegState::Kill, Flags & RegState::Dead, Flags & RegState::Undef,
-      Flags & RegState::EarlyClobber, SubReg, Flags & RegState::Debug);
+      Flags & RegState::EarlyClobber, SubReg, Flags & RegState::Debug,
+      Flags & RegState::InternalRead);
   return false;
 }
 
@@ -1054,6 +1093,12 @@ bool MIParser::parseCFIOperand(MachineOperand &Dest) {
   unsigned Reg;
   unsigned CFIIndex;
   switch (Kind) {
+  case MIToken::kw_cfi_same_value:
+    if (parseCFIRegister(Reg))
+      return true;
+    CFIIndex =
+        MMI.addFrameInst(MCCFIInstruction::createSameValue(nullptr, Reg));
+    break;
   case MIToken::kw_cfi_offset:
     if (parseCFIRegister(Reg) || expectAndConsume(MIToken::comma) ||
         parseCFIOffset(Offset))
@@ -1199,6 +1244,7 @@ bool MIParser::parseMachineOperand(MachineOperand &Dest) {
   case MIToken::kw_dead:
   case MIToken::kw_killed:
   case MIToken::kw_undef:
+  case MIToken::kw_internal:
   case MIToken::kw_early_clobber:
   case MIToken::kw_debug_use:
   case MIToken::underscore:
@@ -1233,6 +1279,7 @@ bool MIParser::parseMachineOperand(MachineOperand &Dest) {
     return parseExternalSymbolOperand(Dest);
   case MIToken::exclaim:
     return parseMetadataOperand(Dest);
+  case MIToken::kw_cfi_same_value:
   case MIToken::kw_cfi_offset:
   case MIToken::kw_cfi_def_cfa_register:
   case MIToken::kw_cfi_def_cfa_offset:
@@ -1397,7 +1444,18 @@ bool MIParser::parseMemoryPseudoSourceValue(const PseudoSourceValue *&PSV) {
     // The token was already consumed, so use return here instead of break.
     return false;
   }
-  // TODO: Parse the other pseudo source values.
+  case MIToken::GlobalValue:
+  case MIToken::NamedGlobalValue: {
+    GlobalValue *GV = nullptr;
+    if (parseGlobalValue(GV))
+      return true;
+    PSV = MF.getPSVManager().getGlobalValueCallEntry(GV);
+    break;
+  }
+  case MIToken::ExternalSymbol:
+    PSV = MF.getPSVManager().getExternalSymbolCallEntry(
+        MF.createExternalSymbolName(Token.stringValue()));
+    break;
   default:
     llvm_unreachable("The current token should be pseudo source value");
   }
@@ -1408,7 +1466,9 @@ bool MIParser::parseMemoryPseudoSourceValue(const PseudoSourceValue *&PSV) {
 bool MIParser::parseMachinePointerInfo(MachinePointerInfo &Dest) {
   if (Token.is(MIToken::kw_constant_pool) || Token.is(MIToken::kw_stack) ||
       Token.is(MIToken::kw_got) || Token.is(MIToken::kw_jump_table) ||
-      Token.is(MIToken::FixedStackObject)) {
+      Token.is(MIToken::FixedStackObject) || Token.is(MIToken::GlobalValue) ||
+      Token.is(MIToken::NamedGlobalValue) ||
+      Token.is(MIToken::ExternalSymbol)) {
     const PseudoSourceValue *PSV = nullptr;
     if (parseMemoryPseudoSourceValue(PSV))
       return true;

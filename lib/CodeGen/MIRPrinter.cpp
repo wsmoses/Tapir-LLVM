@@ -439,11 +439,23 @@ void MIPrinter::print(const MachineBasicBlock &MBB) {
 
   if (HasLineAttributes)
     OS << "\n";
-  for (const auto &MI : MBB) {
-    OS.indent(2);
+  bool IsInBundle = false;
+  for (auto I = MBB.instr_begin(), E = MBB.instr_end(); I != E; ++I) {
+    const MachineInstr &MI = *I;
+    if (IsInBundle && !MI.isInsideBundle()) {
+      OS.indent(2) << "}\n";
+      IsInBundle = false;
+    }
+    OS.indent(IsInBundle ? 4 : 2);
     print(MI);
+    if (!IsInBundle && MI.getFlag(MachineInstr::BundledSucc)) {
+      OS << " {";
+      IsInBundle = true;
+    }
     OS << "\n";
   }
+  if (IsInBundle)
+    OS.indent(2) << "}\n";
 }
 
 void MIPrinter::print(const MachineInstr &MI) {
@@ -469,7 +481,6 @@ void MIPrinter::print(const MachineInstr &MI) {
   if (MI.getFlag(MachineInstr::FrameSetup))
     OS << "frame-setup ";
   OS << TII->getName(MI.getOpcode());
-  // TODO: Print the bundling instruction flags.
   if (I < E)
     OS << ' ';
 
@@ -606,9 +617,11 @@ void MIPrinter::print(const MachineOperand &Op, const TargetRegisterInfo *TRI) {
   printTargetFlags(Op);
   switch (Op.getType()) {
   case MachineOperand::MO_Register:
-    // TODO: Print the other register flags.
+    // FIXME: Serialize the tied register.
     if (Op.isImplicit())
       OS << (Op.isDef() ? "implicit-def " : "implicit ");
+    if (Op.isInternalRead())
+      OS << "internal ";
     if (Op.isDead())
       OS << "dead ";
     if (Op.isKill())
@@ -750,9 +763,14 @@ void MIPrinter::print(const MachineMemOperand &Op) {
       printStackObjectReference(
           cast<FixedStackPseudoSourceValue>(PVal)->getFrameIndex());
       break;
-    default:
-      // TODO: Print the other pseudo source values.
-      OS << "<unserializable pseudo value>";
+    case PseudoSourceValue::GlobalValueCallEntry:
+      cast<GlobalValuePseudoSourceValue>(PVal)->getValue()->printAsOperand(
+          OS, /*PrintType=*/false, MST);
+      break;
+    case PseudoSourceValue::ExternalSymbolCallEntry:
+      OS << '$';
+      printLLVMNameWithoutPrefix(
+          OS, cast<ExternalSymbolPseudoSourceValue>(PVal)->getSymbol());
       break;
     }
   }
@@ -776,6 +794,12 @@ static void printCFIRegister(unsigned DwarfReg, raw_ostream &OS,
 void MIPrinter::print(const MCCFIInstruction &CFI,
                       const TargetRegisterInfo *TRI) {
   switch (CFI.getOperation()) {
+  case MCCFIInstruction::OpSameValue:
+    OS << ".cfi_same_value ";
+    if (CFI.getLabel())
+      OS << "<mcsymbol> ";
+    printCFIRegister(CFI.getRegister(), OS, TRI);
+    break;
   case MCCFIInstruction::OpOffset:
     OS << ".cfi_offset ";
     if (CFI.getLabel())
