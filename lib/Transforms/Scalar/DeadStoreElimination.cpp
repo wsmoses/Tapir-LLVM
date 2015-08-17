@@ -130,7 +130,8 @@ namespace {
     void RemoveAccessedObjects(const MemoryLocation &LoadedLoc,
                                SmallSetVector<Value *, 16> &DeadStackObjects,
                                const DataLayout &DL);
-    void handleNonLocalStoreDeletion(StoreInst *SI);
+    void handleNonLocalStoreDeletion(StoreInst *SI, BasicBlock::iterator &BBI,
+                                     BasicBlock &CurBlock);
     bool isSafeCandidateForDeletion(BasicBlock *SrcBlock, BasicBlock *SinkBlock,
                                     StoreInst *SI);
     void DeleteDeadInstruction(Instruction *I, MemoryDependenceAnalysis &MD,
@@ -544,7 +545,7 @@ bool DSE::runOnBasicBlock(BasicBlock &BB) {
       if (!PDT->getRootNode())
         continue;
       if (StoreInst *SI = dyn_cast<StoreInst>(Inst))
-        handleNonLocalStoreDeletion(SI);
+        handleNonLocalStoreDeletion(SI, BBI, BB);
       continue;
     }
 
@@ -1073,7 +1074,8 @@ bool DSE::isSafeCandidateForDeletion(BasicBlock *SrcBlock,
 /// This works by finding candidate stores using PDT and then running DFS
 /// from candidate store block checking all paths to make sure the store is
 /// safe to delete.
-void DSE::handleNonLocalStoreDeletion(StoreInst *SI) {
+void DSE::handleNonLocalStoreDeletion(StoreInst *SI, BasicBlock::iterator &BBI,
+                                      BasicBlock &CurBlock) {
   BasicBlock *BB = SI->getParent();
   Value *Pointer = SI->getPointerOperand();
   DomTreeNode *DTNode = PDT->getNode(BB);
@@ -1100,6 +1102,11 @@ void DSE::handleNonLocalStoreDeletion(StoreInst *SI) {
                                      CandidateSI)) {
         DeleteDeadInstruction(CandidateSI, *MD, *TLI);
         ++NumCrossBlockStores;
+        // DeleteDeadInstruction can delete the current instruction in loop
+        // cases, reset BBI.
+        BBI = SI;
+        if (BBI != CurBlock.begin())
+          --BBI;
       }
     }
   }
