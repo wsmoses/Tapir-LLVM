@@ -555,6 +555,27 @@ bool Instruction::isNilpotent(unsigned Opcode) {
   return Opcode == Xor;
 }
 
+Constant *Instruction::getIdentity() const {
+  switch (getOpcode()) {
+  case Add:
+  case FAdd:
+  case Sub:
+  case FSub:
+    return Constant::getNullValue(getType());
+  case Mul:
+    return ConstantInt::get(getType(), 1);
+  case FMul:
+    return ConstantFP::get(getType(), 1.0);
+  case And:
+    return Constant::getAllOnesValue(getType());
+  case Or:
+  case Xor:
+    return Constant::getNullValue(getType());
+  default:
+    return nullptr;
+  }
+}
+
 Instruction *Instruction::cloneImpl() const {
   llvm_unreachable("Subclass of Instruction failed to implement cloneImpl");
 }
