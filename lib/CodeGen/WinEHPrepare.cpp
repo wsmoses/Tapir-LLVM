@@ -3085,6 +3085,33 @@ bool WinEHPrepare::prepareExplicitEH(Function &F) {
         RemapInstruction(&I, VMap, RF_IgnoreMissingEntries);
   }
 
+  // Remove implausible terminators and replace them with UnreachableInst.
+  for (auto &Funclet : FuncletBlocks) {
+    BasicBlock *FuncletPadBB = Funclet.first;
+    std::set<BasicBlock *> &BlocksInFunclet = Funclet.second;
+    Instruction *FirstNonPHI = FuncletPadBB->getFirstNonPHI();
+    auto *CatchPad = dyn_cast<CatchPadInst>(FirstNonPHI);
+    auto *CleanupPad = dyn_cast<CleanupPadInst>(FirstNonPHI);
+
+    for (BasicBlock *BB : BlocksInFunclet) {
+      TerminatorInst *TI = BB->getTerminator();
+      // CatchPadInst and CleanupPadInst can't transfer control to a ReturnInst.
+      bool IsUnreachableRet = isa<ReturnInst>(TI) && (CatchPad || CleanupPad);
+      // The token consumed by a CatchReturnInst must match the funclet token.
+      bool IsUnreachableCatchret = false;
+      if (auto *CRI = dyn_cast<CatchReturnInst>(TI))
+        IsUnreachableCatchret = CRI->getReturnValue() != CatchPad;
+      // The token consumed by a CleanupPadInst must match the funclet token.
+      bool IsUnreachableCleanupret = false;
+      if (auto *CRI = dyn_cast<CleanupReturnInst>(TI))
+        IsUnreachableCleanupret = CRI->getReturnValue() != CleanupPad;
+      if (IsUnreachableRet || IsUnreachableCatchret || IsUnreachableCleanupret) {
+        new UnreachableInst(BB->getContext(), TI);
+        TI->eraseFromParent();
+      }
+    }
+  }
+
   // Clean-up some of the mess we made by removing useles PHI nodes, trivial
   // branches, etc.
   for (Function::iterator FI = F.begin(), FE = F.end(); FI != FE;) {
@@ -3093,9 +3120,6 @@ bool WinEHPrepare::prepareExplicitEH(Function &F) {
     ConstantFoldTerminator(BB, /*DeleteDeadConditions=*/true);
     MergeBlockIntoPredecessor(BB);
   }
-
-  // TODO: Do something about cleanupblocks which branch to implausible
-  // cleanuprets.
 
   // We might have some unreachable blocks after cleaning up some impossible
   // control flow.
@@ -3215,6 +3239,12 @@ void WinEHPrepare::insertPHIStore(
 void WinEHPrepare::demoteNonlocalUses(Value *V,
                                       std::set<BasicBlock *> &ColorsForBB,
                                       Function &F) {
+  // Tokens can only be used non-locally due to control flow involving
+  // unreachable edges.  Don't try to demote the token usage, we'll simply
+  // delete the cloned user later.
+  if (isa<CatchPadInst>(V) || isa<CleanupPadInst>(V))
+    return;
+
   DenseMap<BasicBlock *, Value *> Loads;
   AllocaInst *SpillSlot = nullptr;
   for (Value::use_iterator UI = V->use_begin(), UE = V->use_end(); UI != UE;) {
@@ -3289,6 +3319,42 @@ void WinEHPrepare::replaceUseWithLoad(Value *V, Use &U, AllocaInst *&SpillSlot,
     // coming in from the same block, which is illegal SSA form.
     // For this reason, we keep track of and reuse loads we insert.
     BasicBlock *IncomingBlock = UsingPHI->getIncomingBlock(U);
+    if (auto *CatchRet =
+            dyn_cast<CatchReturnInst>(IncomingBlock->getTerminator())) {
+      // Putting a load above a catchret and use on the phi would still leave
+      // a cross-funclet def/use.  We need to split the edge, change the
+      // catchret to target the new block, and put the load there.
+      BasicBlock *PHIBlock = UsingInst->getParent();
+      BasicBlock *NewBlock = SplitEdge(IncomingBlock, PHIBlock);
+      // SplitEdge gives us:
+      //   IncomingBlock:
+      //     ...
+      //     br label %NewBlock
+      //   NewBlock:
+      //     catchret label %PHIBlock
+      // But we need:
+      //   IncomingBlock:
+      //     ...
+      //     catchret label %NewBlock
+      //   NewBlock:
+      //     br label %PHIBlock
+      // So move the terminators to each others' blocks and swap their
+      // successors.
+      BranchInst *Goto = cast<BranchInst>(IncomingBlock->getTerminator());
+      Goto->removeFromParent();
+      CatchRet->removeFromParent();
+      IncomingBlock->getInstList().push_back(CatchRet);
+      NewBlock->getInstList().push_back(Goto);
+      Goto->setSuccessor(0, PHIBlock);
+      CatchRet->setSuccessor(NewBlock);
+      // Update the color mapping for the newly split edge.
+      std::set<BasicBlock *> &ColorsForPHIBlock = BlockColors[PHIBlock];
+      BlockColors[NewBlock] = ColorsForPHIBlock;
+      for (BasicBlock *FuncletPad : ColorsForPHIBlock)
+        FuncletBlocks[FuncletPad].insert(NewBlock);
+      // Treat the new block as incoming for load insertion.
+      IncomingBlock = NewBlock;
+    }
     Value *&Load = Loads[IncomingBlock];
     // Insert the load into the predecessor block
     if (!Load)

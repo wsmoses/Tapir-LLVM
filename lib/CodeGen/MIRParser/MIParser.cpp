@@ -1526,17 +1526,44 @@ bool MIParser::parseMachineMemoryOperand(MachineMemOperand *&Dest) {
   if (parseMachinePointerInfo(Ptr))
     return true;
   unsigned BaseAlignment = Size;
-  if (Token.is(MIToken::comma)) {
-    lex();
-    if (Token.isNot(MIToken::kw_align))
-      return error("expected 'align'");
-    if (parseAlignment(BaseAlignment))
-      return true;
+  AAMDNodes AAInfo;
+  MDNode *Range = nullptr;
+  while (consumeIfPresent(MIToken::comma)) {
+    switch (Token.kind()) {
+    case MIToken::kw_align:
+      if (parseAlignment(BaseAlignment))
+        return true;
+      break;
+    case MIToken::md_tbaa:
+      lex();
+      if (parseMDNode(AAInfo.TBAA))
+        return true;
+      break;
+    case MIToken::md_alias_scope:
+      lex();
+      if (parseMDNode(AAInfo.Scope))
+        return true;
+      break;
+    case MIToken::md_noalias:
+      lex();
+      if (parseMDNode(AAInfo.NoAlias))
+        return true;
+      break;
+    case MIToken::md_range:
+      lex();
+      if (parseMDNode(Range))
+        return true;
+      break;
+    // TODO: Report an error on duplicate metadata nodes.
+    default:
+      return error("expected 'align' or '!tbaa' or '!alias.scope' or "
+                   "'!noalias' or '!range'");
+    }
   }
-  // TODO: Parse the attached metadata nodes.
   if (expectAndConsume(MIToken::rparen))
     return true;
-  Dest = MF.getMachineMemOperand(Ptr, Flags, Size, BaseAlignment);
+  Dest =
+      MF.getMachineMemOperand(Ptr, Flags, Size, BaseAlignment, AAInfo, Range);
   return false;
 }
 

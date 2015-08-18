@@ -324,6 +324,15 @@ void MIRPrinter::convertStackObjects(yaml::MachineFunction &MF,
     else
       MF.StackObjects[StackObject.ID].CalleeSavedRegister = Reg;
   }
+  for (unsigned I = 0, E = MFI.getLocalFrameObjectCount(); I < E; ++I) {
+    auto LocalObject = MFI.getLocalFrameObjectMap(I);
+    auto StackObjectInfo = StackObjectOperandMapping.find(LocalObject.first);
+    assert(StackObjectInfo != StackObjectOperandMapping.end() &&
+           "Invalid stack object index");
+    const FrameIndexOperand &StackObject = StackObjectInfo->second;
+    assert(!StackObject.IsFixed && "Expected a locally mapped stack object");
+    MF.StackObjects[StackObject.ID].LocalOffset = LocalObject.second;
+  }
 }
 
 void MIRPrinter::convert(yaml::MachineFunction &MF,
@@ -777,7 +786,23 @@ void MIPrinter::print(const MachineMemOperand &Op) {
   printOffset(Op.getOffset());
   if (Op.getBaseAlignment() != Op.getSize())
     OS << ", align " << Op.getBaseAlignment();
-  // TODO: Print the metadata attributes.
+  auto AAInfo = Op.getAAInfo();
+  if (AAInfo.TBAA) {
+    OS << ", !tbaa ";
+    AAInfo.TBAA->printAsOperand(OS, MST);
+  }
+  if (AAInfo.Scope) {
+    OS << ", !alias.scope ";
+    AAInfo.Scope->printAsOperand(OS, MST);
+  }
+  if (AAInfo.NoAlias) {
+    OS << ", !noalias ";
+    AAInfo.NoAlias->printAsOperand(OS, MST);
+  }
+  if (Op.getRanges()) {
+    OS << ", !range ";
+    Op.getRanges()->printAsOperand(OS, MST);
+  }
   OS << ')';
 }
 

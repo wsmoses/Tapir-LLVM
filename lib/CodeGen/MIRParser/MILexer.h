@@ -85,6 +85,12 @@ struct MIToken {
     kw_liveins,
     kw_successors,
 
+    // Named metadata keywords
+    md_tbaa,
+    md_alias_scope,
+    md_noalias,
+    md_range,
+
     // Identifier tokens
     Identifier,
     IntegerType,
