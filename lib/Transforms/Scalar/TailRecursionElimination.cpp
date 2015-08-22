@@ -118,7 +118,8 @@ namespace {
                                SmallVectorImpl<PHINode *> &ArgumentPHIs,
                                bool CannotTailCallElimCallsMarkedTail);
     bool CanMoveAboveCall(Instruction *I, CallInst *CI);
-    Value *CanTransformAccumulatorRecursion(Instruction *I, CallInst *CI);
+    // Value *CanTransformAccumulatorRecursion(Instruction *I, CallInst *CI);
+    bool CanTransformAccumulatorRecursion(Instruction *I, CallInst *CI);
   };
 }
 
@@ -535,25 +536,28 @@ static Value *getCommonReturnValue(ReturnInst *IgnoreRI, CallInst *CI) {
 /// If the specified instruction can be transformed using accumulator recursion
 /// elimination, return the constant which is the start of the accumulator
 /// value.  Otherwise return null.
-Value *TailCallElim::CanTransformAccumulatorRecursion(Instruction *I,
+// Value *TailCallElim::CanTransformAccumulatorRecursion(Instruction *I,
+//                                                       CallInst *CI) {
+bool TailCallElim::CanTransformAccumulatorRecursion(Instruction *I,
                                                       CallInst *CI) {
-  if (!I->isAssociative() || !I->isCommutative()) return nullptr;
+  if (!I->isAssociative() || !I->isCommutative()) return false;
   assert(I->getNumOperands() == 2 &&
          "Associative/commutative operations should have 2 args!");
 
   // Exactly one operand should be the result of the call instruction.
   if ((I->getOperand(0) == CI && I->getOperand(1) == CI) ||
       (I->getOperand(0) != CI && I->getOperand(1) != CI))
-    return nullptr;
+    return false;
 
   // The only user of this instruction we allow is a single return instruction.
   if (!I->hasOneUse() || !isa<ReturnInst>(I->user_back()))
-    return nullptr;
+    return false;
 
-  // Ok, now we have to check all of the other return instructions in this
-  // function.  If they return non-constants or differing values, then we cannot
-  // transform the function safely.
-  return getCommonReturnValue(cast<ReturnInst>(I->user_back()), CI);
+  return true;
+  // // Ok, now we have to check all of the other return instructions in this
+  // // function.  If they return non-constants or differing values, then we cannot
+  // // transform the function safely.
+  // return getCommonReturnValue(cast<ReturnInst>(I->user_back()), CI);
 }
 
 static Instruction *FirstNonDbg(BasicBlock::iterator I) {
@@ -631,6 +635,7 @@ bool TailCallElim::EliminateRecursiveTailCall(CallInst *CI, ReturnInst *Ret,
   // special case of accumulator recursion, the operation being "return C".
   Value *AccumulatorRecursionEliminationInitVal = nullptr;
   Instruction *AccumulatorRecursionInstr = nullptr;
+  bool AccumulatorUsingIdentity = false;
 
   // Ok, we found a potential tail call.  We can currently only transform the
   // tail call if all of the instructions between the call and the return are
@@ -644,11 +649,21 @@ bool TailCallElim::EliminateRecursiveTailCall(CallInst *CI, ReturnInst *Ret,
     // is an associative and commutative operation that could be transformed
     // using accumulator recursion elimination.  Check to see if this is the
     // case, and if so, remember the initial accumulator value for later.
-    if ((AccumulatorRecursionEliminationInitVal =
-                           CanTransformAccumulatorRecursion(BBI, CI))) {
-      // Yes, this is accumulator recursion.  Remember which instruction
-      // accumulates.
-      AccumulatorRecursionInstr = BBI;
+    // if ((AccumulatorRecursionEliminationInitVal =
+    //                        CanTransformAccumulatorRecursion(BBI, CI))) {
+    if (CanTransformAccumulatorRecursion(BBI, CI)) {
+      if ((AccumulatorRecursionEliminationInitVal =
+           getCommonReturnValue(cast<ReturnInst>(BBI->user_back()), CI))) {
+        // Yes, this is accumulator recursion.  Remember which instruction
+        // accumulates.
+        AccumulatorRecursionInstr = BBI;
+      } else if ((AccumulatorRecursionEliminationInitVal =
+                  BBI->getIdentity())) {
+        AccumulatorUsingIdentity = true;
+        AccumulatorRecursionInstr = BBI;
+      } else {
+        return false;   // Otherwise, we cannot eliminate the tail recursion!
+      }
     } else {
       return false;   // Otherwise, we cannot eliminate the tail recursion!
     }
@@ -777,8 +792,17 @@ bool TailCallElim::EliminateRecursiveTailCall(CallInst *CI, ReturnInst *Ret,
     // node instead of the "initval" that they do currently.  This loop will
     // actually rewrite the return value we are destroying, but that's ok.
     for (Function::iterator BBI = F->begin(), E = F->end(); BBI != E; ++BBI)
-      if (ReturnInst *RI = dyn_cast<ReturnInst>(BBI->getTerminator()))
-        RI->setOperand(0, AccPN);
+      if (ReturnInst *RI = dyn_cast<ReturnInst>(BBI->getTerminator())) {
+        if (AccumulatorUsingIdentity && RI != Ret) {
+          Instruction *FinalAccRecInstr = AccRecInstr->clone();
+          FinalAccRecInstr->setOperand(FinalAccRecInstr->getOperand(0) ==
+                                       AccPN, RI->getOperand(0));
+          BBI->getInstList().insert(RI, FinalAccRecInstr);
+          RI->setOperand(0, FinalAccRecInstr);
+        } else {
+          RI->setOperand(0, AccPN);
+        }
+      }
     ++NumAccumAdded;
   }
 
