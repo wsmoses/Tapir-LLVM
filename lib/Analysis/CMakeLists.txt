@@ -13,6 +13,9 @@ add_llvm_library(LLVMAnalysis
   CFGPrinter.cpp
   CFLAliasAnalysis.cpp
   CGSCCPassManager.cpp
+  CallGraph.cpp
+  CallGraphSCCPass.cpp
+  CallPrinter.cpp
   CaptureTracking.cpp
   CostModel.cpp
   CodeMetrics.cpp
@@ -23,7 +26,9 @@ add_llvm_library(LLVMAnalysis
   DivergenceAnalysis.cpp
   DomPrinter.cpp
   DominanceFrontier.cpp
+  GlobalsModRef.cpp
   IVUsers.cpp
+  InlineCost.cpp
   InstCount.cpp
   InstructionSimplify.cpp
   Interval.cpp
@@ -44,6 +49,9 @@ add_llvm_library(LLVMAnalysis
   MemoryLocation.cpp
   ModuleDebugInfoPrinter.cpp
   NoAliasAnalysis.cpp
+  ObjCARCAliasAnalysis.cpp
+  ObjCARCAnalysisUtils.cpp
+  ObjCARCInstKind.cpp
   OrderedBasicBlock.cpp
   PHITransAddr.cpp
   PostDominators.cpp
@@ -69,5 +77,3 @@ add_llvm_library(LLVMAnalysis
   )
 
 add_dependencies(LLVMAnalysis intrinsics_gen)
-
-add_subdirectory(IPA)

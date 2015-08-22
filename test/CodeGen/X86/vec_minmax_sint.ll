@@ -1797,7 +1797,7 @@ define <4 x i32> @max_gt_v4i32c() {
 ; SSE2-LABEL: max_gt_v4i32c:
 ; SSE2:       # BB#0:
 ; SSE2-NEXT:    movdqa {{.*#+}} xmm1 = [4294967289,4294967295,1,7]
-; SSE2-NEXT:    movdqa {{.*#+}} xmm2 = [1,4294967289,7,1]
+; SSE2-NEXT:    movdqa {{.*#+}} xmm2 = [4294967295,4294967289,7,1]
 ; SSE2-NEXT:    movdqa %xmm1, %xmm0
 ; SSE2-NEXT:    pcmpgtd %xmm2, %xmm0
 ; SSE2-NEXT:    pand %xmm0, %xmm1
@@ -1807,23 +1807,20 @@ define <4 x i32> @max_gt_v4i32c() {
 ;
 ; SSE41-LABEL: max_gt_v4i32c:
 ; SSE41:       # BB#0:
-; SSE41-NEXT:    movdqa {{.*#+}} xmm0 = [4294967289,4294967295,1,7]
-; SSE41-NEXT:    pmaxsd {{.*}}(%rip), %xmm0
+; SSE41-NEXT:    movaps {{.*#+}} xmm0 = [4294967295,4294967295,7,7]
 ; SSE41-NEXT:    retq
 ;
 ; SSE42-LABEL: max_gt_v4i32c:
 ; SSE42:       # BB#0:
-; SSE42-NEXT:    movdqa {{.*#+}} xmm0 = [4294967289,4294967295,1,7]
-; SSE42-NEXT:    pmaxsd {{.*}}(%rip), %xmm0
+; SSE42-NEXT:    movaps {{.*#+}} xmm0 = [4294967295,4294967295,7,7]
 ; SSE42-NEXT:    retq
 ;
 ; AVX-LABEL: max_gt_v4i32c:
 ; AVX:       # BB#0:
-; AVX-NEXT:    vmovdqa {{.*#+}} xmm0 = [4294967289,4294967295,1,7]
-; AVX-NEXT:    vpmaxsd {{.*}}(%rip), %xmm0, %xmm0
+; AVX-NEXT:    vmovaps {{.*#+}} xmm0 = [4294967295,4294967295,7,7]
 ; AVX-NEXT:    retq
   %1 = insertelement <4 x i32> <i32 -7, i32 -1, i32 1, i32 7>, i32 -7, i32 0
-  %2 = insertelement <4 x i32> <i32 -1, i32 -7, i32 7, i32 1>, i32  1, i32 0
+  %2 = insertelement <4 x i32> <i32 -1, i32 -7, i32 7, i32 1>, i32 -1, i32 0
   %3 = icmp sgt <4 x i32> %1, %2
   %4 = select <4 x i1> %3, <4 x i32> %1, <4 x i32> %2
   ret <4 x i32> %4
@@ -1834,7 +1831,7 @@ define <8 x i32> @max_gt_v8i32c() {
 ; SSE2:       # BB#0:
 ; SSE2-NEXT:    movdqa {{.*#+}} xmm2 = [4294967289,4294967291,4294967293,4294967295]
 ; SSE2-NEXT:    movdqa {{.*#+}} xmm3 = [1,3,5,7]
-; SSE2-NEXT:    movdqa {{.*#+}} xmm4 = [1,4294967293,4294967291,4294967289]
+; SSE2-NEXT:    movdqa {{.*#+}} xmm4 = [4294967295,4294967293,4294967291,4294967289]
 ; SSE2-NEXT:    movdqa {{.*#+}} xmm5 = [7,5,3,1]
 ; SSE2-NEXT:    movdqa %xmm3, %xmm1
 ; SSE2-NEXT:    pcmpgtd %xmm5, %xmm1
@@ -1850,42 +1847,22 @@ define <8 x i32> @max_gt_v8i32c() {
 ;
 ; SSE41-LABEL: max_gt_v8i32c:
 ; SSE41:       # BB#0:
-; SSE41-NEXT:    movdqa {{.*#+}} xmm1 = [1,3,5,7]
-; SSE41-NEXT:    movdqa {{.*#+}} xmm0 = [4294967289,4294967291,4294967293,4294967295]
-; SSE41-NEXT:    pmaxsd {{.*}}(%rip), %xmm0
-; SSE41-NEXT:    pmaxsd {{.*}}(%rip), %xmm1
+; SSE41-NEXT:    movaps {{.*#+}} xmm0 = [4294967295,4294967293,4294967293,4294967295]
+; SSE41-NEXT:    movaps {{.*#+}} xmm1 = [7,5,5,7]
 ; SSE41-NEXT:    retq
 ;
 ; SSE42-LABEL: max_gt_v8i32c:
 ; SSE42:       # BB#0:
-; SSE42-NEXT:    movdqa {{.*#+}} xmm1 = [1,3,5,7]
-; SSE42-NEXT:    movdqa {{.*#+}} xmm0 = [4294967289,4294967291,4294967293,4294967295]
-; SSE42-NEXT:    pmaxsd {{.*}}(%rip), %xmm0
-; SSE42-NEXT:    pmaxsd {{.*}}(%rip), %xmm1
+; SSE42-NEXT:    movaps {{.*#+}} xmm0 = [4294967295,4294967293,4294967293,4294967295]
+; SSE42-NEXT:    movaps {{.*#+}} xmm1 = [7,5,5,7]
 ; SSE42-NEXT:    retq
 ;
-; AVX1-LABEL: max_gt_v8i32c:
-; AVX1:       # BB#0:
-; AVX1-NEXT:    vmovdqa {{.*#+}} xmm0 = [4294967289,4294967291,4294967293,4294967295]
-; AVX1-NEXT:    vpmaxsd {{.*}}(%rip), %xmm0, %xmm0
-; AVX1-NEXT:    vmovdqa {{.*#+}} xmm1 = [1,3,5,7]
-; AVX1-NEXT:    vpmaxsd {{.*}}(%rip), %xmm1, %xmm1
-; AVX1-NEXT:    vinsertf128 $1, %xmm1, %ymm0, %ymm0
-; AVX1-NEXT:    retq
-;
-; AVX2-LABEL: max_gt_v8i32c:
-; AVX2:       # BB#0:
-; AVX2-NEXT:    vmovdqa {{.*#+}} ymm0 = [4294967289,4294967291,4294967293,4294967295,1,3,5,7]
-; AVX2-NEXT:    vpmaxsd {{.*}}(%rip), %ymm0, %ymm0
-; AVX2-NEXT:    retq
-;
-; AVX512-LABEL: max_gt_v8i32c:
-; AVX512:       # BB#0:
-; AVX512-NEXT:    vmovdqa {{.*#+}} ymm0 = [4294967289,4294967291,4294967293,4294967295,1,3,5,7]
-; AVX512-NEXT:    vpmaxsd {{.*}}(%rip), %ymm0, %ymm0
-; AVX512-NEXT:    retq
+; AVX-LABEL: max_gt_v8i32c:
+; AVX:       # BB#0:
+; AVX-NEXT:    vmovaps {{.*#+}} ymm0 = [4294967295,4294967293,4294967293,4294967295,7,5,5,7]
+; AVX-NEXT:    retq
   %1 = insertelement <8 x i32> <i32 -7, i32 -5, i32 -3, i32 -1, i32 1, i32 3, i32 5, i32 7>, i32 -7, i32 0
-  %2 = insertelement <8 x i32> <i32 -1, i32 -3, i32 -5, i32 -7, i32 7, i32 5, i32 3, i32 1>, i32  1, i32 0
+  %2 = insertelement <8 x i32> <i32 -1, i32 -3, i32 -5, i32 -7, i32 7, i32 5, i32 3, i32 1>, i32 -1, i32 0
   %3 = icmp sgt <8 x i32> %1, %2
   %4 = select <8 x i1> %3, <8 x i32> %1, <8 x i32> %2
   ret <8 x i32> %4
@@ -1894,17 +1871,15 @@ define <8 x i32> @max_gt_v8i32c() {
 define <8 x i16> @max_gt_v8i16c() {
 ; SSE-LABEL: max_gt_v8i16c:
 ; SSE:       # BB#0:
-; SSE-NEXT:    movdqa {{.*#+}} xmm0 = [65529,65531,65533,65535,1,3,5,7]
-; SSE-NEXT:    pmaxsw {{.*}}(%rip), %xmm0
+; SSE-NEXT:    movaps {{.*#+}} xmm0 = [65535,65533,65533,65535,7,5,5,7]
 ; SSE-NEXT:    retq
 ;
 ; AVX-LABEL: max_gt_v8i16c:
 ; AVX:       # BB#0:
-; AVX-NEXT:    vmovdqa {{.*#+}} xmm0 = [65529,65531,65533,65535,1,3,5,7]
-; AVX-NEXT:    vpmaxsw {{.*}}(%rip), %xmm0, %xmm0
+; AVX-NEXT:    vmovaps {{.*#+}} xmm0 = [65535,65533,65533,65535,7,5,5,7]
 ; AVX-NEXT:    retq
-  %1 = insertelement <8 x i16> <i16 -7, i16 -5, i16 -3, i16 -1, i16 1, i16 3, i16 5, i16 7>, i16 -7, i16 0
-  %2 = insertelement <8 x i16> <i16 -1, i16 -3, i16 -5, i16 -7, i16 7, i16 5, i16 3, i16 1>, i16  1, i16 0
+  %1 = insertelement <8 x i16> <i16 -7, i16 -5, i16 -3, i16 -1, i16 1, i16 3, i16 5, i16 7>, i16 -7, i32 0
+  %2 = insertelement <8 x i16> <i16 -1, i16 -3, i16 -5, i16 -7, i16 7, i16 5, i16 3, i16 1>, i16 -1, i32 0
   %3 = icmp sgt <8 x i16> %1, %2
   %4 = select <8 x i1> %3, <8 x i16> %1, <8 x i16> %2
   ret <8 x i16> %4
@@ -1913,34 +1888,16 @@ define <8 x i16> @max_gt_v8i16c() {
 define <16 x i16> @max_gt_v16i16c() {
 ; SSE-LABEL: max_gt_v16i16c:
 ; SSE:       # BB#0:
-; SSE-NEXT:    movdqa {{.*#+}} xmm1 = [1,2,3,4,5,6,7,8]
-; SSE-NEXT:    movdqa {{.*#+}} xmm0 = [65529,65530,65531,65532,65533,65534,65535,0]
-; SSE-NEXT:    pmaxsw {{.*}}(%rip), %xmm0
-; SSE-NEXT:    pmaxsw {{.*}}(%rip), %xmm1
+; SSE-NEXT:    movaps {{.*#+}} xmm0 = [65535,65534,65533,65532,65533,65534,65535,0]
+; SSE-NEXT:    movaps {{.*#+}} xmm1 = [7,6,5,4,5,6,7,8]
 ; SSE-NEXT:    retq
 ;
-; AVX1-LABEL: max_gt_v16i16c:
-; AVX1:       # BB#0:
-; AVX1-NEXT:    vmovdqa {{.*#+}} xmm0 = [65529,65530,65531,65532,65533,65534,65535,0]
-; AVX1-NEXT:    vpmaxsw {{.*}}(%rip), %xmm0, %xmm0
-; AVX1-NEXT:    vmovdqa {{.*#+}} xmm1 = [1,2,3,4,5,6,7,8]
-; AVX1-NEXT:    vpmaxsw {{.*}}(%rip), %xmm1, %xmm1
-; AVX1-NEXT:    vinsertf128 $1, %xmm1, %ymm0, %ymm0
-; AVX1-NEXT:    retq
-;
-; AVX2-LABEL: max_gt_v16i16c:
-; AVX2:       # BB#0:
-; AVX2-NEXT:    vmovdqa {{.*#+}} ymm0 = [65529,65530,65531,65532,65533,65534,65535,0,1,2,3,4,5,6,7,8]
-; AVX2-NEXT:    vpmaxsw {{.*}}(%rip), %ymm0, %ymm0
-; AVX2-NEXT:    retq
-;
-; AVX512-LABEL: max_gt_v16i16c:
-; AVX512:       # BB#0:
-; AVX512-NEXT:    vmovdqa {{.*#+}} ymm0 = [65529,65530,65531,65532,65533,65534,65535,0,1,2,3,4,5,6,7,8]
-; AVX512-NEXT:    vpmaxsw {{.*}}(%rip), %ymm0, %ymm0
-; AVX512-NEXT:    retq
-  %1 = insertelement <16 x i16> <i16 -7, i16 -6, i16 -5, i16 -4, i16 -3, i16 -2, i16 -1, i16 0, i16 1, i16 2, i16 3, i16 4, i16 5, i16 6, i16 7, i16 8>, i16 -7, i16 0
-  %2 = insertelement <16 x i16> <i16 -1, i16 -2, i16 -3, i16 -4, i16 -5, i16 -6, i16 -7, i16 0, i16 7, i16 6, i16 5, i16 4, i16 3, i16 2, i16 1, i16 0>, i16  1, i16 0
+; AVX-LABEL: max_gt_v16i16c:
+; AVX:       # BB#0:
+; AVX-NEXT:    vmovaps {{.*#+}} ymm0 = [65535,65534,65533,65532,65533,65534,65535,0,7,6,5,4,5,6,7,8]
+; AVX-NEXT:    retq
+  %1 = insertelement <16 x i16> <i16 -7, i16 -6, i16 -5, i16 -4, i16 -3, i16 -2, i16 -1, i16 0, i16 1, i16 2, i16 3, i16 4, i16 5, i16 6, i16 7, i16 8>, i16 -7, i32 0
+  %2 = insertelement <16 x i16> <i16 -1, i16 -2, i16 -3, i16 -4, i16 -5, i16 -6, i16 -7, i16 0, i16 7, i16 6, i16 5, i16 4, i16 3, i16 2, i16 1, i16 0>, i16 -1, i32 0
   %3 = icmp sgt <16 x i16> %1, %2
   %4 = select <16 x i1> %3, <16 x i16> %1, <16 x i16> %2
   ret <16 x i16> %4
@@ -1950,7 +1907,7 @@ define <16 x i8> @max_gt_v16i8c() {
 ; SSE2-LABEL: max_gt_v16i8c:
 ; SSE2:       # BB#0:
 ; SSE2-NEXT:    movdqa {{.*#+}} xmm1 = [249,250,251,252,253,254,255,0,1,2,3,4,5,6,7,8]
-; SSE2-NEXT:    movdqa {{.*#+}} xmm2 = [1,254,253,252,251,250,249,0,7,6,5,4,3,2,1,0]
+; SSE2-NEXT:    movdqa {{.*#+}} xmm2 = [255,254,253,252,251,250,249,0,7,6,5,4,3,2,1,0]
 ; SSE2-NEXT:    movdqa %xmm1, %xmm0
 ; SSE2-NEXT:    pcmpgtb %xmm2, %xmm0
 ; SSE2-NEXT:    pand %xmm0, %xmm1
@@ -1960,23 +1917,20 @@ define <16 x i8> @max_gt_v16i8c() {
 ;
 ; SSE41-LABEL: max_gt_v16i8c:
 ; SSE41:       # BB#0:
-; SSE41-NEXT:    movdqa {{.*#+}} xmm0 = [249,250,251,252,253,254,255,0,1,2,3,4,5,6,7,8]
-; SSE41-NEXT:    pmaxsb {{.*}}(%rip), %xmm0
+; SSE41-NEXT:    movaps {{.*#+}} xmm0 = [255,254,253,252,253,254,255,0,7,6,5,4,5,6,7,8]
 ; SSE41-NEXT:    retq
 ;
 ; SSE42-LABEL: max_gt_v16i8c:
 ; SSE42:       # BB#0:
-; SSE42-NEXT:    movdqa {{.*#+}} xmm0 = [249,250,251,252,253,254,255,0,1,2,3,4,5,6,7,8]
-; SSE42-NEXT:    pmaxsb {{.*}}(%rip), %xmm0
+; SSE42-NEXT:    movaps {{.*#+}} xmm0 = [255,254,253,252,253,254,255,0,7,6,5,4,5,6,7,8]
 ; SSE42-NEXT:    retq
 ;
 ; AVX-LABEL: max_gt_v16i8c:
 ; AVX:       # BB#0:
-; AVX-NEXT:    vmovdqa {{.*#+}} xmm0 = [249,250,251,252,253,254,255,0,1,2,3,4,5,6,7,8]
-; AVX-NEXT:    vpmaxsb {{.*}}(%rip), %xmm0, %xmm0
+; AVX-NEXT:    vmovaps {{.*#+}} xmm0 = [255,254,253,252,253,254,255,0,7,6,5,4,5,6,7,8]
 ; AVX-NEXT:    retq
-  %1 = insertelement <16 x i8> <i8 -7, i8 -6, i8 -5, i8 -4, i8 -3, i8 -2, i8 -1, i8 0, i8 1, i8 2, i8 3, i8 4, i8 5, i8 6, i8 7, i8 8>, i8 -7, i8 0
-  %2 = insertelement <16 x i8> <i8 -1, i8 -2, i8 -3, i8 -4, i8 -5, i8 -6, i8 -7, i8 0, i8 7, i8 6, i8 5, i8 4, i8 3, i8 2, i8 1, i8 0>, i8  1, i8 0
+  %1 = insertelement <16 x i8> <i8 -7, i8 -6, i8 -5, i8 -4, i8 -3, i8 -2, i8 -1, i8 0, i8 1, i8 2, i8 3, i8 4, i8 5, i8 6, i8 7, i8 8>, i8 -7, i32 0
+  %2 = insertelement <16 x i8> <i8 -1, i8 -2, i8 -3, i8 -4, i8 -5, i8 -6, i8 -7, i8 0, i8 7, i8 6, i8 5, i8 4, i8 3, i8 2, i8 1, i8 0>, i8 -1, i32 0
   %3 = icmp sgt <16 x i8> %1, %2
   %4 = select <16 x i1> %3, <16 x i8> %1, <16 x i8> %2
   ret <16 x i8> %4
@@ -2201,7 +2155,7 @@ define <4 x i32> @max_ge_v4i32c() {
 ; SSE2-LABEL: max_ge_v4i32c:
 ; SSE2:       # BB#0:
 ; SSE2-NEXT:    movdqa {{.*#+}} xmm1 = [4294967289,4294967295,1,7]
-; SSE2-NEXT:    movdqa {{.*#+}} xmm2 = [1,4294967289,7,1]
+; SSE2-NEXT:    movdqa {{.*#+}} xmm2 = [4294967295,4294967289,7,1]
 ; SSE2-NEXT:    movdqa %xmm2, %xmm3
 ; SSE2-NEXT:    pcmpgtd %xmm1, %xmm3
 ; SSE2-NEXT:    pcmpeqd %xmm0, %xmm0
@@ -2213,23 +2167,20 @@ define <4 x i32> @max_ge_v4i32c() {
 ;
 ; SSE41-LABEL: max_ge_v4i32c:
 ; SSE41:       # BB#0:
-; SSE41-NEXT:    movdqa {{.*#+}} xmm0 = [4294967289,4294967295,1,7]
-; SSE41-NEXT:    pmaxsd {{.*}}(%rip), %xmm0
+; SSE41-NEXT:    movaps {{.*#+}} xmm0 = [4294967295,4294967295,7,7]
 ; SSE41-NEXT:    retq
 ;
 ; SSE42-LABEL: max_ge_v4i32c:
 ; SSE42:       # BB#0:
-; SSE42-NEXT:    movdqa {{.*#+}} xmm0 = [4294967289,4294967295,1,7]
-; SSE42-NEXT:    pmaxsd {{.*}}(%rip), %xmm0
+; SSE42-NEXT:    movaps {{.*#+}} xmm0 = [4294967295,4294967295,7,7]
 ; SSE42-NEXT:    retq
 ;
 ; AVX-LABEL: max_ge_v4i32c:
 ; AVX:       # BB#0:
-; AVX-NEXT:    vmovdqa {{.*#+}} xmm0 = [4294967289,4294967295,1,7]
-; AVX-NEXT:    vpmaxsd {{.*}}(%rip), %xmm0, %xmm0
+; AVX-NEXT:    vmovaps {{.*#+}} xmm0 = [4294967295,4294967295,7,7]
 ; AVX-NEXT:    retq
   %1 = insertelement <4 x i32> <i32 -7, i32 -1, i32 1, i32 7>, i32 -7, i32 0
-  %2 = insertelement <4 x i32> <i32 -1, i32 -7, i32 7, i32 1>, i32  1, i32 0
+  %2 = insertelement <4 x i32> <i32 -1, i32 -7, i32 7, i32 1>, i32 -1, i32 0
   %3 = icmp sge <4 x i32> %1, %2
   %4 = select <4 x i1> %3, <4 x i32> %1, <4 x i32> %2
   ret <4 x i32> %4
@@ -2240,7 +2191,7 @@ define <8 x i32> @max_ge_v8i32c() {
 ; SSE2:       # BB#0:
 ; SSE2-NEXT:    movdqa {{.*#+}} xmm2 = [4294967289,4294967291,4294967293,4294967295]
 ; SSE2-NEXT:    movdqa {{.*#+}} xmm3 = [1,3,5,7]
-; SSE2-NEXT:    movdqa {{.*#+}} xmm4 = [1,4294967293,4294967291,4294967289]
+; SSE2-NEXT:    movdqa {{.*#+}} xmm4 = [4294967295,4294967293,4294967291,4294967289]
 ; SSE2-NEXT:    movdqa {{.*#+}} xmm5 = [7,5,3,1]
 ; SSE2-NEXT:    movdqa %xmm5, %xmm6
 ; SSE2-NEXT:    pcmpgtd %xmm3, %xmm6
@@ -2260,42 +2211,22 @@ define <8 x i32> @max_ge_v8i32c() {
 ;
 ; SSE41-LABEL: max_ge_v8i32c:
 ; SSE41:       # BB#0:
-; SSE41-NEXT:    movdqa {{.*#+}} xmm1 = [1,3,5,7]
-; SSE41-NEXT:    movdqa {{.*#+}} xmm0 = [4294967289,4294967291,4294967293,4294967295]
-; SSE41-NEXT:    pmaxsd {{.*}}(%rip), %xmm0
-; SSE41-NEXT:    pmaxsd {{.*}}(%rip), %xmm1
+; SSE41-NEXT:    movaps {{.*#+}} xmm0 = [4294967295,4294967293,4294967293,4294967295]
+; SSE41-NEXT:    movaps {{.*#+}} xmm1 = [7,5,5,7]
 ; SSE41-NEXT:    retq
 ;
 ; SSE42-LABEL: max_ge_v8i32c:
 ; SSE42:       # BB#0:
-; SSE42-NEXT:    movdqa {{.*#+}} xmm1 = [1,3,5,7]
-; SSE42-NEXT:    movdqa {{.*#+}} xmm0 = [4294967289,4294967291,4294967293,4294967295]
-; SSE42-NEXT:    pmaxsd {{.*}}(%rip), %xmm0
-; SSE42-NEXT:    pmaxsd {{.*}}(%rip), %xmm1
+; SSE42-NEXT:    movaps {{.*#+}} xmm0 = [4294967295,4294967293,4294967293,4294967295]
+; SSE42-NEXT:    movaps {{.*#+}} xmm1 = [7,5,5,7]
 ; SSE42-NEXT:    retq
 ;
-; AVX1-LABEL: max_ge_v8i32c:
-; AVX1:       # BB#0:
-; AVX1-NEXT:    vmovdqa {{.*#+}} xmm0 = [4294967289,4294967291,4294967293,4294967295]
-; AVX1-NEXT:    vpmaxsd {{.*}}(%rip), %xmm0, %xmm0
-; AVX1-NEXT:    vmovdqa {{.*#+}} xmm1 = [1,3,5,7]
-; AVX1-NEXT:    vpmaxsd {{.*}}(%rip), %xmm1, %xmm1
-; AVX1-NEXT:    vinsertf128 $1, %xmm1, %ymm0, %ymm0
-; AVX1-NEXT:    retq
-;
-; AVX2-LABEL: max_ge_v8i32c:
-; AVX2:       # BB#0:
-; AVX2-NEXT:    vmovdqa {{.*#+}} ymm0 = [4294967289,4294967291,4294967293,4294967295,1,3,5,7]
-; AVX2-NEXT:    vpmaxsd {{.*}}(%rip), %ymm0, %ymm0
-; AVX2-NEXT:    retq
-;
-; AVX512-LABEL: max_ge_v8i32c:
-; AVX512:       # BB#0:
-; AVX512-NEXT:    vmovdqa {{.*#+}} ymm0 = [4294967289,4294967291,4294967293,4294967295,1,3,5,7]
-; AVX512-NEXT:    vpmaxsd {{.*}}(%rip), %ymm0, %ymm0
-; AVX512-NEXT:    retq
+; AVX-LABEL: max_ge_v8i32c:
+; AVX:       # BB#0:
+; AVX-NEXT:    vmovaps {{.*#+}} ymm0 = [4294967295,4294967293,4294967293,4294967295,7,5,5,7]
+; AVX-NEXT:    retq
   %1 = insertelement <8 x i32> <i32 -7, i32 -5, i32 -3, i32 -1, i32 1, i32 3, i32 5, i32 7>, i32 -7, i32 0
-  %2 = insertelement <8 x i32> <i32 -1, i32 -3, i32 -5, i32 -7, i32 7, i32 5, i32 3, i32 1>, i32  1, i32 0
+  %2 = insertelement <8 x i32> <i32 -1, i32 -3, i32 -5, i32 -7, i32 7, i32 5, i32 3, i32 1>, i32 -1, i32 0
   %3 = icmp sge <8 x i32> %1, %2
   %4 = select <8 x i1> %3, <8 x i32> %1, <8 x i32> %2
   ret <8 x i32> %4
@@ -2304,17 +2235,15 @@ define <8 x i32> @max_ge_v8i32c() {
 define <8 x i16> @max_ge_v8i16c() {
 ; SSE-LABEL: max_ge_v8i16c:
 ; SSE:       # BB#0:
-; SSE-NEXT:    movdqa {{.*#+}} xmm0 = [65529,65531,65533,65535,1,3,5,7]
-; SSE-NEXT:    pmaxsw {{.*}}(%rip), %xmm0
+; SSE-NEXT:    movaps {{.*#+}} xmm0 = [65535,65533,65533,65535,7,5,5,7]
 ; SSE-NEXT:    retq
 ;
 ; AVX-LABEL: max_ge_v8i16c:
 ; AVX:       # BB#0:
-; AVX-NEXT:    vmovdqa {{.*#+}} xmm0 = [65529,65531,65533,65535,1,3,5,7]
-; AVX-NEXT:    vpmaxsw {{.*}}(%rip), %xmm0, %xmm0
+; AVX-NEXT:    vmovaps {{.*#+}} xmm0 = [65535,65533,65533,65535,7,5,5,7]
 ; AVX-NEXT:    retq
-  %1 = insertelement <8 x i16> <i16 -7, i16 -5, i16 -3, i16 -1, i16 1, i16 3, i16 5, i16 7>, i16 -7, i16 0
-  %2 = insertelement <8 x i16> <i16 -1, i16 -3, i16 -5, i16 -7, i16 7, i16 5, i16 3, i16 1>, i16  1, i16 0
+  %1 = insertelement <8 x i16> <i16 -7, i16 -5, i16 -3, i16 -1, i16 1, i16 3, i16 5, i16 7>, i16 -7, i32 0
+  %2 = insertelement <8 x i16> <i16 -1, i16 -3, i16 -5, i16 -7, i16 7, i16 5, i16 3, i16 1>, i16 -1, i32 0
   %3 = icmp sge <8 x i16> %1, %2
   %4 = select <8 x i1> %3, <8 x i16> %1, <8 x i16> %2
   ret <8 x i16> %4
@@ -2323,34 +2252,16 @@ define <8 x i16> @max_ge_v8i16c() {
 define <16 x i16> @max_ge_v16i16c() {
 ; SSE-LABEL: max_ge_v16i16c:
 ; SSE:       # BB#0:
-; SSE-NEXT:    movdqa {{.*#+}} xmm1 = [1,2,3,4,5,6,7,8]
-; SSE-NEXT:    movdqa {{.*#+}} xmm0 = [65529,65530,65531,65532,65533,65534,65535,0]
-; SSE-NEXT:    pmaxsw {{.*}}(%rip), %xmm0
-; SSE-NEXT:    pmaxsw {{.*}}(%rip), %xmm1
+; SSE-NEXT:    movaps {{.*#+}} xmm0 = [65535,65534,65533,65532,65533,65534,65535,0]
+; SSE-NEXT:    movaps {{.*#+}} xmm1 = [7,6,5,4,5,6,7,8]
 ; SSE-NEXT:    retq
 ;
-; AVX1-LABEL: max_ge_v16i16c:
-; AVX1:       # BB#0:
-; AVX1-NEXT:    vmovdqa {{.*#+}} xmm0 = [65529,65530,65531,65532,65533,65534,65535,0]
-; AVX1-NEXT:    vpmaxsw {{.*}}(%rip), %xmm0, %xmm0
-; AVX1-NEXT:    vmovdqa {{.*#+}} xmm1 = [1,2,3,4,5,6,7,8]
-; AVX1-NEXT:    vpmaxsw {{.*}}(%rip), %xmm1, %xmm1
-; AVX1-NEXT:    vinsertf128 $1, %xmm1, %ymm0, %ymm0
-; AVX1-NEXT:    retq
-;
-; AVX2-LABEL: max_ge_v16i16c:
-; AVX2:       # BB#0:
-; AVX2-NEXT:    vmovdqa {{.*#+}} ymm0 = [65529,65530,65531,65532,65533,65534,65535,0,1,2,3,4,5,6,7,8]
-; AVX2-NEXT:    vpmaxsw {{.*}}(%rip), %ymm0, %ymm0
-; AVX2-NEXT:    retq
-;
-; AVX512-LABEL: max_ge_v16i16c:
-; AVX512:       # BB#0:
-; AVX512-NEXT:    vmovdqa {{.*#+}} ymm0 = [65529,65530,65531,65532,65533,65534,65535,0,1,2,3,4,5,6,7,8]
-; AVX512-NEXT:    vpmaxsw {{.*}}(%rip), %ymm0, %ymm0
-; AVX512-NEXT:    retq
-  %1 = insertelement <16 x i16> <i16 -7, i16 -6, i16 -5, i16 -4, i16 -3, i16 -2, i16 -1, i16 0, i16 1, i16 2, i16 3, i16 4, i16 5, i16 6, i16 7, i16 8>, i16 -7, i16 0
-  %2 = insertelement <16 x i16> <i16 -1, i16 -2, i16 -3, i16 -4, i16 -5, i16 -6, i16 -7, i16 0, i16 7, i16 6, i16 5, i16 4, i16 3, i16 2, i16 1, i16 0>, i16  1, i16 0
+; AVX-LABEL: max_ge_v16i16c:
+; AVX:       # BB#0:
+; AVX-NEXT:    vmovaps {{.*#+}} ymm0 = [65535,65534,65533,65532,65533,65534,65535,0,7,6,5,4,5,6,7,8]
+; AVX-NEXT:    retq
+  %1 = insertelement <16 x i16> <i16 -7, i16 -6, i16 -5, i16 -4, i16 -3, i16 -2, i16 -1, i16 0, i16 1, i16 2, i16 3, i16 4, i16 5, i16 6, i16 7, i16 8>, i16 -7, i32 0
+  %2 = insertelement <16 x i16> <i16 -1, i16 -2, i16 -3, i16 -4, i16 -5, i16 -6, i16 -7, i16 0, i16 7, i16 6, i16 5, i16 4, i16 3, i16 2, i16 1, i16 0>, i16 -1, i32 0
   %3 = icmp sge <16 x i16> %1, %2
   %4 = select <16 x i1> %3, <16 x i16> %1, <16 x i16> %2
   ret <16 x i16> %4
@@ -2360,7 +2271,7 @@ define <16 x i8> @max_ge_v16i8c() {
 ; SSE2-LABEL: max_ge_v16i8c:
 ; SSE2:       # BB#0:
 ; SSE2-NEXT:    movdqa {{.*#+}} xmm1 = [249,250,251,252,253,254,255,0,1,2,3,4,5,6,7,8]
-; SSE2-NEXT:    movdqa {{.*#+}} xmm2 = [1,254,253,252,251,250,249,0,7,6,5,4,3,2,1,0]
+; SSE2-NEXT:    movdqa {{.*#+}} xmm2 = [255,254,253,252,251,250,249,0,7,6,5,4,3,2,1,0]
 ; SSE2-NEXT:    movdqa %xmm2, %xmm3
 ; SSE2-NEXT:    pcmpgtb %xmm1, %xmm3
 ; SSE2-NEXT:    pcmpeqd %xmm0, %xmm0
@@ -2372,23 +2283,20 @@ define <16 x i8> @max_ge_v16i8c() {
 ;
 ; SSE41-LABEL: max_ge_v16i8c:
 ; SSE41:       # BB#0:
-; SSE41-NEXT:    movdqa {{.*#+}} xmm0 = [249,250,251,252,253,254,255,0,1,2,3,4,5,6,7,8]
-; SSE41-NEXT:    pmaxsb {{.*}}(%rip), %xmm0
+; SSE41-NEXT:    movaps {{.*#+}} xmm0 = [255,254,253,252,253,254,255,0,7,6,5,4,5,6,7,8]
 ; SSE41-NEXT:    retq
 ;
 ; SSE42-LABEL: max_ge_v16i8c:
 ; SSE42:       # BB#0:
-; SSE42-NEXT:    movdqa {{.*#+}} xmm0 = [249,250,251,252,253,254,255,0,1,2,3,4,5,6,7,8]
-; SSE42-NEXT:    pmaxsb {{.*}}(%rip), %xmm0
+; SSE42-NEXT:    movaps {{.*#+}} xmm0 = [255,254,253,252,253,254,255,0,7,6,5,4,5,6,7,8]
 ; SSE42-NEXT:    retq
 ;
 ; AVX-LABEL: max_ge_v16i8c:
 ; AVX:       # BB#0:
-; AVX-NEXT:    vmovdqa {{.*#+}} xmm0 = [249,250,251,252,253,254,255,0,1,2,3,4,5,6,7,8]
-; AVX-NEXT:    vpmaxsb {{.*}}(%rip), %xmm0, %xmm0
+; AVX-NEXT:    vmovaps {{.*#+}} xmm0 = [255,254,253,252,253,254,255,0,7,6,5,4,5,6,7,8]
 ; AVX-NEXT:    retq
-  %1 = insertelement <16 x i8> <i8 -7, i8 -6, i8 -5, i8 -4, i8 -3, i8 -2, i8 -1, i8 0, i8 1, i8 2, i8 3, i8 4, i8 5, i8 6, i8 7, i8 8>, i8 -7, i8 0
-  %2 = insertelement <16 x i8> <i8 -1, i8 -2, i8 -3, i8 -4, i8 -5, i8 -6, i8 -7, i8 0, i8 7, i8 6, i8 5, i8 4, i8 3, i8 2, i8 1, i8 0>, i8  1, i8 0
+  %1 = insertelement <16 x i8> <i8 -7, i8 -6, i8 -5, i8 -4, i8 -3, i8 -2, i8 -1, i8 0, i8 1, i8 2, i8 3, i8 4, i8 5, i8 6, i8 7, i8 8>, i8 -7, i32 0
+  %2 = insertelement <16 x i8> <i8 -1, i8 -2, i8 -3, i8 -4, i8 -5, i8 -6, i8 -7, i8 0, i8 7, i8 6, i8 5, i8 4, i8 3, i8 2, i8 1, i8 0>, i8 -1, i32 0
   %3 = icmp sge <16 x i8> %1, %2
   %4 = select <16 x i1> %3, <16 x i8> %1, <16 x i8> %2
   ret <16 x i8> %4
@@ -2591,7 +2499,7 @@ define <4 x i32> @min_lt_v4i32c() {
 ; SSE2-LABEL: min_lt_v4i32c:
 ; SSE2:       # BB#0:
 ; SSE2-NEXT:    movdqa {{.*#+}} xmm1 = [4294967289,4294967295,1,7]
-; SSE2-NEXT:    movdqa {{.*#+}} xmm2 = [1,4294967289,7,1]
+; SSE2-NEXT:    movdqa {{.*#+}} xmm2 = [4294967295,4294967289,7,1]
 ; SSE2-NEXT:    movdqa %xmm2, %xmm0
 ; SSE2-NEXT:    pcmpgtd %xmm1, %xmm0
 ; SSE2-NEXT:    pand %xmm0, %xmm1
@@ -2601,23 +2509,20 @@ define <4 x i32> @min_lt_v4i32c() {
 ;
 ; SSE41-LABEL: min_lt_v4i32c:
 ; SSE41:       # BB#0:
-; SSE41-NEXT:    movdqa {{.*#+}} xmm0 = [4294967289,4294967295,1,7]
-; SSE41-NEXT:    pminsd {{.*}}(%rip), %xmm0
+; SSE41-NEXT:    movaps {{.*#+}} xmm0 = [4294967289,4294967289,1,1]
 ; SSE41-NEXT:    retq
 ;
 ; SSE42-LABEL: min_lt_v4i32c:
 ; SSE42:       # BB#0:
-; SSE42-NEXT:    movdqa {{.*#+}} xmm0 = [4294967289,4294967295,1,7]
-; SSE42-NEXT:    pminsd {{.*}}(%rip), %xmm0
+; SSE42-NEXT:    movaps {{.*#+}} xmm0 = [4294967289,4294967289,1,1]
 ; SSE42-NEXT:    retq
 ;
 ; AVX-LABEL: min_lt_v4i32c:
 ; AVX:       # BB#0:
-; AVX-NEXT:    vmovdqa {{.*#+}} xmm0 = [4294967289,4294967295,1,7]
-; AVX-NEXT:    vpminsd {{.*}}(%rip), %xmm0, %xmm0
+; AVX-NEXT:    vmovaps {{.*#+}} xmm0 = [4294967289,4294967289,1,1]
 ; AVX-NEXT:    retq
   %1 = insertelement <4 x i32> <i32 -7, i32 -1, i32 1, i32 7>, i32 -7, i32 0
-  %2 = insertelement <4 x i32> <i32 -1, i32 -7, i32 7, i32 1>, i32  1, i32 0
+  %2 = insertelement <4 x i32> <i32 -1, i32 -7, i32 7, i32 1>, i32 -1, i32 0
   %3 = icmp slt <4 x i32> %1, %2
   %4 = select <4 x i1> %3, <4 x i32> %1, <4 x i32> %2
   ret <4 x i32> %4
@@ -2628,7 +2533,7 @@ define <8 x i32> @min_lt_v8i32c() {
 ; SSE2:       # BB#0:
 ; SSE2-NEXT:    movdqa {{.*#+}} xmm2 = [4294967289,4294967291,4294967293,4294967295]
 ; SSE2-NEXT:    movdqa {{.*#+}} xmm3 = [1,3,5,7]
-; SSE2-NEXT:    movdqa {{.*#+}} xmm4 = [1,4294967293,4294967291,4294967289]
+; SSE2-NEXT:    movdqa {{.*#+}} xmm4 = [4294967295,4294967293,4294967291,4294967289]
 ; SSE2-NEXT:    movdqa {{.*#+}} xmm5 = [7,5,3,1]
 ; SSE2-NEXT:    movdqa %xmm5, %xmm1
 ; SSE2-NEXT:    pcmpgtd %xmm3, %xmm1
@@ -2644,42 +2549,22 @@ define <8 x i32> @min_lt_v8i32c() {
 ;
 ; SSE41-LABEL: min_lt_v8i32c:
 ; SSE41:       # BB#0:
-; SSE41-NEXT:    movdqa {{.*#+}} xmm1 = [1,3,5,7]
-; SSE41-NEXT:    movdqa {{.*#+}} xmm0 = [4294967289,4294967291,4294967293,4294967295]
-; SSE41-NEXT:    pminsd {{.*}}(%rip), %xmm0
-; SSE41-NEXT:    pminsd {{.*}}(%rip), %xmm1
+; SSE41-NEXT:    movaps {{.*#+}} xmm0 = [4294967289,4294967291,4294967291,4294967289]
+; SSE41-NEXT:    movaps {{.*#+}} xmm1 = [1,3,3,1]
 ; SSE41-NEXT:    retq
 ;
 ; SSE42-LABEL: min_lt_v8i32c:
 ; SSE42:       # BB#0:
-; SSE42-NEXT:    movdqa {{.*#+}} xmm1 = [1,3,5,7]
-; SSE42-NEXT:    movdqa {{.*#+}} xmm0 = [4294967289,4294967291,4294967293,4294967295]
-; SSE42-NEXT:    pminsd {{.*}}(%rip), %xmm0
-; SSE42-NEXT:    pminsd {{.*}}(%rip), %xmm1
+; SSE42-NEXT:    movaps {{.*#+}} xmm0 = [4294967289,4294967291,4294967291,4294967289]
+; SSE42-NEXT:    movaps {{.*#+}} xmm1 = [1,3,3,1]
 ; SSE42-NEXT:    retq
 ;
-; AVX1-LABEL: min_lt_v8i32c:
-; AVX1:       # BB#0:
-; AVX1-NEXT:    vmovdqa {{.*#+}} xmm0 = [4294967289,4294967291,4294967293,4294967295]
-; AVX1-NEXT:    vpminsd {{.*}}(%rip), %xmm0, %xmm0
-; AVX1-NEXT:    vmovdqa {{.*#+}} xmm1 = [1,3,5,7]
-; AVX1-NEXT:    vpminsd {{.*}}(%rip), %xmm1, %xmm1
-; AVX1-NEXT:    vinsertf128 $1, %xmm1, %ymm0, %ymm0
-; AVX1-NEXT:    retq
-;
-; AVX2-LABEL: min_lt_v8i32c:
-; AVX2:       # BB#0:
-; AVX2-NEXT:    vmovdqa {{.*#+}} ymm0 = [4294967289,4294967291,4294967293,4294967295,1,3,5,7]
-; AVX2-NEXT:    vpminsd {{.*}}(%rip), %ymm0, %ymm0
-; AVX2-NEXT:    retq
-;
-; AVX512-LABEL: min_lt_v8i32c:
-; AVX512:       # BB#0:
-; AVX512-NEXT:    vmovdqa {{.*#+}} ymm0 = [4294967289,4294967291,4294967293,4294967295,1,3,5,7]
-; AVX512-NEXT:    vpminsd {{.*}}(%rip), %ymm0, %ymm0
-; AVX512-NEXT:    retq
+; AVX-LABEL: min_lt_v8i32c:
+; AVX:       # BB#0:
+; AVX-NEXT:    vmovaps {{.*#+}} ymm0 = [4294967289,4294967291,4294967291,4294967289,1,3,3,1]
+; AVX-NEXT:    retq
   %1 = insertelement <8 x i32> <i32 -7, i32 -5, i32 -3, i32 -1, i32 1, i32 3, i32 5, i32 7>, i32 -7, i32 0
-  %2 = insertelement <8 x i32> <i32 -1, i32 -3, i32 -5, i32 -7, i32 7, i32 5, i32 3, i32 1>, i32  1, i32 0
+  %2 = insertelement <8 x i32> <i32 -1, i32 -3, i32 -5, i32 -7, i32 7, i32 5, i32 3, i32 1>, i32 -1, i32 0
   %3 = icmp slt <8 x i32> %1, %2
   %4 = select <8 x i1> %3, <8 x i32> %1, <8 x i32> %2
   ret <8 x i32> %4
@@ -2688,17 +2573,15 @@ define <8 x i32> @min_lt_v8i32c() {
 define <8 x i16> @min_lt_v8i16c() {
 ; SSE-LABEL: min_lt_v8i16c:
 ; SSE:       # BB#0:
-; SSE-NEXT:    movdqa {{.*#+}} xmm0 = [65529,65531,65533,65535,1,3,5,7]
-; SSE-NEXT:    pminsw {{.*}}(%rip), %xmm0
+; SSE-NEXT:    movaps {{.*#+}} xmm0 = [65529,65531,65531,65529,1,3,3,1]
 ; SSE-NEXT:    retq
 ;
 ; AVX-LABEL: min_lt_v8i16c:
 ; AVX:       # BB#0:
-; AVX-NEXT:    vmovdqa {{.*#+}} xmm0 = [65529,65531,65533,65535,1,3,5,7]
-; AVX-NEXT:    vpminsw {{.*}}(%rip), %xmm0, %xmm0
+; AVX-NEXT:    vmovaps {{.*#+}} xmm0 = [65529,65531,65531,65529,1,3,3,1]
 ; AVX-NEXT:    retq
-  %1 = insertelement <8 x i16> <i16 -7, i16 -5, i16 -3, i16 -1, i16 1, i16 3, i16 5, i16 7>, i16 -7, i16 0
-  %2 = insertelement <8 x i16> <i16 -1, i16 -3, i16 -5, i16 -7, i16 7, i16 5, i16 3, i16 1>, i16  1, i16 0
+  %1 = insertelement <8 x i16> <i16 -7, i16 -5, i16 -3, i16 -1, i16 1, i16 3, i16 5, i16 7>, i16 -7, i32 0
+  %2 = insertelement <8 x i16> <i16 -1, i16 -3, i16 -5, i16 -7, i16 7, i16 5, i16 3, i16 1>, i16 -1, i32 0
   %3 = icmp slt <8 x i16> %1, %2
   %4 = select <8 x i1> %3, <8 x i16> %1, <8 x i16> %2
   ret <8 x i16> %4
@@ -2707,34 +2590,16 @@ define <8 x i16> @min_lt_v8i16c() {
 define <16 x i16> @min_lt_v16i16c() {
 ; SSE-LABEL: min_lt_v16i16c:
 ; SSE:       # BB#0:
-; SSE-NEXT:    movdqa {{.*#+}} xmm1 = [1,2,3,4,5,6,7,8]
-; SSE-NEXT:    movdqa {{.*#+}} xmm0 = [65529,65530,65531,65532,65533,65534,65535,0]
-; SSE-NEXT:    pminsw {{.*}}(%rip), %xmm0
-; SSE-NEXT:    pminsw {{.*}}(%rip), %xmm1
+; SSE-NEXT:    movaps {{.*#+}} xmm0 = [65529,65530,65531,65532,65531,65530,65529,0]
+; SSE-NEXT:    movaps {{.*#+}} xmm1 = [1,2,3,4,3,2,1,0]
 ; SSE-NEXT:    retq
 ;
-; AVX1-LABEL: min_lt_v16i16c:
-; AVX1:       # BB#0:
-; AVX1-NEXT:    vmovdqa {{.*#+}} xmm0 = [65529,65530,65531,65532,65533,65534,65535,0]
-; AVX1-NEXT:    vpminsw {{.*}}(%rip), %xmm0, %xmm0
-; AVX1-NEXT:    vmovdqa {{.*#+}} xmm1 = [1,2,3,4,5,6,7,8]
-; AVX1-NEXT:    vpminsw {{.*}}(%rip), %xmm1, %xmm1
-; AVX1-NEXT:    vinsertf128 $1, %xmm1, %ymm0, %ymm0
-; AVX1-NEXT:    retq
-;
-; AVX2-LABEL: min_lt_v16i16c:
-; AVX2:       # BB#0:
-; AVX2-NEXT:    vmovdqa {{.*#+}} ymm0 = [65529,65530,65531,65532,65533,65534,65535,0,1,2,3,4,5,6,7,8]
-; AVX2-NEXT:    vpminsw {{.*}}(%rip), %ymm0, %ymm0
-; AVX2-NEXT:    retq
-;
-; AVX512-LABEL: min_lt_v16i16c:
-; AVX512:       # BB#0:
-; AVX512-NEXT:    vmovdqa {{.*#+}} ymm0 = [65529,65530,65531,65532,65533,65534,65535,0,1,2,3,4,5,6,7,8]
-; AVX512-NEXT:    vpminsw {{.*}}(%rip), %ymm0, %ymm0
-; AVX512-NEXT:    retq
-  %1 = insertelement <16 x i16> <i16 -7, i16 -6, i16 -5, i16 -4, i16 -3, i16 -2, i16 -1, i16 0, i16 1, i16 2, i16 3, i16 4, i16 5, i16 6, i16 7, i16 8>, i16 -7, i16 0
-  %2 = insertelement <16 x i16> <i16 -1, i16 -2, i16 -3, i16 -4, i16 -5, i16 -6, i16 -7, i16 0, i16 7, i16 6, i16 5, i16 4, i16 3, i16 2, i16 1, i16 0>, i16  1, i16 0
+; AVX-LABEL: min_lt_v16i16c:
+; AVX:       # BB#0:
+; AVX-NEXT:    vmovaps {{.*#+}} ymm0 = [65529,65530,65531,65532,65531,65530,65529,0,1,2,3,4,3,2,1,0]
+; AVX-NEXT:    retq
+  %1 = insertelement <16 x i16> <i16 -7, i16 -6, i16 -5, i16 -4, i16 -3, i16 -2, i16 -1, i16 0, i16 1, i16 2, i16 3, i16 4, i16 5, i16 6, i16 7, i16 8>, i16 -7, i32 0
+  %2 = insertelement <16 x i16> <i16 -1, i16 -2, i16 -3, i16 -4, i16 -5, i16 -6, i16 -7, i16 0, i16 7, i16 6, i16 5, i16 4, i16 3, i16 2, i16 1, i16 0>, i16 -1, i32 0
   %3 = icmp slt <16 x i16> %1, %2
   %4 = select <16 x i1> %3, <16 x i16> %1, <16 x i16> %2
   ret <16 x i16> %4
@@ -2744,7 +2609,7 @@ define <16 x i8> @min_lt_v16i8c() {
 ; SSE2-LABEL: min_lt_v16i8c:
 ; SSE2:       # BB#0:
 ; SSE2-NEXT:    movdqa {{.*#+}} xmm1 = [249,250,251,252,253,254,255,0,1,2,3,4,5,6,7,8]
-; SSE2-NEXT:    movdqa {{.*#+}} xmm2 = [1,254,253,252,251,250,249,0,7,6,5,4,3,2,1,0]
+; SSE2-NEXT:    movdqa {{.*#+}} xmm2 = [255,254,253,252,251,250,249,0,7,6,5,4,3,2,1,0]
 ; SSE2-NEXT:    movdqa %xmm2, %xmm0
 ; SSE2-NEXT:    pcmpgtb %xmm1, %xmm0
 ; SSE2-NEXT:    pand %xmm0, %xmm1
@@ -2754,23 +2619,20 @@ define <16 x i8> @min_lt_v16i8c() {
 ;
 ; SSE41-LABEL: min_lt_v16i8c:
 ; SSE41:       # BB#0:
-; SSE41-NEXT:    movdqa {{.*#+}} xmm0 = [249,250,251,252,253,254,255,0,1,2,3,4,5,6,7,8]
-; SSE41-NEXT:    pminsb {{.*}}(%rip), %xmm0
+; SSE41-NEXT:    movaps {{.*#+}} xmm0 = [249,250,251,252,251,250,249,0,1,2,3,4,3,2,1,0]
 ; SSE41-NEXT:    retq
 ;
 ; SSE42-LABEL: min_lt_v16i8c:
 ; SSE42:       # BB#0:
-; SSE42-NEXT:    movdqa {{.*#+}} xmm0 = [249,250,251,252,253,254,255,0,1,2,3,4,5,6,7,8]
-; SSE42-NEXT:    pminsb {{.*}}(%rip), %xmm0
+; SSE42-NEXT:    movaps {{.*#+}} xmm0 = [249,250,251,252,251,250,249,0,1,2,3,4,3,2,1,0]
 ; SSE42-NEXT:    retq
 ;
 ; AVX-LABEL: min_lt_v16i8c:
 ; AVX:       # BB#0:
-; AVX-NEXT:    vmovdqa {{.*#+}} xmm0 = [249,250,251,252,253,254,255,0,1,2,3,4,5,6,7,8]
-; AVX-NEXT:    vpminsb {{.*}}(%rip), %xmm0, %xmm0
+; AVX-NEXT:    vmovaps {{.*#+}} xmm0 = [249,250,251,252,251,250,249,0,1,2,3,4,3,2,1,0]
 ; AVX-NEXT:    retq
-  %1 = insertelement <16 x i8> <i8 -7, i8 -6, i8 -5, i8 -4, i8 -3, i8 -2, i8 -1, i8 0, i8 1, i8 2, i8 3, i8 4, i8 5, i8 6, i8 7, i8 8>, i8 -7, i8 0
-  %2 = insertelement <16 x i8> <i8 -1, i8 -2, i8 -3, i8 -4, i8 -5, i8 -6, i8 -7, i8 0, i8 7, i8 6, i8 5, i8 4, i8 3, i8 2, i8 1, i8 0>, i8  1, i8 0
+  %1 = insertelement <16 x i8> <i8 -7, i8 -6, i8 -5, i8 -4, i8 -3, i8 -2, i8 -1, i8 0, i8 1, i8 2, i8 3, i8 4, i8 5, i8 6, i8 7, i8 8>, i8 -7, i32 0
+  %2 = insertelement <16 x i8> <i8 -1, i8 -2, i8 -3, i8 -4, i8 -5, i8 -6, i8 -7, i8 0, i8 7, i8 6, i8 5, i8 4, i8 3, i8 2, i8 1, i8 0>, i8 -1, i32 0
   %3 = icmp slt <16 x i8> %1, %2
   %4 = select <16 x i1> %3, <16 x i8> %1, <16 x i8> %2
   ret <16 x i8> %4
@@ -2995,7 +2857,7 @@ define <4 x i32> @min_le_v4i32c() {
 ; SSE2-LABEL: min_le_v4i32c:
 ; SSE2:       # BB#0:
 ; SSE2-NEXT:    movdqa {{.*#+}} xmm1 = [4294967289,4294967295,1,7]
-; SSE2-NEXT:    movdqa {{.*#+}} xmm2 = [1,4294967289,7,1]
+; SSE2-NEXT:    movdqa {{.*#+}} xmm2 = [4294967295,4294967289,7,1]
 ; SSE2-NEXT:    movdqa %xmm1, %xmm3
 ; SSE2-NEXT:    pcmpgtd %xmm2, %xmm3
 ; SSE2-NEXT:    pcmpeqd %xmm0, %xmm0
@@ -3007,23 +2869,20 @@ define <4 x i32> @min_le_v4i32c() {
 ;
 ; SSE41-LABEL: min_le_v4i32c:
 ; SSE41:       # BB#0:
-; SSE41-NEXT:    movdqa {{.*#+}} xmm0 = [4294967289,4294967295,1,7]
-; SSE41-NEXT:    pminsd {{.*}}(%rip), %xmm0
+; SSE41-NEXT:    movaps {{.*#+}} xmm0 = [4294967289,4294967289,1,1]
 ; SSE41-NEXT:    retq
 ;
 ; SSE42-LABEL: min_le_v4i32c:
 ; SSE42:       # BB#0:
-; SSE42-NEXT:    movdqa {{.*#+}} xmm0 = [4294967289,4294967295,1,7]
-; SSE42-NEXT:    pminsd {{.*}}(%rip), %xmm0
+; SSE42-NEXT:    movaps {{.*#+}} xmm0 = [4294967289,4294967289,1,1]
 ; SSE42-NEXT:    retq
 ;
 ; AVX-LABEL: min_le_v4i32c:
 ; AVX:       # BB#0:
-; AVX-NEXT:    vmovdqa {{.*#+}} xmm0 = [4294967289,4294967295,1,7]
-; AVX-NEXT:    vpminsd {{.*}}(%rip), %xmm0, %xmm0
+; AVX-NEXT:    vmovaps {{.*#+}} xmm0 = [4294967289,4294967289,1,1]
 ; AVX-NEXT:    retq
   %1 = insertelement <4 x i32> <i32 -7, i32 -1, i32 1, i32 7>, i32 -7, i32 0
-  %2 = insertelement <4 x i32> <i32 -1, i32 -7, i32 7, i32 1>, i32  1, i32 0
+  %2 = insertelement <4 x i32> <i32 -1, i32 -7, i32 7, i32 1>, i32 -1, i32 0
   %3 = icmp sle <4 x i32> %1, %2
   %4 = select <4 x i1> %3, <4 x i32> %1, <4 x i32> %2
   ret <4 x i32> %4
@@ -3034,7 +2893,7 @@ define <8 x i32> @min_le_v8i32c() {
 ; SSE2:       # BB#0:
 ; SSE2-NEXT:    movdqa {{.*#+}} xmm2 = [4294967289,4294967291,4294967293,4294967295]
 ; SSE2-NEXT:    movdqa {{.*#+}} xmm3 = [1,3,5,7]
-; SSE2-NEXT:    movdqa {{.*#+}} xmm4 = [1,4294967293,4294967291,4294967289]
+; SSE2-NEXT:    movdqa {{.*#+}} xmm4 = [4294967295,4294967293,4294967291,4294967289]
 ; SSE2-NEXT:    movdqa {{.*#+}} xmm5 = [7,5,3,1]
 ; SSE2-NEXT:    movdqa %xmm3, %xmm6
 ; SSE2-NEXT:    pcmpgtd %xmm5, %xmm6
@@ -3054,42 +2913,22 @@ define <8 x i32> @min_le_v8i32c() {
 ;
 ; SSE41-LABEL: min_le_v8i32c:
 ; SSE41:       # BB#0:
-; SSE41-NEXT:    movdqa {{.*#+}} xmm1 = [1,3,5,7]
-; SSE41-NEXT:    movdqa {{.*#+}} xmm0 = [4294967289,4294967291,4294967293,4294967295]
-; SSE41-NEXT:    pminsd {{.*}}(%rip), %xmm0
-; SSE41-NEXT:    pminsd {{.*}}(%rip), %xmm1
+; SSE41-NEXT:    movaps {{.*#+}} xmm0 = [4294967289,4294967291,4294967291,4294967289]
+; SSE41-NEXT:    movaps {{.*#+}} xmm1 = [1,3,3,1]
 ; SSE41-NEXT:    retq
 ;
 ; SSE42-LABEL: min_le_v8i32c:
 ; SSE42:       # BB#0:
-; SSE42-NEXT:    movdqa {{.*#+}} xmm1 = [1,3,5,7]
-; SSE42-NEXT:    movdqa {{.*#+}} xmm0 = [4294967289,4294967291,4294967293,4294967295]
-; SSE42-NEXT:    pminsd {{.*}}(%rip), %xmm0
-; SSE42-NEXT:    pminsd {{.*}}(%rip), %xmm1
+; SSE42-NEXT:    movaps {{.*#+}} xmm0 = [4294967289,4294967291,4294967291,4294967289]
+; SSE42-NEXT:    movaps {{.*#+}} xmm1 = [1,3,3,1]
 ; SSE42-NEXT:    retq
 ;
-; AVX1-LABEL: min_le_v8i32c:
-; AVX1:       # BB#0:
-; AVX1-NEXT:    vmovdqa {{.*#+}} xmm0 = [4294967289,4294967291,4294967293,4294967295]
-; AVX1-NEXT:    vpminsd {{.*}}(%rip), %xmm0, %xmm0
-; AVX1-NEXT:    vmovdqa {{.*#+}} xmm1 = [1,3,5,7]
-; AVX1-NEXT:    vpminsd {{.*}}(%rip), %xmm1, %xmm1
-; AVX1-NEXT:    vinsertf128 $1, %xmm1, %ymm0, %ymm0
-; AVX1-NEXT:    retq
-;
-; AVX2-LABEL: min_le_v8i32c:
-; AVX2:       # BB#0:
-; AVX2-NEXT:    vmovdqa {{.*#+}} ymm0 = [4294967289,4294967291,4294967293,4294967295,1,3,5,7]
-; AVX2-NEXT:    vpminsd {{.*}}(%rip), %ymm0, %ymm0
-; AVX2-NEXT:    retq
-;
-; AVX512-LABEL: min_le_v8i32c:
-; AVX512:       # BB#0:
-; AVX512-NEXT:    vmovdqa {{.*#+}} ymm0 = [4294967289,4294967291,4294967293,4294967295,1,3,5,7]
-; AVX512-NEXT:    vpminsd {{.*}}(%rip), %ymm0, %ymm0
-; AVX512-NEXT:    retq
+; AVX-LABEL: min_le_v8i32c:
+; AVX:       # BB#0:
+; AVX-NEXT:    vmovaps {{.*#+}} ymm0 = [4294967289,4294967291,4294967291,4294967289,1,3,3,1]
+; AVX-NEXT:    retq
   %1 = insertelement <8 x i32> <i32 -7, i32 -5, i32 -3, i32 -1, i32 1, i32 3, i32 5, i32 7>, i32 -7, i32 0
-  %2 = insertelement <8 x i32> <i32 -1, i32 -3, i32 -5, i32 -7, i32 7, i32 5, i32 3, i32 1>, i32  1, i32 0
+  %2 = insertelement <8 x i32> <i32 -1, i32 -3, i32 -5, i32 -7, i32 7, i32 5, i32 3, i32 1>, i32 -1, i32 0
   %3 = icmp sle <8 x i32> %1, %2
   %4 = select <8 x i1> %3, <8 x i32> %1, <8 x i32> %2
   ret <8 x i32> %4
@@ -3098,17 +2937,15 @@ define <8 x i32> @min_le_v8i32c() {
 define <8 x i16> @min_le_v8i16c() {
 ; SSE-LABEL: min_le_v8i16c:
 ; SSE:       # BB#0:
-; SSE-NEXT:    movdqa {{.*#+}} xmm0 = [65529,65531,65533,65535,1,3,5,7]
-; SSE-NEXT:    pminsw {{.*}}(%rip), %xmm0
+; SSE-NEXT:    movaps {{.*#+}} xmm0 = [65529,65531,65531,65529,1,3,3,1]
 ; SSE-NEXT:    retq
 ;
 ; AVX-LABEL: min_le_v8i16c:
 ; AVX:       # BB#0:
-; AVX-NEXT:    vmovdqa {{.*#+}} xmm0 = [65529,65531,65533,65535,1,3,5,7]
-; AVX-NEXT:    vpminsw {{.*}}(%rip), %xmm0, %xmm0
+; AVX-NEXT:    vmovaps {{.*#+}} xmm0 = [65529,65531,65531,65529,1,3,3,1]
 ; AVX-NEXT:    retq
-  %1 = insertelement <8 x i16> <i16 -7, i16 -5, i16 -3, i16 -1, i16 1, i16 3, i16 5, i16 7>, i16 -7, i16 0
-  %2 = insertelement <8 x i16> <i16 -1, i16 -3, i16 -5, i16 -7, i16 7, i16 5, i16 3, i16 1>, i16  1, i16 0
+  %1 = insertelement <8 x i16> <i16 -7, i16 -5, i16 -3, i16 -1, i16 1, i16 3, i16 5, i16 7>, i16 -7, i32 0
+  %2 = insertelement <8 x i16> <i16 -1, i16 -3, i16 -5, i16 -7, i16 7, i16 5, i16 3, i16 1>, i16 -1, i32 0
   %3 = icmp sle <8 x i16> %1, %2
   %4 = select <8 x i1> %3, <8 x i16> %1, <8 x i16> %2
   ret <8 x i16> %4
@@ -3117,34 +2954,16 @@ define <8 x i16> @min_le_v8i16c() {
 define <16 x i16> @min_le_v16i16c() {
 ; SSE-LABEL: min_le_v16i16c:
 ; SSE:       # BB#0:
-; SSE-NEXT:    movdqa {{.*#+}} xmm1 = [1,2,3,4,5,6,7,8]
-; SSE-NEXT:    movdqa {{.*#+}} xmm0 = [65529,65530,65531,65532,65533,65534,65535,0]
-; SSE-NEXT:    pminsw {{.*}}(%rip), %xmm0
-; SSE-NEXT:    pminsw {{.*}}(%rip), %xmm1
+; SSE-NEXT:    movaps {{.*#+}} xmm0 = [65529,65530,65531,65532,65531,65530,65529,0]
+; SSE-NEXT:    movaps {{.*#+}} xmm1 = [1,2,3,4,3,2,1,0]
 ; SSE-NEXT:    retq
 ;
-; AVX1-LABEL: min_le_v16i16c:
-; AVX1:       # BB#0:
-; AVX1-NEXT:    vmovdqa {{.*#+}} xmm0 = [65529,65530,65531,65532,65533,65534,65535,0]
-; AVX1-NEXT:    vpminsw {{.*}}(%rip), %xmm0, %xmm0
-; AVX1-NEXT:    vmovdqa {{.*#+}} xmm1 = [1,2,3,4,5,6,7,8]
-; AVX1-NEXT:    vpminsw {{.*}}(%rip), %xmm1, %xmm1
-; AVX1-NEXT:    vinsertf128 $1, %xmm1, %ymm0, %ymm0
-; AVX1-NEXT:    retq
-;
-; AVX2-LABEL: min_le_v16i16c:
-; AVX2:       # BB#0:
-; AVX2-NEXT:    vmovdqa {{.*#+}} ymm0 = [65529,65530,65531,65532,65533,65534,65535,0,1,2,3,4,5,6,7,8]
-; AVX2-NEXT:    vpminsw {{.*}}(%rip), %ymm0, %ymm0
-; AVX2-NEXT:    retq
-;
-; AVX512-LABEL: min_le_v16i16c:
-; AVX512:       # BB#0:
-; AVX512-NEXT:    vmovdqa {{.*#+}} ymm0 = [65529,65530,65531,65532,65533,65534,65535,0,1,2,3,4,5,6,7,8]
-; AVX512-NEXT:    vpminsw {{.*}}(%rip), %ymm0, %ymm0
-; AVX512-NEXT:    retq
-  %1 = insertelement <16 x i16> <i16 -7, i16 -6, i16 -5, i16 -4, i16 -3, i16 -2, i16 -1, i16 0, i16 1, i16 2, i16 3, i16 4, i16 5, i16 6, i16 7, i16 8>, i16 -7, i16 0
-  %2 = insertelement <16 x i16> <i16 -1, i16 -2, i16 -3, i16 -4, i16 -5, i16 -6, i16 -7, i16 0, i16 7, i16 6, i16 5, i16 4, i16 3, i16 2, i16 1, i16 0>, i16  1, i16 0
+; AVX-LABEL: min_le_v16i16c:
+; AVX:       # BB#0:
+; AVX-NEXT:    vmovaps {{.*#+}} ymm0 = [65529,65530,65531,65532,65531,65530,65529,0,1,2,3,4,3,2,1,0]
+; AVX-NEXT:    retq
+  %1 = insertelement <16 x i16> <i16 -7, i16 -6, i16 -5, i16 -4, i16 -3, i16 -2, i16 -1, i16 0, i16 1, i16 2, i16 3, i16 4, i16 5, i16 6, i16 7, i16 8>, i16 -7, i32 0
+  %2 = insertelement <16 x i16> <i16 -1, i16 -2, i16 -3, i16 -4, i16 -5, i16 -6, i16 -7, i16 0, i16 7, i16 6, i16 5, i16 4, i16 3, i16 2, i16 1, i16 0>, i16 -1, i32 0
   %3 = icmp sle <16 x i16> %1, %2
   %4 = select <16 x i1> %3, <16 x i16> %1, <16 x i16> %2
   ret <16 x i16> %4
@@ -3154,7 +2973,7 @@ define <16 x i8> @min_le_v16i8c() {
 ; SSE2-LABEL: min_le_v16i8c:
 ; SSE2:       # BB#0:
 ; SSE2-NEXT:    movdqa {{.*#+}} xmm1 = [249,250,251,252,253,254,255,0,1,2,3,4,5,6,7,8]
-; SSE2-NEXT:    movdqa {{.*#+}} xmm2 = [1,254,253,252,251,250,249,0,7,6,5,4,3,2,1,0]
+; SSE2-NEXT:    movdqa {{.*#+}} xmm2 = [255,254,253,252,251,250,249,0,7,6,5,4,3,2,1,0]
 ; SSE2-NEXT:    movdqa %xmm1, %xmm3
 ; SSE2-NEXT:    pcmpgtb %xmm2, %xmm3
 ; SSE2-NEXT:    pcmpeqd %xmm0, %xmm0
@@ -3166,23 +2985,20 @@ define <16 x i8> @min_le_v16i8c() {
 ;
 ; SSE41-LABEL: min_le_v16i8c:
 ; SSE41:       # BB#0:
-; SSE41-NEXT:    movdqa {{.*#+}} xmm0 = [249,250,251,252,253,254,255,0,1,2,3,4,5,6,7,8]
-; SSE41-NEXT:    pminsb {{.*}}(%rip), %xmm0
+; SSE41-NEXT:    movaps {{.*#+}} xmm0 = [249,250,251,252,251,250,249,0,1,2,3,4,3,2,1,0]
 ; SSE41-NEXT:    retq
 ;
 ; SSE42-LABEL: min_le_v16i8c:
 ; SSE42:       # BB#0:
-; SSE42-NEXT:    movdqa {{.*#+}} xmm0 = [249,250,251,252,253,254,255,0,1,2,3,4,5,6,7,8]
-; SSE42-NEXT:    pminsb {{.*}}(%rip), %xmm0
+; SSE42-NEXT:    movaps {{.*#+}} xmm0 = [249,250,251,252,251,250,249,0,1,2,3,4,3,2,1,0]
 ; SSE42-NEXT:    retq
 ;
 ; AVX-LABEL: min_le_v16i8c:
 ; AVX:       # BB#0:
-; AVX-NEXT:    vmovdqa {{.*#+}} xmm0 = [249,250,251,252,253,254,255,0,1,2,3,4,5,6,7,8]
-; AVX-NEXT:    vpminsb {{.*}}(%rip), %xmm0, %xmm0
+; AVX-NEXT:    vmovaps {{.*#+}} xmm0 = [249,250,251,252,251,250,249,0,1,2,3,4,3,2,1,0]
 ; AVX-NEXT:    retq
-  %1 = insertelement <16 x i8> <i8 -7, i8 -6, i8 -5, i8 -4, i8 -3, i8 -2, i8 -1, i8 0, i8 1, i8 2, i8 3, i8 4, i8 5, i8 6, i8 7, i8 8>, i8 -7, i8 0
-  %2 = insertelement <16 x i8> <i8 -1, i8 -2, i8 -3, i8 -4, i8 -5, i8 -6, i8 -7, i8 0, i8 7, i8 6, i8 5, i8 4, i8 3, i8 2, i8 1, i8 0>, i8  1, i8 0
+  %1 = insertelement <16 x i8> <i8 -7, i8 -6, i8 -5, i8 -4, i8 -3, i8 -2, i8 -1, i8 0, i8 1, i8 2, i8 3, i8 4, i8 5, i8 6, i8 7, i8 8>, i8 -7, i32 0
+  %2 = insertelement <16 x i8> <i8 -1, i8 -2, i8 -3, i8 -4, i8 -5, i8 -6, i8 -7, i8 0, i8 7, i8 6, i8 5, i8 4, i8 3, i8 2, i8 1, i8 0>, i8 -1, i32 0
   %3 = icmp sle <16 x i8> %1, %2
   %4 = select <16 x i1> %3, <16 x i8> %1, <16 x i8> %2
   ret <16 x i8> %4
