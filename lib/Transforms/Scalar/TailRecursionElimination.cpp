@@ -540,7 +540,8 @@ static Value *getCommonReturnValue(ReturnInst *IgnoreRI, CallInst *CI) {
 //                                                       CallInst *CI) {
 bool TailCallElim::CanTransformAccumulatorRecursion(Instruction *I,
                                                       CallInst *CI) {
-  if (!I->isAssociative() || !I->isCommutative()) return false;
+  // if (!I->isAssociative() || !I->isCommutative()) return false;
+  if (!I->isAssociative()) return false;
   assert(I->getNumOperands() == 2 &&
          "Associative/commutative operations should have 2 args!");
 
@@ -652,7 +653,8 @@ bool TailCallElim::EliminateRecursiveTailCall(CallInst *CI, ReturnInst *Ret,
     // if ((AccumulatorRecursionEliminationInitVal =
     //                        CanTransformAccumulatorRecursion(BBI, CI))) {
     if (CanTransformAccumulatorRecursion(BBI, CI)) {
-      if ((AccumulatorRecursionEliminationInitVal =
+      if (BBI->isCommutative() &&
+          (AccumulatorRecursionEliminationInitVal =
            getCommonReturnValue(cast<ReturnInst>(BBI->user_back()), CI))) {
         // Yes, this is accumulator recursion.  Remember which instruction
         // accumulates.
