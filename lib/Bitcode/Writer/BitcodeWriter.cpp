@@ -57,7 +57,6 @@ enum {
   FUNCTION_INST_RET_VOID_ABBREV,
   FUNCTION_INST_RET_VAL_ABBREV,
   FUNCTION_INST_UNREACHABLE_ABBREV,
-  FUNCTION_INST_REATTACH_ABBREV,
   FUNCTION_INST_GEP_ABBREV,
 };
 
@@ -1928,7 +1927,6 @@ static void WriteInstruction(const Instruction &I, unsigned InstID,
   case Instruction::Reattach:
     {
       Code = bitc::FUNC_CODE_INST_REATTACH;
-      AbbrevToUse = FUNCTION_INST_REATTACH_ABBREV;
       const ReattachInst &RI = cast<ReattachInst>(I);
       Vals.push_back(VE.getValueID(RI.getSuccessor(0)));
     }
