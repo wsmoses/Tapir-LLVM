@@ -37,7 +37,6 @@
 ; RUN: llc < %s -mtriple=i386-unknown-unknown -mcpu=athlon64-sse3 2>&1 | FileCheck %s --check-prefix=SLOW
 
 ; AMD chips with fast unaligned memory accesses
-; FIXME: These are wrong except for btver2.
 
 ; RUN: llc < %s -mtriple=i386-unknown-unknown -mcpu=amdfam10      2>&1 | FileCheck %s --check-prefix=FAST
 ; RUN: llc < %s -mtriple=i386-unknown-unknown -mcpu=barcelona     2>&1 | FileCheck %s --check-prefix=FAST
@@ -55,6 +54,11 @@
 ; Verify that the slow/fast unaligned memory attribute is set correctly for each CPU model.
 ; Slow chips use 4-byte stores. Fast chips with SSE or later use something other than 4-byte stores.
 ; Chips that don't have SSE use 4-byte stores either way, so they're not tested.
+
+; Also verify that SSE4.2 or SSE4a imply fast unaligned accesses.
+
+; RUN: llc < %s -mtriple=i386-unknown-unknown -mattr=sse4.2       2>&1 | FileCheck %s --check-prefix=FAST
+; RUN: llc < %s -mtriple=i386-unknown-unknown -mattr=sse4a        2>&1 | FileCheck %s --check-prefix=FAST
 
 define void @store_zeros(i8* %a) {
 ; SLOW-NOT: not a recognized processor
