@@ -146,10 +146,10 @@ protected:
   /// True if SHLD instructions are slow.
   bool IsSHLDSlow;
 
-  /// True if unaligned memory access is fast.
-  bool IsUAMemFast;
+  /// True if unaligned memory accesses of 16-bytes or smaller are slow.
+  bool IsUAMemUnder32Slow;
 
-  /// True if unaligned 32-byte memory accesses are slow.
+  /// True if unaligned memory accesses of 32-bytes are slow.
   bool IsUAMem32Slow;
 
   /// True if SSE operations can have unaligned memory operands.
@@ -357,7 +357,7 @@ public:
   bool hasRDSEED() const { return HasRDSEED; }
   bool isBTMemSlow() const { return IsBTMemSlow; }
   bool isSHLDSlow() const { return IsSHLDSlow; }
-  bool isUnalignedMemAccessFast() const { return IsUAMemFast; }
+  bool isUnalignedMemUnder32Slow() const { return IsUAMemUnder32Slow; }
   bool isUnalignedMem32Slow() const { return IsUAMem32Slow; }
   bool hasSSEUnalignedMem() const { return HasSSEUnalignedMem; }
   bool hasCmpxchg16b() const { return HasCmpxchg16b; }
@@ -406,6 +406,10 @@ public:
     return TargetTriple.isKnownWindowsMSVCEnvironment();
   }
 
+  bool isTargetWindowsCoreCLR() const {
+    return TargetTriple.isWindowsCoreCLREnvironment();
+  }
+
   bool isTargetWindowsCygwin() const {
     return TargetTriple.isWindowsCygwinEnvironment();
   }
@@ -447,8 +451,26 @@ public:
   }
 
   bool isCallingConvWin64(CallingConv::ID CC) const {
-    return (isTargetWin64() && CC != CallingConv::X86_64_SysV) ||
-           CC == CallingConv::X86_64_Win64;
+    switch (CC) {
+    // On Win64, all these conventions just use the default convention.
+    case CallingConv::C:
+    case CallingConv::Fast:
+    case CallingConv::X86_FastCall:
+    case CallingConv::X86_StdCall:
+    case CallingConv::X86_ThisCall:
+    case CallingConv::X86_VectorCall:
+    case CallingConv::Intel_OCL_BI:
+      return isTargetWin64();
+    // This convention allows using the Win64 convention on other targets.
+    case CallingConv::X86_64_Win64:
+      return true;
+    // This convention allows using the SysV convention on Windows targets.
+    case CallingConv::X86_64_SysV:
+      return false;
+    // Otherwise, who knows what this is.
+    default:
+      return false;
+    }
   }
 
   /// ClassifyGlobalReference - Classify a global variable reference for the

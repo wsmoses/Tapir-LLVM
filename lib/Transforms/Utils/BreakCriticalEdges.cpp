@@ -137,13 +137,17 @@ BasicBlock *llvm::SplitCriticalEdge(TerminatorInst *TI, unsigned SuccNum,
 
   assert(!isa<IndirectBrInst>(TI) &&
          "Cannot split critical edge from IndirectBrInst");
+  assert(!isa<DetachInst>(TI) &&
+         "Cannot split critical edge from DetachInst");
+  assert(!isa<ReattachInst>(TI) &&
+         "Cannot split critical edge from ReattachInst");
 
   BasicBlock *TIBB = TI->getParent();
   BasicBlock *DestBB = TI->getSuccessor(SuccNum);
 
-  // Splitting the critical edge to a landing pad block is non-trivial. Don't do
+  // Splitting the critical edge to a pad block is non-trivial. Don't do
   // it in this generic function.
-  if (DestBB->isLandingPad()) return nullptr;
+  if (DestBB->isEHPad()) return nullptr;
 
   // Create a new basic block, linking it into the CFG.
   BasicBlock *NewBB = BasicBlock::Create(TI->getContext(),
@@ -197,7 +201,6 @@ BasicBlock *llvm::SplitCriticalEdge(TerminatorInst *TI, unsigned SuccNum,
   }
 
   // If we have nothing to update, just return.
-  auto *AA = Options.AA;
   auto *DT = Options.DT;
   auto *LI = Options.LI;
   if (!DT && !LI)
@@ -319,10 +322,9 @@ BasicBlock *llvm::SplitCriticalEdge(TerminatorInst *TI, unsigned SuccNum,
           LoopPreds.push_back(P);
         }
         if (!LoopPreds.empty()) {
-          assert(!DestBB->isLandingPad() &&
-                 "We don't split edges to landing pads!");
+          assert(!DestBB->isEHPad() && "We don't split edges to EH pads!");
           BasicBlock *NewExitBB = SplitBlockPredecessors(
-              DestBB, LoopPreds, "split", AA, DT, LI, Options.PreserveLCSSA);
+              DestBB, LoopPreds, "split", DT, LI, Options.PreserveLCSSA);
           if (Options.PreserveLCSSA)
             createPHIsForSplitLoopExit(LoopPreds, NewExitBB, DestBB);
         }

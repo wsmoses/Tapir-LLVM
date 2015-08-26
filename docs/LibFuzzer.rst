@@ -68,6 +68,9 @@ The most important flags are::
   apply_tokens                       	0	Read the given input file, substitute bytes  with tokens and write the result to stdout.
   sync_command                       	0	Execute an external command "<sync_command> <test_corpus>" to synchronize the test corpus.
   sync_timeout                       	600	Minimum timeout between syncs.
+  use_traces                            0       Experimental: use instruction traces
+  only_ascii                            0       If 1, generate only ASCII (isprint+isspace) inputs.
+
 
 For the full list of flags run the fuzzer binary with ``-help=1``.
 
@@ -273,6 +276,18 @@ The fuzzer itself will still be mutating a string of bytes
 but before passing this input to the target library it will replace every byte ``b`` with the ``b``-th token.
 If there are less than ``b`` tokens, a space will be added instead.
 
+Data-flow-guided fuzzing
+------------------------
+
+*EXPERIMENTAL*.
+With an additional compiler flag ``-fsanitize-coverage=trace-cmp`` (see SanitizerCoverageTraceDataFlow_)
+and extra run-time flag ``-use_traces=1`` the fuzzer will try to apply *data-flow-guided fuzzing*.
+That is, the fuzzer will record the inputs to comparison instructions, switch statements,
+and several libc functions (``memcmp``, ``strcmp``, ``strncmp``, etc).
+It will later use those recorded inputs during mutations.
+
+This mode can be combined with DataFlowSanitizer_ to achieve better sensitivity.
+
 AFL compatibility
 -----------------
 LibFuzzer can be used in parallel with AFL_ on the same test corpus.
@@ -407,11 +422,38 @@ small inputs, each input takes < 1ms to run, and the library code is not expecte
 to crash on invalid inputs.
 Examples: regular expression matchers, text or binary format parsers.
 
+Trophies
+========
+* GLIBC: https://sourceware.org/glibc/wiki/FuzzingLibc
+
+* MUSL LIBC:
+
+  * http://git.musl-libc.org/cgit/musl/commit/?id=39dfd58417ef642307d90306e1c7e50aaec5a35c
+  * http://www.openwall.com/lists/oss-security/2015/03/30/3
+
+* pugixml: https://github.com/zeux/pugixml/issues/39
+
+* PCRE: Search for "LLVM fuzzer" in http://vcs.pcre.org/pcre2/code/trunk/ChangeLog?view=markup
+
+* ICU: http://bugs.icu-project.org/trac/ticket/11838
+
+* LLVM:
+
+  * Clang: https://llvm.org/bugs/show_bug.cgi?id=23057
+
+  * Clang-format: https://llvm.org/bugs/show_bug.cgi?id=23052
+
+  * libc++: https://llvm.org/bugs/show_bug.cgi?id=24411
+
+
+
 .. _pcre2: http://www.pcre.org/
 
 .. _AFL: http://lcamtuf.coredump.cx/afl/
 
 .. _SanitizerCoverage: http://clang.llvm.org/docs/SanitizerCoverage.html
+.. _SanitizerCoverageTraceDataFlow: http://clang.llvm.org/docs/SanitizerCoverage.html#tracing-data-flow
+.. _DataFlowSanitizer: http://clang.llvm.org/docs/DataFlowSanitizer.html
 
 .. _Heartbleed: http://en.wikipedia.org/wiki/Heartbleed
 

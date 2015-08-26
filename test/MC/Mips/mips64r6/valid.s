@@ -132,6 +132,7 @@ a:
         dsubu   $15,$11,5025     # CHECK: daddiu $15, $11, -5025 # encoding: [0x65,0x6f,0xec,0x5f]
         ei                       # CHECK: ei               # encoding: [0x41,0x60,0x60,0x20]
         ei      $14              # CHECK: ei  $14          # encoding: [0x41,0x6e,0x60,0x20]
+        eretnc                   # CHECK: eretnc                 # encoding: [0x42,0x00,0x00,0x58]
         j       1f               # CHECK: j $tmp0                # encoding: [0b000010AA,A,A,A]
                                  # CHECK:                        #   fixup A - offset: 0, value: ($tmp0), kind: fixup_Mips_26
         j       a                # CHECK: j a                    # encoding: [0b000010AA,A,A,A]
@@ -163,6 +164,10 @@ a:
         mfc0    $8,$15,1         # CHECK: mfc0 $8, $15, 1      # encoding: [0x40,0x08,0x78,0x01]
         mod     $2,$3,$4         # CHECK: mod $2, $3, $4   # encoding: [0x00,0x64,0x10,0xda]
         modu    $2,$3,$4         # CHECK: modu $2, $3, $4  # encoding: [0x00,0x64,0x10,0xdb]
+        move    $a0,$a3          # CHECK: move $4, $7             # encoding: [0x00,0xe0,0x20,0x25]
+        move    $s5,$a0          # CHECK: move $21, $4            # encoding: [0x00,0x80,0xa8,0x25]
+        move    $s8,$a0          # CHECK: move $fp, $4            # encoding: [0x00,0x80,0xf0,0x25]
+        move    $25,$a2          # CHECK: move $25, $6            # encoding: [0x00,0xc0,0xc8,0x25]
         mtc0    $9,$15,1         # CHECK: mtc0 $9, $15, 1        # encoding: [0x40,0x89,0x78,0x01]
         msubf.d $f2,$f3,$f4      # CHECK: msubf.d $f2, $f3, $f4  # encoding: [0x46,0x24,0x18,0x99]
         msubf.s $f2,$f3,$f4      # CHECK: msubf.s $f2, $f3, $f4  # encoding: [0x46,0x04,0x18,0x99]

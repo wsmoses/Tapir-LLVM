@@ -381,7 +381,7 @@ void MipsSEFrameLowering::emitPrologue(MachineFunction &MF,
   unsigned SP = ABI.GetStackPtr();
   unsigned FP = ABI.GetFramePtr();
   unsigned ZERO = ABI.GetNullPtr();
-  unsigned ADDu = ABI.GetPtrAdduOp();
+  unsigned MOVE = ABI.GetGPRMoveOp();
   unsigned ADDiu = ABI.GetPtrAddiuOp();
   unsigned AND = ABI.IsN64() ? Mips::AND64 : Mips::AND;
 
@@ -491,7 +491,7 @@ void MipsSEFrameLowering::emitPrologue(MachineFunction &MF,
   // if framepointer enabled, set it to point to the stack pointer.
   if (hasFP(MF)) {
     // Insert instruction "move $fp, $sp" at this location.
-    BuildMI(MBB, MBBI, dl, TII.get(ADDu), FP).addReg(SP).addReg(ZERO)
+    BuildMI(MBB, MBBI, dl, TII.get(MOVE), FP).addReg(SP).addReg(ZERO)
       .setMIFlag(MachineInstr::FrameSetup);
 
     // emit ".cfi_def_cfa_register $fp"
@@ -514,7 +514,7 @@ void MipsSEFrameLowering::emitPrologue(MachineFunction &MF,
       if (hasBP(MF)) {
         // move $s7, $sp
         unsigned BP = STI.isABI_N64() ? Mips::S7_64 : Mips::S7;
-        BuildMI(MBB, MBBI, dl, TII.get(ADDu), BP)
+        BuildMI(MBB, MBBI, dl, TII.get(MOVE), BP)
           .addReg(SP)
           .addReg(ZERO);
       }
@@ -538,7 +538,7 @@ void MipsSEFrameLowering::emitEpilogue(MachineFunction &MF,
   unsigned SP = ABI.GetStackPtr();
   unsigned FP = ABI.GetFramePtr();
   unsigned ZERO = ABI.GetNullPtr();
-  unsigned ADDu = ABI.GetPtrAdduOp();
+  unsigned MOVE = ABI.GetGPRMoveOp();
 
   // if framepointer enabled, restore the stack pointer.
   if (hasFP(MF)) {
@@ -549,7 +549,7 @@ void MipsSEFrameLowering::emitEpilogue(MachineFunction &MF,
       --I;
 
     // Insert instruction "move $sp, $fp" at this location.
-    BuildMI(MBB, I, dl, TII.get(ADDu), SP).addReg(FP).addReg(ZERO);
+    BuildMI(MBB, I, dl, TII.get(MOVE), SP).addReg(FP).addReg(ZERO);
   }
 
   if (MipsFI->callsEhReturn()) {
@@ -621,10 +621,18 @@ MipsSEFrameLowering::hasReservedCallFrame(const MachineFunction &MF) const {
     !MFI->hasVarSizedObjects();
 }
 
-void MipsSEFrameLowering::
-processFunctionBeforeCalleeSavedScan(MachineFunction &MF,
-                                     RegScavenger *RS) const {
-  MachineRegisterInfo &MRI = MF.getRegInfo();
+/// Mark \p Reg and all registers aliasing it in the bitset.
+static void setAliasRegs(MachineFunction &MF, BitVector &SavedRegs,
+                         unsigned Reg) {
+  const TargetRegisterInfo *TRI = MF.getSubtarget().getRegisterInfo();
+  for (MCRegAliasIterator AI(Reg, TRI, true); AI.isValid(); ++AI)
+    SavedRegs.set(*AI);
+}
+
+void MipsSEFrameLowering::determineCalleeSaves(MachineFunction &MF,
+                                               BitVector &SavedRegs,
+                                               RegScavenger *RS) const {
+  TargetFrameLowering::determineCalleeSaves(MF, SavedRegs, RS);
   MipsFunctionInfo *MipsFI = MF.getInfo<MipsFunctionInfo>();
   MipsABIInfo ABI = STI.getABI();
   unsigned FP = ABI.GetFramePtr();
@@ -632,10 +640,10 @@ processFunctionBeforeCalleeSavedScan(MachineFunction &MF,
 
   // Mark $fp as used if function has dedicated frame pointer.
   if (hasFP(MF))
-    MRI.setPhysRegUsed(FP);
+    setAliasRegs(MF, SavedRegs, FP);
   // Mark $s7 as used if function has dedicated base pointer.
   if (hasBP(MF))
-    MRI.setPhysRegUsed(BP);
+    setAliasRegs(MF, SavedRegs, BP);
 
   // Create spill slots for eh data registers if function calls eh_return.
   if (MipsFI->callsEhReturn())

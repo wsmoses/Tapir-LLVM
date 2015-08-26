@@ -270,7 +270,8 @@ public:
     friend class AllocaSlices;
     friend class AllocaSlices::partition_iterator;
 
-    /// \brief The begining and ending offsets of the alloca for this partition.
+    /// \brief The beginning and ending offsets of the alloca for this
+    /// partition.
     uint64_t BeginOffset, EndOffset;
 
     /// \brief The start end end iterators of this partition.
@@ -439,7 +440,7 @@ public:
 
       // OK, we need to consume new slices. Set the end offset based on the
       // current slice, and step SJ past it. The beginning offset of the
-      // parttion is the beginning offset of the next slice unless we have
+      // partition is the beginning offset of the next slice unless we have
       // pre-existing split slices that are continuing, in which case we begin
       // at the prior end offset.
       P.BeginOffset = P.SplitTails.empty() ? P.SI->beginOffset() : P.EndOffset;
@@ -493,7 +494,7 @@ public:
              "End iterators don't match between compared partition iterators!");
 
       // The observed positions of partitions is marked by the P.SI iterator and
-      // the emptyness of the split slices. The latter is only relevant when
+      // the emptiness of the split slices. The latter is only relevant when
       // P.SI == SE, as the end iterator will additionally have an empty split
       // slices list, but the prior may have the same P.SI and a tail of split
       // slices.
@@ -1847,10 +1848,17 @@ static unsigned getAdjustedAlignment(Instruction *I, uint64_t Offset,
 static bool canConvertValue(const DataLayout &DL, Type *OldTy, Type *NewTy) {
   if (OldTy == NewTy)
     return true;
-  if (IntegerType *OldITy = dyn_cast<IntegerType>(OldTy))
-    if (IntegerType *NewITy = dyn_cast<IntegerType>(NewTy))
-      if (NewITy->getBitWidth() >= OldITy->getBitWidth())
-        return true;
+
+  // For integer types, we can't handle any bit-width differences. This would
+  // break both vector conversions with extension and introduce endianness
+  // issues when in conjunction with loads and stores.
+  if (isa<IntegerType>(OldTy) && isa<IntegerType>(NewTy)) {
+    assert(cast<IntegerType>(OldTy)->getBitWidth() !=
+               cast<IntegerType>(NewTy)->getBitWidth() &&
+           "We can't have the same bitwidth for different int types");
+    return false;
+  }
+
   if (DL.getTypeSizeInBits(NewTy) != DL.getTypeSizeInBits(OldTy))
     return false;
   if (!NewTy->isSingleValueType() || !OldTy->isSingleValueType())
@@ -1885,10 +1893,8 @@ static Value *convertValue(const DataLayout &DL, IRBuilderTy &IRB, Value *V,
   if (OldTy == NewTy)
     return V;
 
-  if (IntegerType *OldITy = dyn_cast<IntegerType>(OldTy))
-    if (IntegerType *NewITy = dyn_cast<IntegerType>(NewTy))
-      if (NewITy->getBitWidth() > OldITy->getBitWidth())
-        return IRB.CreateZExt(V, NewITy);
+  assert(!(isa<IntegerType>(OldTy) && isa<IntegerType>(NewTy)) &&
+         "Integer types must be the exact same to convert.");
 
   // See if we need inttoptr for this type pair. A cast involving both scalars
   // and vectors requires and additional bitcast.
@@ -1929,7 +1935,7 @@ static Value *convertValue(const DataLayout &DL, IRBuilderTy &IRB, Value *V,
 
 /// \brief Test whether the given slice use can be promoted to a vector.
 ///
-/// This function is called to test each entry in a partioning which is slated
+/// This function is called to test each entry in a partition which is slated
 /// for a single slice.
 static bool isVectorPromotionViableForSlice(AllocaSlices::Partition &P,
                                             const Slice &S, VectorType *Ty,
@@ -2125,7 +2131,7 @@ static bool isIntegerWideningViableForSlice(const Slice &S,
   uint64_t RelEnd = S.endOffset() - AllocBeginOffset;
 
   // We can't reasonably handle cases where the load or store extends past
-  // the end of the aloca's type and into its padding.
+  // the end of the alloca's type and into its padding.
   if (RelEnd > Size)
     return false;
 
@@ -2133,6 +2139,9 @@ static bool isIntegerWideningViableForSlice(const Slice &S,
 
   if (LoadInst *LI = dyn_cast<LoadInst>(U->getUser())) {
     if (LI->isVolatile())
+      return false;
+    // We can't handle loads that extend past the allocated memory.
+    if (DL.getTypeStoreSize(LI->getType()) > Size)
       return false;
     // Note that we don't count vector loads or stores as whole-alloca
     // operations which enable integer widening because we would prefer to use
@@ -2151,6 +2160,9 @@ static bool isIntegerWideningViableForSlice(const Slice &S,
   } else if (StoreInst *SI = dyn_cast<StoreInst>(U->getUser())) {
     Type *ValueTy = SI->getValueOperand()->getType();
     if (SI->isVolatile())
+      return false;
+    // We can't handle stores that extend past the allocated memory.
+    if (DL.getTypeStoreSize(ValueTy) > Size)
       return false;
     // Note that we don't count vector loads or stores as whole-alloca
     // operations which enable integer widening because we would prefer to use
@@ -2585,6 +2597,7 @@ private:
 
     Type *TargetTy = IsSplit ? Type::getIntNTy(LI.getContext(), SliceSize * 8)
                              : LI.getType();
+    const bool IsLoadPastEnd = DL.getTypeStoreSize(TargetTy) > SliceSize;
     bool IsPtrAdjusted = false;
     Value *V;
     if (VecTy) {
@@ -2592,14 +2605,36 @@ private:
     } else if (IntTy && LI.getType()->isIntegerTy()) {
       V = rewriteIntegerLoad(LI);
     } else if (NewBeginOffset == NewAllocaBeginOffset &&
-               canConvertValue(DL, NewAllocaTy, LI.getType())) {
-      V = IRB.CreateAlignedLoad(&NewAI, NewAI.getAlignment(), LI.isVolatile(),
-                                LI.getName());
+               NewEndOffset == NewAllocaEndOffset &&
+               (canConvertValue(DL, NewAllocaTy, TargetTy) ||
+                (IsLoadPastEnd && NewAllocaTy->isIntegerTy() &&
+                 TargetTy->isIntegerTy()))) {
+      LoadInst *NewLI = IRB.CreateAlignedLoad(&NewAI, NewAI.getAlignment(),
+                                              LI.isVolatile(), LI.getName());
+      if (LI.isVolatile())
+        NewLI->setAtomic(LI.getOrdering(), LI.getSynchScope());
+      V = NewLI;
+
+      // If this is an integer load past the end of the slice (which means the
+      // bytes outside the slice are undef or this load is dead) just forcibly
+      // fix the integer size with correct handling of endianness.
+      if (auto *AITy = dyn_cast<IntegerType>(NewAllocaTy))
+        if (auto *TITy = dyn_cast<IntegerType>(TargetTy))
+          if (AITy->getBitWidth() < TITy->getBitWidth()) {
+            V = IRB.CreateZExt(V, TITy, "load.ext");
+            if (DL.isBigEndian())
+              V = IRB.CreateShl(V, TITy->getBitWidth() - AITy->getBitWidth(),
+                                "endian_shift");
+          }
     } else {
       Type *LTy = TargetTy->getPointerTo();
-      V = IRB.CreateAlignedLoad(getNewAllocaSlicePtr(IRB, LTy),
-                                getSliceAlign(TargetTy), LI.isVolatile(),
-                                LI.getName());
+      LoadInst *NewLI = IRB.CreateAlignedLoad(getNewAllocaSlicePtr(IRB, LTy),
+                                              getSliceAlign(TargetTy),
+                                              LI.isVolatile(), LI.getName());
+      if (LI.isVolatile())
+        NewLI->setAtomic(LI.getOrdering(), LI.getSynchScope());
+
+      V = NewLI;
       IsPtrAdjusted = true;
     }
     V = convertValue(DL, IRB, V, TargetTy);
@@ -2710,10 +2745,25 @@ private:
     if (IntTy && V->getType()->isIntegerTy())
       return rewriteIntegerStore(V, SI);
 
+    const bool IsStorePastEnd = DL.getTypeStoreSize(V->getType()) > SliceSize;
     StoreInst *NewSI;
     if (NewBeginOffset == NewAllocaBeginOffset &&
         NewEndOffset == NewAllocaEndOffset &&
-        canConvertValue(DL, V->getType(), NewAllocaTy)) {
+        (canConvertValue(DL, V->getType(), NewAllocaTy) ||
+         (IsStorePastEnd && NewAllocaTy->isIntegerTy() &&
+          V->getType()->isIntegerTy()))) {
+      // If this is an integer store past the end of slice (and thus the bytes
+      // past that point are irrelevant or this is unreachable), truncate the
+      // value prior to storing.
+      if (auto *VITy = dyn_cast<IntegerType>(V->getType()))
+        if (auto *AITy = dyn_cast<IntegerType>(NewAllocaTy))
+          if (VITy->getBitWidth() > AITy->getBitWidth()) {
+            if (DL.isBigEndian())
+              V = IRB.CreateLShr(V, VITy->getBitWidth() - AITy->getBitWidth(),
+                                 "endian_shift");
+            V = IRB.CreateTrunc(V, AITy, "load.trunc");
+          }
+
       V = convertValue(DL, IRB, V, NewAllocaTy);
       NewSI = IRB.CreateAlignedStore(V, &NewAI, NewAI.getAlignment(),
                                      SI.isVolatile());
@@ -2722,7 +2772,8 @@ private:
       NewSI = IRB.CreateAlignedStore(V, NewPtr, getSliceAlign(V->getType()),
                                      SI.isVolatile());
     }
-    (void)NewSI;
+    if (SI.isVolatile())
+      NewSI->setAtomic(SI.getOrdering(), SI.getSynchScope());
     Pass.DeadInsts.insert(&SI);
     deleteIfTriviallyDead(OldOp);
 
@@ -3661,7 +3712,7 @@ bool SROA::presplitLoadsAndStores(AllocaInst &AI, AllocaSlices &AS) {
                        return true;
                      }),
       Stores.end());
-  // Now we have to go *back* through all te stores, because a later store may
+  // Now we have to go *back* through all the stores, because a later store may
   // have caused an earlier store's load to become unsplittable and if it is
   // unsplittable for the later store, then we can't rely on it being split in
   // the earlier store either.
@@ -3922,7 +3973,7 @@ bool SROA::presplitLoadsAndStores(AllocaInst &AI, AllocaSlices &AS) {
 
     // Mark the original store as dead now that we've split it up and kill its
     // slice. Note that we leave the original load in place unless this store
-    // was its ownly use. It may in turn be split up if it is an alloca load
+    // was its only use. It may in turn be split up if it is an alloca load
     // for some other alloca, but it may be a normal load. This may introduce
     // redundant loads, but where those can be merged the rest of the optimizer
     // should handle the merging, and this uncovers SSA splits which is more
@@ -4085,6 +4136,9 @@ AllocaInst *SROA::rewritePartition(AllocaInst &AI, AllocaSlices &AS,
 
   if (Promotable) {
     if (PHIUsers.empty() && SelectUsers.empty()) {
+      // We don't yet know if NewAI has a detached use.  Assume it
+      // does not and let the promotion process figure it out.
+      NewAI->setHasDetachedUse(false);
       // Promote the alloca.
       PromotableAllocas.push_back(NewAI);
     } else {
@@ -4180,7 +4234,7 @@ bool SROA::splitAlloca(AllocaInst &AI, AllocaSlices &AS) {
       std::max<unsigned>(NumPartitions, MaxPartitionsPerAlloca);
 
   // Migrate debug information from the old alloca to the new alloca(s)
-  // and the individial partitions.
+  // and the individual partitions.
   if (DbgDeclareInst *DbgDecl = FindAllocaDbgDeclare(&AI)) {
     auto *Var = DbgDecl->getVariable();
     auto *Expr = DbgDecl->getExpression();
@@ -4420,9 +4474,20 @@ bool SROA::promoteAllocas(Function &F) {
       enqueueUsersInWorklist(*I, Worklist, Visited);
     }
     AllocaPromoter(Insts, SSA, *AI, DIB).run(Insts);
-    while (!DeadInsts.empty())
-      DeadInsts.pop_back_val()->eraseFromParent();
-    AI->eraseFromParent();
+    while (!DeadInsts.empty()) {
+      Instruction *I = DeadInsts.pop_back_val();
+      if (AllocaInst *AI = dyn_cast<AllocaInst>(I))
+        if (AI->hasDetachedUse()) continue;
+
+      if (LoadInst *LI = dyn_cast<LoadInst>(I))
+        if (LI->usesDetachedDef()) continue;
+
+      if (StoreInst *SI = dyn_cast<StoreInst>(I))
+        if (SI->isDetachedDef()) continue;
+      I->eraseFromParent();
+    }
+    if (!AI->hasDetachedUse())
+      AI->eraseFromParent();
   }
 
   PromotableAllocas.clear();

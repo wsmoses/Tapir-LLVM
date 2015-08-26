@@ -27,6 +27,7 @@
 #include "llvm/IR/Function.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/Operator.h"
+#include "llvm/IR/PassManager.h"
 #include "llvm/IR/ValueHandle.h"
 #include "llvm/Pass.h"
 #include "llvm/Support/Allocator.h"
@@ -48,6 +49,7 @@ namespace llvm {
   class LoopInfo;
   class Operator;
   class SCEVUnknown;
+  class SCEVAddRecExpr;
   class SCEV;
   template<> struct FoldingSetTrait<SCEV>;
 
@@ -169,11 +171,10 @@ namespace llvm {
     static bool classof(const SCEV *S);
   };
 
-  /// ScalarEvolution - This class is the main scalar evolution driver.  Because
-  /// client code (intentionally) can't do much with the SCEV objects directly,
-  /// they must ask this class for services.
-  ///
-  class ScalarEvolution : public FunctionPass {
+  /// The main scalar evolution driver. Because client code (intentionally)
+  /// can't do much with the SCEV objects directly, they must ask this class
+  /// for services.
+  class ScalarEvolution {
   public:
     /// LoopDisposition - An enum describing the relationship between a
     /// SCEV and a loop.
@@ -209,7 +210,7 @@ namespace llvm {
   private:
     /// SCEVCallbackVH - A CallbackVH to arrange for ScalarEvolution to be
     /// notified whenever a Value is deleted.
-    class SCEVCallbackVH : public CallbackVH {
+    class SCEVCallbackVH final : public CallbackVH {
       ScalarEvolution *SE;
       void deleted() override;
       void allUsesReplacedWith(Value *New) override;
@@ -223,26 +224,26 @@ namespace llvm {
 
     /// F - The function we are analyzing.
     ///
-    Function *F;
-
-    /// The tracker for @llvm.assume intrinsics in this function.
-    AssumptionCache *AC;
-
-    /// LI - The loop information for the function we are currently analyzing.
-    ///
-    LoopInfo *LI;
+    Function &F;
 
     /// TLI - The target library information for the target we are targeting.
     ///
-    TargetLibraryInfo *TLI;
+    TargetLibraryInfo &TLI;
+
+    /// The tracker for @llvm.assume intrinsics in this function.
+    AssumptionCache &AC;
 
     /// DT - The dominator tree.
     ///
-    DominatorTree *DT;
+    DominatorTree &DT;
+
+    /// LI - The loop information for the function we are currently analyzing.
+    ///
+    LoopInfo &LI;
 
     /// CouldNotCompute - This SCEV is used to represent unknown trip
     /// counts and things.
-    SCEVCouldNotCompute CouldNotCompute;
+    std::unique_ptr<SCEVCouldNotCompute> CouldNotCompute;
 
     /// ValueExprMapType - The typedef for ValueExprMap.
     ///
@@ -565,24 +566,50 @@ namespace llvm {
     /// forgetMemoizedResults - Drop memoized information computed for S.
     void forgetMemoizedResults(const SCEV *S);
 
+    /// Return an existing SCEV for V if there is one, otherwise return nullptr.
+    const SCEV *getExistingSCEV(Value *V);
+
     /// Return false iff given SCEV contains a SCEVUnknown with NULL value-
     /// pointer.
     bool checkValidity(const SCEV *S) const;
 
-    // Return true if `ExtendOpTy`({`Start`,+,`Step`}) can be proved to be equal
-    // to {`ExtendOpTy`(`Start`),+,`ExtendOpTy`(`Step`)}.  This is equivalent to
-    // proving no signed (resp. unsigned) wrap in {`Start`,+,`Step`} if
-    // `ExtendOpTy` is `SCEVSignExtendExpr` (resp. `SCEVZeroExtendExpr`).
-    //
+    /// Return true if `ExtendOpTy`({`Start`,+,`Step`}) can be proved to be
+    /// equal to {`ExtendOpTy`(`Start`),+,`ExtendOpTy`(`Step`)}.  This is
+    /// equivalent to proving no signed (resp. unsigned) wrap in
+    /// {`Start`,+,`Step`} if `ExtendOpTy` is `SCEVSignExtendExpr`
+    /// (resp. `SCEVZeroExtendExpr`).
+    ///
     template<typename ExtendOpTy>
     bool proveNoWrapByVaryingStart(const SCEV *Start, const SCEV *Step,
                                    const Loop *L);
 
-  public:
-    static char ID; // Pass identification, replacement for typeid
-    ScalarEvolution();
+    bool isMonotonicPredicateImpl(const SCEVAddRecExpr *LHS,
+                                  ICmpInst::Predicate Pred, bool &Increasing);
 
-    LLVMContext &getContext() const { return F->getContext(); }
+    /// Return true if, for all loop invariant X, the predicate "LHS `Pred` X"
+    /// is monotonically increasing or decreasing.  In the former case set
+    /// `Increasing` to true and in the latter case set `Increasing` to false.
+    ///
+    /// A predicate is said to be monotonically increasing if may go from being
+    /// false to being true as the loop iterates, but never the other way
+    /// around.  A predicate is said to be monotonically decreasing if may go
+    /// from being true to being false as the loop iterates, but never the other
+    /// way around.
+    bool isMonotonicPredicate(const SCEVAddRecExpr *LHS,
+                              ICmpInst::Predicate Pred, bool &Increasing);
+
+    // Return SCEV no-wrap flags that can be proven based on reasoning
+    // about how poison produced from no-wrap flags on this value
+    // (e.g. a nuw add) would trigger undefined behavior on overflow.
+    SCEV::NoWrapFlags getNoWrapFlagsFromUB(const Value *V);
+
+  public:
+    ScalarEvolution(Function &F, TargetLibraryInfo &TLI, AssumptionCache &AC,
+                    DominatorTree &DT, LoopInfo &LI);
+    ~ScalarEvolution();
+    ScalarEvolution(ScalarEvolution &&Arg);
+
+    LLVMContext &getContext() const { return F.getContext(); }
 
     /// isSCEVable - Test if values of the given type are analyzable within
     /// the SCEV framework. This primarily includes integer types, and it
@@ -687,7 +714,8 @@ namespace llvm {
 
     /// getNegativeSCEV - Return the SCEV object corresponding to -V.
     ///
-    const SCEV *getNegativeSCEV(const SCEV *V);
+    const SCEV *getNegativeSCEV(const SCEV *V,
+                                SCEV::NoWrapFlags Flags = SCEV::FlagAnyWrap);
 
     /// getNotSCEV - Return the SCEV object corresponding to ~V.
     ///
@@ -899,6 +927,16 @@ namespace llvm {
     bool isKnownPredicate(ICmpInst::Predicate Pred,
                           const SCEV *LHS, const SCEV *RHS);
 
+    /// Return true if the result of the predicate LHS `Pred` RHS is loop
+    /// invariant with respect to L.  Set InvariantPred, InvariantLHS and
+    /// InvariantLHS so that InvariantLHS `InvariantPred` InvariantRHS is the
+    /// loop invariant form of LHS `Pred` RHS.
+    bool isLoopInvariantPredicate(ICmpInst::Predicate Pred, const SCEV *LHS,
+                                  const SCEV *RHS, const Loop *L,
+                                  ICmpInst::Predicate &InvariantPred,
+                                  const SCEV *&InvariantLHS,
+                                  const SCEV *&InvariantRHS);
+
     /// SimplifyICmpOperands - Simplify LHS and RHS in a comparison with
     /// predicate Pred. Return true iff any changes were made. If the
     /// operands are provably equal or unequal, LHS and RHS are set to
@@ -948,11 +986,8 @@ namespace llvm {
                              SmallVectorImpl<const SCEV *> &Sizes,
                              const SCEV *ElementSize) const;
 
-    bool runOnFunction(Function &F) override;
-    void releaseMemory() override;
-    void getAnalysisUsage(AnalysisUsage &AU) const override;
-    void print(raw_ostream &OS, const Module* = nullptr) const override;
-    void verifyAnalysis() const override;
+    void print(raw_ostream &OS) const;
+    void verify() const;
 
     /// Collect parametric terms occurring in step expressions.
     void collectParametricTerms(const SCEV *Expr,
@@ -1060,6 +1095,51 @@ namespace llvm {
     /// values that have been allocated. This is used by releaseMemory
     /// to locate them all and call their destructors.
     SCEVUnknown *FirstUnknown;
+  };
+
+  /// \brief Analysis pass that exposes the \c ScalarEvolution for a function.
+  class ScalarEvolutionAnalysis {
+    static char PassID;
+
+  public:
+    typedef ScalarEvolution Result;
+
+    /// \brief Opaque, unique identifier for this analysis pass.
+    static void *ID() { return (void *)&PassID; }
+
+    /// \brief Provide a name for the analysis for debugging and logging.
+    static StringRef name() { return "ScalarEvolutionAnalysis"; }
+
+    ScalarEvolution run(Function &F, AnalysisManager<Function> *AM);
+  };
+
+  /// \brief Printer pass for the \c ScalarEvolutionAnalysis results.
+  class ScalarEvolutionPrinterPass {
+    raw_ostream &OS;
+
+  public:
+    explicit ScalarEvolutionPrinterPass(raw_ostream &OS) : OS(OS) {}
+    PreservedAnalyses run(Function &F, AnalysisManager<Function> *AM);
+
+    static StringRef name() { return "ScalarEvolutionPrinterPass"; }
+  };
+
+  class ScalarEvolutionWrapperPass : public FunctionPass {
+    std::unique_ptr<ScalarEvolution> SE;
+
+  public:
+    static char ID;
+
+    ScalarEvolutionWrapperPass();
+
+    ScalarEvolution &getSE() { return *SE; }
+    const ScalarEvolution &getSE() const { return *SE; }
+
+    bool runOnFunction(Function &F) override;
+    void releaseMemory() override;
+    void getAnalysisUsage(AnalysisUsage &AU) const override;
+    void print(raw_ostream &OS, const Module * = nullptr) const override;
+    void verifyAnalysis() const override;
   };
 }
 

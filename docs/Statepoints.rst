@@ -331,14 +331,16 @@ the user will patch over the 'num patch bytes' bytes of nops with a
 calling sequence specific to their runtime before executing the
 generated machine code.  There are no guarantees with respect to the
 alignment of the nop sequence.  Unlike :doc:`StackMaps` statepoints do
-not have a concept of shadow bytes.
+not have a concept of shadow bytes.  Note that semantically the
+statepoint still represents a call or invoke to 'target', and the nop
+sequence after patching is expected to represent an operation
+equivalent to a call or invoke to 'target'.
 
 The 'target' operand is the function actually being called.  The
 target can be specified as either a symbolic LLVM function, or as an
 arbitrary Value of appropriate function type.  Note that the function
 type must match the signature of the callee and the types of the 'call
-parameters' arguments.  If 'num patch bytes' is non-zero then 'target'
-has to be the constant pointer null of the appropriate function type.
+parameters' arguments.
 
 The '#call args' operand is the number of arguments to the actual
 call.  It must exactly match the number of arguments passed in the
@@ -565,7 +567,7 @@ The existing IR Verifier pass has been extended to check most of the
 local restrictions on the intrinsics mentioned in their respective
 documentation.  The current implementation in LLVM does not check the
 key relocation invariant, but this is ongoing work on developing such
-a verifier.  Please ask on llvmdev if you're interested in
+a verifier.  Please ask on llvm-dev if you're interested in
 experimenting with the current version.
 
 .. _statepoint-utilities:
@@ -696,8 +698,14 @@ If you are scheduling the RewriteStatepointsForGC pass late in the pass order,
 you should probably schedule this pass immediately before it.  The exception 
 would be if you need to preserve abstract frame information (e.g. for
 deoptimization or introspection) at safepoints.  In that case, ask on the 
-llvmdev mailing list for suggestions.
+llvm-dev mailing list for suggestions.
 
+
+Supported Architectures
+=======================
+
+Support for statepoint generation requires some code for each backend.
+Today, only X86_64 is supported.  
 
 Bugs and Enhancements
 =====================
@@ -707,8 +715,8 @@ tracked by performing a `bugzilla search
 <http://llvm.org/bugs/buglist.cgi?cmdtype=runnamed&namedcmd=Statepoint%20Bugs&list_id=64342>`_
 for [Statepoint] in the summary field. When filing new bugs, please
 use this tag so that interested parties see the newly filed bug.  As
-with most LLVM features, design discussions take place on `llvmdev
-<http://lists.cs.uiuc.edu/mailman/listinfo/llvmdev>`_, and patches
+with most LLVM features, design discussions take place on `llvm-dev
+<http://lists.llvm.org/mailman/listinfo/llvm-dev>`_, and patches
 should be sent to `llvm-commits
-<http://lists.cs.uiuc.edu/mailman/listinfo/llvm-commits>`_ for review.
+<http://lists.llvm.org/mailman/listinfo/llvm-commits>`_ for review.
 

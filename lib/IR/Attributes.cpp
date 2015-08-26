@@ -190,6 +190,8 @@ std::string Attribute::getAsString(bool InAttrGrp) const {
     return "sanitize_address";
   if (hasAttribute(Attribute::AlwaysInline))
     return "alwaysinline";
+  if (hasAttribute(Attribute::ArgMemOnly))
+    return "argmemonly";
   if (hasAttribute(Attribute::Builtin))
     return "builtin";
   if (hasAttribute(Attribute::ByVal))
@@ -447,6 +449,9 @@ uint64_t AttributeImpl::getAttrMask(Attribute::AttrKind Val) {
     llvm_unreachable("dereferenceable_or_null attribute not supported in raw "
                      "format");
     break;
+  case Attribute::ArgMemOnly:
+    llvm_unreachable("argmemonly attribute not supported in raw format");
+    break;
   }
   llvm_unreachable("Unsupported attribute type");
 }
@@ -479,8 +484,7 @@ AttributeSetNode *AttributeSetNode::get(LLVMContext &C,
   // new one and insert it.
   if (!PA) {
     // Coallocate entries after the AttributeSetNode itself.
-    void *Mem = ::operator new(sizeof(AttributeSetNode) +
-                               sizeof(Attribute) * SortedAttrs.size());
+    void *Mem = ::operator new(totalSizeToAlloc<Attribute>(SortedAttrs.size()));
     PA = new (Mem) AttributeSetNode(SortedAttrs);
     pImpl->AttrsSetNodes.InsertNode(PA, InsertPoint);
   }
@@ -612,9 +616,8 @@ AttributeSet::getImpl(LLVMContext &C,
   // create a new one and insert it.
   if (!PA) {
     // Coallocate entries after the AttributeSetImpl itself.
-    void *Mem = ::operator new(sizeof(AttributeSetImpl) +
-                               sizeof(std::pair<unsigned, AttributeSetNode *>) *
-                                   Attrs.size());
+    void *Mem = ::operator new(
+        AttributeSetImpl::totalSizeToAlloc<IndexAttrPair>(Attrs.size()));
     PA = new (Mem) AttributeSetImpl(C, Attrs);
     pImpl->AttrsLists.InsertNode(PA, InsertPoint);
   }
@@ -731,9 +734,8 @@ AttributeSet AttributeSet::get(LLVMContext &C, ArrayRef<AttributeSet> Attrs) {
     if (!AS) continue;
     SmallVector<std::pair<unsigned, AttributeSetNode *>, 8>::iterator
       ANVI = AttrNodeVec.begin(), ANVE;
-    for (const AttributeSetImpl::IndexAttrPair
-             *AI = AS->getNode(0),
-             *AE = AS->getNode(AS->getNumAttributes());
+    for (const IndexAttrPair *AI = AS->getNode(0),
+                             *AE = AS->getNode(AS->getNumAttributes());
          AI != AE; ++AI) {
       ANVE = AttrNodeVec.end();
       while (ANVI != ANVE && ANVI->first <= AI->first)
@@ -1356,7 +1358,8 @@ AttrBuilder &AttrBuilder::addRawValue(uint64_t Val) {
   for (Attribute::AttrKind I = Attribute::None; I != Attribute::EndAttrKinds;
        I = Attribute::AttrKind(I + 1)) {
     if (I == Attribute::Dereferenceable ||
-        I == Attribute::DereferenceableOrNull)
+        I == Attribute::DereferenceableOrNull ||
+        I == Attribute::ArgMemOnly)
       continue;
     if (uint64_t A = (Val & AttributeImpl::getAttrMask(I))) {
       Attrs[I] = true;
@@ -1376,7 +1379,7 @@ AttrBuilder &AttrBuilder::addRawValue(uint64_t Val) {
 //===----------------------------------------------------------------------===//
 
 /// \brief Which attributes cannot be applied to a type.
-AttrBuilder AttributeFuncs::typeIncompatible(const Type *Ty) {
+AttrBuilder AttributeFuncs::typeIncompatible(Type *Ty) {
   AttrBuilder Incompatible;
 
   if (!Ty->isIntegerTy())

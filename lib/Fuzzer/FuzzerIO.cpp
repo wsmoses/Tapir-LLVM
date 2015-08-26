@@ -21,7 +21,10 @@ namespace fuzzer {
 
 static long GetEpoch(const std::string &Path) {
   struct stat St;
-  if (stat(Path.c_str(), &St)) return 0;
+  if (stat(Path.c_str(), &St)) {
+    Printf("Can not stat: %s; exiting\n", Path.c_str());
+    exit(1);
+  }
   return St.st_mtime;
 }
 
@@ -34,7 +37,10 @@ static std::vector<std::string> ListFilesInDir(const std::string &Dir,
     *Epoch = E;
   }
   DIR *D = opendir(Dir.c_str());
-  if (!D) return V;
+  if (!D) {
+    Printf("No such directory: %s; exiting\n", Dir.c_str());
+    exit(1);
+  }
   while (auto E = readdir(D)) {
     if (E->d_type == DT_REG || E->d_type == DT_LNK)
       V.push_back(E->d_name);
@@ -60,8 +66,11 @@ void CopyFileToErr(const std::string &Path) {
 }
 
 void WriteToFile(const Unit &U, const std::string &Path) {
-  std::ofstream OF(Path);
-  OF.write((const char*)U.data(), U.size());
+  // Use raw C interface because this function may be called from a sig handler.
+  FILE *Out = fopen(Path.c_str(), "w");
+  if (!Out) return;
+  fwrite(U.data(), sizeof(U[0]), U.size(), Out);
+  fclose(Out);
 }
 
 void ReadDirToVectorOfUnits(const char *Path, std::vector<Unit> *V,

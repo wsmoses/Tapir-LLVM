@@ -29,10 +29,19 @@ ObjectFile::ObjectFile(unsigned int Type, MemoryBufferRef Source)
     : SymbolicFile(Type, Source) {}
 
 bool SectionRef::containsSymbol(SymbolRef S) const {
-  section_iterator SymSec = getObject()->section_end();
-  if (S.getSection(SymSec))
+  ErrorOr<section_iterator> SymSec = S.getSection();
+  if (!SymSec)
     return false;
-  return *this == *SymSec;
+  return *this == **SymSec;
+}
+
+uint64_t ObjectFile::getSymbolValue(DataRefImpl Ref) const {
+  uint32_t Flags = getSymbolFlags(Ref);
+  if (Flags & SymbolRef::SF_Undefined)
+    return 0;
+  if (Flags & SymbolRef::SF_Common)
+    return getCommonSymbolSize(Ref);
+  return getSymbolValueImpl(Ref);
 }
 
 std::error_code ObjectFile::printSymbolName(raw_ostream &OS,

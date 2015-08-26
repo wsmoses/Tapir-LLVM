@@ -19,7 +19,6 @@
 ; X86:      calll   _g
 ; X86-NEXT: [[RETURN_STMT:.*]]:
 ; X86:      ret
-; X86-NEXT: L{{.*}}:
 ; X86-NEXT: [[END_OF_F:^L.*]]:
 ;
 ; X86-LABEL: .section        .debug$S,"dr"
@@ -51,7 +50,7 @@
 ; X86-NEXT: [[F2_START]]:
 ; X86-NEXT: .secrel32 _f
 ; X86-NEXT: .secidx _f
-; X86-NEXT: .short 0
+; X86-NEXT: .short 1
 ; X86-NEXT: .long [[END_OF_F]]-_f
 ; X86-NEXT: [[FILE_SEGMENT_START:[^:]*]]:
 ; X86-NEXT: .long   0
@@ -63,6 +62,12 @@
 ; X86-NEXT: .long   5
 ; X86-NEXT: .long [[RETURN_STMT]]-_f
 ; X86-NEXT: .long   6
+; X86-NEXT: .short  0
+; X86-NEXT: .short  0
+; X86-NEXT: .short  0
+; X86-NEXT: .short  0
+; X86-NEXT: .short  0
+; X86-NEXT: .short  0
 ; X86-NEXT: [[FILE_SEGMENT_END]]:
 ; X86-NEXT: [[F2_END]]:
 ; File index to string table offset subsection
@@ -101,6 +106,7 @@
 ; OBJ32-NEXT: ]
 ; OBJ32:      FunctionLineTable [
 ; OBJ32-NEXT:   Name: _f
+; OBJ32-NEXT:   Flags: 0x1
 ; OBJ32-NEXT:   CodeSize: 0x6
 ; OBJ32-NEXT:   FilenameSegment [
 ; OBJ32-NEXT:     Filename: D:\asm.c
@@ -110,6 +116,12 @@
 ; OBJ32-NEXT:     +0x0: 4
 ; OBJ32-NEXT:     +0x0: 5
 ; OBJ32-NEXT:     +0x5: 6
+; OBJ32-NEXT:     ColStart: 0
+; OBJ32-NEXT:     ColEnd: 0
+; OBJ32-NEXT:     ColStart: 0
+; OBJ32-NEXT:     ColEnd: 0
+; OBJ32-NEXT:     ColStart: 0
+; OBJ32-NEXT:     ColEnd: 0
 ; OBJ32-NEXT:   ]
 ; OBJ32-NEXT: ]
 ; OBJ32:    }
@@ -125,7 +137,6 @@
 ; X64-NEXT: [[EPILOG_AND_RET:.*]]:
 ; X64:      addq    $40, %rsp
 ; X64-NEXT: ret
-; X64-NEXT: .L{{.*}}:
 ; X64-NEXT: [[END_OF_F:.*]]:
 ;
 ; X64-LABEL: .section        .debug$S,"dr"
@@ -157,7 +168,7 @@
 ; X64-NEXT: [[F2_START]]:
 ; X64-NEXT: .secrel32 f
 ; X64-NEXT: .secidx f
-; X64-NEXT: .short 0
+; X64-NEXT: .short 1
 ; X64-NEXT: .long [[END_OF_F]]-f
 ; X64-NEXT: [[FILE_SEGMENT_START:[^:]*]]:
 ; X64-NEXT: .long   0
@@ -171,6 +182,14 @@
 ; X64-NEXT: .long   5
 ; X64-NEXT: .long [[EPILOG_AND_RET]]-f
 ; X64-NEXT: .long   6
+; X64-NEXT: .short  0
+; X64-NEXT: .short  0
+; X64-NEXT: .short  0
+; X64-NEXT: .short  0
+; X64-NEXT: .short  0
+; X64-NEXT: .short  0
+; X64-NEXT: .short  0
+; X64-NEXT: .short  0
 ; X64-NEXT: [[FILE_SEGMENT_END]]:
 ; X64-NEXT: [[F2_END]]:
 ; File index to string table offset subsection
@@ -209,6 +228,7 @@
 ; OBJ64-NEXT: ]
 ; OBJ64:      FunctionLineTable [
 ; OBJ64-NEXT:   Name: f
+; OBJ64-NEXT:   Flags: 0x1
 ; OBJ64-NEXT:   CodeSize: 0xE
 ; OBJ64-NEXT:   FilenameSegment [
 ; OBJ64-NEXT:     Filename: D:\asm.c
@@ -218,6 +238,14 @@
 ; OBJ64-NEXT:     +0x4: 4
 ; OBJ64-NEXT:     +0x4: 5
 ; OBJ64-NEXT:     +0x9: 6
+; OBJ64-NEXT:     ColStart: 0
+; OBJ64-NEXT:     ColEnd: 0
+; OBJ64-NEXT:     ColStart: 0
+; OBJ64-NEXT:     ColEnd: 0
+; OBJ64-NEXT:     ColStart: 0
+; OBJ64-NEXT:     ColEnd: 0
+; OBJ64-NEXT:     ColStart: 0
+; OBJ64-NEXT:     ColEnd: 0
 ; OBJ64-NEXT:   ]
 ; OBJ64-NEXT: ]
 ; OBJ64:    }
@@ -240,7 +268,7 @@ attributes #2 = { nounwind }
 !llvm.module.flags = !{!9, !10}
 !llvm.ident = !{!11}
 
-!0 = !DICompileUnit(language: DW_LANG_C99, producer: "clang version 3.5 ", isOptimized: false, emissionKind: 0, file: !1, enums: !2, retainedTypes: !2, subprograms: !3, globals: !2, imports: !2)
+!0 = distinct !DICompileUnit(language: DW_LANG_C99, producer: "clang version 3.5 ", isOptimized: false, emissionKind: 0, file: !1, enums: !2, retainedTypes: !2, subprograms: !3, globals: !2, imports: !2)
 !1 = !DIFile(filename: "<unknown>", directory: "D:\5C")
 !2 = !{}
 !3 = !{!4}
@@ -249,7 +277,7 @@ attributes #2 = { nounwind }
 !6 = !DIFile(filename: "asm.c", directory: "D:C")
 !7 = !DISubroutineType(types: !8)
 !8 = !{null}
-!9 = !{i32 2, !"Dwarf Version", i32 4}
+!9 = !{i32 2, !"CodeView", i32 1}
 !10 = !{i32 1, !"Debug Info Version", i32 3}
 !11 = !{!"clang version 3.5 "}
 !12 = !DILocation(line: 4, scope: !4)

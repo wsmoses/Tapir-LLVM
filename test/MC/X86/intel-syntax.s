@@ -635,9 +635,11 @@ add byte ptr [rax], 1
 // CHECK: addw $1, (%rax)
 // CHECK: addb $1, (%rax)
 
+fstp tbyte ptr [rax]
 fstp xword ptr [rax]
 fstp qword ptr [rax]
 fstp dword ptr [rax]
+// CHECK: fstpt (%rax)
 // CHECK: fstpt (%rax)
 // CHECK: fstpl (%rax)
 // CHECK: fstps (%rax)
@@ -665,3 +667,55 @@ frstor dword ptr [eax]
 
 // CHECK: cmpnless %xmm1, %xmm0
 cmpnless xmm0, xmm1
+
+insb
+insw
+insd
+// CHECK: insb %dx, %es:(%rdi)
+// CHECK: insw %dx, %es:(%rdi)
+// CHECK: insl %dx, %es:(%rdi)
+
+outsb
+outsw
+outsd
+// CHECK: outsb (%rsi), %dx
+// CHECK: outsw (%rsi), %dx
+// CHECK: outsl (%rsi), %dx
+
+imul bx, 123
+imul ebx, 123
+imul rbx, 123
+// CHECK: imulw $123, %bx
+// CHECK: imull $123, %ebx
+// CHECK: imulq $123, %rbx
+
+repe cmpsb
+repz cmpsb
+repne cmpsb
+repnz cmpsb
+// CHECK: rep
+// CHECK: cmpsb	%es:(%rdi), (%rsi)
+// CHECK: rep
+// CHECK: cmpsb	%es:(%rdi), (%rsi)
+// CHECK: repne
+// CHECK: cmpsb	%es:(%rdi), (%rsi)
+// CHECK: repne
+// CHECK: cmpsb	%es:(%rdi), (%rsi)
+
+sal eax, 123
+// CHECK: shll	$123, %eax
+
+comisd xmm0, QWORD PTR [eax]
+comiss xmm0, DWORD PTR [eax]
+vcomisd xmm0, QWORD PTR [eax]
+vcomiss xmm0, DWORD PTR [eax]
+
+// CHECK: comisd (%eax), %xmm0
+// CHECK: comiss (%eax), %xmm0
+// CHECK: vcomisd (%eax), %xmm0
+// CHECK: vcomiss (%eax), %xmm0
+
+fbld tbyte ptr [eax]
+fbstp tbyte ptr [eax]
+// CHECK: fbld (%eax)
+// CHECK: fbstp (%eax)

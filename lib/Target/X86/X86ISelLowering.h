@@ -282,9 +282,8 @@ namespace llvm {
 
       // Vector integer truncate.
       VTRUNC,
-
-      // Vector integer truncate with mask.
-      VTRUNCM,
+      // Vector integer truncate with unsigned/signed saturation.
+      VTRUNCUS, VTRUNCS,
 
       // Vector FP extend.
       VFPEXT,
@@ -292,8 +291,8 @@ namespace llvm {
       // Vector FP round.
       VFPROUND,
 
-      // Vector signed integer to double.
-      CVTDQ2PD,
+      // Vector signed/unsigned integer to double.
+      CVTDQ2PD, CVTUDQ2PD,
 
       // 128-bit vector logical left / right shift
       VSHLDQ, VSRLDQ,
@@ -386,6 +385,10 @@ namespace llvm {
       VFIXUPIMM,
       //Range Restriction Calculation For Packed Pairs of Float32/64 values
       VRANGE,
+      // Reduce - Perform Reduction Transformation on scalar\packed FP
+      VREDUCE,
+      // RndScale - Round FP Values To Include A Given Number Of Fraction Bits
+      VRNDSCALE,
       // Broadcast scalar to vector
       VBROADCAST,
       // Broadcast subvector to vector
@@ -403,7 +406,8 @@ namespace llvm {
       PMULDQ,
       // Vector Multiply Packed UnsignedIntegers with Round and Scale
       MULHRS,
-
+      // Multiply and Add Packed Integers
+      VPMADDUBSW, VPMADDWD,
       // FMA nodes
       FMADD,
       FNMADD,
@@ -418,7 +422,6 @@ namespace llvm {
       FNMSUB_RND,
       FMADDSUB_RND,
       FMSUBADD_RND,
-      RNDSCALE,
 
       // Compress and expand
       COMPRESS,
@@ -428,6 +431,9 @@ namespace llvm {
       //with rounding mode
       SINT_TO_FP_RND,
       UINT_TO_FP_RND,
+
+      // Vector float/double to signed/unsigned integer.
+      FP_TO_SINT_RND, FP_TO_UINT_RND,
       // Save xmm argument registers to the stack, according to %al. An operator
       // is needed so that this can be expanded with control flow.
       VASTART_SAVE_XMM_REGS,
@@ -598,7 +604,9 @@ namespace llvm {
     unsigned getJumpTableEncoding() const override;
     bool useSoftFloat() const override;
 
-    MVT getScalarShiftAmountTy(EVT LHSTy) const override { return MVT::i8; }
+    MVT getScalarShiftAmountTy(const DataLayout &, EVT) const override {
+      return MVT::i8;
+    }
 
     const MCExpr *
     LowerCustomJumpTableEntry(const MachineJumpTableInfo *MJTI,
@@ -616,7 +624,8 @@ namespace llvm {
     /// function arguments in the caller parameter area. For X86, aggregates
     /// that contains are placed at 16-byte boundaries while the rest are at
     /// 4-byte boundaries.
-    unsigned getByValTypeAlignment(Type *Ty) const override;
+    unsigned getByValTypeAlignment(Type *Ty,
+                                   const DataLayout &DL) const override;
 
     /// Returns the target specific optimal type for load
     /// and store operations as a result of memset, memcpy, and memmove
@@ -684,7 +693,8 @@ namespace llvm {
     bool isCheapToSpeculateCtlz() const override;
 
     /// Return the value type to use for ISD::SETCC.
-    EVT getSetCCResultType(LLVMContext &Context, EVT VT) const override;
+    EVT getSetCCResultType(const DataLayout &DL, LLVMContext &Context,
+                           EVT VT) const override;
 
     /// Determine which of the bits specified in Mask are known to be either
     /// zero or one and return them in the KnownZero/KnownOne bitsets.
@@ -747,8 +757,8 @@ namespace llvm {
 
     /// Return true if the addressing mode represented
     /// by AM is legal for this target, for a load/store of the specified type.
-    bool isLegalAddressingMode(const AddrMode &AM, Type *Ty,
-                               unsigned AS) const override;
+    bool isLegalAddressingMode(const DataLayout &DL, const AddrMode &AM,
+                               Type *Ty, unsigned AS) const override;
 
     /// Return true if the specified immediate is legal
     /// icmp immediate, that is the target has icmp instructions which can
@@ -767,7 +777,7 @@ namespace llvm {
     /// of the specified type.
     /// If the AM is supported, the return value must be >= 0.
     /// If the AM is not supported, it returns a negative value.
-    int getScalingFactorCost(const AddrMode &AM, Type *Ty,
+    int getScalingFactorCost(const DataLayout &DL, const AddrMode &AM, Type *Ty,
                              unsigned AS) const override;
 
     bool isVectorShiftByScalarCheap(Type *Ty) const override;
@@ -869,7 +879,8 @@ namespace llvm {
       return nullptr; // nothing to do, move along.
     }
 
-    unsigned getRegisterByName(const char* RegName, EVT VT) const override;
+    unsigned getRegisterByName(const char* RegName, EVT VT,
+                               SelectionDAG &DAG) const override;
 
     /// This method returns a target specific FastISel object,
     /// or null if the target does not support "fast" ISel.
@@ -890,6 +901,8 @@ namespace llvm {
     bool useLoadStackGuardNode() const override;
     /// \brief Customize the preferred legalization strategy for certain types.
     LegalizeTypeAction getPreferredVectorAction(EVT VT) const override;
+
+    bool isIntDivCheap(EVT VT, bool OptSize) const override;
 
   protected:
     std::pair<const TargetRegisterClass *, uint8_t>
@@ -1042,7 +1055,7 @@ namespace llvm {
     LoadInst *
     lowerIdempotentRMWIntoFencedLoad(AtomicRMWInst *AI) const override;
 
-    bool needsCmpXchgNb(const Type *MemType) const;
+    bool needsCmpXchgNb(Type *MemType) const;
 
     /// Utility function to emit atomic-load-arith operations (and, or, xor,
     /// nand, max, min, umax, umin). It takes the corresponding instruction to
@@ -1068,6 +1081,9 @@ namespace llvm {
 
     MachineBasicBlock *EmitLoweredSelect(MachineInstr *I,
                                          MachineBasicBlock *BB) const;
+
+    MachineBasicBlock *EmitLoweredAtomicFP(MachineInstr *I,
+                                           MachineBasicBlock *BB) const;
 
     MachineBasicBlock *EmitLoweredWinAlloca(MachineInstr *MI,
                                               MachineBasicBlock *BB) const;
@@ -1113,7 +1129,7 @@ namespace llvm {
                              unsigned &RefinementSteps) const override;
 
     /// Reassociate floating point divisions into multiply by reciprocal.
-    bool combineRepeatedFPDivisors(unsigned NumUsers) const override;
+    unsigned combineRepeatedFPDivisors() const override;
   };
 
   namespace X86 {

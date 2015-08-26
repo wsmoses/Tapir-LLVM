@@ -169,6 +169,11 @@ public:
   RetTy visitIndirectBrInst(IndirectBrInst &I)    { DELEGATE(TerminatorInst);}
   RetTy visitResumeInst(ResumeInst &I)            { DELEGATE(TerminatorInst);}
   RetTy visitUnreachableInst(UnreachableInst &I)  { DELEGATE(TerminatorInst);}
+  RetTy visitCleanupReturnInst(CleanupReturnInst &I) { DELEGATE(TerminatorInst);}
+  RetTy visitCatchReturnInst(CatchReturnInst &I)  { DELEGATE(TerminatorInst);}
+  RetTy visitCatchPadInst(CatchPadInst &I)    { DELEGATE(TerminatorInst);}
+  RetTy visitCatchEndPadInst(CatchEndPadInst &I) { DELEGATE(TerminatorInst); }
+  RetTy visitTerminatePadInst(TerminatePadInst &I) { DELEGATE(TerminatorInst);}
   RetTy visitDetachInst(DetachInst &I)            { DELEGATE(TerminatorInst);}
   RetTy visitReattachInst(ReattachInst &I)        { DELEGATE(TerminatorInst);}
   RetTy visitSyncInst(SyncInst &I)                { DELEGATE(TerminatorInst);}
@@ -203,6 +208,7 @@ public:
   RetTy visitExtractValueInst(ExtractValueInst &I){ DELEGATE(UnaryInstruction);}
   RetTy visitInsertValueInst(InsertValueInst &I)  { DELEGATE(Instruction); }
   RetTy visitLandingPadInst(LandingPadInst &I)    { DELEGATE(Instruction); }
+  RetTy visitCleanupPadInst(CleanupPadInst &I) { DELEGATE(Instruction); }
 
   // Handle the special instrinsic instruction classes.
   RetTy visitDbgDeclareInst(DbgDeclareInst &I)    { DELEGATE(DbgInfoIntrinsic);}

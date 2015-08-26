@@ -73,6 +73,13 @@ Disassembled("d", cl::desc("Alias for --disassemble"),
              cl::aliasopt(Disassemble));
 
 cl::opt<bool>
+llvm::DisassembleAll("disassemble-all",
+  cl::desc("Display assembler mnemonics for the machine instructions"));
+static cl::alias
+DisassembleAlld("D", cl::desc("Alias for --disassemble-all"),
+             cl::aliasopt(DisassembleAll));
+
+cl::opt<bool>
 llvm::Relocations("r", cl::desc("Display the relocation entries in the file"));
 
 cl::opt<bool>
@@ -95,6 +102,10 @@ llvm::LazyBind("lazy-bind", cl::desc("Display mach-o lazy binding info"));
 
 cl::opt<bool>
 llvm::WeakBind("weak-bind", cl::desc("Display mach-o weak binding info"));
+
+cl::opt<bool>
+llvm::RawClangAST("raw-clang-ast",
+    cl::desc("Dump the raw binary contents of the clang AST section"));
 
 static cl::opt<bool>
 MachOOpt("macho", cl::desc("Use MachO specific object file parser"));
@@ -124,6 +135,13 @@ SectionHeadersShort("headers", cl::desc("Alias for --section-headers"),
 static cl::alias
 SectionHeadersShorter("h", cl::desc("Alias for --section-headers"),
                       cl::aliasopt(SectionHeaders));
+
+cl::list<std::string>
+llvm::FilterSections("section", cl::desc("Operate on the specified sections only. "
+                                         "With -macho dump segment,section"));
+cl::alias
+static FilterSectionsj("j", cl::desc("Alias for --section"),
+                 cl::aliasopt(llvm::FilterSections));
 
 cl::list<std::string>
 llvm::MAttrs("mattr",
@@ -159,22 +177,85 @@ cl::opt<bool> PrintFaultMaps("fault-map-section",
                              cl::desc("Display contents of faultmap section"));
 
 static StringRef ToolName;
-static int ReturnValue = EXIT_SUCCESS;
 
-bool llvm::error(std::error_code EC) {
+namespace {
+typedef std::function<bool(llvm::object::SectionRef const &)> FilterPredicate;
+
+class SectionFilterIterator {
+public:
+  SectionFilterIterator(FilterPredicate P,
+                        llvm::object::section_iterator const &I,
+                        llvm::object::section_iterator const &E)
+      : Predicate(P), Iterator(I), End(E) {
+    ScanPredicate();
+  }
+  llvm::object::SectionRef operator*() const { return *Iterator; }
+  SectionFilterIterator &operator++() {
+    ++Iterator;
+    ScanPredicate();
+    return *this;
+  }
+  bool operator!=(SectionFilterIterator const &Other) const {
+    return Iterator != Other.Iterator;
+  }
+
+private:
+  void ScanPredicate() {
+    while (Iterator != End && !Predicate(*Iterator)) {
+      ++Iterator;
+    }
+  }
+  FilterPredicate Predicate;
+  llvm::object::section_iterator Iterator;
+  llvm::object::section_iterator End;
+};
+
+class SectionFilter {
+public:
+  SectionFilter(FilterPredicate P, llvm::object::ObjectFile const &O)
+      : Predicate(P), Object(O) {}
+  SectionFilterIterator begin() {
+    return SectionFilterIterator(Predicate, Object.section_begin(),
+                                 Object.section_end());
+  }
+  SectionFilterIterator end() {
+    return SectionFilterIterator(Predicate, Object.section_end(),
+                                 Object.section_end());
+  }
+
+private:
+  FilterPredicate Predicate;
+  llvm::object::ObjectFile const &Object;
+};
+SectionFilter ToolSectionFilter(llvm::object::ObjectFile const &O) {
+  return SectionFilter([](llvm::object::SectionRef const &S) {
+                         if(FilterSections.empty())
+                           return true;
+                         llvm::StringRef String;
+                         std::error_code error = S.getName(String);
+                         if (error)
+                           return false;
+                         return std::find(FilterSections.begin(),
+                                          FilterSections.end(),
+                                          String) != FilterSections.end();
+                       },
+                       O);
+}
+}
+
+void llvm::error(std::error_code EC) {
   if (!EC)
-    return false;
+    return;
 
   outs() << ToolName << ": error reading file: " << EC.message() << ".\n";
   outs().flush();
-  ReturnValue = EXIT_FAILURE;
-  return true;
+  exit(1);
 }
 
 static void report_error(StringRef File, std::error_code EC) {
   assert(EC);
   errs() << ToolName << ": '" << File << "': " << EC.message() << ".\n";
-  ReturnValue = EXIT_FAILURE;
+  exit(1);
 }
 
 static const Target *getTarget(const ObjectFile *Obj = nullptr) {
@@ -297,11 +378,12 @@ PrettyPrinter &selectPrettyPrinter(Triple const &Triple) {
 
 template <class ELFT>
 static std::error_code getRelocationValueString(const ELFObjectFile<ELFT> *Obj,
-                                                DataRefImpl Rel,
+                                                const RelocationRef &RelRef,
                                                 SmallVectorImpl<char> &Result) {
+  DataRefImpl Rel = RelRef.getRawDataRefImpl();
+
   typedef typename ELFObjectFile<ELFT>::Elf_Sym Elf_Sym;
   typedef typename ELFObjectFile<ELFT>::Elf_Shdr Elf_Shdr;
-  typedef typename ELFObjectFile<ELFT>::Elf_Rel Elf_Rel;
   typedef typename ELFObjectFile<ELFT>::Elf_Rela Elf_Rela;
 
   const ELFFile<ELFT> &EF = *Obj->getELFFile();
@@ -323,36 +405,31 @@ static std::error_code getRelocationValueString(const ELFObjectFile<ELFT> *Obj,
   if (std::error_code EC = StrTabOrErr.getError())
     return EC;
   StringRef StrTab = *StrTabOrErr;
-  uint8_t type;
+  uint8_t type = RelRef.getType();
   StringRef res;
   int64_t addend = 0;
-  uint16_t symbol_index = 0;
   switch (Sec->sh_type) {
   default:
     return object_error::parse_failed;
   case ELF::SHT_REL: {
-    const Elf_Rel *ERel = Obj->getRel(Rel);
-    type = ERel->getType(EF.isMips64EL());
-    symbol_index = ERel->getSymbol(EF.isMips64EL());
     // TODO: Read implicit addend from section data.
     break;
   }
   case ELF::SHT_RELA: {
     const Elf_Rela *ERela = Obj->getRela(Rel);
-    type = ERela->getType(EF.isMips64EL());
-    symbol_index = ERela->getSymbol(EF.isMips64EL());
     addend = ERela->r_addend;
     break;
   }
   }
-  const Elf_Sym *symb =
-      EF.template getEntry<Elf_Sym>(Sec->sh_link, symbol_index);
+  symbol_iterator SI = RelRef.getSymbol();
+  const Elf_Sym *symb = Obj->getSymbol(SI->getRawDataRefImpl());
   StringRef Target;
-  ErrorOr<const Elf_Shdr *> SymSec = EF.getSection(symb);
-  if (std::error_code EC = SymSec.getError())
-    return EC;
   if (symb->getType() == ELF::STT_SECTION) {
-    ErrorOr<StringRef> SecName = EF.getSectionName(*SymSec);
+    ErrorOr<section_iterator> SymSI = SI->getSection();
+    if (std::error_code EC = SymSI.getError())
+      return EC;
+    const Elf_Shdr *SymSec = Obj->getSection((*SymSI)->getRawDataRefImpl());
+    ErrorOr<StringRef> SecName = EF.getSectionName(SymSec);
     if (std::error_code EC = SecName.getError())
       return EC;
     Target = *SecName;
@@ -414,9 +491,8 @@ static std::error_code getRelocationValueString(const ELFObjectFile<ELFT> *Obj,
 }
 
 static std::error_code getRelocationValueString(const ELFObjectFileBase *Obj,
-                                                const RelocationRef &RelRef,
+                                                const RelocationRef &Rel,
                                                 SmallVectorImpl<char> &Result) {
-  DataRefImpl Rel = RelRef.getRawDataRefImpl();
   if (auto *ELF32LE = dyn_cast<ELF32LEObjectFile>(Obj))
     return getRelocationValueString(ELF32LE, Rel, Result);
   if (auto *ELF64LE = dyn_cast<ELF64LEObjectFile>(Obj))
@@ -467,7 +543,7 @@ static void printRelocationTargetName(const MachOObjectFile *O,
 
     // If we couldn't find a symbol that this relocation refers to, try
     // to find a section beginning instead.
-    for (const SectionRef &Section : O->sections()) {
+    for (const SectionRef &Section : ToolSectionFilter(*O)) {
       std::error_code ec;
 
       StringRef Name;
@@ -492,8 +568,8 @@ static void printRelocationTargetName(const MachOObjectFile *O,
     symbol_iterator SI = O->symbol_begin();
     advance(SI, Val);
     ErrorOr<StringRef> SOrErr = SI->getName();
-    if (!error(SOrErr.getError()))
-      S = *SOrErr;
+    error(SOrErr.getError());
+    S = *SOrErr;
   } else {
     section_iterator SI = O->section_begin();
     // Adjust for the fact that sections are 1-indexed.
@@ -802,14 +878,36 @@ static void DisassembleObject(const ObjectFile *Obj, bool InlineRelocs) {
   // in RelocSecs contain the relocations for section S.
   std::error_code EC;
   std::map<SectionRef, SmallVector<SectionRef, 1>> SectionRelocMap;
-  for (const SectionRef &Section : Obj->sections()) {
+  for (const SectionRef &Section : ToolSectionFilter(*Obj)) {
     section_iterator Sec2 = Section.getRelocatedSection();
     if (Sec2 != Obj->section_end())
       SectionRelocMap[*Sec2].push_back(Section);
   }
 
-  for (const SectionRef &Section : Obj->sections()) {
-    if (!Section.isText() || Section.isVirtual())
+  // Create a mapping from virtual address to symbol name.  This is used to
+  // pretty print the target of a call.
+  std::vector<std::pair<uint64_t, StringRef>> AllSymbols;
+  if (MIA) {
+    for (const SymbolRef &Symbol : Obj->symbols()) {
+      if (Symbol.getType() != SymbolRef::ST_Function)
+        continue;
+
+      ErrorOr<uint64_t> AddressOrErr = Symbol.getAddress();
+      error(AddressOrErr.getError());
+      uint64_t Address = *AddressOrErr;
+
+      ErrorOr<StringRef> Name = Symbol.getName();
+      error(Name.getError());
+      if (Name->empty())
+        continue;
+      AllSymbols.push_back(std::make_pair(Address, *Name));
+    }
+
+    array_pod_sort(AllSymbols.begin(), AllSymbols.end());
+  }
+
+  for (const SectionRef &Section : ToolSectionFilter(*Obj)) {
+    if (!DisassembleAll && (!Section.isText() || Section.isVirtual()))
       continue;
 
     uint64_t SectionAddr = Section.getAddress();
@@ -822,18 +920,14 @@ static void DisassembleObject(const ObjectFile *Obj, bool InlineRelocs) {
     for (const SymbolRef &Symbol : Obj->symbols()) {
       if (Section.containsSymbol(Symbol)) {
         ErrorOr<uint64_t> AddressOrErr = Symbol.getAddress();
-        if (error(AddressOrErr.getError()))
-          break;
+        error(AddressOrErr.getError());
         uint64_t Address = *AddressOrErr;
-        if (Address == UnknownAddress)
-          continue;
         Address -= SectionAddr;
         if (Address >= SectSize)
           continue;
 
         ErrorOr<StringRef> Name = Symbol.getName();
-        if (error(Name.getError()))
-          break;
+        error(Name.getError());
         Symbols.push_back(std::make_pair(Address, *Name));
       }
     }
@@ -860,8 +954,7 @@ static void DisassembleObject(const ObjectFile *Obj, bool InlineRelocs) {
       SegmentName = MachO->getSectionFinalSegmentName(DR);
     }
     StringRef name;
-    if (error(Section.getName(name)))
-      break;
+    error(Section.getName(name));
     outs() << "Disassembly of section ";
     if (!SegmentName.empty())
       outs() << SegmentName << ",";
@@ -875,8 +968,7 @@ static void DisassembleObject(const ObjectFile *Obj, bool InlineRelocs) {
     raw_svector_ostream CommentStream(Comments);
 
     StringRef BytesStr;
-    if (error(Section.getContents(BytesStr)))
-      break;
+    error(Section.getContents(BytesStr));
     ArrayRef<uint8_t> Bytes(reinterpret_cast<const uint8_t *>(BytesStr.data()),
                             BytesStr.size());
 
@@ -914,6 +1006,29 @@ static void DisassembleObject(const ObjectFile *Obj, bool InlineRelocs) {
                         SectionAddr + Index, outs(), "", *STI);
           outs() << CommentStream.str();
           Comments.clear();
+          if (MIA && (MIA->isCall(Inst) || MIA->isUnconditionalBranch(Inst) ||
+                      MIA->isConditionalBranch(Inst))) {
+            uint64_t Target;
+            if (MIA->evaluateBranch(Inst, SectionAddr + Index, Size, Target)) {
+              auto TargetSym = std::upper_bound(
+                  AllSymbols.begin(), AllSymbols.end(), Target,
+                  [](uint64_t LHS, const std::pair<uint64_t, StringRef> &RHS) {
+                    return LHS < RHS.first;
+                  });
+              if (TargetSym != AllSymbols.begin())
+                --TargetSym;
+              else
+                TargetSym = AllSymbols.end();
+
+              if (TargetSym != AllSymbols.end()) {
+                outs() << " <" << TargetSym->second;
+                uint64_t Disp = Target - TargetSym->first;
+                if (Disp)
+                  outs() << '+' << utohexstr(Disp);
+                outs() << '>';
+              }
+            }
+          }
           outs() << "\n";
         } else {
           errs() << ToolName << ": warning: invalid instruction encoding\n";
@@ -934,8 +1049,7 @@ static void DisassembleObject(const ObjectFile *Obj, bool InlineRelocs) {
           // Stop when rel_cur's address is past the current instruction.
           if (addr >= Index + Size) break;
           rel_cur->getTypeName(name);
-          if (error(getRelocationValueString(*rel_cur, val)))
-            goto skip_print_rel;
+          error(getRelocationValueString(*rel_cur, val));
           outs() << format(Fmt.data(), SectionAddr + addr) << name
                  << "\t" << val << "\n";
 
@@ -955,12 +1069,11 @@ void llvm::PrintRelocations(const ObjectFile *Obj) {
   if (!Obj->isRelocatableObject())
     return;
 
-  for (const SectionRef &Section : Obj->sections()) {
+  for (const SectionRef &Section : ToolSectionFilter(*Obj)) {
     if (Section.relocation_begin() == Section.relocation_end())
       continue;
     StringRef secname;
-    if (error(Section.getName(secname)))
-      continue;
+    error(Section.getName(secname));
     outs() << "RELOCATION RECORDS FOR [" << secname << "]:\n";
     for (const RelocationRef &Reloc : Section.relocations()) {
       bool hidden = getHidden(Reloc);
@@ -970,8 +1083,7 @@ void llvm::PrintRelocations(const ObjectFile *Obj) {
       if (hidden)
         continue;
       Reloc.getTypeName(relocname);
-      if (error(getRelocationValueString(Reloc, valuestr)))
-        continue;
+      error(getRelocationValueString(Reloc, valuestr));
       outs() << format(Fmt.data(), address) << " " << relocname << " "
              << valuestr << "\n";
     }
@@ -983,10 +1095,9 @@ void llvm::PrintSectionHeaders(const ObjectFile *Obj) {
   outs() << "Sections:\n"
             "Idx Name          Size      Address          Type\n";
   unsigned i = 0;
-  for (const SectionRef &Section : Obj->sections()) {
+  for (const SectionRef &Section : ToolSectionFilter(*Obj)) {
     StringRef Name;
-    if (error(Section.getName(Name)))
-      return;
+    error(Section.getName(Name));
     uint64_t Address = Section.getAddress();
     uint64_t Size = Section.getSize();
     bool Text = Section.isText();
@@ -1002,11 +1113,10 @@ void llvm::PrintSectionHeaders(const ObjectFile *Obj) {
 
 void llvm::PrintSectionContents(const ObjectFile *Obj) {
   std::error_code EC;
-  for (const SectionRef &Section : Obj->sections()) {
+  for (const SectionRef &Section : ToolSectionFilter(*Obj)) {
     StringRef Name;
     StringRef Contents;
-    if (error(Section.getName(Name)))
-      continue;
+    error(Section.getName(Name));
     uint64_t BaseAddr = Section.getAddress();
     uint64_t Size = Section.getSize();
     if (!Size)
@@ -1020,8 +1130,7 @@ void llvm::PrintSectionContents(const ObjectFile *Obj) {
       continue;
     }
 
-    if (error(Section.getContents(Contents)))
-      continue;
+    error(Section.getContents(Contents));
 
     // Dump out the content as hex and printable ascii characters.
     for (std::size_t addr = 0, end = Contents.size(); addr < end; addr += 16) {
@@ -1053,11 +1162,8 @@ static void PrintCOFFSymbolTable(const COFFObjectFile *coff) {
   for (unsigned SI = 0, SE = coff->getNumberOfSymbols(); SI != SE; ++SI) {
     ErrorOr<COFFSymbolRef> Symbol = coff->getSymbol(SI);
     StringRef Name;
-    if (error(Symbol.getError()))
-      return;
-
-    if (error(coff->getSymbolName(*Symbol, Name)))
-      return;
+    error(Symbol.getError());
+    error(coff->getSymbolName(*Symbol, Name));
 
     outs() << "[" << format("%2d", SI) << "]"
            << "(sec " << format("%2d", int(Symbol->getSectionNumber())) << ")"
@@ -1071,8 +1177,7 @@ static void PrintCOFFSymbolTable(const COFFObjectFile *coff) {
     for (unsigned AI = 0, AE = Symbol->getNumberOfAuxSymbols(); AI < AE; ++AI, ++SI) {
       if (Symbol->isSectionDefinition()) {
         const coff_aux_section_definition *asd;
-        if (error(coff->getAuxSymbol<coff_aux_section_definition>(SI + 1, asd)))
-          return;
+        error(coff->getAuxSymbol<coff_aux_section_definition>(SI + 1, asd));
 
         int32_t AuxNumber = asd->getNumber(Symbol->isBigObj());
 
@@ -1087,8 +1192,7 @@ static void PrintCOFFSymbolTable(const COFFObjectFile *coff) {
                          , unsigned(asd->Selection));
       } else if (Symbol->isFileRecord()) {
         const char *FileName;
-        if (error(coff->getAuxSymbol<char>(SI + 1, FileName)))
-          return;
+        error(coff->getAuxSymbol<char>(SI + 1, FileName));
 
         StringRef Name(FileName, Symbol->getNumberOfAuxSymbols() *
                                      coff->getSymbolTableEntrySize());
@@ -1112,21 +1216,19 @@ void llvm::PrintSymbolTable(const ObjectFile *o) {
   }
   for (const SymbolRef &Symbol : o->symbols()) {
     ErrorOr<uint64_t> AddressOrError = Symbol.getAddress();
-    if (error(AddressOrError.getError()))
-      continue;
+    error(AddressOrError.getError());
     uint64_t Address = *AddressOrError;
     SymbolRef::Type Type = Symbol.getType();
     uint32_t Flags = Symbol.getFlags();
-    section_iterator Section = o->section_end();
-    if (error(Symbol.getSection(Section)))
-      continue;
+    ErrorOr<section_iterator> SectionOrErr = Symbol.getSection();
+    error(SectionOrErr.getError());
+    section_iterator Section = *SectionOrErr;
     StringRef Name;
     if (Type == SymbolRef::ST_Debug && Section != o->section_end()) {
       Section->getName(Name);
     } else {
       ErrorOr<StringRef> NameOrErr = Symbol.getName();
-      if (error(NameOrErr.getError()))
-        continue;
+      error(NameOrErr.getError());
       Name = *NameOrErr;
     }
 
@@ -1136,11 +1238,6 @@ void llvm::PrintSymbolTable(const ObjectFile *o) {
     bool Common = Flags & SymbolRef::SF_Common;
     bool Hidden = Flags & SymbolRef::SF_Hidden;
 
-    if (Common)
-      Address = Symbol.getCommonSize();
-
-    if (Address == UnknownAddress)
-      Address = 0;
     char GlobLoc = ' ';
     if (Type != SymbolRef::ST_Unknown)
       GlobLoc = Global ? 'g' : 'l';
@@ -1178,8 +1275,7 @@ void llvm::PrintSymbolTable(const ObjectFile *o) {
         outs() << SegmentName << ",";
       }
       StringRef SectionName;
-      if (error(Section->getName(SectionName)))
-        SectionName = "";
+      error(Section->getName(SectionName));
       outs() << SectionName;
     }
 
@@ -1268,6 +1364,39 @@ void llvm::printWeakBindTable(const ObjectFile *o) {
   }
 }
 
+/// Dump the raw contents of the __clangast section so the output can be piped
+/// into llvm-bcanalyzer.
+void llvm::printRawClangAST(const ObjectFile *Obj) {
+  if (outs().is_displayed()) {
+    errs() << "The -raw-clang-ast option will dump the raw binary contents of "
+              "the clang ast section.\n"
+              "Please redirect the output to a file or another program such as "
+              "llvm-bcanalyzer.\n";
+    return;
+  }
+
+  StringRef ClangASTSectionName("__clangast");
+  if (isa<COFFObjectFile>(Obj)) {
+    ClangASTSectionName = "clangast";
+  }
+
+  Optional<object::SectionRef> ClangASTSection;
+  for (auto Sec : ToolSectionFilter(*Obj)) {
+    StringRef Name;
+    Sec.getName(Name);
+    if (Name == ClangASTSectionName) {
+      ClangASTSection = Sec;
+      break;
+    }
+  }
+  if (!ClangASTSection)
+    return;
+
+  StringRef ClangASTContents;
+  error(ClangASTSection.getValue().getContents(ClangASTContents));
+  outs().write(ClangASTContents.data(), ClangASTContents.size());
+}
+
 static void printFaultMaps(const ObjectFile *Obj) {
   const char *FaultMapSectionName = nullptr;
 
@@ -1283,7 +1412,7 @@ static void printFaultMaps(const ObjectFile *Obj) {
 
   Optional<object::SectionRef> FaultMapSection;
 
-  for (auto Sec : Obj->sections()) {
+  for (auto Sec : ToolSectionFilter(*Obj)) {
     StringRef Name;
     Sec.getName(Name);
     if (Name == FaultMapSectionName) {
@@ -1300,10 +1429,7 @@ static void printFaultMaps(const ObjectFile *Obj) {
   }
 
   StringRef FaultMapContents;
-  if (error(FaultMapSection.getValue().getContents(FaultMapContents))) {
-    errs() << "Could not read the " << FaultMapContents << " section!\n";
-    return;
-  }
+  error(FaultMapSection.getValue().getContents(FaultMapContents));
 
   FaultMapParser FMP(FaultMapContents.bytes_begin(),
                      FaultMapContents.bytes_end());
@@ -1322,9 +1448,12 @@ static void printPrivateFileHeader(const ObjectFile *o) {
 }
 
 static void DumpObject(const ObjectFile *o) {
-  outs() << '\n';
-  outs() << o->getFileName()
-         << ":\tfile format " << o->getFileFormatName() << "\n\n";
+  // Avoid other output when using a raw option.
+  if (!RawClangAST) {
+    outs() << '\n';
+    outs() << o->getFileName()
+           << ":\tfile format " << o->getFileFormatName() << "\n\n";
+  }
 
   if (Disassemble)
     DisassembleObject(o, Relocations);
@@ -1350,21 +1479,19 @@ static void DumpObject(const ObjectFile *o) {
     printLazyBindTable(o);
   if (WeakBind)
     printWeakBindTable(o);
+  if (RawClangAST)
+    printRawClangAST(o);
   if (PrintFaultMaps)
     printFaultMaps(o);
 }
 
 /// @brief Dump each object file in \a a;
 static void DumpArchive(const Archive *a) {
-  for (Archive::child_iterator i = a->child_begin(), e = a->child_end(); i != e;
-       ++i) {
-    ErrorOr<std::unique_ptr<Binary>> ChildOrErr = i->getAsBinary();
-    if (std::error_code EC = ChildOrErr.getError()) {
-      // Ignore non-object files.
+  for (const Archive::Child &C : a->children()) {
+    ErrorOr<std::unique_ptr<Binary>> ChildOrErr = C.getAsBinary();
+    if (std::error_code EC = ChildOrErr.getError())
       if (EC != object_error::invalid_file_type)
         report_error(a->getFileName(), EC);
-      continue;
-    }
     if (ObjectFile *o = dyn_cast<ObjectFile>(&*ChildOrErr.get()))
       DumpObject(o);
     else
@@ -1375,10 +1502,8 @@ static void DumpArchive(const Archive *a) {
 /// @brief Open file and figure out how to dump it.
 static void DumpInput(StringRef file) {
   // If file isn't stdin, check that it exists.
-  if (file != "-" && !sys::fs::exists(file)) {
+  if (file != "-" && !sys::fs::exists(file))
     report_error(file, errc::no_such_file_or_directory);
-    return;
-  }
 
   // If we are using the Mach-O specific object file parser, then let it parse
   // the file and process the command line options.  So the -arch flags can
@@ -1390,10 +1515,8 @@ static void DumpInput(StringRef file) {
 
   // Attempt to open the binary.
   ErrorOr<OwningBinary<Binary>> BinaryOrErr = createBinary(file);
-  if (std::error_code EC = BinaryOrErr.getError()) {
+  if (std::error_code EC = BinaryOrErr.getError())
     report_error(file, EC);
-    return;
-  }
   Binary &Binary = *BinaryOrErr.get().getBinary();
 
   if (Archive *a = dyn_cast<Archive>(&Binary))
@@ -1428,6 +1551,8 @@ int main(int argc, char **argv) {
   if (InputFilenames.size() == 0)
     InputFilenames.push_back("a.out");
 
+  if (DisassembleAll)
+    Disassemble = true;
   if (!Disassemble
       && !Relocations
       && !SectionHeaders
@@ -1440,6 +1565,7 @@ int main(int argc, char **argv) {
       && !Bind
       && !LazyBind
       && !WeakBind
+      && !RawClangAST
       && !(UniversalHeaders && MachOOpt)
       && !(ArchiveHeaders && MachOOpt)
       && !(IndirectSymbols && MachOOpt)
@@ -1449,7 +1575,7 @@ int main(int argc, char **argv) {
       && !(DylibsUsed && MachOOpt)
       && !(DylibId && MachOOpt)
       && !(ObjcMetaData && MachOOpt)
-      && !(DumpSections.size() != 0 && MachOOpt)
+      && !(FilterSections.size() != 0 && MachOOpt)
       && !PrintFaultMaps) {
     cl::PrintHelpMessage();
     return 2;
@@ -1458,5 +1584,5 @@ int main(int argc, char **argv) {
   std::for_each(InputFilenames.begin(), InputFilenames.end(),
                 DumpInput);
 
-  return ReturnValue;
+  return EXIT_SUCCESS;
 }

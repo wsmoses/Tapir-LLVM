@@ -656,10 +656,13 @@ namespace {
       LeaderTableEntry* Prev = nullptr;
       LeaderTableEntry* Curr = &LeaderTable[N];
 
-      while (Curr->Val != I || Curr->BB != BB) {
+      while (Curr && (Curr->Val != I || Curr->BB != BB)) {
         Prev = Curr;
         Curr = Curr->Next;
       }
+
+      if (!Curr)
+        return;
 
       if (Prev) {
         Prev->Next = Curr->Next;
@@ -693,7 +696,7 @@ namespace {
     }
 
 
-    // Helper fuctions of redundant load elimination 
+    // Helper functions of redundant load elimination 
     bool processLoad(LoadInst *L);
     bool processNonLocalLoad(LoadInst *L);
     void AnalyzeLoadAvailability(LoadInst *LI, LoadDepVect &Deps, 
@@ -1298,28 +1301,7 @@ static Value *ConstructSSAForLoadSet(LoadInst *LI,
   }
 
   // Perform PHI construction.
-  Value *V = SSAUpdate.GetValueInMiddleOfBlock(LI->getParent());
-
-  // If new PHI nodes were created, notify alias analysis.
-  if (V->getType()->getScalarType()->isPointerTy()) {
-    AliasAnalysis *AA = gvn.getAliasAnalysis();
-
-    for (unsigned i = 0, e = NewPHIs.size(); i != e; ++i)
-      AA->copyValue(LI, NewPHIs[i]);
-
-    // Now that we've copied information to the new PHIs, scan through
-    // them again and inform alias analysis that we've added potentially
-    // escaping uses to any values that are operands to these PHIs.
-    for (unsigned i = 0, e = NewPHIs.size(); i != e; ++i) {
-      PHINode *P = NewPHIs[i];
-      for (unsigned ii = 0, ee = P->getNumIncomingValues(); ii != ee; ++ii) {
-        unsigned jj = PHINode::getOperandNumForIncomingValue(ii);
-        AA->addEscapingUse(P->getOperandUse(jj));
-      }
-    }
-  }
-
-  return V;
+  return SSAUpdate.GetValueInMiddleOfBlock(LI->getParent());
 }
 
 Value *AvailableValueInBlock::MaterializeAdjustedValue(LoadInst *LI,
@@ -1571,9 +1553,9 @@ bool GVN::PerformLoadPRE(LoadInst *LI, AvailValInBlkVect &ValuesPerBlock,
         return false;
       }
 
-      if (LoadBB->isLandingPad()) {
+      if (LoadBB->isEHPad()) {
         DEBUG(dbgs()
-              << "COULD NOT PRE LOAD BECAUSE OF LANDING PAD CRITICAL EDGE '"
+              << "COULD NOT PRE LOAD BECAUSE OF AN EH PAD CRITICAL EDGE '"
               << Pred->getName() << "': " << *LI << '\n');
         return false;
       }
@@ -1762,7 +1744,8 @@ bool GVN::processNonLocalLoad(LoadInst *LI) {
     if (isa<PHINode>(V))
       V->takeName(LI);
     if (Instruction *I = dyn_cast<Instruction>(V))
-      I->setDebugLoc(LI->getDebugLoc());
+      if (LI->getDebugLoc())
+        I->setDebugLoc(LI->getDebugLoc());
     if (V->getType()->getScalarType()->isPointerTy())
       MD->invalidateCachedPointerInfo(V);
     markInstructionForDeletion(LI);
@@ -1789,14 +1772,14 @@ static void patchReplacementInstruction(Instruction *I, Value *Repl) {
   if (Instruction *ReplInst = dyn_cast<Instruction>(Repl)) {
     // FIXME: If both the original and replacement value are part of the
     // same control-flow region (meaning that the execution of one
-    // guarentees the executation of the other), then we can combine the
+    // guarantees the execution of the other), then we can combine the
     // noalias scopes here and do better than the general conservative
     // answer used in combineMetadata().
 
     // In general, GVN unifies expressions over different control-flow
     // regions, and so we need a conservative combination of the noalias
     // scopes.
-    unsigned KnownIDs[] = {
+    static const unsigned KnownIDs[] = {
       LLVMContext::MD_tbaa,
       LLVMContext::MD_alias_scope,
       LLVMContext::MD_noalias,
@@ -2343,8 +2326,8 @@ bool GVN::runOnFunction(Function& F) {
   for (Function::iterator FI = F.begin(), FE = F.end(); FI != FE; ) {
     BasicBlock *BB = FI++;
 
-    bool removedBlock = MergeBlockIntoPredecessor(
-        BB, DT, /* LoopInfo */ nullptr, VN.getAliasAnalysis(), MD);
+    bool removedBlock =
+        MergeBlockIntoPredecessor(BB, DT, /* LoopInfo */ nullptr, MD);
     if (removedBlock) ++NumGVNBlocks;
 
     Changed |= removedBlock;
@@ -2539,8 +2522,12 @@ bool GVN::performScalarPRE(Instruction *CurInst) {
   Instruction *PREInstr = nullptr;
 
   if (NumWithout != 0) {
-    // Don't do PRE across indirect branch.
-    if (isa<IndirectBrInst>(PREPred->getTerminator()))
+    // Don't do PRE across indirect branch, detach, or reattach.
+    // (Detach-reattach pairs create unsplittable critical edges in
+    // the CFG.)
+    if (isa<IndirectBrInst>(PREPred->getTerminator()) ||
+        isa<DetachInst>(PREPred->getTerminator()) ||
+        isa<ReattachInst>(PREPred->getTerminator()))
       return false;
 
     // We can't do PRE safely on a critical edge, so instead we schedule
@@ -2582,18 +2569,8 @@ bool GVN::performScalarPRE(Instruction *CurInst) {
   addToLeaderTable(ValNo, Phi, CurrentBlock);
   Phi->setDebugLoc(CurInst->getDebugLoc());
   CurInst->replaceAllUsesWith(Phi);
-  if (Phi->getType()->getScalarType()->isPointerTy()) {
-    // Because we have added a PHI-use of the pointer value, it has now
-    // "escaped" from alias analysis' perspective.  We need to inform
-    // AA of this.
-    for (unsigned ii = 0, ee = Phi->getNumIncomingValues(); ii != ee; ++ii) {
-      unsigned jj = PHINode::getOperandNumForIncomingValue(ii);
-      VN.getAliasAnalysis()->addEscapingUse(Phi->getOperandUse(jj));
-    }
-
-    if (MD)
-      MD->invalidateCachedPointerInfo(Phi);
-  }
+  if (MD && Phi->getType()->getScalarType()->isPointerTy())
+    MD->invalidateCachedPointerInfo(Phi);
   VN.erase(CurInst);
   removeFromLeaderTable(ValNo, CurInst, CurrentBlock);
 
@@ -2616,8 +2593,8 @@ bool GVN::performPRE(Function &F) {
     if (CurrentBlock == &F.getEntryBlock())
       continue;
 
-    // Don't perform PRE on a landing pad.
-    if (CurrentBlock->isLandingPad())
+    // Don't perform PRE on an EH pad.
+    if (CurrentBlock->isEHPad())
       continue;
 
     for (BasicBlock::iterator BI = CurrentBlock->begin(),
@@ -2637,8 +2614,8 @@ bool GVN::performPRE(Function &F) {
 /// Split the critical edge connecting the given two blocks, and return
 /// the block inserted to the critical edge.
 BasicBlock *GVN::splitCriticalEdges(BasicBlock *Pred, BasicBlock *Succ) {
-  BasicBlock *BB = SplitCriticalEdge(
-      Pred, Succ, CriticalEdgeSplittingOptions(getAliasAnalysis(), DT));
+  BasicBlock *BB =
+      SplitCriticalEdge(Pred, Succ, CriticalEdgeSplittingOptions(DT));
   if (MD)
     MD->invalidateCachedPredecessors();
   return BB;
@@ -2652,7 +2629,7 @@ bool GVN::splitCriticalEdges() {
   do {
     std::pair<TerminatorInst*, unsigned> Edge = toSplit.pop_back_val();
     SplitCriticalEdge(Edge.first, Edge.second,
-                      CriticalEdgeSplittingOptions(getAliasAnalysis(), DT));
+                      CriticalEdgeSplittingOptions(DT));
   } while (!toSplit.empty());
   if (MD) MD->invalidateCachedPredecessors();
   return true;
@@ -2794,7 +2771,7 @@ void GVN::addDeadBlock(BasicBlock *BB) {
 //     R be the target of the dead out-coming edge.
 //  1) Identify the set of dead blocks implied by the branch's dead outcoming
 //     edge. The result of this step will be {X| X is dominated by R}
-//  2) Identify those blocks which haves at least one dead prodecessor. The
+//  2) Identify those blocks which haves at least one dead predecessor. The
 //     result of this step will be dominance-frontier(R).
 //  3) Update the PHIs in DF(R) by replacing the operands corresponding to 
 //     dead blocks with "UndefVal" in an hope these PHIs will optimized away.

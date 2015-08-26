@@ -108,10 +108,23 @@ private:
                          SDValue &TFE) const;
   bool SelectMUBUFOffset(SDValue Addr, SDValue &SRsrc, SDValue &Soffset,
                          SDValue &Offset, SDValue &GLC) const;
+  bool SelectSMRDOffset(SDValue ByteOffsetNode, SDValue &Offset,
+                        bool &Imm) const;
+  bool SelectSMRD(SDValue Addr, SDValue &SBase, SDValue &Offset,
+                  bool &Imm) const;
+  bool SelectSMRDImm(SDValue Addr, SDValue &SBase, SDValue &Offset) const;
+  bool SelectSMRDImm32(SDValue Addr, SDValue &SBase, SDValue &Offset) const;
+  bool SelectSMRDSgpr(SDValue Addr, SDValue &SBase, SDValue &Offset) const;
+  bool SelectSMRDBufferImm(SDValue Addr, SDValue &Offset) const;
+  bool SelectSMRDBufferImm32(SDValue Addr, SDValue &Offset) const;
+  bool SelectSMRDBufferSgpr(SDValue Addr, SDValue &Offset) const;
   SDNode *SelectAddrSpaceCast(SDNode *N);
   bool SelectVOP3Mods(SDValue In, SDValue &Src, SDValue &SrcMods) const;
+  bool SelectVOP3NoMods(SDValue In, SDValue &Src, SDValue &SrcMods) const;
   bool SelectVOP3Mods0(SDValue In, SDValue &Src, SDValue &SrcMods,
                        SDValue &Clamp, SDValue &Omod) const;
+  bool SelectVOP3NoMods0(SDValue In, SDValue &Src, SDValue &SrcMods,
+                         SDValue &Clamp, SDValue &Omod) const;
 
   bool SelectVOP3Mods0Clamp(SDValue In, SDValue &Src, SDValue &SrcMods,
                             SDValue &Omod) const;
@@ -678,7 +691,7 @@ bool AMDGPUDAGToDAGISel::isCPLoad(const LoadSDNode *N) const {
   if (checkPrivateAddress(N->getMemOperand())) {
     if (MMO) {
       const PseudoSourceValue *PSV = MMO->getPseudoValue();
-      if (PSV && PSV == PseudoSourceValue::getConstantPool()) {
+      if (PSV && PSV->isConstantPool()) {
         return true;
       }
     }
@@ -1026,6 +1039,10 @@ bool AMDGPUDAGToDAGISel::SelectMUBUFAddr64(SDValue Addr, SDValue &SRsrc,
                                            SDValue &SLC, SDValue &TFE) const {
   SDValue Ptr, Offen, Idxen, Addr64;
 
+  // addr64 bit was removed for volcanic islands.
+  if (Subtarget->getGeneration() >= AMDGPUSubtarget::VOLCANIC_ISLANDS)
+    return false;
+
   SelectMUBUF(Addr, Ptr, VAddr, SOffset, Offset, Offen, Idxen, Addr64,
               GLC, SLC, TFE);
 
@@ -1092,13 +1109,16 @@ bool AMDGPUDAGToDAGISel::SelectMUBUFScratch(SDValue Addr, SDValue &Rsrc,
 
   // (add n0, c1)
   if (CurDAG->isBaseWithConstantOffset(Addr)) {
+    SDValue N0 = Addr.getOperand(0);
     SDValue N1 = Addr.getOperand(1);
-    ConstantSDNode *C1 = cast<ConstantSDNode>(N1);
-
-    if (isLegalMUBUFImmOffset(C1)) {
-      VAddr = Addr.getOperand(0);
-      ImmOffset = CurDAG->getTargetConstant(C1->getZExtValue(), DL, MVT::i16);
-      return true;
+    // Offsets in vaddr must be positive.
+    if (CurDAG->SignBitIsZero(N0)) {
+      ConstantSDNode *C1 = cast<ConstantSDNode>(N1);
+      if (isLegalMUBUFImmOffset(C1)) {
+        VAddr = N0;
+        ImmOffset = CurDAG->getTargetConstant(C1->getZExtValue(), DL, MVT::i16);
+        return true;
+      }
     }
   }
 
@@ -1141,6 +1161,121 @@ bool AMDGPUDAGToDAGISel::SelectMUBUFOffset(SDValue Addr, SDValue &SRsrc,
   SDValue SLC, TFE;
 
   return SelectMUBUFOffset(Addr, SRsrc, Soffset, Offset, GLC, SLC, TFE);
+}
+
+///
+/// \param EncodedOffset This is the immediate value that will be encoded
+///        directly into the instruction.  On SI/CI the \p EncodedOffset
+///        will be in units of dwords and on VI+ it will be units of bytes.
+static bool isLegalSMRDImmOffset(const AMDGPUSubtarget *ST,
+                                 int64_t EncodedOffset) {
+  return ST->getGeneration() < AMDGPUSubtarget::VOLCANIC_ISLANDS ?
+     isUInt<8>(EncodedOffset) : isUInt<20>(EncodedOffset);
+}
+
+bool AMDGPUDAGToDAGISel::SelectSMRDOffset(SDValue ByteOffsetNode,
+                                          SDValue &Offset, bool &Imm) const {
+
+  // FIXME: Handle non-constant offsets.
+  ConstantSDNode *C = dyn_cast<ConstantSDNode>(ByteOffsetNode);
+  if (!C)
+    return false;
+
+  SDLoc SL(ByteOffsetNode);
+  AMDGPUSubtarget::Generation Gen = Subtarget->getGeneration();
+  int64_t ByteOffset = C->getSExtValue();
+  int64_t EncodedOffset = Gen < AMDGPUSubtarget::VOLCANIC_ISLANDS ?
+      ByteOffset >> 2 : ByteOffset;
+
+  if (isLegalSMRDImmOffset(Subtarget, EncodedOffset)) {
+    Offset = CurDAG->getTargetConstant(EncodedOffset, SL, MVT::i32);
+    Imm = true;
+    return true;
+  }
+
+  if (!isUInt<32>(EncodedOffset) || !isUInt<32>(ByteOffset))
+    return false;
+
+  if (Gen == AMDGPUSubtarget::SEA_ISLANDS && isUInt<32>(EncodedOffset)) {
+    // 32-bit Immediates are supported on Sea Islands.
+    Offset = CurDAG->getTargetConstant(EncodedOffset, SL, MVT::i32);
+  } else {
+    SDValue C32Bit = CurDAG->getTargetConstant(ByteOffset, SL, MVT::i32);
+    Offset = SDValue(CurDAG->getMachineNode(AMDGPU::S_MOV_B32, SL, MVT::i32,
+                                            C32Bit), 0);
+  }
+  Imm = false;
+  return true;
+}
+
+bool AMDGPUDAGToDAGISel::SelectSMRD(SDValue Addr, SDValue &SBase,
+                                     SDValue &Offset, bool &Imm) const {
+
+  SDLoc SL(Addr);
+  if (CurDAG->isBaseWithConstantOffset(Addr)) {
+    SDValue N0 = Addr.getOperand(0);
+    SDValue N1 = Addr.getOperand(1);
+
+    if (SelectSMRDOffset(N1, Offset, Imm)) {
+      SBase = N0;
+      return true;
+    }
+  }
+  SBase = Addr;
+  Offset = CurDAG->getTargetConstant(0, SL, MVT::i32);
+  Imm = true;
+  return true;
+}
+
+bool AMDGPUDAGToDAGISel::SelectSMRDImm(SDValue Addr, SDValue &SBase,
+                                       SDValue &Offset) const {
+  bool Imm;
+  return SelectSMRD(Addr, SBase, Offset, Imm) && Imm;
+}
+
+bool AMDGPUDAGToDAGISel::SelectSMRDImm32(SDValue Addr, SDValue &SBase,
+                                         SDValue &Offset) const {
+
+  if (Subtarget->getGeneration() != AMDGPUSubtarget::SEA_ISLANDS)
+    return false;
+
+  bool Imm;
+  if (!SelectSMRD(Addr, SBase, Offset, Imm))
+    return false;
+
+  return !Imm && isa<ConstantSDNode>(Offset);
+}
+
+bool AMDGPUDAGToDAGISel::SelectSMRDSgpr(SDValue Addr, SDValue &SBase,
+                                        SDValue &Offset) const {
+  bool Imm;
+  return SelectSMRD(Addr, SBase, Offset, Imm) && !Imm &&
+         !isa<ConstantSDNode>(Offset);
+}
+
+bool AMDGPUDAGToDAGISel::SelectSMRDBufferImm(SDValue Addr,
+                                             SDValue &Offset) const {
+  bool Imm;
+  return SelectSMRDOffset(Addr, Offset, Imm) && Imm;
+}
+
+bool AMDGPUDAGToDAGISel::SelectSMRDBufferImm32(SDValue Addr,
+                                               SDValue &Offset) const {
+  if (Subtarget->getGeneration() != AMDGPUSubtarget::SEA_ISLANDS)
+    return false;
+
+  bool Imm;
+  if (!SelectSMRDOffset(Addr, Offset, Imm))
+    return false;
+
+  return !Imm && isa<ConstantSDNode>(Offset);
+}
+
+bool AMDGPUDAGToDAGISel::SelectSMRDBufferSgpr(SDValue Addr,
+                                              SDValue &Offset) const {
+  bool Imm;
+  return SelectSMRDOffset(Addr, Offset, Imm) && !Imm &&
+         !isa<ConstantSDNode>(Offset);
 }
 
 // FIXME: This is incorrect and only enough to be able to compile.
@@ -1317,6 +1452,12 @@ bool AMDGPUDAGToDAGISel::SelectVOP3Mods(SDValue In, SDValue &Src,
   return true;
 }
 
+bool AMDGPUDAGToDAGISel::SelectVOP3NoMods(SDValue In, SDValue &Src,
+                                         SDValue &SrcMods) const {
+  bool Res = SelectVOP3Mods(In, Src, SrcMods);
+  return Res && cast<ConstantSDNode>(SrcMods)->isNullValue();
+}
+
 bool AMDGPUDAGToDAGISel::SelectVOP3Mods0(SDValue In, SDValue &Src,
                                          SDValue &SrcMods, SDValue &Clamp,
                                          SDValue &Omod) const {
@@ -1326,6 +1467,16 @@ bool AMDGPUDAGToDAGISel::SelectVOP3Mods0(SDValue In, SDValue &Src,
   Omod = CurDAG->getTargetConstant(0, DL, MVT::i32);
 
   return SelectVOP3Mods(In, Src, SrcMods);
+}
+
+bool AMDGPUDAGToDAGISel::SelectVOP3NoMods0(SDValue In, SDValue &Src,
+                                           SDValue &SrcMods, SDValue &Clamp,
+                                           SDValue &Omod) const {
+  bool Res = SelectVOP3Mods0(In, Src, SrcMods, Clamp, Omod);
+
+  return Res && cast<ConstantSDNode>(SrcMods)->isNullValue() &&
+                cast<ConstantSDNode>(Clamp)->isNullValue() &&
+                cast<ConstantSDNode>(Omod)->isNullValue();
 }
 
 bool AMDGPUDAGToDAGISel::SelectVOP3Mods0Clamp(SDValue In, SDValue &Src,
@@ -1352,18 +1503,14 @@ void AMDGPUDAGToDAGISel::PostprocessISelDAG() {
   do {
     IsModified = false;
     // Go over all selected nodes and try to fold them a bit more
-    for (SelectionDAG::allnodes_iterator I = CurDAG->allnodes_begin(),
-         E = CurDAG->allnodes_end(); I != E; ++I) {
-
-      SDNode *Node = I;
-
-      MachineSDNode *MachineNode = dyn_cast<MachineSDNode>(I);
+    for (SDNode &Node : CurDAG->allnodes()) {
+      MachineSDNode *MachineNode = dyn_cast<MachineSDNode>(&Node);
       if (!MachineNode)
         continue;
 
       SDNode *ResNode = Lowering.PostISelFolding(MachineNode, *CurDAG);
-      if (ResNode != Node) {
-        ReplaceUses(Node, ResNode);
+      if (ResNode != &Node) {
+        ReplaceUses(&Node, ResNode);
         IsModified = true;
       }
     }

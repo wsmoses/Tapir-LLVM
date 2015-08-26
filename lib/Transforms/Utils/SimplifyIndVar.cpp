@@ -63,7 +63,7 @@ namespace {
 
     /// Iteratively perform simplification on a worklist of users of the
     /// specified induction variable. This is the top-level driver that applies
-    /// all simplicitions to users of an IV.
+    /// all simplifications to users of an IV.
     void simplifyUsers(PHINode *CurrIV, IVVisitor *V = nullptr);
 
     Value *foldIVUser(Instruction *UseInst, Instruction *IVOperand);
@@ -166,19 +166,65 @@ void SimplifyIndvar::eliminateIVComparison(ICmpInst *ICmp, Value *IVOperand) {
   S = SE->getSCEVAtScope(S, ICmpLoop);
   X = SE->getSCEVAtScope(X, ICmpLoop);
 
+  ICmpInst::Predicate InvariantPredicate;
+  const SCEV *InvariantLHS, *InvariantRHS;
+
   // If the condition is always true or always false, replace it with
   // a constant value.
-  if (SE->isKnownPredicate(Pred, S, X))
+  if (SE->isKnownPredicate(Pred, S, X)) {
     ICmp->replaceAllUsesWith(ConstantInt::getTrue(ICmp->getContext()));
-  else if (SE->isKnownPredicate(ICmpInst::getInversePredicate(Pred), S, X))
+    DeadInsts.emplace_back(ICmp);
+    DEBUG(dbgs() << "INDVARS: Eliminated comparison: " << *ICmp << '\n');
+  } else if (SE->isKnownPredicate(ICmpInst::getInversePredicate(Pred), S, X)) {
     ICmp->replaceAllUsesWith(ConstantInt::getFalse(ICmp->getContext()));
-  else
+    DeadInsts.emplace_back(ICmp);
+    DEBUG(dbgs() << "INDVARS: Eliminated comparison: " << *ICmp << '\n');
+  } else if (isa<PHINode>(IVOperand) &&
+             SE->isLoopInvariantPredicate(Pred, S, X, ICmpLoop,
+                                          InvariantPredicate, InvariantLHS,
+                                          InvariantRHS)) {
+
+    // Rewrite the comparison to a loop invariant comparison if it can be done
+    // cheaply, where cheaply means "we don't need to emit any new
+    // instructions".
+
+    Value *NewLHS = nullptr, *NewRHS = nullptr;
+
+    if (S == InvariantLHS || X == InvariantLHS)
+      NewLHS =
+          ICmp->getOperand(S == InvariantLHS ? IVOperIdx : (1 - IVOperIdx));
+
+    if (S == InvariantRHS || X == InvariantRHS)
+      NewRHS =
+          ICmp->getOperand(S == InvariantRHS ? IVOperIdx : (1 - IVOperIdx));
+
+    for (Value *Incoming : cast<PHINode>(IVOperand)->incoming_values()) {
+      if (NewLHS && NewRHS)
+        break;
+
+      const SCEV *IncomingS = SE->getSCEV(Incoming);
+
+      if (!NewLHS && IncomingS == InvariantLHS)
+        NewLHS = Incoming;
+      if (!NewRHS && IncomingS == InvariantRHS)
+        NewRHS = Incoming;
+    }
+
+    if (!NewLHS || !NewRHS)
+      // We could not find an existing value to replace either LHS or RHS.
+      // Generating new instructions has subtler tradeoffs, so avoid doing that
+      // for now.
+      return;
+
+    DEBUG(dbgs() << "INDVARS: Simplified comparison: " << *ICmp << '\n');
+    ICmp->setPredicate(InvariantPredicate);
+    ICmp->setOperand(0, NewLHS);
+    ICmp->setOperand(1, NewRHS);
+  } else
     return;
 
-  DEBUG(dbgs() << "INDVARS: Eliminated comparison: " << *ICmp << '\n');
   ++NumElimCmp;
   Changed = true;
-  DeadInsts.emplace_back(ICmp);
 }
 
 /// SimplifyIVUsers helper for eliminating useless
@@ -436,8 +482,8 @@ static bool isSimpleIVUser(Instruction *I, const Loop *L, ScalarEvolution *SE) {
 /// This algorithm does not require IVUsers analysis. Instead, it simplifies
 /// instructions in-place during analysis. Rather than rewriting induction
 /// variables bottom-up from their users, it transforms a chain of IVUsers
-/// top-down, updating the IR only when it encouters a clear optimization
-/// opportunitiy.
+/// top-down, updating the IR only when it encounters a clear optimization
+/// opportunity.
 ///
 /// Once DisableIVRewrite is default, LSR will be the only client of IVUsers.
 ///

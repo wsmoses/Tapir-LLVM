@@ -95,13 +95,14 @@ std::string SDNode::getOperationName(const SelectionDAG *G) const {
   case ISD::GLOBAL_OFFSET_TABLE:        return "GLOBAL_OFFSET_TABLE";
   case ISD::RETURNADDR:                 return "RETURNADDR";
   case ISD::FRAMEADDR:                  return "FRAMEADDR";
-  case ISD::FRAME_ALLOC_RECOVER:        return "FRAME_ALLOC_RECOVER";
+  case ISD::LOCAL_RECOVER:        return "LOCAL_RECOVER";
   case ISD::READ_REGISTER:              return "READ_REGISTER";
   case ISD::WRITE_REGISTER:             return "WRITE_REGISTER";
   case ISD::FRAME_TO_ARGS_OFFSET:       return "FRAME_TO_ARGS_OFFSET";
   case ISD::EH_RETURN:                  return "EH_RETURN";
   case ISD::EH_SJLJ_SETJMP:             return "EH_SJLJ_SETJMP";
   case ISD::EH_SJLJ_LONGJMP:            return "EH_SJLJ_LONGJMP";
+  case ISD::EH_SJLJ_SETUP_DISPATCH:     return "EH_SJLJ_SETUP_DISPATCH";
   case ISD::ConstantPool:               return "ConstantPool";
   case ISD::TargetIndex:                return "TargetIndex";
   case ISD::ExternalSymbol:             return "ExternalSymbol";
@@ -145,6 +146,8 @@ std::string SDNode::getOperationName(const SelectionDAG *G) const {
   case ISD::FABS:                       return "fabs";
   case ISD::FMINNUM:                    return "fminnum";
   case ISD::FMAXNUM:                    return "fmaxnum";
+  case ISD::FMINNAN:                    return "fminnan";
+  case ISD::FMAXNAN:                    return "fmaxnan";
   case ISD::FNEG:                       return "fneg";
   case ISD::FSQRT:                      return "fsqrt";
   case ISD::FSIN:                       return "fsin";
@@ -225,6 +228,8 @@ std::string SDNode::getOperationName(const SelectionDAG *G) const {
   case ISD::SHL_PARTS:                  return "shl_parts";
   case ISD::SRA_PARTS:                  return "sra_parts";
   case ISD::SRL_PARTS:                  return "srl_parts";
+  case ISD::UABSDIFF:                   return "uabsdiff";
+  case ISD::SABSDIFF:                   return "sabsdiff";
 
   // Conversion operators.
   case ISD::SIGN_EXTEND:                return "sign_extend";
@@ -320,7 +325,7 @@ std::string SDNode::getOperationName(const SelectionDAG *G) const {
 
     case ISD::SETO:                     return "seto";
     case ISD::SETUO:                    return "setuo";
-    case ISD::SETUEQ:                   return "setue";
+    case ISD::SETUEQ:                   return "setueq";
     case ISD::SETUGT:                   return "setugt";
     case ISD::SETUGE:                   return "setuge";
     case ISD::SETULT:                   return "setult";

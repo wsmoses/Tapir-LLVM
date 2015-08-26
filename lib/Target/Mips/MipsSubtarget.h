@@ -18,10 +18,10 @@
 #include "MipsFrameLowering.h"
 #include "MipsISelLowering.h"
 #include "MipsInstrInfo.h"
-#include "MipsSelectionDAGInfo.h"
 #include "llvm/IR/DataLayout.h"
 #include "llvm/MC/MCInstrItineraries.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Target/TargetSelectionDAGInfo.h"
 #include "llvm/Target/TargetSubtargetInfo.h"
 #include <string>
 
@@ -140,7 +140,7 @@ class MipsSubtarget : public MipsGenSubtargetInfo {
 
   Triple TargetTriple;
 
-  const MipsSelectionDAGInfo TSInfo;
+  const TargetSelectionDAGInfo TSInfo;
   std::unique_ptr<const MipsInstrInfo> InstrInfo;
   std::unique_ptr<const MipsFrameLowering> FrameLowering;
   std::unique_ptr<const MipsTargetLowering> TLInfo;
@@ -189,7 +189,7 @@ public:
   }
   bool hasMips32r5() const {
     return (MipsArchVersion >= Mips32r5 && MipsArchVersion < Mips32Max) ||
-           hasMips64r2();
+           hasMips64r5();
   }
   bool hasMips32r6() const {
     return (MipsArchVersion >= Mips32r6 && MipsArchVersion < Mips32Max) ||
@@ -228,6 +228,7 @@ public:
   }
   bool inMicroMipsMode() const { return InMicroMipsMode; }
   bool inMicroMips32r6Mode() const { return InMicroMipsMode && hasMips32r6(); }
+  bool inMicroMips64r6Mode() const { return InMicroMipsMode && hasMips64r6(); }
   bool hasDSP() const { return HasDSP; }
   bool hasDSPR2() const { return HasDSPR2; }
   bool hasMSA() const { return HasMSA; }
@@ -275,7 +276,7 @@ public:
   void setHelperClassesMips16();
   void setHelperClassesMipsSE();
 
-  const MipsSelectionDAGInfo *getSelectionDAGInfo() const override {
+  const TargetSelectionDAGInfo *getSelectionDAGInfo() const override {
     return &TSInfo;
   }
   const MipsInstrInfo *getInstrInfo() const override { return InstrInfo.get(); }

@@ -435,6 +435,18 @@ DISubroutineType *DIBuilder::createSubroutineType(DIFile *File,
   return DISubroutineType::get(VMContext, Flags, ParameterTypes);
 }
 
+DICompositeType *DIBuilder::createExternalTypeRef(unsigned Tag, DIFile *File,
+                                                  StringRef UniqueIdentifier) {
+  assert(!UniqueIdentifier.empty() && "external type ref without uid");
+  auto *CTy =
+      DICompositeType::get(VMContext, Tag, "", nullptr, 0, nullptr, nullptr, 0,
+                           0, 0, DINode::FlagExternalTypeRef, nullptr, 0,
+                           nullptr, nullptr, UniqueIdentifier);
+  // Types with unique IDs need to be in the type map.
+  retainType(CTy);
+  return CTy;
+}
+
 DICompositeType *DIBuilder::createEnumerationType(
     DIScope *Scope, StringRef Name, DIFile *File, unsigned LineNumber,
     uint64_t SizeInBits, uint64_t AlignInBits, DINodeArray Elements,
@@ -590,20 +602,22 @@ DIGlobalVariable *DIBuilder::createTempGlobalVariableFwdDecl(
       .release();
 }
 
-DILocalVariable *DIBuilder::createLocalVariable(
-    unsigned Tag, DIScope *Scope, StringRef Name, DIFile *File, unsigned LineNo,
-    DIType *Ty, bool AlwaysPreserve, unsigned Flags, unsigned ArgNo) {
+static DILocalVariable *createLocalVariable(
+    LLVMContext &VMContext,
+    DenseMap<MDNode *, std::vector<TrackingMDNodeRef>> &PreservedVariables,
+    DIScope *Scope, StringRef Name, unsigned ArgNo, DIFile *File,
+    unsigned LineNo, DIType *Ty, bool AlwaysPreserve, unsigned Flags) {
   // FIXME: Why getNonCompileUnitScope()?
   // FIXME: Why is "!Context" okay here?
-  // FIXME: WHy doesn't this check for a subprogram or lexical block (AFAICT
+  // FIXME: Why doesn't this check for a subprogram or lexical block (AFAICT
   // the only valid scopes)?
   DIScope *Context = getNonCompileUnitScope(Scope);
 
-  auto *Node = DILocalVariable::get(
-      VMContext, Tag, cast_or_null<DILocalScope>(Context), Name, File, LineNo,
-      DITypeRef::get(Ty), ArgNo, Flags);
+  auto *Node =
+      DILocalVariable::get(VMContext, cast_or_null<DILocalScope>(Context), Name,
+                           File, LineNo, DITypeRef::get(Ty), ArgNo, Flags);
   if (AlwaysPreserve) {
-    // The optimizer may remove local variable. If there is an interest
+    // The optimizer may remove local variables. If there is an interest
     // to preserve variable info in such situation then stash it in a
     // named mdnode.
     DISubprogram *Fn = getDISubprogram(Scope);
@@ -611,6 +625,23 @@ DILocalVariable *DIBuilder::createLocalVariable(
     PreservedVariables[Fn].emplace_back(Node);
   }
   return Node;
+}
+
+DILocalVariable *DIBuilder::createAutoVariable(DIScope *Scope, StringRef Name,
+                                               DIFile *File, unsigned LineNo,
+                                               DIType *Ty, bool AlwaysPreserve,
+                                               unsigned Flags) {
+  return createLocalVariable(VMContext, PreservedVariables, Scope, Name,
+                             /* ArgNo */ 0, File, LineNo, Ty, AlwaysPreserve,
+                             Flags);
+}
+
+DILocalVariable *DIBuilder::createParameterVariable(
+    DIScope *Scope, StringRef Name, unsigned ArgNo, DIFile *File,
+    unsigned LineNo, DIType *Ty, bool AlwaysPreserve, unsigned Flags) {
+  assert(ArgNo && "Expected non-zero argument number for parameter");
+  return createLocalVariable(VMContext, PreservedVariables, Scope, Name, ArgNo,
+                             File, LineNo, Ty, AlwaysPreserve, Flags);
 }
 
 DIExpression *DIBuilder::createExpression(ArrayRef<uint64_t> Addr) {
@@ -867,7 +898,7 @@ void DIBuilder::replaceArrays(DICompositeType *&T, DINodeArray Elements,
   if (!T->isResolved())
     return;
 
-  // If "T" is resolved, it may be due to a self-reference cycle.  Track the
+  // If T is resolved, it may be due to a self-reference cycle.  Track the
   // arrays explicitly if they're unresolved, or else the cycles will be
   // orphaned.
   if (Elements)

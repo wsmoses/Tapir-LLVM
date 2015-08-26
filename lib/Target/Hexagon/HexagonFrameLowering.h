@@ -45,13 +45,14 @@ public:
       MachineBasicBlock &MBB, MachineBasicBlock::iterator I) const override;
   void processFunctionBeforeFrameFinalized(MachineFunction &MF,
         RegScavenger *RS = nullptr) const override;
-  void processFunctionBeforeCalleeSavedScan(MachineFunction &MF,
+  void determineCalleeSaves(MachineFunction &MF, BitVector &SavedRegs,
         RegScavenger *RS) const override;
 
   bool targetHandlesStackFrameRounding() const override {
     return true;
   }
-  int getFrameIndexOffset(const MachineFunction &MF, int FI) const override;
+  int getFrameIndexReference(const MachineFunction &MF, int FI,
+                             unsigned &FrameReg) const override;
   bool hasFP(const MachineFunction &MF) const override;
 
   const SpillSlot *getCalleeSavedSpillSlots(unsigned &NumEntries)

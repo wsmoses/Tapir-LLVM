@@ -17,6 +17,7 @@
 #include "llvm/IR/InstIterator.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/IntrinsicInst.h"
+#include "llvm/IR/Module.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Type.h"
 #include "llvm/Pass.h"
@@ -167,8 +168,7 @@ bool AliasSet::aliasesPointer(const Value *Ptr, uint64_t Size,
   if (!UnknownInsts.empty()) {
     for (unsigned i = 0, e = UnknownInsts.size(); i != e; ++i)
       if (AA.getModRefInfo(UnknownInsts[i],
-                           MemoryLocation(Ptr, Size, AAInfo)) !=
-          AliasAnalysis::NoModRef)
+                           MemoryLocation(Ptr, Size, AAInfo)) != MRI_NoModRef)
         return true;
   }
 
@@ -182,16 +182,14 @@ bool AliasSet::aliasesUnknownInst(const Instruction *Inst,
 
   for (unsigned i = 0, e = UnknownInsts.size(); i != e; ++i) {
     ImmutableCallSite C1(getUnknownInst(i)), C2(Inst);
-    if (!C1 || !C2 ||
-        AA.getModRefInfo(C1, C2) != AliasAnalysis::NoModRef ||
-        AA.getModRefInfo(C2, C1) != AliasAnalysis::NoModRef)
+    if (!C1 || !C2 || AA.getModRefInfo(C1, C2) != MRI_NoModRef ||
+        AA.getModRefInfo(C2, C1) != MRI_NoModRef)
       return true;
   }
 
   for (iterator I = begin(), E = end(); I != E; ++I)
-    if (AA.getModRefInfo(
-            Inst, MemoryLocation(I.getPointer(), I.getSize(), I.getAAInfo())) !=
-        AliasAnalysis::NoModRef)
+    if (AA.getModRefInfo(Inst, MemoryLocation(I.getPointer(), I.getSize(),
+                                              I.getAAInfo())) != MRI_NoModRef)
       return true;
 
   return false;
@@ -309,8 +307,9 @@ bool AliasSetTracker::add(LoadInst *LI) {
 
   AliasSet::AccessLattice Access = AliasSet::RefAccess;
   bool NewPtr;
+  const DataLayout &DL = LI->getModule()->getDataLayout();
   AliasSet &AS = addPointer(LI->getOperand(0),
-                            AA.getTypeStoreSize(LI->getType()),
+                            DL.getTypeStoreSize(LI->getType()),
                             AAInfo, Access, NewPtr);
   if (LI->isVolatile()) AS.setVolatile();
   return NewPtr;
@@ -324,9 +323,10 @@ bool AliasSetTracker::add(StoreInst *SI) {
 
   AliasSet::AccessLattice Access = AliasSet::ModAccess;
   bool NewPtr;
+  const DataLayout &DL = SI->getModule()->getDataLayout();
   Value *Val = SI->getOperand(0);
   AliasSet &AS = addPointer(SI->getOperand(1),
-                            AA.getTypeStoreSize(Val->getType()),
+                            DL.getTypeStoreSize(Val->getType()),
                             AAInfo, Access, NewPtr);
   if (SI->isVolatile()) AS.setVolatile();
   return NewPtr;
@@ -443,7 +443,8 @@ AliasSetTracker::remove(Value *Ptr, uint64_t Size, const AAMDNodes &AAInfo) {
 }
 
 bool AliasSetTracker::remove(LoadInst *LI) {
-  uint64_t Size = AA.getTypeStoreSize(LI->getType());
+  const DataLayout &DL = LI->getModule()->getDataLayout();
+  uint64_t Size = DL.getTypeStoreSize(LI->getType());
 
   AAMDNodes AAInfo;
   LI->getAAMetadata(AAInfo);
@@ -455,7 +456,8 @@ bool AliasSetTracker::remove(LoadInst *LI) {
 }
 
 bool AliasSetTracker::remove(StoreInst *SI) {
-  uint64_t Size = AA.getTypeStoreSize(SI->getOperand(0)->getType());
+  const DataLayout &DL = SI->getModule()->getDataLayout();
+  uint64_t Size = DL.getTypeStoreSize(SI->getOperand(0)->getType());
 
   AAMDNodes AAInfo;
   SI->getAAMetadata(AAInfo);
@@ -505,9 +507,6 @@ bool AliasSetTracker::remove(Instruction *I) {
 // dangling pointers to deleted instructions.
 //
 void AliasSetTracker::deleteValue(Value *PtrVal) {
-  // Notify the alias analysis implementation that this value is gone.
-  AA.deleteValue(PtrVal);
-
   // If this is a call instruction, remove the callsite from the appropriate
   // AliasSet (if present).
   if (Instruction *Inst = dyn_cast<Instruction>(PtrVal)) {
@@ -544,9 +543,6 @@ void AliasSetTracker::deleteValue(Value *PtrVal) {
 // the tracker already knows about a value, it will ignore the request.
 //
 void AliasSetTracker::copyValue(Value *From, Value *To) {
-  // Notify the alias analysis implementation that this value is copied.
-  AA.copyValue(From, To);
-
   // First, look up the PointerRec for this pointer.
   PointerMapType::iterator I = PointerMap.find_as(From);
   if (I == PointerMap.end())

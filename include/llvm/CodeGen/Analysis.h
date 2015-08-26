@@ -37,7 +37,7 @@ struct EVT;
 /// Given an LLVM IR aggregate type and a sequence of insertvalue or
 /// extractvalue indices that identify a member, return the linearized index of
 /// the start of the member, i.e the number of element in memory before the
-/// seeked one. This is disconnected from the number of bytes.
+/// sought one. This is disconnected from the number of bytes.
 ///
 /// \param Ty is the type indexed by \p Indices.
 /// \param Indices is an optional pointer in the indices list to the current
@@ -64,7 +64,7 @@ inline unsigned ComputeLinearIndex(Type *Ty,
 /// If Offsets is non-null, it points to a vector to be filled in
 /// with the in-memory offsets of each of the individual values.
 ///
-void ComputeValueVTs(const TargetLowering &TLI, Type *Ty,
+void ComputeValueVTs(const TargetLowering &TLI, const DataLayout &DL, Type *Ty,
                      SmallVectorImpl<EVT> &ValueVTs,
                      SmallVectorImpl<uint64_t> *Offsets = nullptr,
                      uint64_t StartingOffset = 0);

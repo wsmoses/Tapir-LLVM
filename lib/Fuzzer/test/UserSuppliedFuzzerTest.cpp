@@ -14,6 +14,8 @@ static const uint64_t kMagic = 8860221463604ULL;
 
 class MyFuzzer : public fuzzer::UserSuppliedFuzzer {
  public:
+  MyFuzzer(fuzzer::FuzzerRandomBase *Rand)
+      : fuzzer::UserSuppliedFuzzer(Rand) {}
   void TargetFunction(const uint8_t *Data, size_t Size) {
     if (Size <= 10) return;
     if (memcmp(Data, &kMagic, sizeof(kMagic))) return;
@@ -35,13 +37,14 @@ class MyFuzzer : public fuzzer::UserSuppliedFuzzer {
       Size = sizeof(kMagic);
     // "Fix" the data, then mutate.
     memcpy(Data, &kMagic, std::min(MaxSize, sizeof(kMagic)));
-    return BasicMutate(Data + sizeof(kMagic), Size - sizeof(kMagic),
-                       MaxSize - sizeof(kMagic));
+    return fuzzer::UserSuppliedFuzzer::Mutate(
+        Data + sizeof(kMagic), Size - sizeof(kMagic), MaxSize - sizeof(kMagic));
   }
   // No need to redefine CrossOver() here.
 };
 
 int main(int argc, char **argv) {
-  MyFuzzer F;
+  fuzzer::FuzzerRandomLibc Rand(0);
+  MyFuzzer F(&Rand);
   fuzzer::FuzzerDriver(argc, argv, F);
 }

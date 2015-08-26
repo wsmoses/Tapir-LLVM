@@ -62,18 +62,14 @@ bool BasicBlockEdge::isSingleEdge() const {
 //
 //===----------------------------------------------------------------------===//
 
-TEMPLATE_INSTANTIATION(class llvm::DomTreeNodeBase<BasicBlock>);
-TEMPLATE_INSTANTIATION(class llvm::DominatorTreeBase<BasicBlock>);
+template class llvm::DomTreeNodeBase<BasicBlock>;
+template class llvm::DominatorTreeBase<BasicBlock>;
 
-#define LLVM_COMMA ,
-TEMPLATE_INSTANTIATION(void llvm::Calculate<Function LLVM_COMMA BasicBlock *>(
-    DominatorTreeBase<GraphTraits<BasicBlock *>::NodeType> &DT LLVM_COMMA
-        Function &F));
-TEMPLATE_INSTANTIATION(
-    void llvm::Calculate<Function LLVM_COMMA Inverse<BasicBlock *> >(
-        DominatorTreeBase<GraphTraits<Inverse<BasicBlock *> >::NodeType> &DT
-            LLVM_COMMA Function &F));
-#undef LLVM_COMMA
+template void llvm::Calculate<Function, BasicBlock *>(
+    DominatorTreeBase<GraphTraits<BasicBlock *>::NodeType> &DT, Function &F);
+template void llvm::Calculate<Function, Inverse<BasicBlock *>>(
+    DominatorTreeBase<GraphTraits<Inverse<BasicBlock *>>::NodeType> &DT,
+    Function &F);
 
 // dominates - Return true if Def dominates a use in User. This performs
 // the special checks necessary if Def and User are in the same basic block.
@@ -95,11 +91,11 @@ bool DominatorTree::dominates(const Instruction *Def,
   if (Def == User)
     return false;
 
-  // The value defined by an invoke dominates an instruction only if
+  // The value defined by an invoke/catchpad dominates an instruction only if
   // it dominates every instruction in UseBB.
   // A PHI is dominated only if the instruction dominates every possible use
   // in the UseBB.
-  if (isa<InvokeInst>(Def) || isa<PHINode>(User))
+  if (isa<InvokeInst>(Def) || isa<CatchPadInst>(Def) || isa<PHINode>(User))
     return dominates(Def, UseBB);
   
   if (DefBB != UseBB)
@@ -130,15 +126,20 @@ bool DominatorTree::dominates(const Instruction *Def,
   if (DefBB == UseBB)
     return false;
 
-  const InvokeInst *II = dyn_cast<InvokeInst>(Def);
-  if (!II)
-    return dominates(DefBB, UseBB);
+  // Invoke/CatchPad results are only usable in the normal destination, not in
+  // the exceptional destination.
+  if (const auto *II = dyn_cast<InvokeInst>(Def)) {
+    BasicBlock *NormalDest = II->getNormalDest();
+    BasicBlockEdge E(DefBB, NormalDest);
+    return dominates(E, UseBB);
+  }
+  if (const auto *CPI = dyn_cast<CatchPadInst>(Def)) {
+    BasicBlock *NormalDest = CPI->getNormalDest();
+    BasicBlockEdge E(DefBB, NormalDest);
+    return dominates(E, UseBB);
+  }
 
-  // Invoke results are only usable in the normal destination, not in the
-  // exceptional destination.
-  BasicBlock *NormalDest = II->getNormalDest();
-  BasicBlockEdge E(DefBB, NormalDest);
-  return dominates(E, UseBB);
+  return dominates(DefBB, UseBB);
 }
 
 bool DominatorTree::dominates(const BasicBlockEdge &BBE,
@@ -236,13 +237,18 @@ bool DominatorTree::dominates(const Instruction *Def, const Use &U) const {
   if (!isReachableFromEntry(DefBB))
     return false;
 
-  // Invoke instructions define their return values on the edges
+  // Invoke/CatchPad instructions define their return values on the edges
   // to their normal successors, so we have to handle them specially.
   // Among other things, this means they don't dominate anything in
   // their own block, except possibly a phi, so we don't need to
   // walk the block in any case.
   if (const InvokeInst *II = dyn_cast<InvokeInst>(Def)) {
     BasicBlock *NormalDest = II->getNormalDest();
+    BasicBlockEdge E(DefBB, NormalDest);
+    return dominates(E, U);
+  }
+  if (const auto *CPI = dyn_cast<CatchPadInst>(Def)) {
+    BasicBlock *NormalDest = CPI->getNormalDest();
     BasicBlockEdge E(DefBB, NormalDest);
     return dominates(E, U);
   }

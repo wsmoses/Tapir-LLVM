@@ -98,6 +98,8 @@ public:
     OptimizeNone,          ///< Function must not be optimized.
     ReadNone,              ///< Function does not access memory
     ReadOnly,              ///< Function only reads from memory
+    ArgMemOnly,            ///< Funciton can access memory only using pointers
+                           ///< based on its arguments.
     Returned,              ///< Return value is always equal to this argument
     ReturnsTwice,          ///< Function can return twice
     SExt,                  ///< Sign extended before/after call
@@ -571,7 +573,7 @@ public:
 namespace AttributeFuncs {
 
 /// \brief Which attributes cannot be applied to a type.
-AttrBuilder typeIncompatible(const Type *Ty);
+AttrBuilder typeIncompatible(Type *Ty);
 
 } // end AttributeFuncs namespace
 

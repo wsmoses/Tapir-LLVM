@@ -160,11 +160,6 @@ public:
 
   // Thumb Addressing Modes:
   bool SelectThumbAddrModeRR(SDValue N, SDValue &Base, SDValue &Offset);
-  bool SelectThumbAddrModeRI(SDValue N, SDValue &Base, SDValue &Offset,
-                             unsigned Scale);
-  bool SelectThumbAddrModeRI5S1(SDValue N, SDValue &Base, SDValue &Offset);
-  bool SelectThumbAddrModeRI5S2(SDValue N, SDValue &Base, SDValue &Offset);
-  bool SelectThumbAddrModeRI5S4(SDValue N, SDValue &Base, SDValue &Offset);
   bool SelectThumbAddrModeImm5S(SDValue N, unsigned Scale, SDValue &Base,
                                 SDValue &OffImm);
   bool SelectThumbAddrModeImm5S1(SDValue N, SDValue &Base,
@@ -533,7 +528,8 @@ bool ARMDAGToDAGISel::SelectAddrModeImm12(SDValue N,
     if (N.getOpcode() == ISD::FrameIndex) {
       // Match frame index.
       int FI = cast<FrameIndexSDNode>(N)->getIndex();
-      Base = CurDAG->getTargetFrameIndex(FI, TLI->getPointerTy());
+      Base = CurDAG->getTargetFrameIndex(
+          FI, TLI->getPointerTy(CurDAG->getDataLayout()));
       OffImm  = CurDAG->getTargetConstant(0, SDLoc(N), MVT::i32);
       return true;
     }
@@ -556,7 +552,8 @@ bool ARMDAGToDAGISel::SelectAddrModeImm12(SDValue N,
       Base   = N.getOperand(0);
       if (Base.getOpcode() == ISD::FrameIndex) {
         int FI = cast<FrameIndexSDNode>(Base)->getIndex();
-        Base = CurDAG->getTargetFrameIndex(FI, TLI->getPointerTy());
+        Base = CurDAG->getTargetFrameIndex(
+            FI, TLI->getPointerTy(CurDAG->getDataLayout()));
       }
       OffImm = CurDAG->getTargetConstant(RHSC, SDLoc(N), MVT::i32);
       return true;
@@ -702,7 +699,8 @@ AddrMode2Type ARMDAGToDAGISel::SelectAddrMode2Worker(SDValue N,
     Base = N;
     if (N.getOpcode() == ISD::FrameIndex) {
       int FI = cast<FrameIndexSDNode>(N)->getIndex();
-      Base = CurDAG->getTargetFrameIndex(FI, TLI->getPointerTy());
+      Base = CurDAG->getTargetFrameIndex(
+          FI, TLI->getPointerTy(CurDAG->getDataLayout()));
     } else if (N.getOpcode() == ARMISD::Wrapper &&
                N.getOperand(0).getOpcode() != ISD::TargetGlobalAddress) {
       Base = N.getOperand(0);
@@ -722,7 +720,8 @@ AddrMode2Type ARMDAGToDAGISel::SelectAddrMode2Worker(SDValue N,
       Base = N.getOperand(0);
       if (Base.getOpcode() == ISD::FrameIndex) {
         int FI = cast<FrameIndexSDNode>(Base)->getIndex();
-        Base = CurDAG->getTargetFrameIndex(FI, TLI->getPointerTy());
+        Base = CurDAG->getTargetFrameIndex(
+            FI, TLI->getPointerTy(CurDAG->getDataLayout()));
       }
       Offset = CurDAG->getRegister(0, MVT::i32);
 
@@ -900,7 +899,8 @@ bool ARMDAGToDAGISel::SelectAddrMode3(SDValue N,
     Base = N;
     if (N.getOpcode() == ISD::FrameIndex) {
       int FI = cast<FrameIndexSDNode>(N)->getIndex();
-      Base = CurDAG->getTargetFrameIndex(FI, TLI->getPointerTy());
+      Base = CurDAG->getTargetFrameIndex(
+          FI, TLI->getPointerTy(CurDAG->getDataLayout()));
     }
     Offset = CurDAG->getRegister(0, MVT::i32);
     Opc = CurDAG->getTargetConstant(ARM_AM::getAM3Opc(ARM_AM::add, 0), SDLoc(N),
@@ -915,7 +915,8 @@ bool ARMDAGToDAGISel::SelectAddrMode3(SDValue N,
     Base = N.getOperand(0);
     if (Base.getOpcode() == ISD::FrameIndex) {
       int FI = cast<FrameIndexSDNode>(Base)->getIndex();
-      Base = CurDAG->getTargetFrameIndex(FI, TLI->getPointerTy());
+      Base = CurDAG->getTargetFrameIndex(
+          FI, TLI->getPointerTy(CurDAG->getDataLayout()));
     }
     Offset = CurDAG->getRegister(0, MVT::i32);
 
@@ -964,7 +965,8 @@ bool ARMDAGToDAGISel::SelectAddrMode5(SDValue N,
     Base = N;
     if (N.getOpcode() == ISD::FrameIndex) {
       int FI = cast<FrameIndexSDNode>(N)->getIndex();
-      Base = CurDAG->getTargetFrameIndex(FI, TLI->getPointerTy());
+      Base = CurDAG->getTargetFrameIndex(
+          FI, TLI->getPointerTy(CurDAG->getDataLayout()));
     } else if (N.getOpcode() == ARMISD::Wrapper &&
                N.getOperand(0).getOpcode() != ISD::TargetGlobalAddress) {
       Base = N.getOperand(0);
@@ -981,7 +983,8 @@ bool ARMDAGToDAGISel::SelectAddrMode5(SDValue N,
     Base = N.getOperand(0);
     if (Base.getOpcode() == ISD::FrameIndex) {
       int FI = cast<FrameIndexSDNode>(Base)->getIndex();
-      Base = CurDAG->getTargetFrameIndex(FI, TLI->getPointerTy());
+      Base = CurDAG->getTargetFrameIndex(
+          FI, TLI->getPointerTy(CurDAG->getDataLayout()));
     }
 
     ARM_AM::AddrOpc AddSub = ARM_AM::add;
@@ -1078,99 +1081,18 @@ bool ARMDAGToDAGISel::SelectThumbAddrModeRR(SDValue N,
 }
 
 bool
-ARMDAGToDAGISel::SelectThumbAddrModeRI(SDValue N, SDValue &Base,
-                                       SDValue &Offset, unsigned Scale) {
-  if (Scale == 4) {
-    SDValue TmpBase, TmpOffImm;
-    if (SelectThumbAddrModeSP(N, TmpBase, TmpOffImm))
-      return false;  // We want to select tLDRspi / tSTRspi instead.
-
-    if (N.getOpcode() == ARMISD::Wrapper &&
-        N.getOperand(0).getOpcode() == ISD::TargetConstantPool)
-      return false;  // We want to select tLDRpci instead.
-  }
-
-  if (!CurDAG->isBaseWithConstantOffset(N))
-    return false;
-
-  // Thumb does not have [sp, r] address mode.
-  RegisterSDNode *LHSR = dyn_cast<RegisterSDNode>(N.getOperand(0));
-  RegisterSDNode *RHSR = dyn_cast<RegisterSDNode>(N.getOperand(1));
-  if ((LHSR && LHSR->getReg() == ARM::SP) ||
-      (RHSR && RHSR->getReg() == ARM::SP))
-    return false;
-
-  // FIXME: Why do we explicitly check for a match here and then return false?
-  // Presumably to allow something else to match, but shouldn't this be
-  // documented?
-  int RHSC;
-  if (isScaledConstantInRange(N.getOperand(1), Scale, 0, 32, RHSC))
-    return false;
-
-  Base = N.getOperand(0);
-  Offset = N.getOperand(1);
-  return true;
-}
-
-bool
-ARMDAGToDAGISel::SelectThumbAddrModeRI5S1(SDValue N,
-                                          SDValue &Base,
-                                          SDValue &Offset) {
-  return SelectThumbAddrModeRI(N, Base, Offset, 1);
-}
-
-bool
-ARMDAGToDAGISel::SelectThumbAddrModeRI5S2(SDValue N,
-                                          SDValue &Base,
-                                          SDValue &Offset) {
-  return SelectThumbAddrModeRI(N, Base, Offset, 2);
-}
-
-bool
-ARMDAGToDAGISel::SelectThumbAddrModeRI5S4(SDValue N,
-                                          SDValue &Base,
-                                          SDValue &Offset) {
-  return SelectThumbAddrModeRI(N, Base, Offset, 4);
-}
-
-bool
 ARMDAGToDAGISel::SelectThumbAddrModeImm5S(SDValue N, unsigned Scale,
                                           SDValue &Base, SDValue &OffImm) {
-  if (Scale == 4) {
-    SDValue TmpBase, TmpOffImm;
-    if (SelectThumbAddrModeSP(N, TmpBase, TmpOffImm))
-      return false;  // We want to select tLDRspi / tSTRspi instead.
-
-    if (N.getOpcode() == ARMISD::Wrapper &&
-        N.getOperand(0).getOpcode() == ISD::TargetConstantPool)
-      return false;  // We want to select tLDRpci instead.
-  }
-
   if (!CurDAG->isBaseWithConstantOffset(N)) {
-    if (N.getOpcode() == ARMISD::Wrapper &&
-        N.getOperand(0).getOpcode() != ISD::TargetGlobalAddress) {
+    if (N.getOpcode() == ISD::ADD) {
+      return false; // We want to select register offset instead
+    } else if (N.getOpcode() == ARMISD::Wrapper &&
+               N.getOperand(0).getOpcode() != ISD::TargetGlobalAddress) {
       Base = N.getOperand(0);
     } else {
       Base = N;
     }
 
-    OffImm = CurDAG->getTargetConstant(0, SDLoc(N), MVT::i32);
-    return true;
-  }
-
-  RegisterSDNode *LHSR = dyn_cast<RegisterSDNode>(N.getOperand(0));
-  RegisterSDNode *RHSR = dyn_cast<RegisterSDNode>(N.getOperand(1));
-  if ((LHSR && LHSR->getReg() == ARM::SP) ||
-      (RHSR && RHSR->getReg() == ARM::SP)) {
-    ConstantSDNode *LHS = dyn_cast<ConstantSDNode>(N.getOperand(0));
-    ConstantSDNode *RHS = dyn_cast<ConstantSDNode>(N.getOperand(1));
-    unsigned LHSC = LHS ? LHS->getZExtValue() : 0;
-    unsigned RHSC = RHS ? RHS->getZExtValue() : 0;
-
-    // Thumb does not have [sp, #imm5] address mode for non-zero imm5.
-    if (LHSC != 0 || RHSC != 0) return false;
-
-    Base = N;
     OffImm = CurDAG->getTargetConstant(0, SDLoc(N), MVT::i32);
     return true;
   }
@@ -1183,9 +1105,8 @@ ARMDAGToDAGISel::SelectThumbAddrModeImm5S(SDValue N, unsigned Scale,
     return true;
   }
 
-  Base = N.getOperand(0);
-  OffImm = CurDAG->getTargetConstant(0, SDLoc(N), MVT::i32);
-  return true;
+  // Offset is too large, so use register offset instead.
+  return false;
 }
 
 bool
@@ -1215,7 +1136,8 @@ bool ARMDAGToDAGISel::SelectThumbAddrModeSP(SDValue N,
     MachineFrameInfo *MFI = MF->getFrameInfo();
     if (MFI->getObjectAlignment(FI) < 4)
       MFI->setObjectAlignment(FI, 4);
-    Base = CurDAG->getTargetFrameIndex(FI, TLI->getPointerTy());
+    Base = CurDAG->getTargetFrameIndex(
+        FI, TLI->getPointerTy(CurDAG->getDataLayout()));
     OffImm = CurDAG->getTargetConstant(0, SDLoc(N), MVT::i32);
     return true;
   }
@@ -1237,7 +1159,8 @@ bool ARMDAGToDAGISel::SelectThumbAddrModeSP(SDValue N,
         MachineFrameInfo *MFI = MF->getFrameInfo();
         if (MFI->getObjectAlignment(FI) < 4)
           MFI->setObjectAlignment(FI, 4);
-        Base = CurDAG->getTargetFrameIndex(FI, TLI->getPointerTy());
+        Base = CurDAG->getTargetFrameIndex(
+            FI, TLI->getPointerTy(CurDAG->getDataLayout()));
       }
       OffImm = CurDAG->getTargetConstant(RHSC, SDLoc(N), MVT::i32);
       return true;
@@ -1285,7 +1208,8 @@ bool ARMDAGToDAGISel::SelectT2AddrModeImm12(SDValue N,
     if (N.getOpcode() == ISD::FrameIndex) {
       // Match frame index.
       int FI = cast<FrameIndexSDNode>(N)->getIndex();
-      Base = CurDAG->getTargetFrameIndex(FI, TLI->getPointerTy());
+      Base = CurDAG->getTargetFrameIndex(
+          FI, TLI->getPointerTy(CurDAG->getDataLayout()));
       OffImm  = CurDAG->getTargetConstant(0, SDLoc(N), MVT::i32);
       return true;
     }
@@ -1314,7 +1238,8 @@ bool ARMDAGToDAGISel::SelectT2AddrModeImm12(SDValue N,
       Base   = N.getOperand(0);
       if (Base.getOpcode() == ISD::FrameIndex) {
         int FI = cast<FrameIndexSDNode>(Base)->getIndex();
-        Base = CurDAG->getTargetFrameIndex(FI, TLI->getPointerTy());
+        Base = CurDAG->getTargetFrameIndex(
+            FI, TLI->getPointerTy(CurDAG->getDataLayout()));
       }
       OffImm = CurDAG->getTargetConstant(RHSC, SDLoc(N), MVT::i32);
       return true;
@@ -1343,7 +1268,8 @@ bool ARMDAGToDAGISel::SelectT2AddrModeImm8(SDValue N,
       Base = N.getOperand(0);
       if (Base.getOpcode() == ISD::FrameIndex) {
         int FI = cast<FrameIndexSDNode>(Base)->getIndex();
-        Base = CurDAG->getTargetFrameIndex(FI, TLI->getPointerTy());
+        Base = CurDAG->getTargetFrameIndex(
+            FI, TLI->getPointerTy(CurDAG->getDataLayout()));
       }
       OffImm = CurDAG->getTargetConstant(RHSC, SDLoc(N), MVT::i32);
       return true;
@@ -1438,7 +1364,8 @@ bool ARMDAGToDAGISel::SelectT2AddrModeExclusive(SDValue N, SDValue &Base,
   Base = N.getOperand(0);
   if (Base.getOpcode() == ISD::FrameIndex) {
     int FI = cast<FrameIndexSDNode>(Base)->getIndex();
-    Base = CurDAG->getTargetFrameIndex(FI, TLI->getPointerTy());
+    Base = CurDAG->getTargetFrameIndex(
+        FI, TLI->getPointerTy(CurDAG->getDataLayout()));
   }
 
   OffImm = CurDAG->getTargetConstant(RHSC/4, SDLoc(N), MVT::i32);
@@ -2510,7 +2437,7 @@ SDNode *ARMDAGToDAGISel::Select(SDNode *N) {
     if (UseCP) {
       SDValue CPIdx = CurDAG->getTargetConstantPool(
           ConstantInt::get(Type::getInt32Ty(*CurDAG->getContext()), Val),
-          TLI->getPointerTy());
+          TLI->getPointerTy(CurDAG->getDataLayout()));
 
       SDNode *ResNode;
       if (Subtarget->isThumb()) {
@@ -2540,7 +2467,8 @@ SDNode *ARMDAGToDAGISel::Select(SDNode *N) {
   case ISD::FrameIndex: {
     // Selects to ADDri FI, 0 which in turn will become ADDri SP, imm.
     int FI = cast<FrameIndexSDNode>(N)->getIndex();
-    SDValue TFI = CurDAG->getTargetFrameIndex(FI, TLI->getPointerTy());
+    SDValue TFI = CurDAG->getTargetFrameIndex(
+        FI, TLI->getPointerTy(CurDAG->getDataLayout()));
     if (Subtarget->isThumb1Only()) {
       // Set the alignment of the frame object to 4, to avoid having to generate
       // more than one ADD
@@ -3446,9 +3374,9 @@ static inline int getMClassRegisterSYSmValueMask(StringRef RegString) {
 // The flags here are common to those allowed for apsr in the A class cores and
 // those allowed for the special registers in the M class cores. Returns a
 // value representing which flags were present, -1 if invalid.
-static inline int getMClassFlagsMask(StringRef Flags) {
+static inline int getMClassFlagsMask(StringRef Flags, bool hasThumb2DSP) {
   if (Flags.empty())
-    return 0x3;
+    return 0x2 | (int)hasThumb2DSP;
 
   return StringSwitch<int>(Flags)
           .Case("g", 0x1)
@@ -3477,7 +3405,7 @@ static int getMClassRegisterMask(StringRef Reg, StringRef Flags, bool IsRead,
   }
 
   // We know we are now handling a write so need to get the mask for the flags.
-  int Mask = getMClassFlagsMask(Flags);
+  int Mask = getMClassFlagsMask(Flags, Subtarget->hasThumb2DSP());
 
   // Only apsr, iapsr, eapsr, xpsr can have flags. The other register values
   // shouldn't have flags present.
@@ -3486,7 +3414,7 @@ static int getMClassRegisterMask(StringRef Reg, StringRef Flags, bool IsRead,
 
   // The _g and _nzcvqg versions are only valid if the DSP extension is
   // available.
-  if (!Subtarget->hasThumb2DSP() && (Mask & 0x2))
+  if (!Subtarget->hasThumb2DSP() && (Mask & 0x1))
     return -1;
 
   // The register was valid so need to put the mask in the correct place
@@ -3508,7 +3436,7 @@ static int getARClassRegisterMask(StringRef Reg, StringRef Flags) {
     // The flags permitted for apsr are the same flags that are allowed in
     // M class registers. We get the flag value and then shift the flags into
     // the correct place to combine with the mask.
-    Mask = getMClassFlagsMask(Flags);
+    Mask = getMClassFlagsMask(Flags, true);
     if (Mask == -1)
       return -1;
     return Mask << 2;

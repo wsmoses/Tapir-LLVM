@@ -822,9 +822,12 @@ void
 MachineVerifier::visitMachineOperand(const MachineOperand *MO, unsigned MONum) {
   const MachineInstr *MI = MO->getParent();
   const MCInstrDesc &MCID = MI->getDesc();
+  unsigned NumDefs = MCID.getNumDefs();
+  if (MCID.getOpcode() == TargetOpcode::PATCHPOINT)
+    NumDefs = (MONum == 0 && MO->isReg()) ? NumDefs : 0;
 
   // The first MCID.NumDefs operands must be explicit register defines
-  if (MONum < MCID.getNumDefs()) {
+  if (MONum < NumDefs) {
     const MCOperandInfo &MCOI = MCID.OpInfo[MONum];
     if (!MO->isReg())
       report("Explicit definition must be a register", MO, MONum);
@@ -1671,6 +1674,8 @@ void MachineVerifier::verifyLiveInterval(const LiveInterval &LI) {
       report("Lane masks of sub ranges overlap in live interval", MF, LI);
     if ((SR.LaneMask & ~MaxMask) != 0)
       report("Subrange lanemask is invalid", MF, LI);
+    if (SR.empty())
+      report("Subrange must not be empty", MF, SR, LI.reg, SR.LaneMask);
     Mask |= SR.LaneMask;
     verifyLiveRange(SR, LI.reg, SR.LaneMask);
     if (!LI.covers(SR))

@@ -293,6 +293,16 @@ public:
     addFnAttr(Attribute::ReadOnly);
   }
 
+  /// @brief Determine if the call can access memmory only using pointers based
+  /// on its arguments.
+  bool onlyAccessesArgMemory() const {
+    return AttributeSets.hasAttribute(AttributeSet::FunctionIndex,
+                                      Attribute::ArgMemOnly);
+  }
+  void setOnlyAccessesArgMemory() {
+    addFnAttr(Attribute::ArgMemOnly);
+  }
+  
   /// @brief Determine if the function cannot return.
   bool doesNotReturn() const {
     return AttributeSets.hasAttribute(AttributeSet::FunctionIndex,
@@ -383,6 +393,16 @@ public:
   }
   void setOnlyReadsMemory(unsigned n) {
     addAttribute(n, Attribute::ReadOnly);
+  }
+
+  /// Optimize this function for minimum size (-Oz).
+  bool optForMinSize() const {
+    return hasFnAttribute(Attribute::MinSize);
+  };
+  
+  /// Optimize this function for size (-Os) or minimum size (-Oz).
+  bool optForSize() const {
+    return hasFnAttribute(Attribute::OptimizeForSize) || optForMinSize();
   }
 
   /// copyAttributesFrom - copy all additional attributes (those not needed to

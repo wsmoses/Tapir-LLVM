@@ -17,6 +17,7 @@
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Analysis/ConstantFolding.h"
 #include "llvm/Analysis/InstructionSimplify.h"
+#include "llvm/Analysis/LoopInfo.h"
 #include "llvm/IR/CFG.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DebugInfo.h"
@@ -399,8 +400,8 @@ void PruningFunctionCloner::CloneBlock(const BasicBlock *BB,
       // If the director says to skip with a terminate instruction, we still
       // need to clone this block's successors.
       const TerminatorInst *TI = NewBB->getTerminator();
-      for (unsigned i = 0, e = TI->getNumSuccessors(); i != e; ++i)
-        ToClone.push_back(TI->getSuccessor(i));
+      for (const BasicBlock *Succ : TI->successors())
+        ToClone.push_back(Succ);
       return;
     }
     assert(Action != CloningDirector::SkipInstruction && 
@@ -449,8 +450,8 @@ void PruningFunctionCloner::CloneBlock(const BasicBlock *BB,
     
     // Recursively clone any reachable successor blocks.
     const TerminatorInst *TI = BB->getTerminator();
-    for (unsigned i = 0, e = TI->getNumSuccessors(); i != e; ++i)
-      ToClone.push_back(TI->getSuccessor(i));
+    for (const BasicBlock *Succ : TI->successors())
+      ToClone.push_back(Succ);
   }
   
   if (CodeInfo) {
@@ -483,7 +484,7 @@ void llvm::CloneAndPruneIntoFromInst(Function *NewFunc, const Function *OldFunc,
   }
 
 #ifndef NDEBUG
-  // If the cloning starts at the begining of the function, verify that
+  // If the cloning starts at the beginning of the function, verify that
   // the function arguments are mapped.
   if (!StartingInst)
     for (Function::const_arg_iterator II = OldFunc->arg_begin(),
@@ -719,4 +720,69 @@ void llvm::CloneAndPruneFunctionInto(Function *NewFunc, const Function *OldFunc,
   CloneAndPruneIntoFromInst(NewFunc, OldFunc, OldFunc->front().begin(), VMap,
                             ModuleLevelChanges, Returns, NameSuffix, CodeInfo,
                             nullptr);
+}
+
+/// \brief Remaps instructions in \p Blocks using the mapping in \p VMap.
+void llvm::remapInstructionsInBlocks(
+    const SmallVectorImpl<BasicBlock *> &Blocks, ValueToValueMapTy &VMap) {
+  // Rewrite the code to refer to itself.
+  for (auto *BB : Blocks)
+    for (auto &Inst : *BB)
+      RemapInstruction(&Inst, VMap,
+                       RF_NoModuleLevelChanges | RF_IgnoreMissingEntries);
+}
+
+/// \brief Clones a loop \p OrigLoop.  Returns the loop and the blocks in \p
+/// Blocks.
+///
+/// Updates LoopInfo and DominatorTree assuming the loop is dominated by block
+/// \p LoopDomBB.  Insert the new blocks before block specified in \p Before.
+Loop *llvm::cloneLoopWithPreheader(BasicBlock *Before, BasicBlock *LoopDomBB,
+                                   Loop *OrigLoop, ValueToValueMapTy &VMap,
+                                   const Twine &NameSuffix, LoopInfo *LI,
+                                   DominatorTree *DT,
+                                   SmallVectorImpl<BasicBlock *> &Blocks) {
+  Function *F = OrigLoop->getHeader()->getParent();
+  Loop *ParentLoop = OrigLoop->getParentLoop();
+
+  Loop *NewLoop = new Loop();
+  if (ParentLoop)
+    ParentLoop->addChildLoop(NewLoop);
+  else
+    LI->addTopLevelLoop(NewLoop);
+
+  BasicBlock *OrigPH = OrigLoop->getLoopPreheader();
+  assert(OrigPH && "No preheader");
+  BasicBlock *NewPH = CloneBasicBlock(OrigPH, VMap, NameSuffix, F);
+  // To rename the loop PHIs.
+  VMap[OrigPH] = NewPH;
+  Blocks.push_back(NewPH);
+
+  // Update LoopInfo.
+  if (ParentLoop)
+    ParentLoop->addBasicBlockToLoop(NewPH, *LI);
+
+  // Update DominatorTree.
+  DT->addNewBlock(NewPH, LoopDomBB);
+
+  for (BasicBlock *BB : OrigLoop->getBlocks()) {
+    BasicBlock *NewBB = CloneBasicBlock(BB, VMap, NameSuffix, F);
+    VMap[BB] = NewBB;
+
+    // Update LoopInfo.
+    NewLoop->addBasicBlockToLoop(NewBB, *LI);
+
+    // Update DominatorTree.
+    BasicBlock *IDomBB = DT->getNode(BB)->getIDom()->getBlock();
+    DT->addNewBlock(NewBB, cast<BasicBlock>(VMap[IDomBB]));
+
+    Blocks.push_back(NewBB);
+  }
+
+  // Move them physically from the end of the block list.
+  F->getBasicBlockList().splice(Before, F->getBasicBlockList(), NewPH);
+  F->getBasicBlockList().splice(Before, F->getBasicBlockList(),
+                                NewLoop->getHeader(), F->end());
+
+  return NewLoop;
 }

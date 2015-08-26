@@ -88,9 +88,7 @@ MCSubtargetInfo *X86_MC::createX86MCSubtargetInfo(const Triple &TT,
   if (CPUName.empty())
     CPUName = "generic";
 
-  MCSubtargetInfo *X = new MCSubtargetInfo();
-  InitX86MCSubtargetInfo(X, TT, CPUName, ArchFS);
-  return X;
+  return createX86MCSubtargetInfoImpl(TT, CPUName, ArchFS);
 }
 
 static MCInstrInfo *createX86MCInstrInfo() {
@@ -124,7 +122,8 @@ static MCAsmInfo *createX86MCAsmInfo(const MCRegisterInfo &MRI,
   } else if (TheTriple.isOSBinFormatELF()) {
     // Force the use of an ELF container.
     MAI = new X86ELFMCAsmInfo(TheTriple);
-  } else if (TheTriple.isWindowsMSVCEnvironment()) {
+  } else if (TheTriple.isWindowsMSVCEnvironment() ||
+             TheTriple.isWindowsCoreCLREnvironment()) {
     MAI = new X86MCAsmInfoMicrosoft(TheTriple);
   } else if (TheTriple.isOSCygMing() ||
              TheTriple.isWindowsItaniumEnvironment()) {

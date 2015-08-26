@@ -189,9 +189,9 @@ class ARMAsmParser : public MCTargetAsmParser {
     return getParser().Error(L, Msg, Ranges);
   }
 
-  bool validatetLDMRegList(MCInst Inst, const OperandVector &Operands,
+  bool validatetLDMRegList(const MCInst &Inst, const OperandVector &Operands,
                            unsigned ListNo, bool IsARPop = false);
-  bool validatetSTMRegList(MCInst Inst, const OperandVector &Operands,
+  bool validatetSTMRegList(const MCInst &Inst, const OperandVector &Operands,
                            unsigned ListNo);
 
   int tryParseRegister();
@@ -242,6 +242,8 @@ class ARMAsmParser : public MCTargetAsmParser {
                              bool &CanAcceptCarrySet,
                              bool &CanAcceptPredicationCode);
 
+  void tryConvertingToTwoOperandForm(StringRef Mnemonic, bool CarrySetting,
+                                     OperandVector &Operands);
   bool isThumb() const {
     // FIXME: Can tablegen auto-generate this?
     return STI.getFeatureBits()[ARM::ModeThumb];
@@ -347,7 +349,7 @@ public:
 
   ARMAsmParser(MCSubtargetInfo &STI, MCAsmParser &Parser,
                const MCInstrInfo &MII, const MCTargetOptions &Options)
-      : STI(STI), MII(MII), UC(Parser) {
+      : MCTargetAsmParser(Options), STI(STI), MII(MII), UC(Parser) {
     MCAsmParserExtension::Initialize(Parser);
 
     // Cache the MCRegisterInfo.
@@ -561,87 +563,6 @@ class ARMOperand : public MCParsedAsmOperand {
 
 public:
   ARMOperand(KindTy K) : MCParsedAsmOperand(), Kind(K) {}
-  ARMOperand(const ARMOperand &o) : MCParsedAsmOperand() {
-    Kind = o.Kind;
-    StartLoc = o.StartLoc;
-    EndLoc = o.EndLoc;
-    switch (Kind) {
-    case k_CondCode:
-      CC = o.CC;
-      break;
-    case k_ITCondMask:
-      ITMask = o.ITMask;
-      break;
-    case k_Token:
-      Tok = o.Tok;
-      break;
-    case k_CCOut:
-    case k_Register:
-      Reg = o.Reg;
-      break;
-    case k_RegisterList:
-    case k_DPRRegisterList:
-    case k_SPRRegisterList:
-      Registers = o.Registers;
-      break;
-    case k_VectorList:
-    case k_VectorListAllLanes:
-    case k_VectorListIndexed:
-      VectorList = o.VectorList;
-      break;
-    case k_CoprocNum:
-    case k_CoprocReg:
-      Cop = o.Cop;
-      break;
-    case k_CoprocOption:
-      CoprocOption = o.CoprocOption;
-      break;
-    case k_Immediate:
-      Imm = o.Imm;
-      break;
-    case k_MemBarrierOpt:
-      MBOpt = o.MBOpt;
-      break;
-    case k_InstSyncBarrierOpt:
-      ISBOpt = o.ISBOpt;
-    case k_Memory:
-      Memory = o.Memory;
-      break;
-    case k_PostIndexRegister:
-      PostIdxReg = o.PostIdxReg;
-      break;
-    case k_MSRMask:
-      MMask = o.MMask;
-      break;
-    case k_BankedReg:
-      BankedReg = o.BankedReg;
-      break;
-    case k_ProcIFlags:
-      IFlags = o.IFlags;
-      break;
-    case k_ShifterImmediate:
-      ShifterImm = o.ShifterImm;
-      break;
-    case k_ShiftedRegister:
-      RegShiftedReg = o.RegShiftedReg;
-      break;
-    case k_ShiftedImmediate:
-      RegShiftedImm = o.RegShiftedImm;
-      break;
-    case k_RotateImmediate:
-      RotImm = o.RotImm;
-      break;
-    case k_ModifiedImmediate:
-      ModImm = o.ModImm;
-      break;
-    case k_BitfieldDescriptor:
-      Bitfield = o.Bitfield;
-      break;
-    case k_VectorIndex:
-      VectorIndex = o.VectorIndex;
-      break;
-    }
-  }
 
   /// getStartLoc - Get the location of the first token of this operand.
   SMLoc getStartLoc() const override { return StartLoc; }
@@ -5465,6 +5386,92 @@ void ARMAsmParser::getMnemonicAcceptInfo(StringRef Mnemonic, StringRef FullInst,
     CanAcceptPredicationCode = true;
 }
 
+// \brief Some Thumb instructions have two operand forms that are not
+// available as three operand, convert to two operand form if possible.
+//
+// FIXME: We would really like to be able to tablegen'erate this.
+void ARMAsmParser::tryConvertingToTwoOperandForm(StringRef Mnemonic,
+                                                 bool CarrySetting,
+                                                 OperandVector &Operands) {
+  if (Operands.size() != 6)
+    return;
+
+  const auto &Op3 = static_cast<ARMOperand &>(*Operands[3]);
+        auto &Op4 = static_cast<ARMOperand &>(*Operands[4]);
+  if (!Op3.isReg() || !Op4.isReg())
+    return;
+
+  auto Op3Reg = Op3.getReg();
+  auto Op4Reg = Op4.getReg();
+
+  // For most Thumb2 cases we just generate the 3 operand form and reduce
+  // it in processInstruction(), but the 3 operand form of ADD (t2ADDrr)
+  // won't accept SP or PC so we do the transformation here taking care
+  // with immediate range in the 'add sp, sp #imm' case.
+  auto &Op5 = static_cast<ARMOperand &>(*Operands[5]);
+  if (isThumbTwo()) {
+    if (Mnemonic != "add")
+      return;
+    bool TryTransform = Op3Reg == ARM::PC || Op4Reg == ARM::PC ||
+                        (Op5.isReg() && Op5.getReg() == ARM::PC);
+    if (!TryTransform) {
+      TryTransform = (Op3Reg == ARM::SP || Op4Reg == ARM::SP ||
+                      (Op5.isReg() && Op5.getReg() == ARM::SP)) &&
+                     !(Op3Reg == ARM::SP && Op4Reg == ARM::SP &&
+                       Op5.isImm() && !Op5.isImm0_508s4());
+    }
+    if (!TryTransform)
+      return;
+  } else if (!isThumbOne())
+    return;
+
+  if (!(Mnemonic == "add" || Mnemonic == "sub" || Mnemonic == "and" ||
+        Mnemonic == "eor" || Mnemonic == "lsl" || Mnemonic == "lsr" ||
+        Mnemonic == "asr" || Mnemonic == "adc" || Mnemonic == "sbc" ||
+        Mnemonic == "ror" || Mnemonic == "orr" || Mnemonic == "bic"))
+    return;
+
+  // If first 2 operands of a 3 operand instruction are the same
+  // then transform to 2 operand version of the same instruction
+  // e.g. 'adds r0, r0, #1' transforms to 'adds r0, #1'
+  bool Transform = Op3Reg == Op4Reg;
+
+  // For communtative operations, we might be able to transform if we swap
+  // Op4 and Op5.  The 'ADD Rdm, SP, Rdm' form is already handled specially
+  // as tADDrsp.
+  const ARMOperand *LastOp = &Op5;
+  bool Swap = false;
+  if (!Transform && Op5.isReg() && Op3Reg == Op5.getReg() &&
+      ((Mnemonic == "add" && Op4Reg != ARM::SP) ||
+       Mnemonic == "and" || Mnemonic == "eor" ||
+       Mnemonic == "adc" || Mnemonic == "orr")) {
+    Swap = true;
+    LastOp = &Op4;
+    Transform = true;
+  }
+
+  // If both registers are the same then remove one of them from
+  // the operand list, with certain exceptions.
+  if (Transform) {
+    // Don't transform 'adds Rd, Rd, Rm' or 'sub{s} Rd, Rd, Rm' because the
+    // 2 operand forms don't exist.
+    if (((Mnemonic == "add" && CarrySetting) || Mnemonic == "sub") &&
+        LastOp->isReg())
+      Transform = false;
+
+    // Don't transform 'add/sub{s} Rd, Rd, #imm' if the immediate fits into
+    // 3-bits because the ARMARM says not to.
+    if ((Mnemonic == "add" || Mnemonic == "sub") && LastOp->isImm0_7())
+      Transform = false;
+  }
+
+  if (Transform) {
+    if (Swap)
+      std::swap(Op4, Op5);
+    Operands.erase(Operands.begin() + 3);
+  }
+}
+
 bool ARMAsmParser::shouldOmitCCOutOperand(StringRef Mnemonic,
                                           OperandVector &Operands) {
   // FIXME: This is all horribly hacky. We really need a better way to deal
@@ -5838,6 +5845,8 @@ bool ARMAsmParser::ParseInstruction(ParseInstructionInfo &Info, StringRef Name,
                    "VFP/Neon double precision register expected");
   }
 
+  tryConvertingToTwoOperandForm(Mnemonic, CarrySetting, Operands);
+
   // Some instructions, mostly Thumb, have forms for the same mnemonic that
   // do and don't have a cc_out optional-def operand. With some spot-checks
   // of the operand list, we can figure out which variant we're trying to
@@ -5901,48 +5910,6 @@ bool ARMAsmParser::ParseInstruction(ParseInstructionInfo &Info, StringRef Name,
     }
   }
 
-  // If first 2 operands of a 3 operand instruction are the same
-  // then transform to 2 operand version of the same instruction
-  // e.g. 'adds r0, r0, #1' transforms to 'adds r0, #1'
-  // FIXME: We would really like to be able to tablegen'erate this.
-  if (isThumbOne() && Operands.size() == 6 &&
-       (Mnemonic == "add" || Mnemonic == "sub" || Mnemonic == "and" ||
-        Mnemonic == "eor" || Mnemonic == "lsl" || Mnemonic == "lsr" ||
-        Mnemonic == "asr" || Mnemonic == "adc" || Mnemonic == "sbc" ||
-        Mnemonic == "ror" || Mnemonic == "orr" || Mnemonic == "bic")) {
-      ARMOperand &Op3 = static_cast<ARMOperand &>(*Operands[3]);
-      ARMOperand &Op4 = static_cast<ARMOperand &>(*Operands[4]);
-      ARMOperand &Op5 = static_cast<ARMOperand &>(*Operands[5]);
-
-      // If both registers are the same then remove one of them from
-      // the operand list.
-      if (Op3.isReg() && Op4.isReg() && Op3.getReg() == Op4.getReg()) {
-          // If 3rd operand (variable Op5) is a register and the instruction is adds/sub
-          // then do not transform as the backend already handles this instruction
-          // correctly.
-          if (!Op5.isReg() || !((Mnemonic == "add" && CarrySetting) || Mnemonic == "sub")) {
-              Operands.erase(Operands.begin() + 3);
-              if (Mnemonic == "add" && !CarrySetting) {
-                  // Special case for 'add' (not 'adds') instruction must
-                  // remove the CCOut operand as well.
-                  Operands.erase(Operands.begin() + 1);
-              }
-          }
-      }
-  }
-
-  // If instruction is 'add' and first two register operands
-  // use SP register, then remove one of the SP registers from
-  // the instruction.
-  // FIXME: We would really like to be able to tablegen'erate this.
-  if (isThumbOne() && Operands.size() == 5 && Mnemonic == "add" && !CarrySetting) {
-      ARMOperand &Op2 = static_cast<ARMOperand &>(*Operands[2]);
-      ARMOperand &Op3 = static_cast<ARMOperand &>(*Operands[3]);
-      if (Op2.isReg() && Op3.isReg() && Op2.getReg() == ARM::SP && Op3.getReg() == ARM::SP) {
-          Operands.erase(Operands.begin() + 2);
-      }
-  }
-
   // GNU Assembler extension (compatibility)
   if ((Mnemonic == "ldrd" || Mnemonic == "strd")) {
     ARMOperand &Op2 = static_cast<ARMOperand &>(*Operands[2]);
@@ -5985,8 +5952,9 @@ bool ARMAsmParser::ParseInstruction(ParseInstructionInfo &Info, StringRef Name,
 // return 'true' if register list contains non-low GPR registers,
 // 'false' otherwise. If Reg is in the register list or is HiReg, set
 // 'containsReg' to true.
-static bool checkLowRegisterList(MCInst Inst, unsigned OpNo, unsigned Reg,
-                                 unsigned HiReg, bool &containsReg) {
+static bool checkLowRegisterList(const MCInst &Inst, unsigned OpNo,
+                                 unsigned Reg, unsigned HiReg,
+                                 bool &containsReg) {
   containsReg = false;
   for (unsigned i = OpNo; i < Inst.getNumOperands(); ++i) {
     unsigned OpReg = Inst.getOperand(i).getReg();
@@ -6001,8 +5969,8 @@ static bool checkLowRegisterList(MCInst Inst, unsigned OpNo, unsigned Reg,
 
 // Check if the specified regisgter is in the register list of the inst,
 // starting at the indicated operand number.
-static bool listContainsReg(MCInst &Inst, unsigned OpNo, unsigned Reg) {
-  for (unsigned i = OpNo; i < Inst.getNumOperands(); ++i) {
+static bool listContainsReg(const MCInst &Inst, unsigned OpNo, unsigned Reg) {
+  for (unsigned i = OpNo, e = Inst.getNumOperands(); i < e; ++i) {
     unsigned OpReg = Inst.getOperand(i).getReg();
     if (OpReg == Reg)
       return true;
@@ -6020,7 +5988,7 @@ static bool instIsBreakpoint(const MCInst &Inst) {
 
 }
 
-bool ARMAsmParser::validatetLDMRegList(MCInst Inst,
+bool ARMAsmParser::validatetLDMRegList(const MCInst &Inst,
                                        const OperandVector &Operands,
                                        unsigned ListNo, bool IsARPop) {
   const ARMOperand &Op = static_cast<const ARMOperand &>(*Operands[ListNo]);
@@ -6043,7 +6011,7 @@ bool ARMAsmParser::validatetLDMRegList(MCInst Inst,
   return false;
 }
 
-bool ARMAsmParser::validatetSTMRegList(MCInst Inst,
+bool ARMAsmParser::validatetSTMRegList(const MCInst &Inst,
                                        const OperandVector &Operands,
                                        unsigned ListNo) {
   const ARMOperand &Op = static_cast<const ARMOperand &>(*Operands[ListNo]);
@@ -8167,8 +8135,16 @@ bool ARMAsmParser::processInstruction(MCInst &Inst,
     // If the destination and first source operand are the same, and
     // there's no setting of the flags, use encoding T2 instead of T3.
     // Note that this is only for ADD, not SUB. This mirrors the system
-    // 'as' behaviour. Make sure the wide encoding wasn't explicit.
-    if (Inst.getOperand(0).getReg() != Inst.getOperand(1).getReg() ||
+    // 'as' behaviour.  Also take advantage of ADD being commutative.
+    // Make sure the wide encoding wasn't explicit.
+    bool Swap = false;
+    auto DestReg = Inst.getOperand(0).getReg();
+    bool Transform = DestReg == Inst.getOperand(1).getReg();
+    if (!Transform && DestReg == Inst.getOperand(2).getReg()) {
+      Transform = true;
+      Swap = true;
+    }
+    if (!Transform ||
         Inst.getOperand(5).getReg() != 0 ||
         (static_cast<ARMOperand &>(*Operands[3]).isToken() &&
          static_cast<ARMOperand &>(*Operands[3]).getToken() == ".w"))
@@ -8177,7 +8153,7 @@ bool ARMAsmParser::processInstruction(MCInst &Inst,
     TmpInst.setOpcode(ARM::tADDhirr);
     TmpInst.addOperand(Inst.getOperand(0));
     TmpInst.addOperand(Inst.getOperand(0));
-    TmpInst.addOperand(Inst.getOperand(2));
+    TmpInst.addOperand(Inst.getOperand(Swap ? 1 : 2));
     TmpInst.addOperand(Inst.getOperand(3));
     TmpInst.addOperand(Inst.getOperand(4));
     Inst = TmpInst;
@@ -9176,8 +9152,7 @@ bool ARMAsmParser::parseDirectiveCPU(SMLoc L) {
     return false;
   }
 
-  STI.InitMCProcessorInfo(CPU, "");
-  STI.InitCPUSchedModel(CPU);
+  STI.setDefaultFeatures(CPU);
   setAvailableFeatures(ComputeAvailableFeatures(STI.getFeatureBits()));
 
   return false;
@@ -9915,7 +9890,7 @@ extern "C" void LLVMInitializeARMAsmParser() {
 // when we start to table-generate them, and we can use the ARM
 // flags below, that were generated by table-gen.
 static const struct {
-  const ARM::ArchExtKind Kind;
+  const unsigned Kind;
   const unsigned ArchCheck;
   const FeatureBitset Features;
 } Extensions[] = {
@@ -9923,7 +9898,7 @@ static const struct {
   { ARM::AEK_CRYPTO,  Feature_HasV8,
     {ARM::FeatureCrypto, ARM::FeatureNEON, ARM::FeatureFPARMv8} },
   { ARM::AEK_FP, Feature_HasV8, {ARM::FeatureFPARMv8} },
-  { ARM::AEK_HWDIV, Feature_HasV7 | Feature_IsNotMClass,
+  { (ARM::AEK_HWDIV | ARM::AEK_HWDIVARM), Feature_HasV7 | Feature_IsNotMClass,
     {ARM::FeatureHWDiv, ARM::FeatureHWDivARM} },
   { ARM::AEK_MP, Feature_HasV7 | Feature_IsNotMClass, {ARM::FeatureMP} },
   { ARM::AEK_SIMD, Feature_HasV8, {ARM::FeatureNEON, ARM::FeatureFPARMv8} },

@@ -54,13 +54,13 @@ struct MCDwarfFile {
 /// \brief Instances of this class represent the information from a
 /// dwarf .loc directive.
 class MCDwarfLoc {
-  unsigned FileNum;
-  unsigned Line;
-  unsigned Column;
+  uint32_t FileNum;
+  uint32_t Line;
+  uint16_t Column;
   // Flags (see #define's below)
-  unsigned Flags;
-  unsigned Isa;
-  unsigned Discriminator;
+  uint8_t Flags;
+  uint8_t Isa;
+  uint32_t Discriminator;
 
 // Flag that indicates the initial value of the is_stmt_start flag.
 #define DWARF2_LINE_DEFAULT_IS_STMT 1
@@ -107,13 +107,22 @@ public:
   void setLine(unsigned line) { Line = line; }
 
   /// \brief Set the Column of this MCDwarfLoc.
-  void setColumn(unsigned column) { Column = column; }
+  void setColumn(unsigned column) {
+    assert(column <= UINT16_MAX);
+    Column = column;
+  }
 
   /// \brief Set the Flags of this MCDwarfLoc.
-  void setFlags(unsigned flags) { Flags = flags; }
+  void setFlags(unsigned flags) {
+    assert(flags <= UINT8_MAX);
+    Flags = flags;
+  }
 
   /// \brief Set the Isa of this MCDwarfLoc.
-  void setIsa(unsigned isa) { Isa = isa; }
+  void setIsa(unsigned isa) {
+    assert(isa <= UINT8_MAX);
+    Isa = isa;
+  }
 
   /// \brief Set the Discriminator of this MCDwarfLoc.
   void setDiscriminator(unsigned discriminator) {
@@ -173,6 +182,19 @@ public:
   }
 };
 
+struct MCDwarfLineTableParams {
+  /// First special line opcode - leave room for the standard opcodes.
+  /// Note: If you want to change this, you'll have to update the
+  /// "StandardOpcodeLengths" table that is emitted in
+  /// \c Emit().
+  uint8_t DWARF2LineOpcodeBase = 13;
+  /// Minimum line offset in a special line info. opcode.  The value
+  /// -5 was chosen to give a reasonable range of values.
+  int8_t DWARF2LineBase = -5;
+  /// Range of line offsets in a special line info. opcode.
+  uint8_t DWARF2LineRange = 14;
+};
+
 struct MCDwarfLineTableHeader {
   MCSymbol *Label;
   SmallVector<std::string, 3> MCDwarfDirs;
@@ -183,9 +205,11 @@ struct MCDwarfLineTableHeader {
   MCDwarfLineTableHeader() : Label(nullptr) {}
   unsigned getFile(StringRef &Directory, StringRef &FileName,
                    unsigned FileNumber = 0);
-  std::pair<MCSymbol *, MCSymbol *> Emit(MCStreamer *MCOS) const;
+  std::pair<MCSymbol *, MCSymbol *> Emit(MCStreamer *MCOS,
+                                         MCDwarfLineTableParams Params) const;
   std::pair<MCSymbol *, MCSymbol *>
-  Emit(MCStreamer *MCOS, ArrayRef<char> SpecialOpcodeLengths) const;
+  Emit(MCStreamer *MCOS, MCDwarfLineTableParams Params,
+       ArrayRef<char> SpecialOpcodeLengths) const;
 };
 
 class MCDwarfDwoLineTable {
@@ -197,7 +221,7 @@ public:
   unsigned getFile(StringRef Directory, StringRef FileName) {
     return Header.getFile(Directory, FileName);
   }
-  void Emit(MCStreamer &MCOS) const;
+  void Emit(MCStreamer &MCOS, MCDwarfLineTableParams Params) const;
 };
 
 class MCDwarfLineTable {
@@ -206,10 +230,10 @@ class MCDwarfLineTable {
 
 public:
   // This emits the Dwarf file and the line tables for all Compile Units.
-  static void Emit(MCObjectStreamer *MCOS);
+  static void Emit(MCObjectStreamer *MCOS, MCDwarfLineTableParams Params);
 
   // This emits the Dwarf file and the line tables for a given Compile Unit.
-  void EmitCU(MCObjectStreamer *MCOS) const;
+  void EmitCU(MCObjectStreamer *MCOS, MCDwarfLineTableParams Params) const;
 
   unsigned getFile(StringRef &Directory, StringRef &FileName,
                    unsigned FileNumber = 0);
@@ -253,11 +277,12 @@ public:
 class MCDwarfLineAddr {
 public:
   /// Utility function to encode a Dwarf pair of LineDelta and AddrDeltas.
-  static void Encode(MCContext &Context, int64_t LineDelta, uint64_t AddrDelta,
-                     raw_ostream &OS);
+  static void Encode(MCContext &Context, MCDwarfLineTableParams Params,
+                     int64_t LineDelta, uint64_t AddrDelta, raw_ostream &OS);
 
   /// Utility function to emit the encoding to a streamer.
-  static void Emit(MCStreamer *MCOS, int64_t LineDelta, uint64_t AddrDelta);
+  static void Emit(MCStreamer *MCOS, MCDwarfLineTableParams Params,
+                   int64_t LineDelta, uint64_t AddrDelta);
 };
 
 class MCGenDwarfInfo {

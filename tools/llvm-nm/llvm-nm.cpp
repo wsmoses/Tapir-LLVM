@@ -185,39 +185,20 @@ struct NMSymbol {
 }
 
 static bool compareSymbolAddress(const NMSymbol &A, const NMSymbol &B) {
-  bool AUndefined = A.Sym.getFlags() & SymbolRef::SF_Undefined;
-  bool BUndefined = B.Sym.getFlags() & SymbolRef::SF_Undefined;
-  if (AUndefined && !BUndefined)
-    return true;
-  if (!AUndefined && BUndefined)
-    return false;
-  if (A.Address < B.Address)
-    return true;
-  if (A.Address == B.Address && A.Name < B.Name)
-    return true;
-  if (A.Address == B.Address && A.Name == B.Name && A.Size < B.Size)
-    return true;
-  return false;
+  bool ADefined = !(A.Sym.getFlags() & SymbolRef::SF_Undefined);
+  bool BDefined = !(B.Sym.getFlags() & SymbolRef::SF_Undefined);
+  return std::make_tuple(ADefined, A.Address, A.Name, A.Size) <
+         std::make_tuple(BDefined, B.Address, B.Name, B.Size);
 }
 
 static bool compareSymbolSize(const NMSymbol &A, const NMSymbol &B) {
-  if (A.Size < B.Size)
-    return true;
-  if (A.Size == B.Size && A.Name < B.Name)
-    return true;
-  if (A.Size == B.Size && A.Name == B.Name && A.Address < B.Address)
-    return true;
-  return false;
+  return std::make_tuple(A.Size, A.Name, A.Address) <
+         std::make_tuple(B.Size, B.Name, B.Address);
 }
 
 static bool compareSymbolName(const NMSymbol &A, const NMSymbol &B) {
-  if (A.Name < B.Name)
-    return true;
-  if (A.Name == B.Name && A.Size < B.Size)
-    return true;
-  if (A.Name == B.Name && A.Size == B.Size && A.Address < B.Address)
-    return true;
-  return false;
+  return std::make_tuple(A.Name, A.Size, A.Address) <
+         std::make_tuple(B.Name, B.Size, B.Address);
 }
 
 static char isSymbolList64Bit(SymbolicFile &Obj) {
@@ -333,8 +314,7 @@ static void darwinPrintSymbol(MachOObjectFile *MachO, SymbolListT::iterator I,
     outs() << "(indirect) ";
     break;
   case MachO::N_SECT: {
-    section_iterator Sec = MachO->section_end();
-    MachO->getSymbolSection(I->Sym.getRawDataRefImpl(), Sec);
+    section_iterator Sec = *MachO->getSymbolSection(I->Sym.getRawDataRefImpl());
     DataRefImpl Ref = Sec->getRawDataRefImpl();
     StringRef SectionName;
     MachO->getSectionName(Ref, SectionName);
@@ -564,12 +544,12 @@ static void sortAndPrintSymbolList(SymbolicFile &Obj, bool printName,
     char SymbolAddrStr[18] = "";
     char SymbolSizeStr[18] = "";
 
-    if (OutputFormat == sysv || I->Address == UnknownAddress)
+    if (OutputFormat == sysv || I->TypeChar == 'U')
       strcpy(SymbolAddrStr, printBlanks);
     if (OutputFormat == sysv)
       strcpy(SymbolSizeStr, printBlanks);
 
-    if (I->Address != UnknownAddress)
+    if (I->TypeChar != 'U')
       format(printFormat, I->Address)
           .print(SymbolAddrStr, sizeof(SymbolAddrStr));
     format(printFormat, I->Size).print(SymbolSizeStr, sizeof(SymbolSizeStr));
@@ -613,10 +593,11 @@ static char getSymbolNMTypeChar(ELFObjectFileBase &Obj,
   // OK, this is ELF
   elf_symbol_iterator SymI(I);
 
-  elf_section_iterator SecI = Obj.section_end();
-  if (error(SymI->getSection(SecI)))
+  ErrorOr<elf_section_iterator> SecIOrErr = SymI->getSection();
+  if (error(SecIOrErr.getError()))
     return '?';
 
+  elf_section_iterator SecI = *SecIOrErr;
   if (SecI != Obj.section_end()) {
     switch (SecI->getType()) {
     case ELF::SHT_PROGBITS:
@@ -670,9 +651,10 @@ static char getSymbolNMTypeChar(COFFObjectFile &Obj, symbol_iterator I) {
 
   uint32_t Characteristics = 0;
   if (!COFF::isReservedSectionNumber(Symb.getSectionNumber())) {
-    section_iterator SecI = Obj.section_end();
-    if (error(SymI->getSection(SecI)))
+    ErrorOr<section_iterator> SecIOrErr = SymI->getSection();
+    if (error(SecIOrErr.getError()))
       return '?';
+    section_iterator SecI = *SecIOrErr;
     const coff_section *Section = Obj.getCOFFSection(*SecI);
     Characteristics = Section->Characteristics;
   }
@@ -720,8 +702,7 @@ static char getSymbolNMTypeChar(MachOObjectFile &Obj, basic_symbol_iterator I) {
   case MachO::N_INDR:
     return 'i';
   case MachO::N_SECT: {
-    section_iterator Sec = Obj.section_end();
-    Obj.getSymbolSection(Symb, Sec);
+    section_iterator Sec = *Obj.getSymbolSection(Symb);
     DataRefImpl Ref = Sec->getRawDataRefImpl();
     StringRef SectionName;
     Obj.getSectionName(Ref, SectionName);
@@ -881,21 +862,17 @@ static void dumpSymbolNamesFromObject(SymbolicFile &Obj, bool printName,
       continue;
     NMSymbol S;
     S.Size = 0;
-    S.Address = UnknownAddress;
+    S.Address = 0;
     if (PrintSize) {
       if (isa<ELFObjectFileBase>(&Obj))
         S.Size = ELFSymbolRef(Sym).getSize();
     }
     if (PrintAddress && isa<ObjectFile>(Obj)) {
       SymbolRef SymRef(Sym);
-      if (SymFlags & SymbolRef::SF_Common) {
-        S.Address = SymRef.getCommonSize();
-      } else {
-        ErrorOr<uint64_t> AddressOrErr = SymRef.getAddress();
-        if (error(AddressOrErr.getError()))
-          break;
-        S.Address = *AddressOrErr;
-      }
+      ErrorOr<uint64_t> AddressOrErr = SymRef.getAddress();
+      if (error(AddressOrErr.getError()))
+        break;
+      S.Address = *AddressOrErr;
     }
     S.TypeChar = getNMTypeChar(Obj, Sym);
     if (error(Sym.printName(OS)))

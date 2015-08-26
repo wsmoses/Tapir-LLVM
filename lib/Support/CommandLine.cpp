@@ -46,21 +46,21 @@ using namespace cl;
 //
 namespace llvm {
 namespace cl {
-TEMPLATE_INSTANTIATION(class basic_parser<bool>);
-TEMPLATE_INSTANTIATION(class basic_parser<boolOrDefault>);
-TEMPLATE_INSTANTIATION(class basic_parser<int>);
-TEMPLATE_INSTANTIATION(class basic_parser<unsigned>);
-TEMPLATE_INSTANTIATION(class basic_parser<unsigned long long>);
-TEMPLATE_INSTANTIATION(class basic_parser<double>);
-TEMPLATE_INSTANTIATION(class basic_parser<float>);
-TEMPLATE_INSTANTIATION(class basic_parser<std::string>);
-TEMPLATE_INSTANTIATION(class basic_parser<char>);
+template class basic_parser<bool>;
+template class basic_parser<boolOrDefault>;
+template class basic_parser<int>;
+template class basic_parser<unsigned>;
+template class basic_parser<unsigned long long>;
+template class basic_parser<double>;
+template class basic_parser<float>;
+template class basic_parser<std::string>;
+template class basic_parser<char>;
 
-TEMPLATE_INSTANTIATION(class opt<unsigned>);
-TEMPLATE_INSTANTIATION(class opt<int>);
-TEMPLATE_INSTANTIATION(class opt<std::string>);
-TEMPLATE_INSTANTIATION(class opt<char>);
-TEMPLATE_INSTANTIATION(class opt<bool>);
+template class opt<unsigned>;
+template class opt<int>;
+template class opt<std::string>;
+template class opt<char>;
+template class opt<bool>;
 }
 } // end namespace llvm::cl
 
@@ -799,7 +799,7 @@ void cl::ParseEnvironmentOptions(const char *progName, const char *envVar,
   // telling us.
   SmallVector<const char *, 20> newArgv;
   BumpPtrAllocator A;
-  BumpPtrStringSaver Saver(A);
+  StringSaver Saver(A);
   newArgv.push_back(Saver.save(progName));
 
   // Parse the value of the environment variable into a "command line"
@@ -822,7 +822,7 @@ void CommandLineParser::ParseCommandLineOptions(int argc,
   // Expand response files.
   SmallVector<const char *, 20> newArgv(argv, argv + argc);
   BumpPtrAllocator A;
-  BumpPtrStringSaver Saver(A);
+  StringSaver Saver(A);
   ExpandResponseFiles(Saver, TokenizeGNUCommandLine, newArgv);
   argv = &newArgv[0];
   argc = static_cast<int>(newArgv.size());

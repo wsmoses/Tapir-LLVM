@@ -69,8 +69,13 @@ static cl::opt<bool> ShouldStartVectorizeHorAtStore(
     cl::desc(
         "Attempt to vectorize horizontal reductions feeding into a store"));
 
+static cl::opt<int>
+MaxVectorRegSizeOption("slp-max-reg-size", cl::init(128), cl::Hidden,
+    cl::desc("Attempt to vectorize for this register size in bits"));
+
 namespace {
 
+// FIXME: Set this via cl::opt to allow overriding.
 static const unsigned MinVecRegSize = 128;
 
 static const unsigned RecursionMaxDepth = 12;
@@ -157,7 +162,7 @@ static bool canCombineAsAltInst(unsigned Op) {
   return false;
 }
 
-/// \returns ShuffleVector instruction if intructions in \p VL have
+/// \returns ShuffleVector instruction if instructions in \p VL have
 ///  alternate fadd,fsub / fsub,fadd/add,sub/sub,add sequence.
 /// (i.e. e.g. opcodes of fadd,fsub,fadd,fsub...)
 static unsigned isAltInst(ArrayRef<Value *> VL) {
@@ -236,6 +241,9 @@ static Instruction *propagateMetadata(Instruction *I, ArrayRef<Value *> VL) {
         break;
       case LLVMContext::MD_fpmath:
         MD = MDNode::getMostGenericFPMath(MD, IMD);
+        break;
+      case LLVMContext::MD_nontemporal:
+        MD = MDNode::intersect(MD, IMD);
         break;
       }
     }
@@ -388,7 +396,7 @@ public:
   /// \brief Perform LICM and CSE on the newly generated gather sequences.
   void optimizeGatherSequence();
 
-  /// \returns true if it is benefitial to reverse the vector order.
+  /// \returns true if it is beneficial to reverse the vector order.
   bool shouldReorder() const {
     return NumLoadsWantToChangeOrder > NumLoadsWantToKeepOrder;
   }
@@ -436,7 +444,7 @@ private:
   /// \returns a vector from a collection of scalars in \p VL.
   Value *Gather(ArrayRef<Value *> VL, VectorType *Ty);
 
-  /// \returns whether the VectorizableTree is fully vectoriable and will
+  /// \returns whether the VectorizableTree is fully vectorizable and will
   /// be beneficial even the tree height is tiny.
   bool isFullyVectorizableTinyTree();
 
@@ -501,7 +509,7 @@ private:
   /// This POD struct describes one external user in the vectorized tree.
   struct ExternalUser {
     ExternalUser (Value *S, llvm::User *U, int L) :
-      Scalar(S), User(U), Lane(L){};
+      Scalar(S), User(U), Lane(L){}
     // Which scalar in our function.
     Value *Scalar;
     // Which user that uses the scalar.
@@ -2893,8 +2901,8 @@ void BoUpSLP::BlockScheduling::calculateDependencies(ScheduleData *SD,
             }
           } else {
             // I'm not sure if this can ever happen. But we need to be safe.
-            // This lets the instruction/bundle never be scheduled and eventally
-            // disable vectorization.
+            // This lets the instruction/bundle never be scheduled and
+            // eventually disable vectorization.
             BundleMember->Dependencies++;
             BundleMember->incrementUnscheduledDeps(1);
           }
@@ -3000,7 +3008,7 @@ void BoUpSLP::scheduleBlock(BlockScheduling *BS) {
   };
   std::set<ScheduleData *, ScheduleDataCompare> ReadyInsts;
 
-  // Ensure that all depencency data is updated and fill the ready-list with
+  // Ensure that all dependency data is updated and fill the ready-list with
   // initial instructions.
   int Idx = 0;
   int NumToSchedule = 0;
@@ -3071,7 +3079,7 @@ struct SLPVectorizer : public FunctionPass {
     if (skipOptnoneFunction(F))
       return false;
 
-    SE = &getAnalysis<ScalarEvolution>();
+    SE = &getAnalysis<ScalarEvolutionWrapperPass>().getSE();
     TTI = &getAnalysis<TargetTransformInfoWrapperPass>().getTTI(F);
     auto *TLIP = getAnalysisIfAvailable<TargetLibraryInfoWrapperPass>();
     TLI = TLIP ? &TLIP->getTLI() : nullptr;
@@ -3087,6 +3095,17 @@ struct SLPVectorizer : public FunctionPass {
     // vectorization.
     if (!TTI->getNumberOfRegisters(true))
       return false;
+
+    // Use the vector register size specified by the target unless overridden
+    // by a command-line option.
+    // TODO: It would be better to limit the vectorization factor based on
+    //       data type rather than just register size. For example, x86 AVX has
+    //       256-bit registers, but it does not support integer operations
+    //       at that width (that requires AVX2).
+    if (MaxVectorRegSizeOption.getNumOccurrences())
+      MaxVecRegSize = MaxVectorRegSizeOption;
+    else
+      MaxVecRegSize = TTI->getRegisterBitWidth(true);
 
     // Don't vectorize when the attribute NoImplicitFloat is used.
     if (F.hasFnAttribute(Attribute::NoImplicitFloat))
@@ -3125,7 +3144,7 @@ struct SLPVectorizer : public FunctionPass {
   void getAnalysisUsage(AnalysisUsage &AU) const override {
     FunctionPass::getAnalysisUsage(AU);
     AU.addRequired<AssumptionCacheTracker>();
-    AU.addRequired<ScalarEvolution>();
+    AU.addRequired<ScalarEvolutionWrapperPass>();
     AU.addRequired<AliasAnalysis>();
     AU.addRequired<TargetTransformInfoWrapperPass>();
     AU.addRequired<LoopInfoWrapperPass>();
@@ -3165,12 +3184,13 @@ private:
   bool vectorizeChainsInBlock(BasicBlock *BB, BoUpSLP &R);
 
   bool vectorizeStoreChain(ArrayRef<Value *> Chain, int CostThreshold,
-                           BoUpSLP &R);
+                           BoUpSLP &R, unsigned VecRegSize);
 
   bool vectorizeStores(ArrayRef<StoreInst *> Stores, int costThreshold,
                        BoUpSLP &R);
 private:
   StoreListMap StoreRefs;
+  unsigned MaxVecRegSize; // This is set by TTI or overridden by cl::opt.
 };
 
 /// \brief Check that the Values in the slice in VL array are still existent in
@@ -3185,14 +3205,15 @@ static bool hasValueBeenRAUWed(ArrayRef<Value *> VL, ArrayRef<WeakVH> VH,
 }
 
 bool SLPVectorizer::vectorizeStoreChain(ArrayRef<Value *> Chain,
-                                          int CostThreshold, BoUpSLP &R) {
+                                        int CostThreshold, BoUpSLP &R,
+                                        unsigned VecRegSize) {
   unsigned ChainLen = Chain.size();
   DEBUG(dbgs() << "SLP: Analyzing a store chain of length " << ChainLen
         << "\n");
   Type *StoreTy = cast<StoreInst>(Chain[0])->getValueOperand()->getType();
   auto &DL = cast<StoreInst>(Chain[0])->getModule()->getDataLayout();
   unsigned Sz = DL.getTypeSizeInBits(StoreTy);
-  unsigned VF = MinVecRegSize / Sz;
+  unsigned VF = VecRegSize / Sz;
 
   if (!isPowerOf2_32(Sz) || VF < 2)
     return false;
@@ -3244,15 +3265,26 @@ bool SLPVectorizer::vectorizeStores(ArrayRef<StoreInst *> Stores,
 
   // Do a quadratic search on all of the given stores and find
   // all of the pairs of stores that follow each other.
+  SmallVector<unsigned, 16> IndexQueue;
   for (unsigned i = 0, e = Stores.size(); i < e; ++i) {
-    for (unsigned j = 0; j < e; ++j) {
-      if (i == j)
-        continue;
-      const DataLayout &DL = Stores[i]->getModule()->getDataLayout();
-      if (R.isConsecutiveAccess(Stores[i], Stores[j], DL)) {
-        Tails.insert(Stores[j]);
+    const DataLayout &DL = Stores[i]->getModule()->getDataLayout();
+    IndexQueue.clear();
+    // If a store has multiple consecutive store candidates, search Stores
+    // array according to the sequence: from i+1 to e, then from i-1 to 0.
+    // This is because usually pairing with immediate succeeding or preceding
+    // candidate create the best chance to find slp vectorization opportunity.
+    unsigned j = 0;
+    for (j = i + 1; j < e; ++j)
+      IndexQueue.push_back(j);
+    for (j = i; j > 0; --j)
+      IndexQueue.push_back(j - 1);
+
+    for (auto &k : IndexQueue) {
+      if (R.isConsecutiveAccess(Stores[i], Stores[k], DL)) {
+        Tails.insert(Stores[k]);
         Heads.insert(Stores[i]);
-        ConsecutiveChain[Stores[i]] = Stores[j];
+        ConsecutiveChain[Stores[i]] = Stores[k];
+        break;
       }
     }
   }
@@ -3276,10 +3308,15 @@ bool SLPVectorizer::vectorizeStores(ArrayRef<StoreInst *> Stores,
       I = ConsecutiveChain[I];
     }
 
-    if (vectorizeStoreChain(Operands, costThreshold, R)) {
-      // Mark the vectorized stores so that we don't vectorize them again.
-      VectorizedStores.insert(Operands.begin(), Operands.end());
-      Changed = true;
+    // FIXME: Is division-by-2 the correct step? Should we assert that the
+    // register size is a power-of-2?
+    for (unsigned Size = MaxVecRegSize; Size >= MinVecRegSize; Size /= 2) {
+      if (vectorizeStoreChain(Operands, costThreshold, R, Size)) {
+        // Mark the vectorized stores so that we don't vectorize them again.
+        VectorizedStores.insert(Operands.begin(), Operands.end());
+        Changed = true;
+        break;
+      }
     }
   }
 
@@ -3340,6 +3377,8 @@ bool SLPVectorizer::tryToVectorizeList(ArrayRef<Value *> VL, BoUpSLP &R,
 
   Type *Ty0 = I0->getType();
   unsigned Sz = DL.getTypeSizeInBits(Ty0);
+  // FIXME: Register size should be a parameter to this function, so we can
+  // try different vectorization factors.
   unsigned VF = MinVecRegSize / Sz;
 
   for (Value *V : VL) {
@@ -3569,6 +3608,8 @@ public:
     const DataLayout &DL = B->getModule()->getDataLayout();
     ReductionOpcode = B->getOpcode();
     ReducedValueOpcode = 0;
+    // FIXME: Register size should be a parameter to this function, so we can
+    // try different vectorization factors.
     ReduxWidth = MinVecRegSize / DL.getTypeSizeInBits(Ty);
     ReductionRoot = B;
     ReductionPHI = Phi;
@@ -3694,7 +3735,7 @@ public:
 
 private:
 
-  /// \brief Calcuate the cost of a reduction.
+  /// \brief Calculate the cost of a reduction.
   int getReductionCost(TargetTransformInfo *TTI, Value *FirstReducedVal) {
     Type *ScalarTy = FirstReducedVal->getType();
     Type *VecTy = VectorType::get(ScalarTy, ReduxWidth);
@@ -3995,6 +4036,9 @@ bool SLPVectorizer::vectorizeStoreChains(BoUpSLP &R) {
           << it->second.size() << ".\n");
 
     // Process the stores in chunks of 16.
+    // TODO: The limit of 16 inhibits greater vectorization factors.
+    //       For example, AVX2 supports v32i8. Increasing this limit, however,
+    //       may cause a significant compile-time increase.
     for (unsigned CI = 0, CE = it->second.size(); CI < CE; CI+=16) {
       unsigned Len = std::min<unsigned>(CE - CI, 16);
       Changed |= vectorizeStores(makeArrayRef(&it->second[CI], Len),
@@ -4012,7 +4056,7 @@ INITIALIZE_PASS_BEGIN(SLPVectorizer, SV_NAME, lv_name, false, false)
 INITIALIZE_AG_DEPENDENCY(AliasAnalysis)
 INITIALIZE_PASS_DEPENDENCY(TargetTransformInfoWrapperPass)
 INITIALIZE_PASS_DEPENDENCY(AssumptionCacheTracker)
-INITIALIZE_PASS_DEPENDENCY(ScalarEvolution)
+INITIALIZE_PASS_DEPENDENCY(ScalarEvolutionWrapperPass)
 INITIALIZE_PASS_DEPENDENCY(LoopSimplify)
 INITIALIZE_PASS_END(SLPVectorizer, SV_NAME, lv_name, false, false)
 

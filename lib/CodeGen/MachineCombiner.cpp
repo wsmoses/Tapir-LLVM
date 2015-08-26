@@ -124,7 +124,8 @@ MachineCombiner::getDepth(SmallVectorImpl<MachineInstr *> &InsInstrs,
                           MachineTraceMetrics::Trace BlockTrace) {
 
   SmallVector<unsigned, 16> InstrDepth;
-  assert(TSchedModel.hasInstrSchedModel() && "Missing machine model\n");
+  assert(TSchedModel.hasInstrSchedModelOrItineraries() &&
+         "Missing machine model\n");
 
   // For each instruction in the new sequence compute the depth based on the
   // operands. Use the trace information when possible. For new operands which
@@ -181,7 +182,8 @@ MachineCombiner::getDepth(SmallVectorImpl<MachineInstr *> &InsInstrs,
 unsigned MachineCombiner::getLatency(MachineInstr *Root, MachineInstr *NewRoot,
                                      MachineTraceMetrics::Trace BlockTrace) {
 
-  assert(TSchedModel.hasInstrSchedModel() && "Missing machine model\n");
+  assert(TSchedModel.hasInstrSchedModelOrItineraries() &&
+         "Missing machine model\n");
 
   // Check each definition in NewRoot and compute the latency
   unsigned NewRootLatency = 0;
@@ -202,7 +204,7 @@ unsigned MachineCombiner::getLatency(MachineInstr *Root, MachineInstr *NewRoot,
           NewRoot, NewRoot->findRegisterDefOperandIdx(MO.getReg()), UseMO,
           UseMO->findRegisterUseOperandIdx(MO.getReg()));
     } else {
-      LatencyOp = TSchedModel.computeInstrLatency(NewRoot->getOpcode());
+      LatencyOp = TSchedModel.computeInstrLatency(NewRoot);
     }
     NewRootLatency = std::max(NewRootLatency, LatencyOp);
   }
@@ -228,7 +230,8 @@ bool MachineCombiner::improvesCriticalPathLen(
     DenseMap<unsigned, unsigned> &InstrIdxForVirtReg,
     bool NewCodeHasLessInsts) {
 
-  assert(TSchedModel.hasInstrSchedModel() && "Missing machine model\n");
+  assert(TSchedModel.hasInstrSchedModelOrItineraries() &&
+         "Missing machine model\n");
   // NewRoot is the last instruction in the \p InsInstrs vector.
   // Get depth and latency of NewRoot.
   unsigned NewRootIdx = InsInstrs.size() - 1;
@@ -276,6 +279,8 @@ bool MachineCombiner::preservesResourceLen(
     MachineBasicBlock *MBB, MachineTraceMetrics::Trace BlockTrace,
     SmallVectorImpl<MachineInstr *> &InsInstrs,
     SmallVectorImpl<MachineInstr *> &DelInstrs) {
+  if (!TSchedModel.hasInstrSchedModel())
+    return true;
 
   // Compute current resource length
 
@@ -310,7 +315,7 @@ bool MachineCombiner::preservesResourceLen(
 bool MachineCombiner::doSubstitute(unsigned NewSize, unsigned OldSize) {
   if (OptSize && (NewSize < OldSize))
     return true;
-  if (!TSchedModel.hasInstrSchedModel())
+  if (!TSchedModel.hasInstrSchedModelOrItineraries())
     return true;
   return false;
 }
@@ -421,8 +426,7 @@ bool MachineCombiner::runOnMachineFunction(MachineFunction &MF) {
   MRI = &MF.getRegInfo();
   Traces = &getAnalysis<MachineTraceMetrics>();
   MinInstr = 0;
-
-  OptSize = MF.getFunction()->hasFnAttribute(Attribute::OptimizeForSize);
+  OptSize = MF.getFunction()->optForSize();
 
   DEBUG(dbgs() << getPassName() << ": " << MF.getName() << '\n');
   if (!TII->useMachineCombiner()) {

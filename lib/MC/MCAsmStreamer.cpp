@@ -78,6 +78,9 @@ public:
     }
     EmitCommentsAndEOL();
   }
+
+  void EmitSyntaxDirective() override;
+
   void EmitCommentsAndEOL();
 
   /// isVerboseAsm - Return true if this streamer supports verbose assembly at
@@ -250,15 +253,9 @@ public:
 void MCAsmStreamer::AddComment(const Twine &T) {
   if (!IsVerboseAsm) return;
 
-  // Make sure that CommentStream is flushed.
-  CommentStream.flush();
-
   T.toVector(CommentToEmit);
   // Each comment goes on its own line.
   CommentToEmit.push_back('\n');
-
-  // Tell the comment stream that the vector changed underneath it.
-  CommentStream.resync();
 }
 
 void MCAsmStreamer::EmitCommentsAndEOL() {
@@ -267,7 +264,6 @@ void MCAsmStreamer::EmitCommentsAndEOL() {
     return;
   }
 
-  CommentStream.flush();
   StringRef Comments = CommentToEmit;
 
   assert(Comments.back() == '\n' &&
@@ -282,8 +278,6 @@ void MCAsmStreamer::EmitCommentsAndEOL() {
   } while (!Comments.empty());
 
   CommentToEmit.clear();
-  // Tell the comment stream that the vector changed underneath it.
-  CommentStream.resync();
 }
 
 static inline int64_t truncateToSize(int64_t Value, unsigned Bytes) {
@@ -480,6 +474,14 @@ void MCAsmStreamer::EmitSymbolDesc(MCSymbol *Symbol, unsigned DescValue) {
   EmitEOL();
 }
 
+void MCAsmStreamer::EmitSyntaxDirective() {
+  if (MAI->getAssemblerDialect() == 1)
+    OS << "\t.intel_syntax noprefix\n";
+  // FIXME: Currently emit unprefix'ed registers.
+  // The intel_syntax directive has one optional argument 
+  // with may have a value of prefix or noprefix.
+}
+
 void MCAsmStreamer::BeginCOFFSymbolDef(const MCSymbol *Symbol) {
   OS << "\t.def\t ";
   Symbol->print(OS, MAI);
@@ -503,7 +505,8 @@ void MCAsmStreamer::EndCOFFSymbolDef() {
 }
 
 void MCAsmStreamer::EmitCOFFSafeSEH(MCSymbol const *Symbol) {
-  OS << "\t.safeseh\t" << *Symbol;
+  OS << "\t.safeseh\t";
+  Symbol->print(OS, MAI);
   EmitEOL();
 }
 
@@ -1216,7 +1219,6 @@ void MCAsmStreamer::AddEncodingComment(const MCInst &Inst,
   SmallVector<MCFixup, 4> Fixups;
   raw_svector_ostream VecOS(Code);
   Emitter->encodeInstruction(Inst, VecOS, Fixups, STI);
-  VecOS.flush();
 
   // If we are showing fixups, create symbolic markers in the encoded
   // representation. We do this by making a per-bit map to the fixup item index,

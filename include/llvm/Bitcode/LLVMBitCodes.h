@@ -121,7 +121,9 @@ namespace bitc {
     TYPE_CODE_STRUCT_NAME = 19, // STRUCT_NAME: [strchr x N]
     TYPE_CODE_STRUCT_NAMED = 20,// STRUCT_NAMED: [ispacked, eltty x N]
 
-    TYPE_CODE_FUNCTION = 21     // FUNCTION: [vararg, retty, paramty x N]
+    TYPE_CODE_FUNCTION = 21,    // FUNCTION: [vararg, retty, paramty x N]
+
+    TYPE_CODE_TOKEN = 22        // TOKEN
   };
 
   // The type symbol table only has one code (TST_ENTRY_CODE).
@@ -354,9 +356,16 @@ namespace bitc {
     FUNC_CODE_INST_CMPXCHG     = 46, // CMPXCHG: [ptrty,ptr,valty,cmp,new, align,
                                      //           vol,ordering,synchscope]
     FUNC_CODE_INST_LANDINGPAD  = 47, // LANDINGPAD: [ty,val,num,id0,val0...]
-    FUNC_CODE_INST_DETACH      = 48, // DETACH: [bb#, bb#]
-    FUNC_CODE_INST_REATTACH    = 49, // REATTACH
-    FUNC_CODE_INST_SYNC        = 50, // SYNC: [bb#]
+    FUNC_CODE_INST_CLEANUPRET  = 48, // CLEANUPRET: [] or [val] or [bb#] or [val,bb#]
+    FUNC_CODE_INST_CATCHRET    = 49, // CATCHRET: [bb#]
+    FUNC_CODE_INST_CATCHPAD  = 50, // CATCHPAD: [ty,val,val,num,args...]
+    FUNC_CODE_INST_TERMINATEPAD = 51, // TERMINATEPAD: [bb#,num,args...]
+    FUNC_CODE_INST_CLEANUPPAD = 52, // CLEANUPPAD: [num,args...]
+    FUNC_CODE_INST_CATCHENDPAD = 53, // CATCHENDPAD: [] or [bb#]
+
+    FUNC_CODE_INST_DETACH      = 54, // DETACH: [bb#, bb#]
+    FUNC_CODE_INST_REATTACH    = 55, // REATTACH
+    FUNC_CODE_INST_SYNC        = 56, // SYNC: [bb#]
   };
 
   enum UseListCodes {
@@ -410,6 +419,9 @@ namespace bitc {
     ATTR_KIND_DEREFERENCEABLE_OR_NULL = 42,
     ATTR_KIND_CONVERGENT = 43,
     ATTR_KIND_SAFESTACK = 44,
+    ATTR_KIND_ARGMEMONLY = 45,
+    ATTR_KIND_SWIFT_SELF = 46,
+    ATTR_KIND_SWIFT_ERROR = 47
   };
 
   enum ComdatSelectionKindCodes {

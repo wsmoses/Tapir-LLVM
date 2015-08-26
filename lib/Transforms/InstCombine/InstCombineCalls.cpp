@@ -67,8 +67,7 @@ Instruction *InstCombiner::SimplifyMemTransfer(MemIntrinsic *MI) {
   unsigned CopyAlign = MI->getAlignment();
 
   if (CopyAlign < MinAlign) {
-    MI->setAlignment(ConstantInt::get(MI->getAlignmentType(),
-                                             MinAlign, false));
+    MI->setAlignment(ConstantInt::get(MI->getAlignmentType(), MinAlign, false));
     return MI;
   }
 
@@ -198,12 +197,140 @@ Instruction *InstCombiner::SimplifyMemSet(MemSetInst *MI) {
   return nullptr;
 }
 
+static Value *SimplifyX86immshift(const IntrinsicInst &II,
+                                  InstCombiner::BuilderTy &Builder) {
+  bool LogicalShift = false;
+  bool ShiftLeft = false;
+
+  switch (II.getIntrinsicID()) {
+  default:
+    return nullptr;
+  case Intrinsic::x86_sse2_psra_d:
+  case Intrinsic::x86_sse2_psra_w:
+  case Intrinsic::x86_sse2_psrai_d:
+  case Intrinsic::x86_sse2_psrai_w:
+  case Intrinsic::x86_avx2_psra_d:
+  case Intrinsic::x86_avx2_psra_w:
+  case Intrinsic::x86_avx2_psrai_d:
+  case Intrinsic::x86_avx2_psrai_w:
+    LogicalShift = false; ShiftLeft = false;
+    break;
+  case Intrinsic::x86_sse2_psrl_d:
+  case Intrinsic::x86_sse2_psrl_q:
+  case Intrinsic::x86_sse2_psrl_w:
+  case Intrinsic::x86_sse2_psrli_d:
+  case Intrinsic::x86_sse2_psrli_q:
+  case Intrinsic::x86_sse2_psrli_w:
+  case Intrinsic::x86_avx2_psrl_d:
+  case Intrinsic::x86_avx2_psrl_q:
+  case Intrinsic::x86_avx2_psrl_w:
+  case Intrinsic::x86_avx2_psrli_d:
+  case Intrinsic::x86_avx2_psrli_q:
+  case Intrinsic::x86_avx2_psrli_w:
+    LogicalShift = true; ShiftLeft = false;
+    break;
+  case Intrinsic::x86_sse2_psll_d:
+  case Intrinsic::x86_sse2_psll_q:
+  case Intrinsic::x86_sse2_psll_w:
+  case Intrinsic::x86_sse2_pslli_d:
+  case Intrinsic::x86_sse2_pslli_q:
+  case Intrinsic::x86_sse2_pslli_w:
+  case Intrinsic::x86_avx2_psll_d:
+  case Intrinsic::x86_avx2_psll_q:
+  case Intrinsic::x86_avx2_psll_w:
+  case Intrinsic::x86_avx2_pslli_d:
+  case Intrinsic::x86_avx2_pslli_q:
+  case Intrinsic::x86_avx2_pslli_w:
+    LogicalShift = true; ShiftLeft = true;
+    break;
+  }
+  assert((LogicalShift || !ShiftLeft) && "Only logical shifts can shift left");
+
+  // Simplify if count is constant.
+  auto Arg1 = II.getArgOperand(1);
+  auto CAZ = dyn_cast<ConstantAggregateZero>(Arg1);
+  auto CDV = dyn_cast<ConstantDataVector>(Arg1);
+  auto CInt = dyn_cast<ConstantInt>(Arg1);
+  if (!CAZ && !CDV && !CInt)
+    return nullptr;
+
+  APInt Count(64, 0);
+  if (CDV) {
+    // SSE2/AVX2 uses all the first 64-bits of the 128-bit vector
+    // operand to compute the shift amount.
+    auto VT = cast<VectorType>(CDV->getType());
+    unsigned BitWidth = VT->getElementType()->getPrimitiveSizeInBits();
+    assert((64 % BitWidth) == 0 && "Unexpected packed shift size");
+    unsigned NumSubElts = 64 / BitWidth;
+
+    // Concatenate the sub-elements to create the 64-bit value.
+    for (unsigned i = 0; i != NumSubElts; ++i) {
+      unsigned SubEltIdx = (NumSubElts - 1) - i;
+      auto SubElt = cast<ConstantInt>(CDV->getElementAsConstant(SubEltIdx));
+      Count = Count.shl(BitWidth);
+      Count |= SubElt->getValue().zextOrTrunc(64);
+    }
+  }
+  else if (CInt)
+    Count = CInt->getValue();
+
+  auto Vec = II.getArgOperand(0);
+  auto VT = cast<VectorType>(Vec->getType());
+  auto SVT = VT->getElementType();
+  unsigned VWidth = VT->getNumElements();
+  unsigned BitWidth = SVT->getPrimitiveSizeInBits();
+
+  // If shift-by-zero then just return the original value.
+  if (Count == 0)
+    return Vec;
+
+  // Handle cases when Shift >= BitWidth.
+  if (Count.uge(BitWidth)) {
+    // If LogicalShift - just return zero.
+    if (LogicalShift)
+      return ConstantAggregateZero::get(VT);
+
+    // If ArithmeticShift - clamp Shift to (BitWidth - 1).
+    Count = APInt(64, BitWidth - 1);
+  }
+
+  // Get a constant vector of the same type as the first operand.
+  auto ShiftAmt = ConstantInt::get(SVT, Count.zextOrTrunc(BitWidth));
+  auto ShiftVec = Builder.CreateVectorSplat(VWidth, ShiftAmt);
+
+  if (ShiftLeft)
+    return Builder.CreateShl(Vec, ShiftVec);
+
+  if (LogicalShift)
+    return Builder.CreateLShr(Vec, ShiftVec);
+
+  return Builder.CreateAShr(Vec, ShiftVec);
+}
+
+static Value *SimplifyX86extend(const IntrinsicInst &II,
+                                InstCombiner::BuilderTy &Builder,
+                                bool SignExtend) {
+  VectorType *SrcTy = cast<VectorType>(II.getArgOperand(0)->getType());
+  VectorType *DstTy = cast<VectorType>(II.getType());
+  unsigned NumDstElts = DstTy->getNumElements();
+
+  // Extract a subvector of the first NumDstElts lanes and sign/zero extend.
+  SmallVector<int, 8> ShuffleMask;
+  for (int i = 0; i != (int)NumDstElts; ++i)
+    ShuffleMask.push_back(i);
+
+  Value *SV = Builder.CreateShuffleVector(II.getArgOperand(0),
+                                          UndefValue::get(SrcTy), ShuffleMask);
+  return SignExtend ? Builder.CreateSExt(SV, DstTy)
+                    : Builder.CreateZExt(SV, DstTy);
+}
+
 static Value *SimplifyX86insertps(const IntrinsicInst &II,
                                   InstCombiner::BuilderTy &Builder) {
   if (auto *CInt = dyn_cast<ConstantInt>(II.getArgOperand(2))) {
     VectorType *VecTy = cast<VectorType>(II.getType());
     assert(VecTy->getNumElements() == 4 && "insertps with wrong vector type");
-    
+
     // The immediate permute control byte looks like this:
     //    [3:0] - zero mask for each 32-bit lane
     //    [5:4] - select one 32-bit destination lane
@@ -248,7 +375,7 @@ static Value *SimplifyX86insertps(const IntrinsicInst &II,
       // Replace the selected destination lane with the selected source lane.
       ShuffleMask[DestLane] = SourceLane + 4;
     }
-  
+
     return Builder.CreateShuffleVector(II.getArgOperand(0), V1, ShuffleMask);
   }
   return nullptr;
@@ -289,7 +416,7 @@ static Value *SimplifyX86vperm2(const IntrinsicInst &II,
     // The high bit of the selection field chooses the 1st or 2nd operand.
     bool LowInputSelect = Imm & 0x02;
     bool HighInputSelect = Imm & 0x20;
-    
+
     // The low bit of the selection field chooses the low or high half
     // of the selected operand.
     bool LowHalfSelect = Imm & 0x01;
@@ -298,11 +425,11 @@ static Value *SimplifyX86vperm2(const IntrinsicInst &II,
     // Determine which operand(s) are actually in use for this instruction.
     Value *V0 = LowInputSelect ? II.getArgOperand(1) : II.getArgOperand(0);
     Value *V1 = HighInputSelect ? II.getArgOperand(1) : II.getArgOperand(0);
-    
+
     // If needed, replace operands based on zero mask.
     V0 = LowHalfZero ? ZeroVector : V0;
     V1 = HighHalfZero ? ZeroVector : V1;
-    
+
     // Permute low half of result.
     unsigned StartIndex = LowHalfSelect ? HalfSize : 0;
     for (unsigned i = 0; i < HalfSize; ++i)
@@ -704,123 +831,123 @@ Instruction *InstCombiner::visitCallInst(CallInst &CI) {
     break;
   }
 
-  // Constant fold <A x Bi> << Ci.
-  // FIXME: We don't handle _dq because it's a shift of an i128, but is
-  // represented in the IR as <2 x i64>. A per element shift is wrong.
-  case Intrinsic::x86_sse2_psll_d:
-  case Intrinsic::x86_sse2_psll_q:
-  case Intrinsic::x86_sse2_psll_w:
-  case Intrinsic::x86_sse2_pslli_d:
-  case Intrinsic::x86_sse2_pslli_q:
-  case Intrinsic::x86_sse2_pslli_w:
-  case Intrinsic::x86_avx2_psll_d:
-  case Intrinsic::x86_avx2_psll_q:
-  case Intrinsic::x86_avx2_psll_w:
-  case Intrinsic::x86_avx2_pslli_d:
-  case Intrinsic::x86_avx2_pslli_q:
-  case Intrinsic::x86_avx2_pslli_w:
-  case Intrinsic::x86_sse2_psrl_d:
-  case Intrinsic::x86_sse2_psrl_q:
-  case Intrinsic::x86_sse2_psrl_w:
+  // Constant fold ashr( <A x Bi>, Ci ).
+  // Constant fold lshr( <A x Bi>, Ci ).
+  // Constant fold shl( <A x Bi>, Ci ).
+  case Intrinsic::x86_sse2_psrai_d:
+  case Intrinsic::x86_sse2_psrai_w:
+  case Intrinsic::x86_avx2_psrai_d:
+  case Intrinsic::x86_avx2_psrai_w:
   case Intrinsic::x86_sse2_psrli_d:
   case Intrinsic::x86_sse2_psrli_q:
   case Intrinsic::x86_sse2_psrli_w:
+  case Intrinsic::x86_avx2_psrli_d:
+  case Intrinsic::x86_avx2_psrli_q:
+  case Intrinsic::x86_avx2_psrli_w:
+  case Intrinsic::x86_sse2_pslli_d:
+  case Intrinsic::x86_sse2_pslli_q:
+  case Intrinsic::x86_sse2_pslli_w:
+  case Intrinsic::x86_avx2_pslli_d:
+  case Intrinsic::x86_avx2_pslli_q:
+  case Intrinsic::x86_avx2_pslli_w:
+    if (Value *V = SimplifyX86immshift(*II, *Builder))
+      return ReplaceInstUsesWith(*II, V);
+    break;
+
+  case Intrinsic::x86_sse2_psra_d:
+  case Intrinsic::x86_sse2_psra_w:
+  case Intrinsic::x86_avx2_psra_d:
+  case Intrinsic::x86_avx2_psra_w:
+  case Intrinsic::x86_sse2_psrl_d:
+  case Intrinsic::x86_sse2_psrl_q:
+  case Intrinsic::x86_sse2_psrl_w:
   case Intrinsic::x86_avx2_psrl_d:
   case Intrinsic::x86_avx2_psrl_q:
   case Intrinsic::x86_avx2_psrl_w:
-  case Intrinsic::x86_avx2_psrli_d:
-  case Intrinsic::x86_avx2_psrli_q:
-  case Intrinsic::x86_avx2_psrli_w: {
-    // Simplify if count is constant. To 0 if >= BitWidth,
-    // otherwise to shl/lshr.
-    auto CDV = dyn_cast<ConstantDataVector>(II->getArgOperand(1));
-    auto CInt = dyn_cast<ConstantInt>(II->getArgOperand(1));
-    if (!CDV && !CInt)
-      break;
-    ConstantInt *Count;
-    if (CDV)
-      Count = cast<ConstantInt>(CDV->getElementAsConstant(0));
-    else
-      Count = CInt;
+  case Intrinsic::x86_sse2_psll_d:
+  case Intrinsic::x86_sse2_psll_q:
+  case Intrinsic::x86_sse2_psll_w:
+  case Intrinsic::x86_avx2_psll_d:
+  case Intrinsic::x86_avx2_psll_q:
+  case Intrinsic::x86_avx2_psll_w: {
+    if (Value *V = SimplifyX86immshift(*II, *Builder))
+      return ReplaceInstUsesWith(*II, V);
 
-    auto Vec = II->getArgOperand(0);
-    auto VT = cast<VectorType>(Vec->getType());
-    if (Count->getZExtValue() >
-        VT->getElementType()->getPrimitiveSizeInBits() - 1)
-      return ReplaceInstUsesWith(
-          CI, ConstantAggregateZero::get(Vec->getType()));
+    // SSE2/AVX2 uses only the first 64-bits of the 128-bit vector
+    // operand to compute the shift amount.
+    auto ShiftAmt = II->getArgOperand(1);
+    auto ShiftType = cast<VectorType>(ShiftAmt->getType());
+    assert(ShiftType->getPrimitiveSizeInBits() == 128 &&
+           "Unexpected packed shift size");
+    unsigned VWidth = ShiftType->getNumElements();
 
-    bool isPackedShiftLeft = true;
-    switch (II->getIntrinsicID()) {
-    default : break;
-    case Intrinsic::x86_sse2_psrl_d:
-    case Intrinsic::x86_sse2_psrl_q:
-    case Intrinsic::x86_sse2_psrl_w:
-    case Intrinsic::x86_sse2_psrli_d:
-    case Intrinsic::x86_sse2_psrli_q:
-    case Intrinsic::x86_sse2_psrli_w:
-    case Intrinsic::x86_avx2_psrl_d:
-    case Intrinsic::x86_avx2_psrl_q:
-    case Intrinsic::x86_avx2_psrl_w:
-    case Intrinsic::x86_avx2_psrli_d:
-    case Intrinsic::x86_avx2_psrli_q:
-    case Intrinsic::x86_avx2_psrli_w: isPackedShiftLeft = false; break;
-    }
-
-    unsigned VWidth = VT->getNumElements();
-    // Get a constant vector of the same type as the first operand.
-    auto VTCI = ConstantInt::get(VT->getElementType(), Count->getZExtValue());
-    if (isPackedShiftLeft)
-      return BinaryOperator::CreateShl(Vec,
-          Builder->CreateVectorSplat(VWidth, VTCI));
-
-    return BinaryOperator::CreateLShr(Vec,
-        Builder->CreateVectorSplat(VWidth, VTCI));
-  }
-
-  case Intrinsic::x86_sse41_pmovsxbw:
-  case Intrinsic::x86_sse41_pmovsxwd:
-  case Intrinsic::x86_sse41_pmovsxdq:
-  case Intrinsic::x86_sse41_pmovzxbw:
-  case Intrinsic::x86_sse41_pmovzxwd:
-  case Intrinsic::x86_sse41_pmovzxdq: {
-    // pmov{s|z}x ignores the upper half of their input vectors.
-    unsigned VWidth =
-      cast<VectorType>(II->getArgOperand(0)->getType())->getNumElements();
-    unsigned LowHalfElts = VWidth / 2;
-    APInt InputDemandedElts(APInt::getBitsSet(VWidth, 0, LowHalfElts));
+    APInt DemandedElts = APInt::getLowBitsSet(VWidth, VWidth / 2);
     APInt UndefElts(VWidth, 0);
-    if (Value *TmpV = SimplifyDemandedVectorElts(
-            II->getArgOperand(0), InputDemandedElts, UndefElts)) {
-      II->setArgOperand(0, TmpV);
+    if (Value *V =
+            SimplifyDemandedVectorElts(ShiftAmt, DemandedElts, UndefElts)) {
+      II->setArgOperand(1, V);
       return II;
     }
     break;
   }
+
+  case Intrinsic::x86_sse41_pmovsxbd:
+  case Intrinsic::x86_sse41_pmovsxbq:
+  case Intrinsic::x86_sse41_pmovsxbw:
+  case Intrinsic::x86_sse41_pmovsxdq:
+  case Intrinsic::x86_sse41_pmovsxwd:
+  case Intrinsic::x86_sse41_pmovsxwq:
+  case Intrinsic::x86_avx2_pmovsxbd:
+  case Intrinsic::x86_avx2_pmovsxbq:
+  case Intrinsic::x86_avx2_pmovsxbw:
+  case Intrinsic::x86_avx2_pmovsxdq:
+  case Intrinsic::x86_avx2_pmovsxwd:
+  case Intrinsic::x86_avx2_pmovsxwq:
+    if (Value *V = SimplifyX86extend(*II, *Builder, true))
+      return ReplaceInstUsesWith(*II, V);
+    break;
+
+  case Intrinsic::x86_sse41_pmovzxbd:
+  case Intrinsic::x86_sse41_pmovzxbq:
+  case Intrinsic::x86_sse41_pmovzxbw:
+  case Intrinsic::x86_sse41_pmovzxdq:
+  case Intrinsic::x86_sse41_pmovzxwd:
+  case Intrinsic::x86_sse41_pmovzxwq:
+  case Intrinsic::x86_avx2_pmovzxbd:
+  case Intrinsic::x86_avx2_pmovzxbq:
+  case Intrinsic::x86_avx2_pmovzxbw:
+  case Intrinsic::x86_avx2_pmovzxdq:
+  case Intrinsic::x86_avx2_pmovzxwd:
+  case Intrinsic::x86_avx2_pmovzxwq:
+    if (Value *V = SimplifyX86extend(*II, *Builder, false))
+      return ReplaceInstUsesWith(*II, V);
+    break;
+
   case Intrinsic::x86_sse41_insertps:
     if (Value *V = SimplifyX86insertps(*II, *Builder))
       return ReplaceInstUsesWith(*II, V);
     break;
-    
+
   case Intrinsic::x86_sse4a_insertqi: {
     // insertqi x, y, 64, 0 can just copy y's lower bits and leave the top
     // ones undef
     // TODO: eventually we should lower this intrinsic to IR
-    if (auto CIWidth = dyn_cast<ConstantInt>(II->getArgOperand(2))) {
-      if (auto CIStart = dyn_cast<ConstantInt>(II->getArgOperand(3))) {
-        unsigned Index = CIStart->getZExtValue();
+    if (auto CILength = dyn_cast<ConstantInt>(II->getArgOperand(2))) {
+      if (auto CIIndex = dyn_cast<ConstantInt>(II->getArgOperand(3))) {
+        unsigned Index = CIIndex->getZExtValue();
         // From AMD documentation: "a value of zero in the field length is
         // defined as length of 64".
-        unsigned Length = CIWidth->equalsInt(0) ? 64 : CIWidth->getZExtValue();
+        unsigned Length = CILength->equalsInt(0) ? 64 : CILength->getZExtValue();
 
         // From AMD documentation: "If the sum of the bit index + length field
         // is greater than 64, the results are undefined".
+        unsigned End = Index + Length;
 
         // Note that both field index and field length are 8-bit quantities.
         // Since variables 'Index' and 'Length' are unsigned values
         // obtained from zero-extending field index and field length
         // respectively, their sum should never wrap around.
-        if ((Index + Length) > 64)
+        if (End > 64)
           return ReplaceInstUsesWith(CI, UndefValue::get(II->getType()));
 
         if (Length == 64 && Index == 0) {
@@ -832,7 +959,6 @@ Instruction *InstCombiner::visitCallInst(CallInst &CI) {
               Builder->CreateShuffleVector(
                   Vec, Undef, ConstantDataVector::get(
                                   II->getContext(), makeArrayRef(Mask))));
-
         } else if (auto Source =
                        dyn_cast<IntrinsicInst>(II->getArgOperand(0))) {
           if (Source->hasOneUse() &&
@@ -840,37 +966,34 @@ Instruction *InstCombiner::visitCallInst(CallInst &CI) {
             // If the source of the insert has only one use and it's another
             // insert (and they're both inserting from the same vector), try to
             // bundle both together.
-            auto CISourceWidth =
+            auto CISourceLength =
                 dyn_cast<ConstantInt>(Source->getArgOperand(2));
-            auto CISourceStart =
+            auto CISourceIndex =
                 dyn_cast<ConstantInt>(Source->getArgOperand(3));
-            if (CISourceStart && CISourceWidth) {
-              unsigned Start = CIStart->getZExtValue();
-              unsigned Width = CIWidth->getZExtValue();
-              unsigned End = Start + Width;
-              unsigned SourceStart = CISourceStart->getZExtValue();
-              unsigned SourceWidth = CISourceWidth->getZExtValue();
-              unsigned SourceEnd = SourceStart + SourceWidth;
-              unsigned NewStart, NewWidth;
+            if (CISourceIndex && CISourceLength) {
+              unsigned SourceIndex = CISourceIndex->getZExtValue();
+              unsigned SourceLength = CISourceLength->getZExtValue();
+              unsigned SourceEnd = SourceIndex + SourceLength;
+              unsigned NewIndex, NewLength;
               bool ShouldReplace = false;
-              if (Start <= SourceStart && SourceStart <= End) {
-                NewStart = Start;
-                NewWidth = std::max(End, SourceEnd) - NewStart;
+              if (Index <= SourceIndex && SourceIndex <= End) {
+                NewIndex = Index;
+                NewLength = std::max(End, SourceEnd) - NewIndex;
                 ShouldReplace = true;
-              } else if (SourceStart <= Start && Start <= SourceEnd) {
-                NewStart = SourceStart;
-                NewWidth = std::max(SourceEnd, End) - NewStart;
+              } else if (SourceIndex <= Index && Index <= SourceEnd) {
+                NewIndex = SourceIndex;
+                NewLength = std::max(SourceEnd, End) - NewIndex;
                 ShouldReplace = true;
               }
 
               if (ShouldReplace) {
-                Constant *ConstantWidth = ConstantInt::get(
-                    II->getArgOperand(2)->getType(), NewWidth, false);
-                Constant *ConstantStart = ConstantInt::get(
-                    II->getArgOperand(3)->getType(), NewStart, false);
+                Constant *ConstantLength = ConstantInt::get(
+                    II->getArgOperand(2)->getType(), NewLength, false);
+                Constant *ConstantIndex = ConstantInt::get(
+                    II->getArgOperand(3)->getType(), NewIndex, false);
                 Value *Args[4] = { Source->getArgOperand(0),
-                                   II->getArgOperand(1), ConstantWidth,
-                                   ConstantStart };
+                                   II->getArgOperand(1), ConstantLength,
+                                   ConstantIndex };
                 Module *M = CI.getParent()->getParent()->getParent();
                 Value *F =
                     Intrinsic::getDeclaration(M, Intrinsic::x86_sse4a_insertqi);
@@ -894,7 +1017,20 @@ Instruction *InstCombiner::visitCallInst(CallInst &CI) {
     // This optimization is convoluted because the intrinsic is defined as
     // getting a vector of floats or doubles for the ps and pd versions.
     // FIXME: That should be changed.
+
+    Value *Op0 = II->getArgOperand(0);
+    Value *Op1 = II->getArgOperand(1);
     Value *Mask = II->getArgOperand(2);
+
+    // fold (blend A, A, Mask) -> A
+    if (Op0 == Op1)
+      return ReplaceInstUsesWith(CI, Op0);
+
+    // Zero Mask - select 1st argument.
+    if (isa<ConstantAggregateZero>(Mask))
+      return ReplaceInstUsesWith(CI, Op0);
+
+    // Constant Mask - select 1st/2nd argument lane based on top bit of mask.
     if (auto C = dyn_cast<ConstantDataVector>(Mask)) {
       auto Tyi1 = Builder->getInt1Ty();
       auto SelectorType = cast<VectorType>(Mask->getType());
@@ -917,11 +1053,9 @@ Instruction *InstCombiner::visitCallInst(CallInst &CI) {
         Selectors.push_back(ConstantInt::get(Tyi1, Selector >> (BitWidth - 1)));
       }
       auto NewSelector = ConstantVector::get(Selectors);
-      return SelectInst::Create(NewSelector, II->getArgOperand(1),
-                                II->getArgOperand(0), "blendv");
-    } else {
-      break;
+      return SelectInst::Create(NewSelector, Op1, Op0, "blendv");
     }
+    break;
   }
 
   case Intrinsic::x86_avx_vpermilvar_ps:

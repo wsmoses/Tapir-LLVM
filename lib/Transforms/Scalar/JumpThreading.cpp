@@ -260,6 +260,11 @@ static unsigned getJumpThreadDuplicationCost(const BasicBlock *BB,
     if (isa<BitCastInst>(I) && I->getType()->isPointerTy())
       continue;
 
+    // Bail out if this instruction gives back a token type, it is not possible
+    // to duplicate it if it used outside this BB.
+    if (I->getType()->isTokenTy() && I->isUsedOutsideOfBlock(BB))
+      return ~0U;
+
     // All other instructions count for at least one unit.
     ++Size;
 
@@ -669,7 +674,10 @@ bool JumpThreading::ProcessBlock(BasicBlock *BB) {
   // because now the condition in this block can be threaded through
   // predecessors of our predecessor block.
   if (BasicBlock *SinglePred = BB->getSinglePredecessor()) {
-    if (SinglePred->getTerminator()->getNumSuccessors() == 1 &&
+    const TerminatorInst *TI = SinglePred->getTerminator();
+    if (!TI->isExceptional() &&
+        !isa<SyncInst>(SinglePred->getTerminator()) &&  // Can't remove syncs
+        TI->getNumSuccessors() == 1 &&
         SinglePred != BB && !hasAddressTakenAndUsed(BB)) {
       // If SinglePred was a loop header, BB becomes one.
       if (LoopHeaders.erase(SinglePred))
@@ -850,10 +858,10 @@ bool JumpThreading::SimplifyPartiallyRedundantLoad(LoadInst *LI) {
   if (LoadBB->getSinglePredecessor())
     return false;
 
-  // If the load is defined in a landing pad, it can't be partially redundant,
-  // because the edges between the invoke and the landing pad cannot have other
+  // If the load is defined in an EH pad, it can't be partially redundant,
+  // because the edges between the invoke and the EH pad cannot have other
   // instructions between them.
-  if (LoadBB->isLandingPad())
+  if (LoadBB->isEHPad())
     return false;
 
   Value *LoadedPtr = LI->getOperand(0);

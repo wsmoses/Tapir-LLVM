@@ -58,12 +58,13 @@ enum NodeType : unsigned {
   SBCS,
   ANDS,
 
+  // Conditional compares. Operands: left,right,falsecc,cc,flags
+  CCMP,
+  CCMN,
+  FCCMP,
+
   // Floating point comparison
   FCMP,
-
-  // Floating point max and min instructions.
-  FMAX,
-  FMIN,
 
   // Scalar extract
   EXTR,
@@ -217,8 +218,6 @@ class AArch64Subtarget;
 class AArch64TargetMachine;
 
 class AArch64TargetLowering : public TargetLowering {
-  bool RequireStrictAlign;
-
 public:
   explicit AArch64TargetLowering(const TargetMachine &TM,
                                  const AArch64Subtarget &STI);
@@ -233,20 +232,13 @@ public:
                                      APInt &KnownOne, const SelectionDAG &DAG,
                                      unsigned Depth = 0) const override;
 
-  MVT getScalarShiftAmountTy(EVT LHSTy) const override;
+  MVT getScalarShiftAmountTy(const DataLayout &DL, EVT) const override;
 
   /// allowsMisalignedMemoryAccesses - Returns true if the target allows
   /// unaligned memory accesses of the specified type.
   bool allowsMisalignedMemoryAccesses(EVT VT, unsigned AddrSpace = 0,
                                       unsigned Align = 1,
-                                      bool *Fast = nullptr) const override {
-    if (RequireStrictAlign)
-      return false;
-    // FIXME: True for Cyclone, but not necessary others.
-    if (Fast)
-      *Fast = true;
-    return true;
-  }
+                                      bool *Fast = nullptr) const override;
 
   /// LowerOperation - Provide custom lowering hooks for some operations.
   SDValue LowerOperation(SDValue Op, SelectionDAG &DAG) const override;
@@ -278,7 +270,8 @@ public:
   bool isShuffleMaskLegal(const SmallVectorImpl<int> &M, EVT VT) const override;
 
   /// getSetCCResultType - Return the ISD::SETCC ValueType
-  EVT getSetCCResultType(LLVMContext &Context, EVT VT) const override;
+  EVT getSetCCResultType(const DataLayout &DL, LLVMContext &Context,
+                         EVT VT) const override;
 
   SDValue ReconstructShuffle(SDValue Op, SelectionDAG &DAG) const;
 
@@ -323,7 +316,7 @@ public:
 
   /// isLegalAddressingMode - Return true if the addressing mode represented
   /// by AM is legal for this target, for a load/store of the specified type.
-  bool isLegalAddressingMode(const AddrMode &AM, Type *Ty,
+  bool isLegalAddressingMode(const DataLayout &DL, const AddrMode &AM, Type *Ty,
                              unsigned AS) const override;
 
   /// \brief Return the cost of the scaling factor used in the addressing
@@ -331,7 +324,7 @@ public:
   /// of the specified type.
   /// If the AM is supported, the return value must be >= 0.
   /// If the AM is not supported, it returns a negative value.
-  int getScalingFactorCost(const AddrMode &AM, Type *Ty,
+  int getScalingFactorCost(const DataLayout &DL, const AddrMode &AM, Type *Ty,
                            unsigned AS) const override;
 
   /// isFMAFasterThanFMulAndFAdd - Return true if an FMA operation is faster
@@ -390,6 +383,8 @@ private:
                           const SmallVectorImpl<ISD::InputArg> &Ins, SDLoc DL,
                           SelectionDAG &DAG, SmallVectorImpl<SDValue> &InVals,
                           bool isThisReturn, SDValue ThisVal) const;
+
+  SDValue LowerINTRINSIC_WO_CHAIN(SDValue Op, SelectionDAG &DAG) const;
 
   bool isEligibleForTailCallOptimization(
       SDValue Callee, CallingConv::ID CalleeCC, bool isVarArg,
@@ -469,10 +464,11 @@ private:
 
   SDValue BuildSDIVPow2(SDNode *N, const APInt &Divisor, SelectionDAG &DAG,
                         std::vector<SDNode *> *Created) const override;
-  bool combineRepeatedFPDivisors(unsigned NumUsers) const override;
+  unsigned combineRepeatedFPDivisors() const override;
 
   ConstraintType getConstraintType(StringRef Constraint) const override;
-  unsigned getRegisterByName(const char* RegName, EVT VT) const override;
+  unsigned getRegisterByName(const char* RegName, EVT VT,
+                             SelectionDAG &DAG) const override;
 
   /// Examine constraint string and operand type and determine a weight value.
   /// The operand object must already have been set up with the operand type.
@@ -514,6 +510,8 @@ private:
   bool functionArgumentNeedsConsecutiveRegisters(Type *Ty,
                                                  CallingConv::ID CallConv,
                                                  bool isVarArg) const override;
+
+  bool shouldNormalizeToSelectSequence(LLVMContext &, EVT) const override;
 };
 
 namespace AArch64 {

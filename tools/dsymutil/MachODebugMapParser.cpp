@@ -21,19 +21,22 @@ using namespace llvm::object;
 
 class MachODebugMapParser {
 public:
-  MachODebugMapParser(StringRef BinaryPath, StringRef PathPrefix = "",
-                      bool Verbose = false)
-      : BinaryPath(BinaryPath), PathPrefix(PathPrefix),
-        MainBinaryHolder(Verbose), CurrentObjectHolder(Verbose),
-        CurrentDebugMapObject(nullptr) {}
+  MachODebugMapParser(StringRef BinaryPath, ArrayRef<std::string> Archs,
+                      StringRef PathPrefix = "", bool Verbose = false)
+      : BinaryPath(BinaryPath), Archs(Archs.begin(), Archs.end()),
+        PathPrefix(PathPrefix), MainBinaryHolder(Verbose),
+        CurrentObjectHolder(Verbose), CurrentDebugMapObject(nullptr) {}
 
-  /// \brief Parses and returns the DebugMap of the input binary.
+  /// \brief Parses and returns the DebugMaps of the input binary.
+  /// The binary contains multiple maps in case it is a universal
+  /// binary.
   /// \returns an error in case the provided BinaryPath doesn't exist
   /// or isn't of a supported type.
-  ErrorOr<std::unique_ptr<DebugMap>> parse();
+  ErrorOr<std::vector<std::unique_ptr<DebugMap>>> parse();
 
 private:
   std::string BinaryPath;
+  SmallVector<StringRef, 1> Archs;
   std::string PathPrefix;
 
   /// Owns the MemoryBuffer for the main binary.
@@ -55,11 +58,14 @@ private:
   const char *CurrentFunctionName;
   uint64_t CurrentFunctionAddress;
 
-  void switchToNewDebugMapObject(StringRef Filename);
+  std::unique_ptr<DebugMap> parseOneBinary(const MachOObjectFile &MainBinary,
+                                           StringRef BinaryPath);
+
+  void switchToNewDebugMapObject(StringRef Filename, sys::TimeValue Timestamp);
   void resetParserState();
   uint64_t getMainBinarySymbolAddress(StringRef Name);
-  void loadMainBinarySymbols();
-  void loadCurrentObjectFileSymbols();
+  void loadMainBinarySymbols(const MachOObjectFile &MainBinary);
+  void loadCurrentObjectFileSymbols(const object::MachOObjectFile &Obj);
   void handleStabSymbolTableEntry(uint32_t StringIndex, uint8_t Type,
                                   uint8_t SectionIndex, uint16_t Flags,
                                   uint64_t Value);
@@ -84,41 +90,37 @@ void MachODebugMapParser::resetParserState() {
 /// Create a new DebugMapObject. This function resets the state of the
 /// parser that was referring to the last object file and sets
 /// everything up to add symbols to the new one.
-void MachODebugMapParser::switchToNewDebugMapObject(StringRef Filename) {
+void MachODebugMapParser::switchToNewDebugMapObject(StringRef Filename,
+                                                    sys::TimeValue Timestamp) {
   resetParserState();
 
   SmallString<80> Path(PathPrefix);
   sys::path::append(Path, Filename);
 
-  auto MachOOrError = CurrentObjectHolder.GetFileAs<MachOObjectFile>(Path);
+  auto MachOOrError =
+      CurrentObjectHolder.GetFilesAs<MachOObjectFile>(Path, Timestamp);
   if (auto Error = MachOOrError.getError()) {
     Warning(Twine("cannot open debug object \"") + Path.str() + "\": " +
             Error.message() + "\n");
     return;
   }
 
-  loadCurrentObjectFileSymbols();
-  CurrentDebugMapObject = &Result->addDebugMapObject(Path);
+  auto ErrOrAchObj =
+      CurrentObjectHolder.GetAs<MachOObjectFile>(Result->getTriple());
+  if (auto Err = ErrOrAchObj.getError()) {
+    return Warning(Twine("cannot open debug object \"") + Path.str() + "\": " +
+                   Err.message() + "\n");
+  }
+
+  CurrentDebugMapObject = &Result->addDebugMapObject(Path, Timestamp);
+  loadCurrentObjectFileSymbols(*ErrOrAchObj);
 }
 
-static Triple getTriple(const object::MachOObjectFile &Obj) {
-  Triple TheTriple("unknown-unknown-unknown");
-  TheTriple.setArch(Triple::ArchType(Obj.getArch()));
-  TheTriple.setObjectFormat(Triple::MachO);
-  return TheTriple;
-}
-
-/// This main parsing routine tries to open the main binary and if
-/// successful iterates over the STAB entries. The real parsing is
-/// done in handleStabSymbolTableEntry.
-ErrorOr<std::unique_ptr<DebugMap>> MachODebugMapParser::parse() {
-  auto MainBinOrError = MainBinaryHolder.GetFileAs<MachOObjectFile>(BinaryPath);
-  if (auto Error = MainBinOrError.getError())
-    return Error;
-
-  const MachOObjectFile &MainBinary = *MainBinOrError;
-  loadMainBinarySymbols();
-  Result = make_unique<DebugMap>(getTriple(MainBinary));
+std::unique_ptr<DebugMap>
+MachODebugMapParser::parseOneBinary(const MachOObjectFile &MainBinary,
+                                    StringRef BinaryPath) {
+  loadMainBinarySymbols(MainBinary);
+  Result = make_unique<DebugMap>(BinaryHolder::getTriple(MainBinary));
   MainBinaryStrings = MainBinary.getStringTableData();
   for (const SymbolRef &Symbol : MainBinary.symbols()) {
     const DataRefImpl &DRI = Symbol.getRawDataRefImpl();
@@ -130,6 +132,37 @@ ErrorOr<std::unique_ptr<DebugMap>> MachODebugMapParser::parse() {
 
   resetParserState();
   return std::move(Result);
+}
+
+static bool shouldLinkArch(SmallVectorImpl<StringRef> &Archs, StringRef Arch) {
+  if (Archs.empty() ||
+      std::find(Archs.begin(), Archs.end(), "all") != Archs.end() ||
+      std::find(Archs.begin(), Archs.end(), "*") != Archs.end())
+    return true;
+
+  if (Arch.startswith("arm") && Arch != "arm64" &&
+      std::find(Archs.begin(), Archs.end(), "arm") != Archs.end())
+    return true;
+
+  return std::find(Archs.begin(), Archs.end(), Arch) != Archs.end();
+}
+
+/// This main parsing routine tries to open the main binary and if
+/// successful iterates over the STAB entries. The real parsing is
+/// done in handleStabSymbolTableEntry.
+ErrorOr<std::vector<std::unique_ptr<DebugMap>>> MachODebugMapParser::parse() {
+  auto MainBinOrError =
+      MainBinaryHolder.GetFilesAs<MachOObjectFile>(BinaryPath);
+  if (auto Error = MainBinOrError.getError())
+    return Error;
+
+  std::vector<std::unique_ptr<DebugMap>> Results;
+  Triple T;
+  for (const auto *Binary : *MainBinOrError)
+    if (shouldLinkArch(Archs, Binary->getArch(nullptr, &T).getArchName()))
+      Results.push_back(parseOneBinary(*Binary, BinaryPath));
+
+  return std::move(Results);
 }
 
 /// Interpret the STAB entries to fill the DebugMap.
@@ -144,8 +177,11 @@ void MachODebugMapParser::handleStabSymbolTableEntry(uint32_t StringIndex,
   const char *Name = &MainBinaryStrings.data()[StringIndex];
 
   // An N_OSO entry represents the start of a new object file description.
-  if (Type == MachO::N_OSO)
-    return switchToNewDebugMapObject(Name);
+  if (Type == MachO::N_OSO) {
+    sys::TimeValue Timestamp;
+    Timestamp.fromEpochTime(Value);
+    return switchToNewDebugMapObject(Name, Timestamp);
+  }
 
   // If the last N_OSO object file wasn't found,
   // CurrentDebugMapObject will be null. Do not update anything
@@ -160,8 +196,6 @@ void MachODebugMapParser::handleStabSymbolTableEntry(uint32_t StringIndex,
     // symbol table to find its address as it might not be in the
     // debug map (for common symbols).
     Value = getMainBinarySymbolAddress(Name);
-    if (Value == UnknownAddress)
-      return;
     break;
   case MachO::N_FUN:
     // Functions are scopes in STABS. They have an end marker that
@@ -193,14 +227,12 @@ void MachODebugMapParser::handleStabSymbolTableEntry(uint32_t StringIndex,
 }
 
 /// Load the current object file symbols into CurrentObjectAddresses.
-void MachODebugMapParser::loadCurrentObjectFileSymbols() {
+void MachODebugMapParser::loadCurrentObjectFileSymbols(
+    const object::MachOObjectFile &Obj) {
   CurrentObjectAddresses.clear();
 
-  for (auto Sym : CurrentObjectHolder.Get().symbols()) {
-
+  for (auto Sym : Obj.symbols()) {
     uint64_t Addr = Sym.getValue();
-    if (Addr == UnknownAddress)
-      continue;
     ErrorOr<StringRef> Name = Sym.getName();
     if (!Name)
       continue;
@@ -214,28 +246,34 @@ void MachODebugMapParser::loadCurrentObjectFileSymbols() {
 uint64_t MachODebugMapParser::getMainBinarySymbolAddress(StringRef Name) {
   auto Sym = MainBinarySymbolAddresses.find(Name);
   if (Sym == MainBinarySymbolAddresses.end())
-    return UnknownAddress;
+    return 0;
   return Sym->second;
 }
 
 /// Load the interesting main binary symbols' addresses into
 /// MainBinarySymbolAddresses.
-void MachODebugMapParser::loadMainBinarySymbols() {
-  const MachOObjectFile &MainBinary = MainBinaryHolder.GetAs<MachOObjectFile>();
+void MachODebugMapParser::loadMainBinarySymbols(
+    const MachOObjectFile &MainBinary) {
   section_iterator Section = MainBinary.section_end();
+  MainBinarySymbolAddresses.clear();
   for (const auto &Sym : MainBinary.symbols()) {
     SymbolRef::Type Type = Sym.getType();
     // Skip undefined and STAB entries.
     if ((Type & SymbolRef::ST_Debug) || (Type & SymbolRef::ST_Unknown))
       continue;
-    uint64_t Addr = Sym.getValue();
     // The only symbols of interest are the global variables. These
     // are the only ones that need to be queried because the address
     // of common data won't be described in the debug map. All other
     // addresses should be fetched for the debug map.
-    if (Addr == UnknownAddress || !(Sym.getFlags() & SymbolRef::SF_Global) ||
-        Sym.getSection(Section) || Section->isText())
+    if (!(Sym.getFlags() & SymbolRef::SF_Global))
       continue;
+    ErrorOr<section_iterator> SectionOrErr = Sym.getSection();
+    if (!SectionOrErr)
+      continue;
+    Section = *SectionOrErr;
+    if (Section == MainBinary.section_end() || Section->isText())
+      continue;
+    uint64_t Addr = Sym.getValue();
     ErrorOr<StringRef> NameOrErr = Sym.getName();
     if (!NameOrErr)
       continue;
@@ -248,12 +286,11 @@ void MachODebugMapParser::loadMainBinarySymbols() {
 
 namespace llvm {
 namespace dsymutil {
-llvm::ErrorOr<std::unique_ptr<DebugMap>> parseDebugMap(StringRef InputFile,
-                                                       StringRef PrependPath,
-                                                       bool Verbose,
-                                                       bool InputIsYAML) {
+llvm::ErrorOr<std::vector<std::unique_ptr<DebugMap>>>
+parseDebugMap(StringRef InputFile, ArrayRef<std::string> Archs,
+              StringRef PrependPath, bool Verbose, bool InputIsYAML) {
   if (!InputIsYAML) {
-    MachODebugMapParser Parser(InputFile, PrependPath, Verbose);
+    MachODebugMapParser Parser(InputFile, Archs, PrependPath, Verbose);
     return Parser.parse();
   } else {
     return DebugMap::parseYAMLDebugMap(InputFile, PrependPath, Verbose);

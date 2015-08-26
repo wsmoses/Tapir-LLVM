@@ -31,7 +31,6 @@ class AArch64TTIImpl : public BasicTTIImplBase<AArch64TTIImpl> {
   typedef TargetTransformInfo TTI;
   friend BaseT;
 
-  const AArch64TargetMachine *TM;
   const AArch64Subtarget *ST;
   const AArch64TargetLowering *TLI;
 
@@ -50,41 +49,25 @@ class AArch64TTIImpl : public BasicTTIImplBase<AArch64TTIImpl> {
 
 public:
   explicit AArch64TTIImpl(const AArch64TargetMachine *TM, Function &F)
-      : BaseT(TM), TM(TM), ST(TM->getSubtargetImpl(F)),
+      : BaseT(TM, F.getParent()->getDataLayout()), ST(TM->getSubtargetImpl(F)),
         TLI(ST->getTargetLowering()) {}
 
   // Provide value semantics. MSVC requires that we spell all of these out.
   AArch64TTIImpl(const AArch64TTIImpl &Arg)
-      : BaseT(static_cast<const BaseT &>(Arg)), TM(Arg.TM), ST(Arg.ST),
-        TLI(Arg.TLI) {}
+      : BaseT(static_cast<const BaseT &>(Arg)), ST(Arg.ST), TLI(Arg.TLI) {}
   AArch64TTIImpl(AArch64TTIImpl &&Arg)
-      : BaseT(std::move(static_cast<BaseT &>(Arg))), TM(std::move(Arg.TM)),
-        ST(std::move(Arg.ST)), TLI(std::move(Arg.TLI)) {}
-  AArch64TTIImpl &operator=(const AArch64TTIImpl &RHS) {
-    BaseT::operator=(static_cast<const BaseT &>(RHS));
-    TM = RHS.TM;
-    ST = RHS.ST;
-    TLI = RHS.TLI;
-    return *this;
-  }
-  AArch64TTIImpl &operator=(AArch64TTIImpl &&RHS) {
-    BaseT::operator=(std::move(static_cast<BaseT &>(RHS)));
-    TM = std::move(RHS.TM);
-    ST = std::move(RHS.ST);
-    TLI = std::move(RHS.TLI);
-    return *this;
-  }
+      : BaseT(std::move(static_cast<BaseT &>(Arg))), ST(std::move(Arg.ST)),
+        TLI(std::move(Arg.TLI)) {}
 
   /// \name Scalar TTI Implementations
   /// @{
 
   using BaseT::getIntImmCost;
-  unsigned getIntImmCost(int64_t Val);
-  unsigned getIntImmCost(const APInt &Imm, Type *Ty);
-  unsigned getIntImmCost(unsigned Opcode, unsigned Idx, const APInt &Imm,
-                         Type *Ty);
-  unsigned getIntImmCost(Intrinsic::ID IID, unsigned Idx, const APInt &Imm,
-                         Type *Ty);
+  int getIntImmCost(int64_t Val);
+  int getIntImmCost(const APInt &Imm, Type *Ty);
+  int getIntImmCost(unsigned Opcode, unsigned Idx, const APInt &Imm, Type *Ty);
+  int getIntImmCost(Intrinsic::ID IID, unsigned Idx, const APInt &Imm,
+                    Type *Ty);
   TTI::PopcntSupportKind getPopcntSupport(unsigned TyWidth);
 
   /// @}
@@ -112,25 +95,25 @@ public:
 
   unsigned getMaxInterleaveFactor(unsigned VF);
 
-  unsigned getCastInstrCost(unsigned Opcode, Type *Dst, Type *Src);
+  int getCastInstrCost(unsigned Opcode, Type *Dst, Type *Src);
 
-  unsigned getVectorInstrCost(unsigned Opcode, Type *Val, unsigned Index);
+  int getVectorInstrCost(unsigned Opcode, Type *Val, unsigned Index);
 
-  unsigned getArithmeticInstrCost(
+  int getArithmeticInstrCost(
       unsigned Opcode, Type *Ty,
       TTI::OperandValueKind Opd1Info = TTI::OK_AnyValue,
       TTI::OperandValueKind Opd2Info = TTI::OK_AnyValue,
       TTI::OperandValueProperties Opd1PropInfo = TTI::OP_None,
       TTI::OperandValueProperties Opd2PropInfo = TTI::OP_None);
 
-  unsigned getAddressComputationCost(Type *Ty, bool IsComplex);
+  int getAddressComputationCost(Type *Ty, bool IsComplex);
 
-  unsigned getCmpSelInstrCost(unsigned Opcode, Type *ValTy, Type *CondTy);
+  int getCmpSelInstrCost(unsigned Opcode, Type *ValTy, Type *CondTy);
 
-  unsigned getMemoryOpCost(unsigned Opcode, Type *Src, unsigned Alignment,
-                           unsigned AddressSpace);
+  int getMemoryOpCost(unsigned Opcode, Type *Src, unsigned Alignment,
+                      unsigned AddressSpace);
 
-  unsigned getCostOfKeepingLiveOverCall(ArrayRef<Type *> Tys);
+  int getCostOfKeepingLiveOverCall(ArrayRef<Type *> Tys);
 
   void getUnrollingPreferences(Loop *L, TTI::UnrollingPreferences &UP);
 
@@ -139,11 +122,9 @@ public:
 
   bool getTgtMemIntrinsic(IntrinsicInst *Inst, MemIntrinsicInfo &Info);
 
-  unsigned getInterleavedMemoryOpCost(unsigned Opcode, Type *VecTy,
-                                      unsigned Factor,
-                                      ArrayRef<unsigned> Indices,
-                                      unsigned Alignment,
-                                      unsigned AddressSpace);
+  int getInterleavedMemoryOpCost(unsigned Opcode, Type *VecTy, unsigned Factor,
+                                 ArrayRef<unsigned> Indices, unsigned Alignment,
+                                 unsigned AddressSpace);
   /// @}
 };
 

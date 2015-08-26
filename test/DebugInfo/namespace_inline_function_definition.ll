@@ -1,6 +1,6 @@
 ; REQUIRES: object-emission
 
-; RUN: %llc_dwarf -O0 -filetype=obj < %s | llvm-dwarfdump -debug-dump=info - | FileCheck %s
+; RUN: %llc_dwarf -O0 -filetype=obj -dwarf-linkage-names=Enable < %s | llvm-dwarfdump -debug-dump=info - | FileCheck %s
 
 ; Generate from clang with the following source. Note that the definition of
 ; the inline function follows its use to workaround another bug that should be
@@ -70,7 +70,7 @@ attributes #2 = { nounwind readnone }
 !llvm.module.flags = !{!13, !14}
 !llvm.ident = !{!15}
 
-!0 = !DICompileUnit(language: DW_LANG_C_plus_plus, producer: "clang version 3.5.0 ", isOptimized: false, emissionKind: 1, file: !1, enums: !2, retainedTypes: !2, subprograms: !3, globals: !2, imports: !2)
+!0 = distinct !DICompileUnit(language: DW_LANG_C_plus_plus, producer: "clang version 3.5.0 ", isOptimized: false, emissionKind: 1, file: !1, enums: !2, retainedTypes: !2, subprograms: !3, globals: !2, imports: !2)
 !1 = !DIFile(filename: "namespace_inline_function_definition.cpp", directory: "/tmp/dbginfo")
 !2 = !{}
 !3 = !{!4, !9}
@@ -87,9 +87,9 @@ attributes #2 = { nounwind readnone }
 !14 = !{i32 2, !"Debug Info Version", i32 3}
 !15 = !{!"clang version 3.5.0 "}
 !16 = !DILocation(line: 5, scope: !4)
-!17 = !DILocalVariable(tag: DW_TAG_arg_variable, name: "i", line: 6, arg: 1, scope: !9, file: !5, type: !8)
+!17 = !DILocalVariable(name: "i", line: 6, arg: 1, scope: !9, file: !5, type: !8)
 
-!117 = !DILocalVariable(tag: DW_TAG_arg_variable, name: "i", line: 6, arg: 1, scope: !9, file: !5, type: !8)
+!117 = !DILocalVariable(name: "i", line: 6, arg: 1, scope: !9, file: !5, type: !8)
 
 !18 = !DILocation(line: 6, scope: !9, inlinedAt: !16)
 !19 = !DILocation(line: 6, scope: !9)

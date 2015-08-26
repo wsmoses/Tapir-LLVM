@@ -697,6 +697,21 @@ static Comdat::SelectionKind getDecodedComdatSelectionKind(unsigned Val) {
   }
 }
 
+static FastMathFlags getDecodedFastMathFlags(unsigned Val) {
+  FastMathFlags FMF;
+  if (0 != (Val & FastMathFlags::UnsafeAlgebra))
+    FMF.setUnsafeAlgebra();
+  if (0 != (Val & FastMathFlags::NoNaNs))
+    FMF.setNoNaNs();
+  if (0 != (Val & FastMathFlags::NoInfs))
+    FMF.setNoInfs();
+  if (0 != (Val & FastMathFlags::NoSignedZeros))
+    FMF.setNoSignedZeros();
+  if (0 != (Val & FastMathFlags::AllowReciprocal))
+    FMF.setAllowReciprocal();
+  return FMF;
+}
+
 static void upgradeDLLImportExportLinkage(llvm::GlobalValue *GV, unsigned Val) {
   switch (Val) {
   case 5: GV->setDLLStorageClass(GlobalValue::DLLImportStorageClass); break;
@@ -1075,6 +1090,8 @@ static Attribute::AttrKind getAttrFromCode(uint64_t Code) {
     return Attribute::Alignment;
   case bitc::ATTR_KIND_ALWAYS_INLINE:
     return Attribute::AlwaysInline;
+  case bitc::ATTR_KIND_ARGMEMONLY:
+    return Attribute::ArgMemOnly;
   case bitc::ATTR_KIND_BUILTIN:
     return Attribute::Builtin;
   case bitc::ATTR_KIND_BY_VAL:
@@ -1342,6 +1359,9 @@ std::error_code BitcodeReader::parseTypeTableBody() {
       break;
     case bitc::TYPE_CODE_X86_MMX:   // X86_MMX
       ResultTy = Type::getX86_MMXTy(Context);
+      break;
+    case bitc::TYPE_CODE_TOKEN:     // TOKEN
+      ResultTy = Type::getTokenTy(Context);
       break;
     case bitc::TYPE_CODE_INTEGER: { // INTEGER: [width]
       if (Record.size() < 1)
@@ -1855,15 +1875,16 @@ std::error_code BitcodeReader::parseMetadata() {
       if (Record.size() < 14 || Record.size() > 15)
         return error("Invalid record");
 
+      // Ignore Record[1], which indicates whether this compile unit is
+      // distinct.  It's always distinct.
       MDValueList.assignValue(
-          GET_OR_DISTINCT(
-              DICompileUnit, Record[0],
-              (Context, Record[1], getMDOrNull(Record[2]),
-               getMDString(Record[3]), Record[4], getMDString(Record[5]),
-               Record[6], getMDString(Record[7]), Record[8],
-               getMDOrNull(Record[9]), getMDOrNull(Record[10]),
-               getMDOrNull(Record[11]), getMDOrNull(Record[12]),
-               getMDOrNull(Record[13]), Record.size() == 14 ? 0 : Record[14])),
+          DICompileUnit::getDistinct(
+              Context, Record[1], getMDOrNull(Record[2]),
+              getMDString(Record[3]), Record[4], getMDString(Record[5]),
+              Record[6], getMDString(Record[7]), Record[8],
+              getMDOrNull(Record[9]), getMDOrNull(Record[10]),
+              getMDOrNull(Record[11]), getMDOrNull(Record[12]),
+              getMDOrNull(Record[13]), Record.size() == 14 ? 0 : Record[14]),
           NextMDValueNo++);
       break;
     }
@@ -1955,15 +1976,19 @@ std::error_code BitcodeReader::parseMetadata() {
     }
     case bitc::METADATA_LOCAL_VAR: {
       // 10th field is for the obseleted 'inlinedAt:' field.
-      if (Record.size() != 9 && Record.size() != 10)
+      if (Record.size() < 8 || Record.size() > 10)
         return error("Invalid record");
 
+      // 2nd field used to be an artificial tag, either DW_TAG_auto_variable or
+      // DW_TAG_arg_variable.
+      bool HasTag = Record.size() > 8;
       MDValueList.assignValue(
           GET_OR_DISTINCT(DILocalVariable, Record[0],
-                          (Context, Record[1], getMDOrNull(Record[2]),
-                           getMDString(Record[3]), getMDOrNull(Record[4]),
-                           Record[5], getMDOrNull(Record[6]), Record[7],
-                           Record[8])),
+                          (Context, getMDOrNull(Record[1 + HasTag]),
+                           getMDString(Record[2 + HasTag]),
+                           getMDOrNull(Record[3 + HasTag]), Record[4 + HasTag],
+                           getMDOrNull(Record[5 + HasTag]), Record[6 + HasTag],
+                           Record[7 + HasTag])),
           NextMDValueNo++);
       break;
     }
@@ -3472,17 +3497,7 @@ std::error_code BitcodeReader::parseFunctionBody(Function *F) {
           if (Record[OpNum] & (1 << bitc::PEO_EXACT))
             cast<BinaryOperator>(I)->setIsExact(true);
         } else if (isa<FPMathOperator>(I)) {
-          FastMathFlags FMF;
-          if (0 != (Record[OpNum] & FastMathFlags::UnsafeAlgebra))
-            FMF.setUnsafeAlgebra();
-          if (0 != (Record[OpNum] & FastMathFlags::NoNaNs))
-            FMF.setNoNaNs();
-          if (0 != (Record[OpNum] & FastMathFlags::NoInfs))
-            FMF.setNoInfs();
-          if (0 != (Record[OpNum] & FastMathFlags::NoSignedZeros))
-            FMF.setNoSignedZeros();
-          if (0 != (Record[OpNum] & FastMathFlags::AllowReciprocal))
-            FMF.setAllowReciprocal();
+          FastMathFlags FMF = getDecodedFastMathFlags(Record[OpNum]);
           if (FMF.any())
             I->setFastMathFlags(FMF);
         }
@@ -3739,14 +3754,25 @@ std::error_code BitcodeReader::parseFunctionBody(Function *F) {
       unsigned OpNum = 0;
       Value *LHS, *RHS;
       if (getValueTypePair(Record, OpNum, NextValueNo, LHS) ||
-          popValue(Record, OpNum, NextValueNo, LHS->getType(), RHS) ||
-          OpNum+1 != Record.size())
+          popValue(Record, OpNum, NextValueNo, LHS->getType(), RHS))
+        return error("Invalid record");
+
+      unsigned PredVal = Record[OpNum];
+      bool IsFP = LHS->getType()->isFPOrFPVectorTy();
+      FastMathFlags FMF;
+      if (IsFP && Record.size() > OpNum+1)
+        FMF = getDecodedFastMathFlags(Record[++OpNum]);
+
+      if (OpNum+1 != Record.size())
         return error("Invalid record");
 
       if (LHS->getType()->isFPOrFPVectorTy())
-        I = new FCmpInst((FCmpInst::Predicate)Record[OpNum], LHS, RHS);
+        I = new FCmpInst((FCmpInst::Predicate)PredVal, LHS, RHS);
       else
-        I = new ICmpInst((ICmpInst::Predicate)Record[OpNum], LHS, RHS);
+        I = new ICmpInst((ICmpInst::Predicate)PredVal, LHS, RHS);
+
+      if (FMF.any())
+        I->setFastMathFlags(FMF);
       InstructionList.push_back(I);
       break;
     }
@@ -3791,6 +3817,140 @@ std::error_code BitcodeReader::parseFunctionBody(Function *F) {
         I = BranchInst::Create(TrueDest, FalseDest, Cond);
         InstructionList.push_back(I);
       }
+      break;
+    }
+    // CLEANUPRET: [] or [ty,val] or [bb#] or [ty,val,bb#]
+    case bitc::FUNC_CODE_INST_CLEANUPRET: {
+      if (Record.size() < 2)
+        return error("Invalid record");
+      unsigned Idx = 0;
+      bool HasReturnValue = !!Record[Idx++];
+      bool HasUnwindDest = !!Record[Idx++];
+      Value *RetVal = nullptr;
+      BasicBlock *UnwindDest = nullptr;
+
+      if (HasReturnValue && getValueTypePair(Record, Idx, NextValueNo, RetVal))
+        return error("Invalid record");
+      if (HasUnwindDest) {
+        if (Idx == Record.size())
+          return error("Invalid record");
+        UnwindDest = getBasicBlock(Record[Idx++]);
+        if (!UnwindDest)
+          return error("Invalid record");
+      }
+
+      if (Record.size() != Idx)
+        return error("Invalid record");
+
+      I = CleanupReturnInst::Create(Context, RetVal, UnwindDest);
+      InstructionList.push_back(I);
+      break;
+    }
+    case bitc::FUNC_CODE_INST_CATCHRET: { // CATCHRET: [bb#]
+      if (Record.size() != 1 && Record.size() != 3)
+        return error("Invalid record");
+      unsigned Idx = 0;
+      BasicBlock *BB = getBasicBlock(Record[Idx++]);
+      if (!BB)
+        return error("Invalid record");
+      Value *RetVal = nullptr;
+      if (Record.size() == 3 &&
+          getValueTypePair(Record, Idx, NextValueNo, RetVal))
+        return error("Invalid record");
+
+      I = CatchReturnInst::Create(BB, RetVal);
+      InstructionList.push_back(I);
+      break;
+    }
+    case bitc::FUNC_CODE_INST_CATCHPAD: { // CATCHPAD: [ty,bb#,bb#,num,(ty,val)*]
+      if (Record.size() < 4)
+        return error("Invalid record");
+      unsigned Idx = 0;
+      Type *Ty = getTypeByID(Record[Idx++]);
+      if (!Ty)
+        return error("Invalid record");
+      BasicBlock *NormalBB = getBasicBlock(Record[Idx++]);
+      if (!NormalBB)
+        return error("Invalid record");
+      BasicBlock *UnwindBB = getBasicBlock(Record[Idx++]);
+      if (!UnwindBB)
+        return error("Invalid record");
+      unsigned NumArgOperands = Record[Idx++];
+      SmallVector<Value *, 2> Args;
+      for (unsigned Op = 0; Op != NumArgOperands; ++Op) {
+        Value *Val;
+        if (getValueTypePair(Record, Idx, NextValueNo, Val))
+          return error("Invalid record");
+        Args.push_back(Val);
+      }
+      if (Record.size() != Idx)
+        return error("Invalid record");
+
+      I = CatchPadInst::Create(Ty, NormalBB, UnwindBB, Args);
+      InstructionList.push_back(I);
+      break;
+    }
+    case bitc::FUNC_CODE_INST_TERMINATEPAD: { // TERMINATEPAD: [bb#,num,(ty,val)*]
+      if (Record.size() < 1)
+        return error("Invalid record");
+      unsigned Idx = 0;
+      bool HasUnwindDest = !!Record[Idx++];
+      BasicBlock *UnwindDest = nullptr;
+      if (HasUnwindDest) {
+        if (Idx == Record.size())
+          return error("Invalid record");
+        UnwindDest = getBasicBlock(Record[Idx++]);
+        if (!UnwindDest)
+          return error("Invalid record");
+      }
+      unsigned NumArgOperands = Record[Idx++];
+      SmallVector<Value *, 2> Args;
+      for (unsigned Op = 0; Op != NumArgOperands; ++Op) {
+        Value *Val;
+        if (getValueTypePair(Record, Idx, NextValueNo, Val))
+          return error("Invalid record");
+        Args.push_back(Val);
+      }
+      if (Record.size() != Idx)
+        return error("Invalid record");
+
+      I = TerminatePadInst::Create(Context, UnwindDest, Args);
+      InstructionList.push_back(I);
+      break;
+    }
+    case bitc::FUNC_CODE_INST_CLEANUPPAD: { // CLEANUPPAD: [ty, num,(ty,val)*]
+      if (Record.size() < 2)
+        return error("Invalid record");
+      unsigned Idx = 0;
+      Type *Ty = getTypeByID(Record[Idx++]);
+      if (!Ty)
+        return error("Invalid record");
+      unsigned NumArgOperands = Record[Idx++];
+      SmallVector<Value *, 2> Args;
+      for (unsigned Op = 0; Op != NumArgOperands; ++Op) {
+        Value *Val;
+        if (getValueTypePair(Record, Idx, NextValueNo, Val))
+          return error("Invalid record");
+        Args.push_back(Val);
+      }
+      if (Record.size() != Idx)
+        return error("Invalid record");
+
+      I = CleanupPadInst::Create(Ty, Args);
+      InstructionList.push_back(I);
+      break;
+    }
+    case bitc::FUNC_CODE_INST_CATCHENDPAD: { // CATCHENDPADINST: [bb#] or []
+      if (Record.size() > 1)
+        return error("Invalid record");
+      BasicBlock *BB = nullptr;
+      if (Record.size() == 1) {
+        BB = getBasicBlock(Record[0]);
+        if (!BB)
+          return error("Invalid record");
+      }
+      I = CatchEndPadInst::Create(Context, BB);
+      InstructionList.push_back(I);
       break;
     }
     case bitc::FUNC_CODE_INST_SWITCH: { // SWITCH: [opty, op0, op1, ...]
@@ -3978,21 +4138,27 @@ std::error_code BitcodeReader::parseFunctionBody(Function *F) {
     case bitc::FUNC_CODE_INST_DETACH: { // DETACH: [bb#, bb#]
       if (Record.size() != 2)
         return error("Invalid record");
-      BasicBlock *Child = getBasicBlock(Record[0]);
-      if (!Child)
+      BasicBlock *Detached = getBasicBlock(Record[0]);
+      if (!Detached)
         return error("Invalid record");
 
-      BasicBlock *Parent = getBasicBlock(Record[1]);
-      if (!Parent)
+      BasicBlock *Continue = getBasicBlock(Record[1]);
+      if (!Continue)
         return error("Invalid record");
-      I = DetachInst::Create(Child, Parent);
+      I = DetachInst::Create(Detached, Continue);
       InstructionList.push_back(I);
       break;
     }
-    case bitc::FUNC_CODE_INST_REATTACH: // REATTACH
-      I = new ReattachInst(Context);
+      case bitc::FUNC_CODE_INST_REATTACH: { // REATTACH
+      if (Record.size() != 1)
+        return error("Invalid record");
+      BasicBlock *DetachContinue = getBasicBlock(Record[0]);
+      if (!DetachContinue)
+        return error("Invalid record");
+      I = ReattachInst::Create(Context, DetachContinue);
       InstructionList.push_back(I);
       break;
+    }
     case bitc::FUNC_CODE_INST_SYNC: { // Sync: [bb#]
       if (Record.size() != 1)
         return error("Invalid record");
@@ -4091,6 +4257,8 @@ std::error_code BitcodeReader::parseFunctionBody(Function *F) {
       uint64_t AlignRecord = Record[3];
       const uint64_t InAllocaMask = uint64_t(1) << 5;
       const uint64_t ExplicitTypeMask = uint64_t(1) << 6;
+      // Reserve bit 7 for SwiftError flag.
+      // const uint64_t SwiftErrorMask = uint64_t(1) << 7;
       const uint64_t FlagMask = InAllocaMask | ExplicitTypeMask;
       bool InAlloca = AlignRecord & InAllocaMask;
       Type *Ty = getTypeByID(Record[0]);

@@ -127,6 +127,10 @@ namespace opts {
   cl::opt<bool> ProgramHeaders("program-headers",
     cl::desc("Display ELF program headers"));
 
+  // -hash-table
+  cl::opt<bool> HashTable("hash-table",
+    cl::desc("Display ELF hash table"));
+
   // -expand-relocs
   cl::opt<bool> ExpandRelocs("expand-relocs",
     cl::desc("Expand each shown relocation to multiple lines"));
@@ -177,6 +181,11 @@ namespace opts {
   COFFBaseRelocs("coff-basereloc",
                  cl::desc("Display the PE/COFF .reloc section"));
 
+  // -macho-data-in-code
+  cl::opt<bool>
+  MachODataInCode("macho-data-in-code",
+                  cl::desc("Display MachO Data in Code command"));
+
   // -stackmap
   cl::opt<bool>
   PrintStackMap("stackmap",
@@ -184,18 +193,19 @@ namespace opts {
 
 } // namespace opts
 
-static int ReturnValue = EXIT_SUCCESS;
-
 namespace llvm {
 
-bool error(std::error_code EC) {
-  if (!EC)
-    return false;
-
-  ReturnValue = EXIT_FAILURE;
-  outs() << "\nError reading file: " << EC.message() << ".\n";
+void reportError(Twine Msg) {
+  outs() << "\nError reading file: " << Msg << ".\n";
   outs().flush();
-  return true;
+  exit(1);
+}
+
+void error(std::error_code EC) {
+  if (!EC)
+    return;
+
+  reportError(EC.message());
 }
 
 bool relocAddressLess(RelocationRef a, RelocationRef b) {
@@ -208,17 +218,14 @@ static void reportError(StringRef Input, std::error_code EC) {
   if (Input == "-")
     Input = "<stdin>";
 
-  errs() << Input << ": " << EC.message() << "\n";
-  errs().flush();
-  ReturnValue = EXIT_FAILURE;
+  reportError(Twine(Input) + ": " + EC.message());
 }
 
 static void reportError(StringRef Input, StringRef Message) {
   if (Input == "-")
     Input = "<stdin>";
 
-  errs() << Input << ": " << Message << "\n";
-  ReturnValue = EXIT_FAILURE;
+  reportError(Twine(Input) + ": " + Message);
 }
 
 static bool isMipsArch(unsigned Arch) {
@@ -249,18 +256,6 @@ static std::error_code createDumper(const ObjectFile *Obj, StreamWriter &Writer,
   return readobj_error::unsupported_obj_file_format;
 }
 
-static StringRef getLoadName(const ObjectFile *Obj) {
-  if (auto *ELF = dyn_cast<ELF32LEObjectFile>(Obj))
-    return ELF->getLoadName();
-  if (auto *ELF = dyn_cast<ELF64LEObjectFile>(Obj))
-    return ELF->getLoadName();
-  if (auto *ELF = dyn_cast<ELF32BEObjectFile>(Obj))
-    return ELF->getLoadName();
-  if (auto *ELF = dyn_cast<ELF64BEObjectFile>(Obj))
-    return ELF->getLoadName();
-  llvm_unreachable("Not ELF");
-}
-
 /// @brief Dumps the specified object file.
 static void dumpObject(const ObjectFile *Obj) {
   StreamWriter Writer(outs());
@@ -277,8 +272,7 @@ static void dumpObject(const ObjectFile *Obj) {
          << Triple::getArchTypeName((llvm::Triple::ArchType)Obj->getArch())
          << "\n";
   outs() << "AddressSize: " << (8*Obj->getBytesInAddress()) << "bit\n";
-  if (Obj->isELF())
-    outs() << "LoadName: " << getLoadName(Obj) << "\n";
+  Dumper->printLoadName();
 
   if (opts::FileHeaders)
     Dumper->printFileHeaders();
@@ -300,6 +294,8 @@ static void dumpObject(const ObjectFile *Obj) {
     Dumper->printNeededLibraries();
   if (opts::ProgramHeaders)
     Dumper->printProgramHeaders();
+  if (opts::HashTable)
+    Dumper->printHashTable();
   if (Obj->getArch() == llvm::Triple::arm && Obj->isELF())
     if (opts::ARMAttributes)
       Dumper->printAttributes();
@@ -311,25 +307,27 @@ static void dumpObject(const ObjectFile *Obj) {
     if (opts::MipsReginfo)
       Dumper->printMipsReginfo();
   }
-  if (opts::COFFImports)
-    Dumper->printCOFFImports();
-  if (opts::COFFExports)
-    Dumper->printCOFFExports();
-  if (opts::COFFDirectives)
-    Dumper->printCOFFDirectives();
-  if (opts::COFFBaseRelocs)
-    Dumper->printCOFFBaseReloc();
-
+  if (Obj->isCOFF()) {
+    if (opts::COFFImports)
+      Dumper->printCOFFImports();
+    if (opts::COFFExports)
+      Dumper->printCOFFExports();
+    if (opts::COFFDirectives)
+      Dumper->printCOFFDirectives();
+    if (opts::COFFBaseRelocs)
+      Dumper->printCOFFBaseReloc();
+  }
+  if (Obj->isMachO())
+    if (opts::MachODataInCode)
+      Dumper->printMachODataInCode();
   if (opts::PrintStackMap)
     Dumper->printStackMap();
 }
 
 /// @brief Dumps each object file in \a Arc;
 static void dumpArchive(const Archive *Arc) {
-  for (Archive::child_iterator ArcI = Arc->child_begin(),
-                               ArcE = Arc->child_end();
-                               ArcI != ArcE; ++ArcI) {
-    ErrorOr<std::unique_ptr<Binary>> ChildOrErr = ArcI->getAsBinary();
+  for (const auto &Child : Arc->children()) {
+    ErrorOr<std::unique_ptr<Binary>> ChildOrErr = Child.getAsBinary();
     if (std::error_code EC = ChildOrErr.getError()) {
       // Ignore non-object files.
       if (EC != object_error::invalid_file_type)
@@ -401,5 +399,5 @@ int main(int argc, const char *argv[]) {
   std::for_each(opts::InputFilenames.begin(), opts::InputFilenames.end(),
                 dumpInput);
 
-  return ReturnValue;
+  return 0;
 }

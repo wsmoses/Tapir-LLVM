@@ -227,10 +227,16 @@ Value *Scatterer::operator[](unsigned I) {
       if (!Idx)
         break;
       unsigned J = Idx->getZExtValue();
-      CV[J] = Insert->getOperand(1);
       V = Insert->getOperand(0);
-      if (I == J)
+      if (I == J) {
+        CV[J] = Insert->getOperand(1);
         return CV[J];
+      } else if (!CV[J]) {
+        // Only cache the first entry we find for each index we're not actively
+        // searching for. This prevents us from going too far up the chain and
+        // caching incorrect entries.
+        CV[J] = Insert->getOperand(1);
+      }
     }
     CV[I] = Builder.CreateExtractElement(V, Builder.getInt32(I),
                                          V->getName() + ".i" + Twine(I));
@@ -247,6 +253,7 @@ bool Scalarizer::doInitialization(Module &M) {
 }
 
 bool Scalarizer::runOnFunction(Function &F) {
+  assert(Gathered.empty() && Scattered.empty());
   for (Function::iterator BBI = F.begin(), BBE = F.end(); BBI != BBE; ++BBI) {
     BasicBlock *BB = BBI;
     for (BasicBlock::iterator II = BB->begin(), IE = BB->end(); II != IE;) {
@@ -636,7 +643,9 @@ bool Scalarizer::visitStoreInst(StoreInst &SI) {
 // Delete the instructions that we scalarized.  If a full vector result
 // is still needed, recreate it using InsertElements.
 bool Scalarizer::finish() {
-  if (Gathered.empty())
+  // The presence of data in Gathered or Scattered indicates changes
+  // made to the Function.
+  if (Gathered.empty() && Scattered.empty())
     return false;
   for (GatherList::iterator GMI = Gathered.begin(), GME = Gathered.end();
        GMI != GME; ++GMI) {

@@ -750,7 +750,6 @@ TargetLoweringBase::TargetLoweringBase(const TargetMachine &tm) : TM(tm) {
   initActions();
 
   // Perform these initializations only once.
-  IsLittleEndian = getDataLayout()->isLittleEndian();
   MaxStoresPerMemset = MaxStoresPerMemcpy = MaxStoresPerMemmove = 8;
   MaxStoresPerMemsetOptSize = MaxStoresPerMemcpyOptSize
     = MaxStoresPerMemmoveOptSize = 4;
@@ -759,9 +758,7 @@ TargetLoweringBase::TargetLoweringBase(const TargetMachine &tm) : TM(tm) {
   SelectIsExpensive = false;
   HasMultipleConditionRegisters = false;
   HasExtractBitsInsn = false;
-  IntDivIsCheap = false;
   FsqrtIsCheap = false;
-  Pow2SDivIsCheap = false;
   JumpIsExpensive = JumpIsExpensiveOverride;
   PredictableSelectIsExpensive = false;
   MaskAndBranchFoldingIsLegal = false;
@@ -815,6 +812,8 @@ void TargetLoweringBase::initActions() {
     setOperationAction(ISD::CONCAT_VECTORS, VT, Expand);
     setOperationAction(ISD::FMINNUM, VT, Expand);
     setOperationAction(ISD::FMAXNUM, VT, Expand);
+    setOperationAction(ISD::FMINNAN, VT, Expand);
+    setOperationAction(ISD::FMAXNAN, VT, Expand);
     setOperationAction(ISD::FMAD, VT, Expand);
     setOperationAction(ISD::SMIN, VT, Expand);
     setOperationAction(ISD::SMAX, VT, Expand);
@@ -828,6 +827,8 @@ void TargetLoweringBase::initActions() {
     setOperationAction(ISD::USUBO, VT, Expand);
     setOperationAction(ISD::SMULO, VT, Expand);
     setOperationAction(ISD::UMULO, VT, Expand);
+    setOperationAction(ISD::UABSDIFF, VT, Expand);
+    setOperationAction(ISD::SABSDIFF, VT, Expand);
 
     // These library functions default to expand.
     setOperationAction(ISD::FROUND, VT, Expand);
@@ -879,28 +880,17 @@ void TargetLoweringBase::initActions() {
   setOperationAction(ISD::DEBUGTRAP, MVT::Other, Expand);
 }
 
-MVT TargetLoweringBase::getPointerTy(uint32_t AS) const {
-  return MVT::getIntegerVT(getPointerSizeInBits(AS));
+MVT TargetLoweringBase::getScalarShiftAmountTy(const DataLayout &DL,
+                                               EVT) const {
+  return MVT::getIntegerVT(8 * DL.getPointerSize(0));
 }
 
-unsigned TargetLoweringBase::getPointerSizeInBits(uint32_t AS) const {
-  return getDataLayout()->getPointerSizeInBits(AS);
-}
-
-unsigned TargetLoweringBase::getPointerTypeSizeInBits(Type *Ty) const {
-  assert(Ty->isPointerTy());
-  return getPointerSizeInBits(Ty->getPointerAddressSpace());
-}
-
-MVT TargetLoweringBase::getScalarShiftAmountTy(EVT LHSTy) const {
-  return MVT::getIntegerVT(8 * getDataLayout()->getPointerSize(0));
-}
-
-EVT TargetLoweringBase::getShiftAmountTy(EVT LHSTy) const {
+EVT TargetLoweringBase::getShiftAmountTy(EVT LHSTy,
+                                         const DataLayout &DL) const {
   assert(LHSTy.isInteger() && "Shift amount is not an integer type!");
   if (LHSTy.isVector())
     return LHSTy;
-  return getScalarShiftAmountTy(LHSTy);
+  return getScalarShiftAmountTy(DL, LHSTy);
 }
 
 /// canOpTrap - Returns true if the operation can trap for the value type.
@@ -1160,8 +1150,8 @@ TargetLoweringBase::emitPatchPoint(MachineInstr *MI,
       Flags |= MachineMemOperand::MOVolatile;
     }
     MachineMemOperand *MMO = MF.getMachineMemOperand(
-        MachinePointerInfo::getFixedStack(FI), Flags,
-        TM.getDataLayout()->getPointerSize(), MFI.getObjectAlignment(FI));
+        MachinePointerInfo::getFixedStack(MF, FI), Flags,
+        MF.getDataLayout().getPointerSize(), MFI.getObjectAlignment(FI));
     MIB->addMemOperand(MF, MMO);
 
     // Replace the instruction and update the operand index.
@@ -1398,9 +1388,10 @@ void TargetLoweringBase::computeRegisterProperties(
   }
 }
 
-EVT TargetLoweringBase::getSetCCResultType(LLVMContext &, EVT VT) const {
+EVT TargetLoweringBase::getSetCCResultType(const DataLayout &DL, LLVMContext &,
+                                           EVT VT) const {
   assert(!VT.isVector() && "No default SetCC type for vectors!");
-  return getPointerTy(0).SimpleTy;
+  return getPointerTy(DL).SimpleTy;
 }
 
 MVT::SimpleValueType TargetLoweringBase::getCmpLibcallReturnType() const {
@@ -1485,11 +1476,11 @@ unsigned TargetLoweringBase::getVectorTypeBreakdown(LLVMContext &Context, EVT VT
 /// type of the given function.  This does not require a DAG or a return value,
 /// and is suitable for use before any DAGs for the function are constructed.
 /// TODO: Move this out of TargetLowering.cpp.
-void llvm::GetReturnInfo(Type* ReturnType, AttributeSet attr,
+void llvm::GetReturnInfo(Type *ReturnType, AttributeSet attr,
                          SmallVectorImpl<ISD::OutputArg> &Outs,
-                         const TargetLowering &TLI) {
+                         const TargetLowering &TLI, const DataLayout &DL) {
   SmallVector<EVT, 4> ValueVTs;
-  ComputeValueVTs(TLI, ReturnType, ValueVTs);
+  ComputeValueVTs(TLI, DL, ReturnType, ValueVTs);
   unsigned NumValues = ValueVTs.size();
   if (NumValues == 0) return;
 
@@ -1534,9 +1525,33 @@ void llvm::GetReturnInfo(Type* ReturnType, AttributeSet attr,
 /// getByValTypeAlignment - Return the desired alignment for ByVal aggregate
 /// function arguments in the caller parameter area.  This is the actual
 /// alignment, not its logarithm.
-unsigned TargetLoweringBase::getByValTypeAlignment(Type *Ty) const {
-  return getDataLayout()->getABITypeAlignment(Ty);
+unsigned TargetLoweringBase::getByValTypeAlignment(Type *Ty,
+                                                   const DataLayout &DL) const {
+  return DL.getABITypeAlignment(Ty);
 }
+
+bool TargetLoweringBase::allowsMemoryAccess(LLVMContext &Context,
+                                            const DataLayout &DL, EVT VT,
+                                            unsigned AddrSpace,
+                                            unsigned Alignment,
+                                            bool *Fast) const {
+  // Check if the specified alignment is sufficient based on the data layout.
+  // TODO: While using the data layout works in practice, a better solution
+  // would be to implement this check directly (make this a virtual function).
+  // For example, the ABI alignment may change based on software platform while
+  // this function should only be affected by hardware implementation.
+  Type *Ty = VT.getTypeForEVT(Context);
+  if (Alignment >= DL.getABITypeAlignment(Ty)) {
+    // Assume that an access that meets the ABI-specified alignment is fast.
+    if (Fast != nullptr)
+      *Fast = true;
+    return true;
+  }
+  
+  // This is a misaligned access.
+  return allowsMisalignedMemoryAccesses(VT, AddrSpace, Alignment, Fast);
+}
+
 
 //===----------------------------------------------------------------------===//
 //  TargetTransformInfo Helpers
@@ -1557,6 +1572,12 @@ int TargetLoweringBase::InstructionOpcodeToISD(unsigned Opcode) const {
   case Invoke:         return 0;
   case Resume:         return 0;
   case Unreachable:    return 0;
+  case CleanupRet:     return 0;
+  case CatchEndPad:  return 0;
+  case CatchRet:       return 0;
+  case CatchPad:     return 0;
+  case TerminatePad: return 0;
+  case CleanupPad:   return 0;
   case Add:            return ISD::ADD;
   case FAdd:           return ISD::FADD;
   case Sub:            return ISD::SUB;
@@ -1614,12 +1635,13 @@ int TargetLoweringBase::InstructionOpcodeToISD(unsigned Opcode) const {
   llvm_unreachable("Unknown instruction type encountered!");
 }
 
-std::pair<unsigned, MVT>
-TargetLoweringBase::getTypeLegalizationCost(Type *Ty) const {
+std::pair<int, MVT>
+TargetLoweringBase::getTypeLegalizationCost(const DataLayout &DL,
+                                            Type *Ty) const {
   LLVMContext &C = Ty->getContext();
-  EVT MTy = getValueType(Ty);
+  EVT MTy = getValueType(DL, Ty);
 
-  unsigned Cost = 1;
+  int Cost = 1;
   // We keep legalizing the type until we find a legal kind. We assume that
   // the only operation that costs anything is the split. After splitting
   // we need to handle two types.
@@ -1643,8 +1665,8 @@ TargetLoweringBase::getTypeLegalizationCost(Type *Ty) const {
 
 /// isLegalAddressingMode - Return true if the addressing mode represented
 /// by AM is legal for this target, for a load/store of the specified type.
-bool TargetLoweringBase::isLegalAddressingMode(const AddrMode &AM,
-                                               Type *Ty,
+bool TargetLoweringBase::isLegalAddressingMode(const DataLayout &DL,
+                                               const AddrMode &AM, Type *Ty,
                                                unsigned AS) const {
   // The default implementation of this implements a conservative RISCy, r+r and
   // r+i addr mode.

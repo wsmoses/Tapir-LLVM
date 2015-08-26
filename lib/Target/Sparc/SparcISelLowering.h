@@ -85,10 +85,13 @@ namespace llvm {
                                  StringRef Constraint, MVT VT) const override;
 
     bool isOffsetFoldingLegal(const GlobalAddressSDNode *GA) const override;
-    MVT getScalarShiftAmountTy(EVT LHSTy) const override { return MVT::i32; }
+    MVT getScalarShiftAmountTy(const DataLayout &, EVT) const override {
+      return MVT::i32;
+    }
 
     /// getSetCCResultType - Return the ISD::SETCC ValueType
-    EVT getSetCCResultType(LLVMContext &Context, EVT VT) const override;
+    EVT getSetCCResultType(const DataLayout &DL, LLVMContext &Context,
+                           EVT VT) const override;
 
     SDValue
       LowerFormalArguments(SDValue Chain,
@@ -164,8 +167,8 @@ namespace llvm {
     }
 
     void ReplaceNodeResults(SDNode *N,
-                                    SmallVectorImpl<SDValue>& Results,
-                                    SelectionDAG &DAG) const override;
+                            SmallVectorImpl<SDValue>& Results,
+                            SelectionDAG &DAG) const override;
 
     MachineBasicBlock *expandSelectCC(MachineInstr *MI, MachineBasicBlock *BB,
                                       unsigned BROpcode) const;

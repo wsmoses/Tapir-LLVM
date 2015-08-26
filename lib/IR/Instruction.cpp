@@ -196,6 +196,11 @@ const char *Instruction::getOpcodeName(unsigned OpCode) {
   case Invoke: return "invoke";
   case Resume: return "resume";
   case Unreachable: return "unreachable";
+  case CleanupRet: return "cleanupret";
+  case CatchEndPad: return "catchendpad";
+  case CatchRet: return "catchret";
+  case CatchPad: return "catchpad";
+  case TerminatePad: return "terminatepad";
   case Detach: return "detach";
   case Reattach: return "reattach";
   case Sync:   return "sync";
@@ -259,6 +264,7 @@ const char *Instruction::getOpcodeName(unsigned OpCode) {
   case ExtractValue:   return "extractvalue";
   case InsertValue:    return "insertvalue";
   case LandingPad:     return "landingpad";
+  case CleanupPad:   return "cleanuppad";
 
   default: return "<Invalid operator> ";
   }
@@ -408,8 +414,11 @@ bool Instruction::mayReadFromMemory() const {
   case Instruction::VAArg:
   case Instruction::Load:
   case Instruction::Fence: // FIXME: refine definition of mayReadFromMemory
+  case Instruction::Sync: // Like Instruction::Fence
   case Instruction::AtomicCmpXchg:
   case Instruction::AtomicRMW:
+  case Instruction::CatchRet:
+  case Instruction::TerminatePad:
     return true;
   case Instruction::Call:
     return !cast<CallInst>(this)->doesNotAccessMemory();
@@ -426,10 +435,13 @@ bool Instruction::mayWriteToMemory() const {
   switch (getOpcode()) {
   default: return false;
   case Instruction::Fence: // FIXME: refine definition of mayWriteToMemory
+  case Instruction::Sync: // Like Instruction::Fence
   case Instruction::Store:
   case Instruction::VAArg:
   case Instruction::AtomicCmpXchg:
   case Instruction::AtomicRMW:
+  case Instruction::CatchRet:
+  case Instruction::TerminatePad:
     return true;
   case Instruction::Call:
     return !cast<CallInst>(this)->onlyReadsMemory();
@@ -458,6 +470,12 @@ bool Instruction::isAtomic() const {
 bool Instruction::mayThrow() const {
   if (const CallInst *CI = dyn_cast<CallInst>(this))
     return !CI->doesNotThrow();
+  if (const auto *CRI = dyn_cast<CleanupReturnInst>(this))
+    return CRI->unwindsToCaller();
+  if (const auto *CEPI = dyn_cast<CatchEndPadInst>(this))
+    return CEPI->unwindsToCaller();
+  if (const auto *TPI = dyn_cast<TerminatePadInst>(this))
+    return TPI->unwindsToCaller();
   return isa<ResumeInst>(this);
 }
 
@@ -535,6 +553,27 @@ bool Instruction::isIdempotent(unsigned Opcode) {
 ///
 bool Instruction::isNilpotent(unsigned Opcode) {
   return Opcode == Xor;
+}
+
+Constant *Instruction::getIdentity() const {
+  switch (getOpcode()) {
+  case Add:
+  case FAdd:
+  case Sub:
+  case FSub:
+    return Constant::getNullValue(getType());
+  case Mul:
+    return ConstantInt::get(getType(), 1);
+  case FMul:
+    return ConstantFP::get(getType(), 1.0);
+  case And:
+    return Constant::getAllOnesValue(getType());
+  case Or:
+  case Xor:
+    return Constant::getNullValue(getType());
+  default:
+    return nullptr;
+  }
 }
 
 Instruction *Instruction::cloneImpl() const {

@@ -227,9 +227,8 @@ bool SIInstrInfo::getMemOpBaseRegImmOfs(MachineInstr *LdSt, unsigned &BaseReg,
 
     uint8_t Offset0 = Offset0Imm->getImm();
     uint8_t Offset1 = Offset1Imm->getImm();
-    assert(Offset1 > Offset0);
 
-    if (Offset1 - Offset0 == 1) {
+    if (Offset1 > Offset0 && Offset1 - Offset0 == 1) {
       // Each of these offsets is in element sized units, so we need to convert
       // to bytes of the individual reads.
 
@@ -361,7 +360,7 @@ SIInstrInfo::copyPhysReg(MachineBasicBlock &MBB,
       } else {
         // FIXME: Hack until VReg_1 removed.
         assert(AMDGPU::VGPR_32RegClass.contains(SrcReg));
-        BuildMI(MBB, MI, DL, get(AMDGPU::V_CMP_NE_I32_e32), AMDGPU::VCC)
+        BuildMI(MBB, MI, DL, get(AMDGPU::V_CMP_NE_I32_e32))
           .addImm(0)
           .addReg(SrcReg, getKillRegState(KillSrc));
       }
@@ -899,11 +898,6 @@ bool SIInstrInfo::isMov(unsigned Opcode) const {
   }
 }
 
-bool
-SIInstrInfo::isSafeToMoveRegClassDefs(const TargetRegisterClass *RC) const {
-  return RC != &AMDGPU::EXECRegRegClass;
-}
-
 static void removeModOperands(MachineInstr &MI) {
   unsigned Opc = MI.getOpcode();
   int Src0ModIdx = AMDGPU::getNamedOperandIdx(Opc,
@@ -924,7 +918,7 @@ bool SIInstrInfo::FoldImmediate(MachineInstr *UseMI, MachineInstr *DefMI,
     return false;
 
   unsigned Opc = UseMI->getOpcode();
-  if (Opc == AMDGPU::V_MAD_F32) {
+  if (Opc == AMDGPU::V_MAD_F32 || Opc == AMDGPU::V_MAC_F32_e64) {
     // Don't fold if we are using source modifiers. The new VOP2 instructions
     // don't have them.
     if (hasModifiersSet(*UseMI, AMDGPU::OpName::src0_modifiers) ||
@@ -963,9 +957,9 @@ bool SIInstrInfo::FoldImmediate(MachineInstr *UseMI, MachineInstr *DefMI,
       // instead of having to modify in place.
 
       // Remove these first since they are at the end.
-      UseMI->RemoveOperand(AMDGPU::getNamedOperandIdx(AMDGPU::V_MAD_F32,
+      UseMI->RemoveOperand(AMDGPU::getNamedOperandIdx(Opc,
                                                       AMDGPU::OpName::omod));
-      UseMI->RemoveOperand(AMDGPU::getNamedOperandIdx(AMDGPU::V_MAD_F32,
+      UseMI->RemoveOperand(AMDGPU::getNamedOperandIdx(Opc,
                                                       AMDGPU::OpName::clamp));
 
       unsigned Src1Reg = Src1->getReg();
@@ -980,6 +974,14 @@ bool SIInstrInfo::FoldImmediate(MachineInstr *UseMI, MachineInstr *DefMI,
       Src1->setSubReg(Src2SubReg);
       Src1->setIsKill(Src2->isKill());
 
+      if (Opc == AMDGPU::V_MAC_F32_e64) {
+        UseMI->untieRegOperand(
+          AMDGPU::getNamedOperandIdx(Opc, AMDGPU::OpName::src2));
+      }
+
+      UseMI->RemoveOperand(AMDGPU::getNamedOperandIdx(Opc,
+                                                      AMDGPU::OpName::src2));
+      // ChangingToImmediate adds Src2 back to the instruction.
       Src2->ChangeToImmediate(Imm);
 
       removeModOperands(*UseMI);
@@ -1010,11 +1012,17 @@ bool SIInstrInfo::FoldImmediate(MachineInstr *UseMI, MachineInstr *DefMI,
       // instead of having to modify in place.
 
       // Remove these first since they are at the end.
-      UseMI->RemoveOperand(AMDGPU::getNamedOperandIdx(AMDGPU::V_MAD_F32,
+      UseMI->RemoveOperand(AMDGPU::getNamedOperandIdx(Opc,
                                                       AMDGPU::OpName::omod));
-      UseMI->RemoveOperand(AMDGPU::getNamedOperandIdx(AMDGPU::V_MAD_F32,
+      UseMI->RemoveOperand(AMDGPU::getNamedOperandIdx(Opc,
                                                       AMDGPU::OpName::clamp));
 
+      if (Opc == AMDGPU::V_MAC_F32_e64) {
+        UseMI->untieRegOperand(
+          AMDGPU::getNamedOperandIdx(Opc, AMDGPU::OpName::src2));
+      }
+
+      // ChangingToImmediate adds Src2 back to the instruction.
       Src2->ChangeToImmediate(Imm);
 
       // These come before src2.
@@ -1030,18 +1038,6 @@ bool SIInstrInfo::FoldImmediate(MachineInstr *UseMI, MachineInstr *DefMI,
   }
 
   return false;
-}
-
-bool
-SIInstrInfo::isTriviallyReMaterializable(const MachineInstr *MI,
-                                         AliasAnalysis *AA) const {
-  switch(MI->getOpcode()) {
-  default: return AMDGPUInstrInfo::isTriviallyReMaterializable(MI, AA);
-  case AMDGPU::S_MOV_B32:
-  case AMDGPU::S_MOV_B64:
-  case AMDGPU::V_MOV_B32_e32:
-    return MI->getOperand(1).isImm();
-  }
 }
 
 static bool offsetsDoNotOverlap(int WidthA, int OffsetA,
@@ -1092,7 +1088,7 @@ bool SIInstrInfo::areMemAccessesTriviallyDisjoint(MachineInstr *MIa,
 
   // TODO: Should we check the address space from the MachineMemOperand? That
   // would allow us to distinguish objects we know don't alias based on the
-  // underlying addres space, even if it was lowered to a different one,
+  // underlying address space, even if it was lowered to a different one,
   // e.g. private accesses lowered to use MUBUF instructions on a scratch
   // buffer.
   if (isDS(Opc0)) {
@@ -1124,6 +1120,38 @@ bool SIInstrInfo::areMemAccessesTriviallyDisjoint(MachineInstr *MIa,
   }
 
   return false;
+}
+
+MachineInstr *SIInstrInfo::convertToThreeAddress(MachineFunction::iterator &MBB,
+                                                MachineBasicBlock::iterator &MI,
+                                                LiveVariables *LV) const {
+
+  switch (MI->getOpcode()) {
+    default: return nullptr;
+    case AMDGPU::V_MAC_F32_e64: break;
+    case AMDGPU::V_MAC_F32_e32: {
+      const MachineOperand *Src0 = getNamedOperand(*MI, AMDGPU::OpName::src0);
+      if (Src0->isImm() && !isInlineConstant(*Src0, 4))
+        return nullptr;
+      break;
+    }
+  }
+
+  const MachineOperand *Dst = getNamedOperand(*MI, AMDGPU::OpName::dst);
+  const MachineOperand *Src0 = getNamedOperand(*MI, AMDGPU::OpName::src0);
+  const MachineOperand *Src1 = getNamedOperand(*MI, AMDGPU::OpName::src1);
+  const MachineOperand *Src2 = getNamedOperand(*MI, AMDGPU::OpName::src2);
+
+  return BuildMI(*MBB, MI, MI->getDebugLoc(), get(AMDGPU::V_MAD_F32))
+                 .addOperand(*Dst)
+                 .addImm(0) // Src0 mods
+                 .addOperand(*Src0)
+                 .addImm(0) // Src1 mods
+                 .addOperand(*Src1)
+                 .addImm(0) // Src mods
+                 .addOperand(*Src2)
+                 .addImm(0)  // clamp
+                 .addImm(0); // omod
 }
 
 bool SIInstrInfo::isInlineConstant(const APInt &Imm) const {
@@ -1625,7 +1653,10 @@ bool SIInstrInfo::isOperandLegal(const MachineInstr *MI, unsigned OpIdx,
 
   if (MO->isReg()) {
     assert(DefinedRC);
-    const TargetRegisterClass *RC = MRI.getRegClass(MO->getReg());
+    const TargetRegisterClass *RC =
+        TargetRegisterInfo::isVirtualRegister(MO->getReg()) ?
+            MRI.getRegClass(MO->getReg()) :
+            RI.getPhysRegClass(MO->getReg());
 
     // In order to be legal, the common sub-class must be equal to the
     // class of the current operand.  For example:
@@ -2020,13 +2051,13 @@ void SIInstrInfo::splitSMRD(MachineInstr *MI,
 
 void SIInstrInfo::moveSMRDToVALU(MachineInstr *MI, MachineRegisterInfo &MRI) const {
   MachineBasicBlock *MBB = MI->getParent();
-  switch (MI->getOpcode()) {
-    case AMDGPU::S_LOAD_DWORD_IMM:
-    case AMDGPU::S_LOAD_DWORD_SGPR:
-    case AMDGPU::S_LOAD_DWORDX2_IMM:
-    case AMDGPU::S_LOAD_DWORDX2_SGPR:
-    case AMDGPU::S_LOAD_DWORDX4_IMM:
-    case AMDGPU::S_LOAD_DWORDX4_SGPR: {
+  int DstIdx = AMDGPU::getNamedOperandIdx(MI->getOpcode(), AMDGPU::OpName::dst);
+  assert(DstIdx != -1);
+  unsigned DstRCID = get(MI->getOpcode()).OpInfo[DstIdx].RegClass;
+  switch(RI.getRegClass(DstRCID)->getSize()) {
+    case 4:
+    case 8:
+    case 16: {
       unsigned NewOpcode = getVALUOp(*MI);
       unsigned RegOffset;
       unsigned ImmOffset;
@@ -2098,8 +2129,7 @@ void SIInstrInfo::moveSMRDToVALU(MachineInstr *MI, MachineRegisterInfo &MRI) con
       MRI.replaceRegWith(DstReg, NewDstReg);
       break;
     }
-    case AMDGPU::S_LOAD_DWORDX8_IMM:
-    case AMDGPU::S_LOAD_DWORDX8_SGPR: {
+    case 32: {
       MachineInstr *Lo, *Hi;
       splitSMRD(MI, &AMDGPU::SReg_128RegClass, AMDGPU::S_LOAD_DWORDX4_IMM,
                 AMDGPU::S_LOAD_DWORDX4_SGPR, Lo, Hi);
@@ -2109,8 +2139,7 @@ void SIInstrInfo::moveSMRDToVALU(MachineInstr *MI, MachineRegisterInfo &MRI) con
       break;
     }
 
-    case AMDGPU::S_LOAD_DWORDX16_IMM:
-    case AMDGPU::S_LOAD_DWORDX16_SGPR: {
+    case 64: {
       MachineInstr *Lo, *Hi;
       splitSMRD(MI, &AMDGPU::SReg_256RegClass, AMDGPU::S_LOAD_DWORDX8_IMM,
                 AMDGPU::S_LOAD_DWORDX8_SGPR, Lo, Hi);
@@ -2271,7 +2300,7 @@ void SIInstrInfo::moveToVALU(MachineInstr &TopInst) const {
       Inst->addOperand(MachineOperand::CreateImm(0));
     }
 
-    addDescImplicitUseDef(NewDesc, Inst);
+    Inst->addImplicitDefUseOperands(*Inst->getParent()->getParent());
 
     if (Opcode == AMDGPU::S_BFE_I32 || Opcode == AMDGPU::S_BFE_U32) {
       const MachineOperand &OffsetWidthOp = Inst->getOperand(2);
@@ -2557,24 +2586,6 @@ void SIInstrInfo::splitScalar64BitBFE(SmallVectorImpl<MachineInstr *> &Worklist,
     .addImm(AMDGPU::sub1);
 
   MRI.replaceRegWith(Dest.getReg(), ResultReg);
-}
-
-void SIInstrInfo::addDescImplicitUseDef(const MCInstrDesc &NewDesc,
-                                        MachineInstr *Inst) const {
-  // Add the implict and explicit register definitions.
-  if (NewDesc.ImplicitUses) {
-    for (unsigned i = 0; NewDesc.ImplicitUses[i]; ++i) {
-      unsigned Reg = NewDesc.ImplicitUses[i];
-      Inst->addOperand(MachineOperand::CreateReg(Reg, false, true));
-    }
-  }
-
-  if (NewDesc.ImplicitDefs) {
-    for (unsigned i = 0; NewDesc.ImplicitDefs[i]; ++i) {
-      unsigned Reg = NewDesc.ImplicitDefs[i];
-      Inst->addOperand(MachineOperand::CreateReg(Reg, true, true));
-    }
-  }
 }
 
 unsigned SIInstrInfo::findUsedSGPR(const MachineInstr *MI,

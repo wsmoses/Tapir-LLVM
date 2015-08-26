@@ -206,13 +206,11 @@ public:
   unsigned getSectionType(SectionRef Sec) const;
 
   ErrorOr<uint64_t> getSymbolAddress(DataRefImpl Symb) const override;
-  uint64_t getSymbolValue(DataRefImpl Symb) const override;
   uint32_t getSymbolAlignment(DataRefImpl Symb) const override;
   uint64_t getCommonSymbolSizeImpl(DataRefImpl Symb) const override;
   SymbolRef::Type getSymbolType(DataRefImpl Symb) const override;
   uint32_t getSymbolFlags(DataRefImpl Symb) const override;
-  std::error_code getSymbolSection(DataRefImpl Symb,
-                                   section_iterator &Res) const override;
+  ErrorOr<section_iterator> getSymbolSection(DataRefImpl Symb) const override;
   unsigned getSymbolSectionID(SymbolRef Symb) const;
   unsigned getSectionID(SectionRef Sec) const;
 
@@ -425,6 +423,8 @@ public:
   }
 
 private:
+  uint64_t getSymbolValueImpl(DataRefImpl Symb) const override;
+
   union {
     MachO::mach_header_64 Header64;
     MachO::mach_header Header;

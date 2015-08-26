@@ -147,7 +147,7 @@ public:
 
   /// @brief Get section this symbol is defined in reference to. Result is
   /// end_sections() if it is undefined or is an absolute symbol.
-  std::error_code getSection(section_iterator &Result) const;
+  ErrorOr<section_iterator> getSection() const;
 
   const ObjectFile *getObject() const;
 };
@@ -198,12 +198,12 @@ protected:
   std::error_code printSymbolName(raw_ostream &OS,
                                   DataRefImpl Symb) const override;
   virtual ErrorOr<uint64_t> getSymbolAddress(DataRefImpl Symb) const = 0;
-  virtual uint64_t getSymbolValue(DataRefImpl Symb) const = 0;
+  virtual uint64_t getSymbolValueImpl(DataRefImpl Symb) const = 0;
   virtual uint32_t getSymbolAlignment(DataRefImpl Symb) const;
   virtual uint64_t getCommonSymbolSizeImpl(DataRefImpl Symb) const = 0;
   virtual SymbolRef::Type getSymbolType(DataRefImpl Symb) const = 0;
-  virtual std::error_code getSymbolSection(DataRefImpl Symb,
-                                           section_iterator &Res) const = 0;
+  virtual ErrorOr<section_iterator>
+  getSymbolSection(DataRefImpl Symb) const = 0;
 
   // Same as above for SectionRef.
   friend class SectionRef;
@@ -232,6 +232,8 @@ protected:
   virtual uint64_t getRelocationType(DataRefImpl Rel) const = 0;
   virtual void getRelocationTypeName(DataRefImpl Rel,
                                      SmallVectorImpl<char> &Result) const = 0;
+
+  uint64_t getSymbolValue(DataRefImpl Symb) const;
 
 public:
   uint64_t getCommonSymbolSize(DataRefImpl Symb) const {
@@ -321,8 +323,8 @@ inline uint64_t SymbolRef::getCommonSize() const {
   return getObject()->getCommonSymbolSize(getRawDataRefImpl());
 }
 
-inline std::error_code SymbolRef::getSection(section_iterator &Result) const {
-  return getObject()->getSymbolSection(getRawDataRefImpl(), Result);
+inline ErrorOr<section_iterator> SymbolRef::getSection() const {
+  return getObject()->getSymbolSection(getRawDataRefImpl());
 }
 
 inline SymbolRef::Type SymbolRef::getType() const {

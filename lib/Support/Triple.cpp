@@ -124,8 +124,8 @@ const char *Triple::getArchTypePrefix(ArchType Kind) {
   case spir64:      return "spir";
   case kalimba:     return "kalimba";
   case shave:       return "shave";
-  case wasm32:      return "wasm32";
-  case wasm64:      return "wasm64";
+  case wasm32:
+  case wasm64:      return "wasm";
   }
 }
 
@@ -196,6 +196,8 @@ const char *Triple::getEnvironmentTypeName(EnvironmentType Kind) {
   case MSVC: return "msvc";
   case Itanium: return "itanium";
   case Cygnus: return "cygnus";
+  case AMDOpenCL: return "amdopencl";
+  case CoreCLR: return "coreclr";
   }
 
   llvm_unreachable("Invalid EnvironmentType!");
@@ -430,6 +432,8 @@ static Triple::EnvironmentType parseEnvironment(StringRef EnvironmentName) {
     .StartsWith("msvc", Triple::MSVC)
     .StartsWith("itanium", Triple::Itanium)
     .StartsWith("cygnus", Triple::Cygnus)
+    .StartsWith("amdopencl", Triple::AMDOpenCL)
+    .StartsWith("coreclr", Triple::CoreCLR)
     .Default(Triple::UnknownEnvironment);
 }
 
@@ -535,6 +539,11 @@ static Triple::ObjectFormatType getDefaultFormat(const Triple &T) {
     if (T.isOSDarwin())
       return Triple::MachO;
     return Triple::ELF;
+
+  case Triple::wasm32:
+  case Triple::wasm64:
+    // Unknown for now, until an object format is specified.
+    return Triple::UnknownObjectFormat;
   }
 
   if (T.isOSDarwin())

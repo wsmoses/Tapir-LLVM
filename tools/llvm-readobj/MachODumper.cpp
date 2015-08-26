@@ -40,6 +40,9 @@ public:
   void printUnwindInfo() override;
   void printStackMap() const override;
 
+  // MachO-specific.
+  void printMachODataInCode() override;
+
 private:
   template<class MachHeader>
   void printFileHeaders(const MachHeader &Header);
@@ -375,8 +378,7 @@ void MachODumper::printSections(const MachOObjectFile *Obj) {
     DataRefImpl DR = Section.getRawDataRefImpl();
 
     StringRef Name;
-    if (error(Section.getName(Name)))
-      Name = "";
+    error(Section.getName(Name));
 
     ArrayRef<char> RawName = Obj->getSectionRawName(DR);
     StringRef SegmentName = Obj->getSectionFinalSegmentName(DR);
@@ -419,8 +421,7 @@ void MachODumper::printSections(const MachOObjectFile *Obj) {
       bool IsBSS = Section.isBSS();
       if (!IsBSS) {
         StringRef Data;
-        if (error(Section.getContents(Data)))
-          break;
+        error(Section.getContents(Data));
 
         W.printBinaryBlock("SectionData", Data);
       }
@@ -434,8 +435,7 @@ void MachODumper::printRelocations() {
   std::error_code EC;
   for (const SectionRef &Section : Obj->sections()) {
     StringRef Name;
-    if (error(Section.getName(Name)))
-      continue;
+    error(Section.getName(Name));
 
     bool PrintedGroup = false;
     for (const RelocationRef &Reloc : Section.relocations()) {
@@ -475,15 +475,13 @@ void MachODumper::printRelocation(const MachOObjectFile *Obj,
     symbol_iterator Symbol = Reloc.getSymbol();
     if (Symbol != Obj->symbol_end()) {
       ErrorOr<StringRef> TargetNameOrErr = Symbol->getName();
-      if (error(TargetNameOrErr.getError()))
-        return;
+      error(TargetNameOrErr.getError());
       TargetName = *TargetNameOrErr;
     }
   } else if (!IsScattered) {
     section_iterator SecI = Obj->getRelocationSection(DR);
     if (SecI != Obj->section_end()) {
-      if (error(SecI->getName(TargetName)))
-        return;
+      error(SecI->getName(TargetName));
     }
   }
   if (TargetName.empty())
@@ -547,8 +545,10 @@ void MachODumper::printSymbol(const SymbolRef &Symbol) {
   getSymbol(Obj, Symbol.getRawDataRefImpl(), MOSymbol);
 
   StringRef SectionName = "";
-  section_iterator SecI(Obj->section_begin());
-  if (!error(Symbol.getSection(SecI)) && SecI != Obj->section_end())
+  ErrorOr<section_iterator> SecIOrErr = Symbol.getSection();
+  error(SecIOrErr.getError());
+  section_iterator SecI = *SecIOrErr;
+  if (SecI != Obj->section_end())
     error(SecI->getName(SectionName));
 
   DictScope D(W, "Symbol");
@@ -602,4 +602,26 @@ void MachODumper::printStackMap() const {
   else
      prettyPrintStackMap(llvm::outs(),
                          StackMapV1Parser<support::big>(StackMapContentsArray));
+}
+
+void MachODumper::printMachODataInCode() {
+  for (const auto &Load : Obj->load_commands()) {
+    if (Load.C.cmd  == MachO::LC_DATA_IN_CODE) {
+      MachO::linkedit_data_command LLC = Obj->getLinkeditDataLoadCommand(Load);
+      DictScope Group(W, "DataInCode");
+      W.printNumber("Data offset", LLC.dataoff);
+      W.printNumber("Data size", LLC.datasize);
+      ListScope D(W, "Data entries");
+      unsigned NumRegions = LLC.datasize / sizeof(MachO::data_in_code_entry);
+      for (unsigned i = 0; i < NumRegions; ++i) {
+        MachO::data_in_code_entry DICE = Obj->getDataInCodeTableEntry(
+                                                              LLC.dataoff, i);
+        DictScope Group(W, "Entry");
+        W.printNumber("Index", i);
+        W.printNumber("Offset", DICE.offset);
+        W.printNumber("Length", DICE.length);
+        W.printNumber("Kind", DICE.kind);
+      }
+    }
+  }
 }

@@ -468,6 +468,14 @@ private:
   // Terminators
   void visitReturnInst(ReturnInst &I);
   void visitTerminatorInst(TerminatorInst &TI);
+  void visitReattachInst(ReattachInst &I) {
+    markAnythingOverdefined(&I);
+    visitTerminatorInst(I);
+  }
+  void visitSyncInst(SyncInst &I) {
+    markAnythingOverdefined(&I);
+    visitTerminatorInst(I);
+  }
 
   void visitCastInst(CastInst &I);
   void visitSelectInst(SelectInst &I);
@@ -479,6 +487,11 @@ private:
   void visitExtractValueInst(ExtractValueInst &EVI);
   void visitInsertValueInst(InsertValueInst &IVI);
   void visitLandingPadInst(LandingPadInst &I) { markAnythingOverdefined(&I); }
+  void visitCleanupPadInst(CleanupPadInst &CPI) { markAnythingOverdefined(&CPI); }
+  void visitCatchPadInst(CatchPadInst &CPI) {
+    markAnythingOverdefined(&CPI);
+    visitTerminatorInst(CPI);
+  }
 
   // Instructions that cannot be folded away.
   void visitStoreInst     (StoreInst &I);
@@ -494,7 +507,6 @@ private:
   void visitCallSite      (CallSite CS);
   void visitResumeInst    (TerminatorInst &I) { /*returns void*/ }
   void visitUnreachableInst(TerminatorInst &I) { /*returns void*/ }
-  void visitReattachInst  (TerminatorInst &I) { /*returns void*/ }
   void visitFenceInst     (FenceInst &I) { /*returns void*/ }
   void visitAtomicCmpXchgInst(AtomicCmpXchgInst &I) {
     markAnythingOverdefined(&I);
@@ -540,9 +552,9 @@ void SCCPSolver::getFeasibleSuccessors(TerminatorInst &TI,
     return;
   }
 
-  if (isa<InvokeInst>(TI)) {
-    // Invoke instructions successors are always executable.
-    Succs[0] = Succs[1] = true;
+  // Unwinding instructions successors are always executable.
+  if (TI.isExceptional()) {
+    Succs.assign(TI.getNumSuccessors(), true);
     return;
   }
 
@@ -572,13 +584,9 @@ void SCCPSolver::getFeasibleSuccessors(TerminatorInst &TI,
     return;
   }
 
-  if (isa<DetachInst>(&TI)) {
-    // All destinations are executable.
-    Succs.assign(TI.getNumSuccessors(), true);
-    return;
-  }
-
-  if (isa<SyncInst>(&TI)) {
+  if (isa<DetachInst>(&TI) ||
+      isa<ReattachInst>(&TI) ||
+      isa<SyncInst>(&TI)) {
     // All destinations are executable.
     Succs.assign(TI.getNumSuccessors(), true);
     return;
@@ -617,8 +625,8 @@ bool SCCPSolver::isEdgeFeasible(BasicBlock *From, BasicBlock *To) {
     return BI->getSuccessor(CI->isZero()) == To;
   }
 
-  // Invoke instructions successors are always executable.
-  if (isa<InvokeInst>(TI))
+  // Unwinding instructions successors are always executable.
+  if (TI->isExceptional())
     return true;
 
   if (SwitchInst *SI = dyn_cast<SwitchInst>(TI)) {
@@ -637,6 +645,9 @@ bool SCCPSolver::isEdgeFeasible(BasicBlock *From, BasicBlock *To) {
   // Just mark all destinations executable!
   // TODO: This could be improved if the operand is a [cast of a] BlockAddress.
   if (isa<IndirectBrInst>(TI))
+    return true;
+
+  if (isa<ReattachInst>(TI))
     return true;
 
 #ifndef NDEBUG
@@ -1557,7 +1568,7 @@ static void DeleteInstructionInBlock(BasicBlock *BB) {
     Instruction *Inst = --I;
     if (!Inst->use_empty())
       Inst->replaceAllUsesWith(UndefValue::get(Inst->getType()));
-    if (isa<LandingPadInst>(Inst)) {
+    if (Inst->isEHPad()) {
       EndInst = Inst;
       continue;
     }
@@ -1803,19 +1814,17 @@ bool IPSCCP::runOnModule(Module &M) {
         MadeChanges = true;
 
         TerminatorInst *TI = BB->getTerminator();
-        for (unsigned i = 0, e = TI->getNumSuccessors(); i != e; ++i) {
-          BasicBlock *Succ = TI->getSuccessor(i);
+        for (BasicBlock *Succ : TI->successors()) {
           if (!Succ->empty() && isa<PHINode>(Succ->begin()))
-            TI->getSuccessor(i)->removePredecessor(BB);
+            Succ->removePredecessor(BB);
         }
         if (!TI->use_empty())
           TI->replaceAllUsesWith(UndefValue::get(TI->getType()));
         TI->eraseFromParent();
+        new UnreachableInst(M.getContext(), BB);
 
         if (&*BB != &F->front())
           BlocksToErase.push_back(BB);
-        else
-          new UnreachableInst(M.getContext(), BB);
         continue;
       }
 

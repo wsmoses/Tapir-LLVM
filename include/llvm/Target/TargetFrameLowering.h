@@ -19,6 +19,7 @@
 #include <vector>
 
 namespace llvm {
+  class BitVector;
   class CalleeSavedInfo;
   class MachineFunction;
   class RegScavenger;
@@ -68,6 +69,18 @@ public:
   /// is the largest alignment for any data object in the target.
   ///
   unsigned getStackAlignment() const { return StackAlignment; }
+
+  /// alignSPAdjust - This method aligns the stack adjustment to the correct
+  /// alignment.
+  ///
+  int alignSPAdjust(int SPAdj) const {
+    if (SPAdj < 0) {
+      SPAdj = -RoundUpToAlignment(-SPAdj, StackAlignment);
+    } else {
+      SPAdj = RoundUpToAlignment(SPAdj, StackAlignment);
+    }
+    return SPAdj;
+  }
 
   /// getTransientStackAlignment - This method returns the number of bytes to
   /// which the stack pointer must be aligned at all times, even between
@@ -206,10 +219,6 @@ public:
   // has any stack objects. However, targets may want to override this.
   virtual bool needsFrameIndexResolution(const MachineFunction &MF) const;
 
-  /// getFrameIndexOffset - Returns the displacement from the frame register to
-  /// the stack frame of the specified index.
-  virtual int getFrameIndexOffset(const MachineFunction &MF, int FI) const;
-
   /// getFrameIndexReference - This method should return the base register
   /// and offset used to reference a frame index location. The offset is
   /// returned directly, and the base register is returned via FrameReg.
@@ -226,13 +235,15 @@ public:
     return 0;
   }
 
-  /// processFunctionBeforeCalleeSavedScan - This method is called immediately
-  /// before PrologEpilogInserter scans the physical registers used to determine
-  /// what callee saved registers should be spilled. This method is optional.
-  virtual void processFunctionBeforeCalleeSavedScan(MachineFunction &MF,
-                                             RegScavenger *RS = nullptr) const {
-
-  }
+  /// This method determines which of the registers reported by
+  /// TargetRegisterInfo::getCalleeSavedRegs() should actually get saved.
+  /// The default implementation checks populates the \p SavedRegs bitset with
+  /// all registers which are modified in the function, targets may override
+  /// this function to save additional registers.
+  /// This method also sets up the register scavenger ensuring there is a free
+  /// register or a frameindex available.
+  virtual void determineCalleeSaves(MachineFunction &MF, BitVector &SavedRegs,
+                                    RegScavenger *RS = nullptr) const;
 
   /// processFunctionBeforeFrameFinalized - This method is called immediately
   /// before the specified function's frame layout (MF.getFrameInfo()) is

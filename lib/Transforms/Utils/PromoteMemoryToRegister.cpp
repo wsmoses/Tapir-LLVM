@@ -53,6 +53,11 @@ bool llvm::isAllocaPromotable(const AllocaInst *AI) {
   // assignments to subsections of the memory unit.
   unsigned AS = AI->getType()->getAddressSpace();
 
+  // Alloca's whose values are stored in a detached block and loaded
+  // after the corresponding reattach are not promotable.
+  if (AI->hasDetachedUse())
+    return false;
+
   // Only allow direct and non-volatile loads and stores...
   for (const User *U : AI->users()) {
     if (const LoadInst *LI = dyn_cast<LoadInst>(U)) {
@@ -60,12 +65,16 @@ bool llvm::isAllocaPromotable(const AllocaInst *AI) {
       // not have any meaning for a local alloca.
       if (LI->isVolatile())
         return false;
+      if (LI->usesDetachedDef())
+        return false;
     } else if (const StoreInst *SI = dyn_cast<StoreInst>(U)) {
       if (SI->getOperand(0) == AI)
         return false; // Don't allow a store OF the AI, only INTO the AI.
       // Note that atomic stores can be transformed; atomic semantics do
       // not have any meaning for a local alloca.
       if (SI->isVolatile())
+        return false;
+      if (SI->isDetachedDef())
         return false;
     } else if (const IntrinsicInst *II = dyn_cast<IntrinsicInst>(U)) {
       if (II->getIntrinsicID() != Intrinsic::lifetime_start &&
@@ -425,14 +434,17 @@ static bool rewriteSingleStoreAlloca(AllocaInst *AI, AllocaInfo &Info,
 /// using the Alloca.
 ///
 /// If we cannot promote this alloca (because it is read before it is written),
-/// return true.  This is necessary in cases where, due to control flow, the
-/// alloca is potentially undefined on some control flow paths.  e.g. code like
-/// this is potentially correct:
-///
-///   for (...) { if (c) { A = undef; undef = B; } }
-///
-/// ... so long as A is not used before undef is set.
-static void promoteSingleBlockAlloca(AllocaInst *AI, const AllocaInfo &Info,
+/// return false.  This is necessary in cases where, due to control flow, the
+/// alloca is undefined only on some control flow paths.  e.g. code like
+/// this is correct in LLVM IR:
+///  // A is an alloca with no stores so far
+///  for (...) {
+///    int t = *A;
+///    if (!first_iteration)
+///      use(t);
+///    *A = 42;
+///  }
+static bool promoteSingleBlockAlloca(AllocaInst *AI, const AllocaInfo &Info,
                                      LargeBlockInfo &LBI,
                                      AliasSetTracker *AST) {
   // The trickiest case to handle is when we have large blocks. Because of this,
@@ -467,10 +479,15 @@ static void promoteSingleBlockAlloca(AllocaInst *AI, const AllocaInfo &Info,
                          std::make_pair(LoadIdx,
                                         static_cast<StoreInst *>(nullptr)),
                          less_first());
-
-    if (I == StoresByIndex.begin())
-      // If there is no store before this load, the load takes the undef value.
-      LI->replaceAllUsesWith(UndefValue::get(LI->getType()));
+    if (I == StoresByIndex.begin()) {
+      if (StoresByIndex.empty())
+        // If there are no stores, the load takes the undef value.
+        LI->replaceAllUsesWith(UndefValue::get(LI->getType()));
+      else
+        // There is no store before this load, bail out (load may be affected
+        // by the following stores - see main comment).
+        return false;
+    }
     else
       // Otherwise, there was a store before this load, the load takes its value.
       LI->replaceAllUsesWith(std::prev(I)->second->getOperand(0));
@@ -506,6 +523,7 @@ static void promoteSingleBlockAlloca(AllocaInst *AI, const AllocaInfo &Info,
   }
 
   ++NumLocalPromoted;
+  return true;
 }
 
 void PromoteMem2Reg::run() {
@@ -557,9 +575,8 @@ void PromoteMem2Reg::run() {
 
     // If the alloca is only read and written in one basic block, just perform a
     // linear sweep over the block to eliminate it.
-    if (Info.OnlyUsedInOneBlock) {
-      promoteSingleBlockAlloca(AI, Info, LBI, AST);
-
+    if (Info.OnlyUsedInOneBlock &&
+        promoteSingleBlockAlloca(AI, Info, LBI, AST)) {
       // The alloca has been processed, move on.
       RemoveFromAllocasList(AllocaNum);
       continue;
@@ -571,6 +588,40 @@ void PromoteMem2Reg::run() {
       unsigned ID = 0;
       for (auto &BB : F)
         BBNumbers[&BB] = ID++;
+    }
+
+    // Unique the set of defining blocks for efficient lookup.
+    SmallPtrSet<BasicBlock *, 32> DefBlocks;
+    DefBlocks.insert(Info.DefiningBlocks.begin(), Info.DefiningBlocks.end());
+
+    // Determine which blocks the value is live in.  These are blocks which lead
+    // to uses.
+    SmallPtrSet<BasicBlock *, 32> LiveInBlocks;
+    ComputeLiveInBlocks(AI, Info, DefBlocks, LiveInBlocks);
+
+    // Determine which blocks need phi nodes and see if we can
+    // optimize out some work by avoiding insertion of dead phi nodes.
+    IDF.setLiveInBlocks(LiveInBlocks);
+    IDF.setDefiningBlocks(DefBlocks);
+    SmallVector<BasicBlock *, 32> PHIBlocks;
+    IDF.calculate(PHIBlocks);
+    // Determine which phi nodes want to use a value from a detached
+    // predecessor.  Because register state is not preserved across a
+    // reattach, these alloca's cannot be promoted.
+    bool DetachedPred = false;
+    for (unsigned i = 0, e = PHIBlocks.size(); i != e && !DetachedPred; ++i) {
+      BasicBlock *BB = PHIBlocks[i];
+      for (pred_iterator PI = pred_begin(BB), E = pred_end(BB);
+           PI != E && !DetachedPred; ++PI) {
+        BasicBlock *P = *PI;
+        if (isa<ReattachInst>(P->getTerminator()))
+          DetachedPred = true;
+      }
+    }
+    if (DetachedPred) {
+      AI->setHasDetachedUse(true);
+      RemoveFromAllocasList(AllocaNum);
+      continue;
     }
 
     // If we have an AST to keep updated, remember some pointer value that is
@@ -586,28 +637,7 @@ void PromoteMem2Reg::run() {
     AllocaLookup[Allocas[AllocaNum]] = AllocaNum;
 
     // At this point, we're committed to promoting the alloca using IDF's, and
-    // the standard SSA construction algorithm.  Determine which blocks need PHI
-    // nodes and see if we can optimize out some work by avoiding insertion of
-    // dead phi nodes.
-
-
-    // Unique the set of defining blocks for efficient lookup.
-    SmallPtrSet<BasicBlock *, 32> DefBlocks;
-    DefBlocks.insert(Info.DefiningBlocks.begin(), Info.DefiningBlocks.end());
-
-    // Determine which blocks the value is live in.  These are blocks which lead
-    // to uses.
-    SmallPtrSet<BasicBlock *, 32> LiveInBlocks;
-    ComputeLiveInBlocks(AI, Info, DefBlocks, LiveInBlocks);
-
-    // At this point, we're committed to promoting the alloca using IDF's, and
-    // the standard SSA construction algorithm.  Determine which blocks need phi
-    // nodes and see if we can optimize out some work by avoiding insertion of
-    // dead phi nodes.
-    IDF.setLiveInBlocks(LiveInBlocks);
-    IDF.setDefiningBlocks(DefBlocks);
-    SmallVector<BasicBlock *, 32> PHIBlocks;
-    IDF.calculate(PHIBlocks);
+    // the standard SSA construction algorithm.
     if (PHIBlocks.size() > 1)
       std::sort(PHIBlocks.begin(), PHIBlocks.end(),
                 [this](BasicBlock *A, BasicBlock *B) {

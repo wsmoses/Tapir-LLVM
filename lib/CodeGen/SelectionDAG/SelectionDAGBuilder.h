@@ -695,7 +695,8 @@ public:
 
   void FindMergedConditions(const Value *Cond, MachineBasicBlock *TBB,
                             MachineBasicBlock *FBB, MachineBasicBlock *CurBB,
-                            MachineBasicBlock *SwitchBB, unsigned Opc,
+                            MachineBasicBlock *SwitchBB,
+                            Instruction::BinaryOps Opc,
                             uint32_t TW, uint32_t FW);
   void EmitBranchForMergedCondition(const Value *Cond, MachineBasicBlock *TBB,
                                     MachineBasicBlock *FBB,
@@ -737,6 +738,12 @@ private:
   void visitSwitch(const SwitchInst &I);
   void visitIndirectBr(const IndirectBrInst &I);
   void visitUnreachable(const UnreachableInst &I);
+  void visitCleanupRet(const CleanupReturnInst &I);
+  void visitCatchEndPad(const CatchEndPadInst &I);
+  void visitCatchRet(const CatchReturnInst &I);
+  void visitCatchPad(const CatchPadInst &I);
+  void visitTerminatePad(const TerminatePadInst &TPI);
+  void visitCleanupPad(const CleanupPadInst &CPI);
   void visitDetach(const DetachInst& I);
   void visitReattach(const ReattachInst& I);
   void visitSync(const SyncInst& I);
@@ -761,8 +768,6 @@ public:
   void visitJumpTable(JumpTable &JT);
   void visitJumpTableHeader(JumpTable &JT, JumpTableHeader &JTH,
                             MachineBasicBlock *SwitchBB);
-  unsigned visitLandingPadClauseBB(GlobalValue *ClauseGV,
-                                   MachineBasicBlock *LPadMBB);
 
 private:
   // These all get lowered before this pass.
@@ -921,8 +926,8 @@ struct RegsForValue {
 
   RegsForValue(const SmallVector<unsigned, 4> &regs, MVT regvt, EVT valuevt);
 
-  RegsForValue(LLVMContext &Context, const TargetLowering &tli, unsigned Reg,
-               Type *Ty);
+  RegsForValue(LLVMContext &Context, const TargetLowering &TLI,
+               const DataLayout &DL, unsigned Reg, Type *Ty);
 
   /// append - Add the specified values to this one.
   void append(const RegsForValue &RHS) {

@@ -314,18 +314,24 @@ public:
     return iterator_range<const_mop_iterator>(explicit_operands().end(),
                                               operands_end());
   }
+  /// Returns a range over all explicit operands that are register definitions.
+  /// Implicit definition are not included!
   iterator_range<mop_iterator> defs() {
     return iterator_range<mop_iterator>(
         operands_begin(), operands_begin() + getDesc().getNumDefs());
   }
+  /// \copydoc defs()
   iterator_range<const_mop_iterator> defs() const {
     return iterator_range<const_mop_iterator>(
         operands_begin(), operands_begin() + getDesc().getNumDefs());
   }
+  /// Returns a range that includes all operands that are register uses.
+  /// This may include unrelated operands which are not register uses.
   iterator_range<mop_iterator> uses() {
     return iterator_range<mop_iterator>(
         operands_begin() + getDesc().getNumDefs(), operands_end());
   }
+  /// \copydoc uses()
   iterator_range<const_mop_iterator> uses() const {
     return iterator_range<const_mop_iterator>(
         operands_begin() + getDesc().getNumDefs(), operands_end());
@@ -1094,6 +1100,9 @@ public:
   ///
   bool hasUnmodeledSideEffects() const;
 
+  /// Returns true if it is illegal to fold a load across this instruction.
+  bool isLoadFoldBarrier() const;
+
   /// Return true if all the defs of this instruction are dead.
   bool allDefsAreDead() const;
 
@@ -1174,15 +1183,14 @@ public:
     }
   }
 
+  /// Add all implicit def and use operands to this instruction.
+  void addImplicitDefUseOperands(MachineFunction &MF);
 
 private:
   /// If this instruction is embedded into a MachineFunction, return the
   /// MachineRegisterInfo object for the current function, otherwise
   /// return null.
   MachineRegisterInfo *getRegInfo();
-
-  /// Add all implicit def and use operands to this instruction.
-  void addImplicitDefUseOperands(MachineFunction &MF);
 
   /// Unlink all of the register operands in this instruction from their
   /// respective use lists.  This requires that the operands already be on their
