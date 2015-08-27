@@ -2140,34 +2140,39 @@ void SelectionDAGBuilder::visitDetach(const DetachInst &I) {
 
   // Update machine-CFG edges.
   MachineBasicBlock *Detached = FuncInfo.MBBMap[I.getSuccessor(0)];
-  MachineBasicBlock *Continue = FuncInfo.MBBMap[I.getSuccessor(1)];
+  //MachineBasicBlock *Continue = FuncInfo.MBBMap[I.getSuccessor(1)];
 
-  // TODO!!!
-  assert(0 && "Lowering detach to machine instructions not completed yet!");
+  // Update machine-CFG edges.
+  DetachMBB->addSuccessor(Detached);
 
-  // If the value of the invoke is used outside of its defining block, make it
-  // available as a virtual register.
-  // We already took care of the exported value for the statepoint instruction
-  // during call to the LowerStatepoint.
-  if (!isStatepoint(I)) {
-    CopyToExportRegsIfNeeded(&I);
-  }
+  // If this is not a fall-through branch or optimizations are switched off,
+  // emit the branch.
+  if (Detached != NextBlock(DetachMBB) || TM.getOptLevel() == CodeGenOpt::None)
+    DAG.setRoot(DAG.getNode(ISD::BR, getCurSDLoc(),
+                            MVT::Other, getControlRoot(),
+                            DAG.getBasicBlock(Detached)));
 
-  addSuccessorWithWeight(DetachMBB, Detached);
-  addSuccessorWithWeight(DetachMBB, Continue);
-
-  DAG.setRoot(DAG.getNode(ISD::BR, getCurSDLoc(),
-                          MVT::Other, getControlRoot(),
-                          DAG.getBasicBlock(Continue)));
+  return;
 
 }
 
 void SelectionDAGBuilder::visitReattach(const ReattachInst &I) {
-  // TODO!!!
-  assert(0 && "Lowering reattach to machine instructions not completed yet!");
+  MachineBasicBlock *ReattachMBB = FuncInfo.MBB;
 
-  if (DAG.getTarget().Options.TrapUnreachable)
-    DAG.setRoot(DAG.getNode(ISD::TRAP, getCurSDLoc(), MVT::Other, DAG.getRoot()));
+  // Update machine-CFG edges.
+  MachineBasicBlock *Continue = FuncInfo.MBBMap[I.getSuccessor(0)];
+
+  // Update machine-CFG edges.
+  ReattachMBB->addSuccessor(Continue);
+
+  // If this is not a fall-through branch or optimizations are switched off,
+  // emit the branch.
+  if (Continue != NextBlock(ReattachMBB) || TM.getOptLevel() == CodeGenOpt::None)
+    DAG.setRoot(DAG.getNode(ISD::BR, getCurSDLoc(),
+                            MVT::Other, getControlRoot(),
+                            DAG.getBasicBlock(Continue)));
+
+  return;
 }
 
 void SelectionDAGBuilder::visitSync(const SyncInst &I) {
@@ -2176,15 +2181,17 @@ void SelectionDAGBuilder::visitSync(const SyncInst &I) {
   // Update machine-CFG edges.
   MachineBasicBlock *Continue = FuncInfo.MBBMap[I.getSuccessor(0)];
 
-  // TODO!!!
-  assert(0 && "Lowering sync to machine instructions not completed yet!");
+  // Update machine-CFG edges.
+  SyncMBB->addSuccessor(Continue);
 
-  addSuccessorWithWeight(SyncMBB, Continue);
+  // If this is not a fall-through branch or optimizations are switched off,
+  // emit the branch.
+  if (Continue != NextBlock(SyncMBB) || TM.getOptLevel() == CodeGenOpt::None)
+    DAG.setRoot(DAG.getNode(ISD::BR, getCurSDLoc(),
+                            MVT::Other, getControlRoot(),
+                            DAG.getBasicBlock(Continue)));
 
-  DAG.setRoot(DAG.getNode(ISD::BR, getCurSDLoc(),
-                          MVT::Other, getControlRoot(),
-                          DAG.getBasicBlock(Continue)));
-
+  return;
 }
 
 
