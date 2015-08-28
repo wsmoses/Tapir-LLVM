@@ -407,6 +407,7 @@ X86TargetLowering::X86TargetLowering(const X86TargetMachine &TM,
     setOperationAction(ISD::SETCC         , MVT::i64  , Custom);
   }
   setOperationAction(ISD::EH_RETURN       , MVT::Other, Custom);
+  setOperationAction(ISD::CATCHRET        , MVT::Other, Custom);
   // NOTE: EH_SJLJ_SETJMP/_LONGJMP supported here is NOT intended to support
   // SjLj exception handling but a light-weight setjmp/longjmp replacement to
   // support continuation, user-level threading, and etc.. As a result, no
@@ -484,8 +485,7 @@ X86TargetLowering::X86TargetLowering(const X86TargetMachine &TM,
   // VASTART needs to be custom lowered to use the VarArgsFrameIndex
   setOperationAction(ISD::VASTART           , MVT::Other, Custom);
   setOperationAction(ISD::VAEND             , MVT::Other, Expand);
-  if (Subtarget->is64Bit() && !Subtarget->isTargetWin64()) {
-    // TargetInfo::X86_64ABIBuiltinVaList
+  if (Subtarget->is64Bit()) {
     setOperationAction(ISD::VAARG           , MVT::Other, Custom);
     setOperationAction(ISD::VACOPY          , MVT::Other, Custom);
   } else {
@@ -15153,7 +15153,8 @@ SDValue X86TargetLowering::LowerVASTART(SDValue Op, SelectionDAG &DAG) const {
   const Value *SV = cast<SrcValueSDNode>(Op.getOperand(2))->getValue();
   SDLoc DL(Op);
 
-  if (!Subtarget->is64Bit() || Subtarget->isTargetWin64()) {
+  if (!Subtarget->is64Bit() ||
+      Subtarget->isCallingConvWin64(MF.getFunction()->getCallingConv())) {
     // vastart just stores the address of the VarArgsFrameIndex slot into the
     // memory location argument.
     SDValue FR = DAG.getFrameIndex(FuncInfo->getVarArgsFrameIndex(), PtrVT);
@@ -15203,10 +15204,13 @@ SDValue X86TargetLowering::LowerVASTART(SDValue Op, SelectionDAG &DAG) const {
 SDValue X86TargetLowering::LowerVAARG(SDValue Op, SelectionDAG &DAG) const {
   assert(Subtarget->is64Bit() &&
          "LowerVAARG only handles 64-bit va_arg!");
-  assert((Subtarget->isTargetLinux() ||
-          Subtarget->isTargetDarwin()) &&
-          "Unhandled target in LowerVAARG");
   assert(Op.getNode()->getNumOperands() == 4);
+
+  MachineFunction &MF = DAG.getMachineFunction();
+  if (Subtarget->isCallingConvWin64(MF.getFunction()->getCallingConv()))
+    // The Win64 ABI uses char* instead of a structure.
+    return DAG.expandVAArg(Op.getNode());
+
   SDValue Chain = Op.getOperand(0);
   SDValue SrcPtr = Op.getOperand(1);
   const Value *SV = cast<SrcValueSDNode>(Op.getOperand(2))->getValue();
@@ -15234,8 +15238,7 @@ SDValue X86TargetLowering::LowerVAARG(SDValue Op, SelectionDAG &DAG) const {
   if (ArgMode == 2) {
     // Sanity Check: Make sure using fp_offset makes sense.
     assert(!Subtarget->useSoftFloat() &&
-           !(DAG.getMachineFunction().getFunction()->hasFnAttribute(
-               Attribute::NoImplicitFloat)) &&
+           !(MF.getFunction()->hasFnAttribute(Attribute::NoImplicitFloat)) &&
            Subtarget->hasSSE1());
   }
 
@@ -15264,8 +15267,14 @@ SDValue X86TargetLowering::LowerVAARG(SDValue Op, SelectionDAG &DAG) const {
 
 static SDValue LowerVACOPY(SDValue Op, const X86Subtarget *Subtarget,
                            SelectionDAG &DAG) {
-  // X86-64 va_list is a struct { i32, i32, i8*, i8* }.
+  // X86-64 va_list is a struct { i32, i32, i8*, i8* }, except on Windows,
+  // where a va_list is still an i8*.
   assert(Subtarget->is64Bit() && "This code only handles 64-bit va_copy!");
+  if (Subtarget->isCallingConvWin64(
+        DAG.getMachineFunction().getFunction()->getCallingConv()))
+    // Probably a Win64 va_copy.
+    return DAG.expandVACopy(Op.getNode());
+
   SDValue Chain = Op.getOperand(0);
   SDValue DstPtr = Op.getOperand(1);
   SDValue SrcPtr = Op.getOperand(2);
@@ -16654,6 +16663,25 @@ SDValue X86TargetLowering::LowerEH_RETURN(SDValue Op, SelectionDAG &DAG) const {
 
   return DAG.getNode(X86ISD::EH_RETURN, dl, MVT::Other, Chain,
                      DAG.getRegister(StoreAddrReg, PtrVT));
+}
+
+SDValue X86TargetLowering::LowerCATCHRET(SDValue Op, SelectionDAG &DAG) const {
+  SDValue Chain = Op.getOperand(0);
+  SDValue Dest = Op.getOperand(1);
+  SDLoc DL(Op);
+
+  MVT PtrVT = getPointerTy(DAG.getDataLayout());
+  unsigned ReturnReg = (PtrVT == MVT::i64 ? X86::RAX : X86::EAX);
+
+  // Load the address of the destination block.
+  MachineBasicBlock *DestMBB = cast<BasicBlockSDNode>(Dest)->getBasicBlock();
+  SDValue BlockPtr = DAG.getMCSymbol(DestMBB->getSymbol(), PtrVT);
+  unsigned WrapperKind =
+      Subtarget->isPICStyleRIPRel() ? X86ISD::WrapperRIP : X86ISD::Wrapper;
+  SDValue WrappedPtr = DAG.getNode(WrapperKind, DL, PtrVT, BlockPtr);
+  Chain = DAG.getCopyToReg(Chain, DL, ReturnReg, WrappedPtr);
+  return DAG.getNode(X86ISD::CATCHRET, DL, MVT::Other, Chain,
+                     DAG.getRegister(ReturnReg, PtrVT));
 }
 
 SDValue X86TargetLowering::lowerEH_SJLJ_SETJMP(SDValue Op,
@@ -18895,6 +18923,7 @@ SDValue X86TargetLowering::LowerOperation(SDValue Op, SelectionDAG &DAG) const {
                                 return LowerFRAME_TO_ARGS_OFFSET(Op, DAG);
   case ISD::DYNAMIC_STACKALLOC: return LowerDYNAMIC_STACKALLOC(Op, DAG);
   case ISD::EH_RETURN:          return LowerEH_RETURN(Op, DAG);
+  case ISD::CATCHRET:           return LowerCATCHRET(Op, DAG);
   case ISD::EH_SJLJ_SETJMP:     return lowerEH_SJLJ_SETJMP(Op, DAG);
   case ISD::EH_SJLJ_LONGJMP:    return lowerEH_SJLJ_LONGJMP(Op, DAG);
   case ISD::INIT_TRAMPOLINE:    return LowerINIT_TRAMPOLINE(Op, DAG);
@@ -19230,6 +19259,7 @@ const char *X86TargetLowering::getTargetNodeName(unsigned Opcode) const {
   case X86ISD::EH_SJLJ_SETJMP:     return "X86ISD::EH_SJLJ_SETJMP";
   case X86ISD::EH_SJLJ_LONGJMP:    return "X86ISD::EH_SJLJ_LONGJMP";
   case X86ISD::EH_RETURN:          return "X86ISD::EH_RETURN";
+  case X86ISD::CATCHRET:           return "X86ISD::CATCHRET";
   case X86ISD::TC_RETURN:          return "X86ISD::TC_RETURN";
   case X86ISD::FNSTCW16m:          return "X86ISD::FNSTCW16m";
   case X86ISD::FNSTSW16r:          return "X86ISD::FNSTSW16r";
@@ -20034,7 +20064,7 @@ X86TargetLowering::EmitVAStartSaveXMMRegsWithCustomInserter(
   int64_t RegSaveFrameIndex = MI->getOperand(1).getImm();
   int64_t VarArgsFPOffset = MI->getOperand(2).getImm();
 
-  if (!Subtarget->isTargetWin64()) {
+  if (!Subtarget->isCallingConvWin64(F->getFunction()->getCallingConv())) {
     // If %al is 0, branch around the XMM save block.
     BuildMI(MBB, DL, TII->get(X86::TEST8rr)).addReg(CountReg).addReg(CountReg);
     BuildMI(MBB, DL, TII->get(X86::JE_1)).addMBB(EndMBB);
