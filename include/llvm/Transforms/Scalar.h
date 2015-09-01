@@ -219,6 +219,12 @@ FunctionPass *createPromoteMemoryToRegisterPass();
 
 //===----------------------------------------------------------------------===//
 //
+// PromoteDetachToCilkk
+//
+FunctionPass *createPromoteDetachToCilkPass();
+
+//===----------------------------------------------------------------------===//
+//
 // DemoteRegisterToMemoryPass - This pass is used to demote registers to memory
 // references. In basically undoes the PromoteMemoryToRegister pass to make cfg
 // hacking easier.
