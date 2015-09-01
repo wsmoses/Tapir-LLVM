@@ -849,8 +849,10 @@ bool JumpThreading::ProcessBlock(BasicBlock *BB) {
 /// important optimization that encourages jump threading, and needs to be run
 /// interlaced with other jump threading tasks.
 bool JumpThreading::SimplifyPartiallyRedundantLoad(LoadInst *LI) {
+  DEBUG(dbgs() << "JumpThreading trying to simplify " << *LI << "\n");
   // Don't hack volatile/atomic loads.
   if (!LI->isSimple()) return false;
+  DEBUG(dbgs() << "\tLoad is simple\n");
 
   // If the load is defined in a block with exactly one predecessor, it can't be
   // partially redundant.
@@ -924,7 +926,8 @@ bool JumpThreading::SimplifyPartiallyRedundantLoad(LoadInst *LI) {
     AAMDNodes ThisAATags;
     Value *PredAvailable = FindAvailableLoadedValue(LoadedPtr, PredBB, BBIt, 6,
                                                     nullptr, &ThisAATags);
-    if (!PredAvailable) {
+    if (!PredAvailable ||
+        isa<ReattachInst>(PredBB->getTerminator())) {
       OneUnavailablePred = PredBB;
       continue;
     }
@@ -953,6 +956,9 @@ bool JumpThreading::SimplifyPartiallyRedundantLoad(LoadInst *LI) {
   // unconditional branch, we know that it isn't a critical edge.
   if (PredsScanned.size() == AvailablePreds.size()+1 &&
       OneUnavailablePred->getTerminator()->getNumSuccessors() == 1) {
+    // If the predecessor is a reattach, we can't split the edge
+    if (isa<ReattachInst>(OneUnavailablePred->getTerminator()))
+      return false;
     UnavailablePred = OneUnavailablePred;
   } else if (PredsScanned.size() != AvailablePreds.size()) {
     // Otherwise, we had multiple unavailable predecessors or we had a critical
@@ -967,8 +973,10 @@ bool JumpThreading::SimplifyPartiallyRedundantLoad(LoadInst *LI) {
     for (pred_iterator PI = pred_begin(LoadBB), PE = pred_end(LoadBB);
          PI != PE; ++PI) {
       BasicBlock *P = *PI;
-      // If the predecessor is an indirect goto, we can't split the edge.
-      if (isa<IndirectBrInst>(P->getTerminator()))
+      // If the predecessor is an indirect goto or a reattach, we
+      // can't split the edge.
+      if (isa<IndirectBrInst>(P->getTerminator()) ||
+          isa<ReattachInst>(P->getTerminator()))
         return false;
 
       if (!AvailablePredSet.count(P))
@@ -999,7 +1007,7 @@ bool JumpThreading::SimplifyPartiallyRedundantLoad(LoadInst *LI) {
   // Now we know that each predecessor of this block has a value in
   // AvailablePreds, sort them for efficient access as we're walking the preds.
   array_pod_sort(AvailablePreds.begin(), AvailablePreds.end());
-
+  DEBUG(dbgs() << "Creating a Phi node to eliminate " << *LI << "\n");
   // Create a PHI node at the start of the block for the PRE'd load value.
   pred_iterator PB = pred_begin(LoadBB), PE = pred_end(LoadBB);
   PHINode *PN = PHINode::Create(LI->getType(), std::distance(PB, PE), "",

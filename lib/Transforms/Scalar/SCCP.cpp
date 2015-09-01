@@ -647,7 +647,9 @@ bool SCCPSolver::isEdgeFeasible(BasicBlock *From, BasicBlock *To) {
   if (isa<IndirectBrInst>(TI))
     return true;
 
-  if (isa<ReattachInst>(TI))
+  if (isa<ReattachInst>(TI) ||
+      isa<DetachInst>(TI) ||
+      isa<SyncInst>(TI))
     return true;
 
 #ifndef NDEBUG

@@ -1085,7 +1085,7 @@ void Instruction::dropUnknownNonDebugMetadata(ArrayRef<unsigned> KnownIDs) {
   }
 }
 
-/// setMetadata - Set the metadata of of the specified kind to the specified
+/// setMetadata - Set the metadata of the specified kind to the specified
 /// node.  This updates/replaces metadata if already present, or removes it if
 /// Node is null.
 void Instruction::setMetadata(unsigned KindID, MDNode *Node) {
@@ -1258,4 +1258,12 @@ void Function::clearMetadata() {
     return;
   getContext().pImpl->FunctionMetadata.erase(this);
   setHasMetadataHashEntry(false);
+}
+
+void Function::setSubprogram(DISubprogram *SP) {
+  setMetadata(LLVMContext::MD_dbg, SP);
+}
+
+DISubprogram *Function::getSubprogram() const {
+  return cast_or_null<DISubprogram>(getMetadata(LLVMContext::MD_dbg));
 }

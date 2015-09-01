@@ -299,6 +299,9 @@ namespace {
     SDValue visitBRCOND(SDNode *N);
     SDValue visitBR_CC(SDNode *N);
     SDValue visitLOAD(SDNode *N);
+
+    SDValue replaceStoreChain(StoreSDNode *ST, SDValue BetterChain);
+
     SDValue visitSTORE(SDNode *N);
     SDValue visitINSERT_VECTOR_ELT(SDNode *N);
     SDValue visitEXTRACT_VECTOR_ELT(SDNode *N);
@@ -313,6 +316,7 @@ namespace {
     SDValue visitMGATHER(SDNode *N);
     SDValue visitMSCATTER(SDNode *N);
     SDValue visitFP_TO_FP16(SDNode *N);
+    SDValue visitFP16_TO_FP(SDNode *N);
 
     SDValue visitFADDForFMACombine(SDNode *N);
     SDValue visitFSUBForFMACombine(SDNode *N);
@@ -375,6 +379,10 @@ namespace {
     /// Walk up chain skipping non-aliasing memory nodes, looking for a better
     /// chain (aliasing node.)
     SDValue FindBetterChain(SDNode *N, SDValue Chain);
+
+    /// Do FindBetterChain for a store and any possibly adjacent stores on
+    /// consecutive chains.
+    bool findBetterNeighborChains(StoreSDNode *St);
 
     /// Holds a pointer to an LSBaseSDNode as well as information on where it
     /// is located in a sequence of memory operations connected by a chain.
@@ -1411,6 +1419,7 @@ SDValue DAGCombiner::visit(SDNode *N) {
   case ISD::MSCATTER:           return visitMSCATTER(N);
   case ISD::MSTORE:             return visitMSTORE(N);
   case ISD::FP_TO_FP16:         return visitFP_TO_FP16(N);
+  case ISD::FP16_TO_FP:         return visitFP16_TO_FP(N);
   }
   return SDValue();
 }
@@ -2181,7 +2190,6 @@ SDValue DAGCombiner::visitSDIV(SDNode *N) {
                          N0, N1);
   }
 
-  bool MinSize = DAG.getMachineFunction().getFunction()->optForMinSize();
   // fold (sdiv X, pow2) -> simple ops after legalize
   // FIXME: We check for the exact bit here because the generic lowering gives
   // better results in that case. The target-specific lowering should learn how
@@ -2190,10 +2198,6 @@ SDValue DAGCombiner::visitSDIV(SDNode *N) {
       !cast<BinaryWithFlagsSDNode>(N)->Flags.hasExact() &&
       (N1C->getAPIntValue().isPowerOf2() ||
        (-N1C->getAPIntValue()).isPowerOf2())) {
-    // If integer division is cheap, then don't perform the following fold.
-    if (TLI.isIntDivCheap(N->getValueType(0), MinSize))
-      return SDValue();
-
     // Target-specific implementation of sdiv x, pow2.
     if (SDValue Res = BuildSDIVPow2(N))
       return Res;
@@ -2230,8 +2234,10 @@ SDValue DAGCombiner::visitSDIV(SDNode *N) {
   }
 
   // If integer divide is expensive and we satisfy the requirements, emit an
-  // alternate sequence.
-  if (N1C && !TLI.isIntDivCheap(N->getValueType(0), MinSize))
+  // alternate sequence.  Targets may check function attributes for size/speed
+  // trade-offs.
+  AttributeSet Attr = DAG.getMachineFunction().getFunction()->getAttributes();
+  if (N1C && !TLI.isIntDivCheap(N->getValueType(0), Attr))
     if (SDValue Op = BuildSDIV(N))
       return Op;
 
@@ -2285,10 +2291,10 @@ SDValue DAGCombiner::visitUDIV(SDNode *N) {
       }
     }
   }
-  
+
   // fold (udiv x, c) -> alternate
-  bool MinSize = DAG.getMachineFunction().getFunction()->optForMinSize();
-  if (N1C && !TLI.isIntDivCheap(N->getValueType(0), MinSize))
+  AttributeSet Attr = DAG.getMachineFunction().getFunction()->getAttributes();
+  if (N1C && !TLI.isIntDivCheap(N->getValueType(0), Attr))
     if (SDValue Op = BuildUDIV(N))
       return Op;
 
@@ -4458,8 +4464,9 @@ SDValue DAGCombiner::visitSHL(SDNode *N) {
   // fold (shl (mul x, c1), c2) -> (mul x, c1 << c2)
   if (N1C && N0.getOpcode() == ISD::MUL && N0.getNode()->hasOneUse()) {
     if (ConstantSDNode *N0C1 = isConstOrConstSplat(N0.getOperand(1))) {
-      SDValue Folded = DAG.FoldConstantArithmetic(ISD::SHL, SDLoc(N1), VT, N0C1, N1C);
-      return DAG.getNode(ISD::MUL, SDLoc(N), VT, N0.getOperand(0), Folded);
+      if (SDValue Folded =
+              DAG.FoldConstantArithmetic(ISD::SHL, SDLoc(N1), VT, N0C1, N1C))
+        return DAG.getNode(ISD::MUL, SDLoc(N), VT, N0.getOperand(0), Folded);
     }
   }
 
@@ -10826,6 +10833,36 @@ void DAGCombiner::getStoreMergeAndAliasCandidates(
   EVT MemVT = St->getMemoryVT();
   unsigned Seq = 0;
   StoreSDNode *Index = St;
+
+
+  bool UseAA = CombinerAA.getNumOccurrences() > 0 ? CombinerAA
+                                                  : DAG.getSubtarget().useAA();
+
+  if (UseAA) {
+    // Look at other users of the same chain. Stores on the same chain do not
+    // alias. If combiner-aa is enabled, non-aliasing stores are canonicalized
+    // to be on the same chain, so don't bother looking at adjacent chains.
+
+    SDValue Chain = St->getChain();
+    for (auto I = Chain->use_begin(), E = Chain->use_end(); I != E; ++I) {
+      if (StoreSDNode *OtherST = dyn_cast<StoreSDNode>(*I)) {
+
+        if (OtherST->isVolatile() || OtherST->isIndexed())
+          continue;
+
+        if (OtherST->getMemoryVT() != MemVT)
+          continue;
+
+        BaseIndexOffset Ptr = BaseIndexOffset::match(OtherST->getBasePtr());
+
+        if (Ptr.equalBaseIndex(BasePtr))
+          StoreNodes.push_back(MemOpLink(OtherST, Ptr.Offset, Seq++));
+      }
+    }
+
+    return;
+  }
+
   while (Index) {
     // If the chain has more than one use, then we can't reorder the mem ops.
     if (Index != St && !SDValue(Index, 0)->hasOneUse())
@@ -11259,6 +11296,31 @@ bool DAGCombiner::MergeConsecutiveStores(StoreSDNode* St) {
   return true;
 }
 
+SDValue DAGCombiner::replaceStoreChain(StoreSDNode *ST, SDValue BetterChain) {
+  SDLoc SL(ST);
+  SDValue ReplStore;
+
+  // Replace the chain to avoid dependency.
+  if (ST->isTruncatingStore()) {
+    ReplStore = DAG.getTruncStore(BetterChain, SL, ST->getValue(),
+                                  ST->getBasePtr(), ST->getMemoryVT(),
+                                  ST->getMemOperand());
+  } else {
+    ReplStore = DAG.getStore(BetterChain, SL, ST->getValue(), ST->getBasePtr(),
+                             ST->getMemOperand());
+  }
+
+  // Create token to keep both nodes around.
+  SDValue Token = DAG.getNode(ISD::TokenFactor, SL,
+                              MVT::Other, ST->getChain(), ReplStore);
+
+  // Make sure the new and old chains are cleaned up.
+  AddToWorklist(Token.getNode());
+
+  // Don't add users to work list.
+  return CombineTo(ST, Token, false);
+}
+
 SDValue DAGCombiner::visitSTORE(SDNode *N) {
   StoreSDNode *ST  = cast<StoreSDNode>(N);
   SDValue Chain = ST->getChain();
@@ -11389,31 +11451,17 @@ SDValue DAGCombiner::visitSTORE(SDNode *N) {
     UseAA = false;
 #endif
   if (UseAA && ST->isUnindexed()) {
-    // Walk up chain skipping non-aliasing memory nodes.
-    SDValue BetterChain = FindBetterChain(N, Chain);
+    // FIXME: We should do this even without AA enabled. AA will just allow
+    // FindBetterChain to work in more situations. The problem with this is that
+    // any combine that expects memory operations to be on consecutive chains
+    // first needs to be updated to look for users of the same chain.
 
-    // If there is a better chain.
-    if (Chain != BetterChain) {
-      SDValue ReplStore;
-
-      // Replace the chain to avoid dependency.
-      if (ST->isTruncatingStore()) {
-        ReplStore = DAG.getTruncStore(BetterChain, SDLoc(N), Value, Ptr,
-                                      ST->getMemoryVT(), ST->getMemOperand());
-      } else {
-        ReplStore = DAG.getStore(BetterChain, SDLoc(N), Value, Ptr,
-                                 ST->getMemOperand());
-      }
-
-      // Create token to keep both nodes around.
-      SDValue Token = DAG.getNode(ISD::TokenFactor, SDLoc(N),
-                                  MVT::Other, Chain, ReplStore);
-
-      // Make sure the new and old chains are cleaned up.
-      AddToWorklist(Token.getNode());
-
-      // Don't add users to work list.
-      return CombineTo(N, Token, false);
+    // Walk up chain skipping non-aliasing memory nodes, on this store and any
+    // adjacent stores.
+    if (findBetterNeighborChains(ST)) {
+      // replaceStoreChain uses CombineTo, which handled all of the worklist
+      // manipulation. Return the original node to not do anything else.
+      return SDValue(ST, 0);
     }
   }
 
@@ -12270,15 +12318,24 @@ static SDValue combineConcatVectorOfExtracts(SDNode *N, SelectionDAG &DAG) {
 
     // What vector are we extracting the subvector from and at what index?
     SDValue ExtVec = Op.getOperand(0);
+
+    // We want the EVT of the original extraction to correctly scale the
+    // extraction index.
+    EVT ExtVT = ExtVec.getValueType();
+
+    // Peek through any bitcast.
+    while (ExtVec.getOpcode() == ISD::BITCAST)
+      ExtVec = ExtVec.getOperand(0);
+
+    // UNDEF nodes convert to UNDEF shuffle mask values.
     if (ExtVec.getOpcode() == ISD::UNDEF) {
       Mask.append((unsigned)NumOpElts, -1);
       continue;
     }
 
-    EVT ExtVT = ExtVec.getValueType();
     if (!isa<ConstantSDNode>(Op.getOperand(1)))
       return SDValue();
-    int ExtIdx = dyn_cast<ConstantSDNode>(Op.getOperand(1))->getZExtValue();
+    int ExtIdx = cast<ConstantSDNode>(Op.getOperand(1))->getZExtValue();
 
     // Ensure that we are extracting a subvector from a vector the same
     // size as the result.
@@ -13109,6 +13166,21 @@ SDValue DAGCombiner::visitFP_TO_FP16(SDNode *N) {
   // fold (fp_to_fp16 (fp16_to_fp op)) -> op
   if (N0->getOpcode() == ISD::FP16_TO_FP)
     return N0->getOperand(0);
+
+  return SDValue();
+}
+
+SDValue DAGCombiner::visitFP16_TO_FP(SDNode *N) {
+  SDValue N0 = N->getOperand(0);
+
+  // fold fp16_to_fp(op & 0xffff) -> fp16_to_fp(op)
+  if (N0->getOpcode() == ISD::AND) {
+    ConstantSDNode *AndConst = getAsNonOpaqueConstant(N0.getOperand(1));
+    if (AndConst && AndConst->getAPIntValue() == 0xffff) {
+      return DAG.getNode(ISD::FP16_TO_FP, SDLoc(N), N->getValueType(0),
+                         N0.getOperand(0));
+    }
+  }
 
   return SDValue();
 }
@@ -14268,6 +14340,83 @@ SDValue DAGCombiner::FindBetterChain(SDNode *N, SDValue OldChain) {
 
   // Construct a custom tailored token factor.
   return DAG.getNode(ISD::TokenFactor, SDLoc(N), MVT::Other, Aliases);
+}
+
+bool DAGCombiner::findBetterNeighborChains(StoreSDNode* St) {
+  // This holds the base pointer, index, and the offset in bytes from the base
+  // pointer.
+  BaseIndexOffset BasePtr = BaseIndexOffset::match(St->getBasePtr());
+
+  // We must have a base and an offset.
+  if (!BasePtr.Base.getNode())
+    return false;
+
+  // Do not handle stores to undef base pointers.
+  if (BasePtr.Base.getOpcode() == ISD::UNDEF)
+    return false;
+
+  SmallVector<StoreSDNode *, 8> ChainedStores;
+  ChainedStores.push_back(St);
+
+  // Walk up the chain and look for nodes with offsets from the same
+  // base pointer. Stop when reaching an instruction with a different kind
+  // or instruction which has a different base pointer.
+  StoreSDNode *Index = St;
+  while (Index) {
+    // If the chain has more than one use, then we can't reorder the mem ops.
+    if (Index != St && !SDValue(Index, 0)->hasOneUse())
+      break;
+
+    // Find the base pointer and offset for this memory node.
+    BaseIndexOffset Ptr = BaseIndexOffset::match(Index->getBasePtr());
+
+    // Check that the base pointer is the same as the original one.
+    if (!Ptr.equalBaseIndex(BasePtr))
+      break;
+
+    if (Index->isVolatile() || Index->isIndexed())
+      break;
+
+    // Find the next memory operand in the chain. If the next operand in the
+    // chain is a store then move up and continue the scan with the next
+    // memory operand. If the next operand is a load save it and use alias
+    // information to check if it interferes with anything.
+    SDNode *NextInChain = Index->getChain().getNode();
+    while (true) {
+      if (StoreSDNode *STn = dyn_cast<StoreSDNode>(NextInChain)) {
+        // We found a store node. Use it for the next iteration.
+        ChainedStores.push_back(STn);
+        Index = STn;
+        break;
+      } else if (LoadSDNode *Ldn = dyn_cast<LoadSDNode>(NextInChain)) {
+        NextInChain = Ldn->getChain().getNode();
+        continue;
+      } else {
+        Index = nullptr;
+        break;
+      }
+    }
+  }
+
+  bool MadeChange = false;
+  SmallVector<std::pair<StoreSDNode *, SDValue>, 8> BetterChains;
+
+  for (StoreSDNode *ChainedStore : ChainedStores) {
+    SDValue Chain = ChainedStore->getChain();
+    SDValue BetterChain = FindBetterChain(ChainedStore, Chain);
+
+    if (Chain != BetterChain) {
+      MadeChange = true;
+      BetterChains.push_back(std::make_pair(ChainedStore, BetterChain));
+    }
+  }
+
+  // Do all replacements after finding the replacements to make to avoid making
+  // the chains more complicated by introducing new TokenFactors.
+  for (auto Replacement : BetterChains)
+    replaceStoreChain(Replacement.first, Replacement.second);
+
+  return MadeChange;
 }
 
 /// This is the entry point for the file.
