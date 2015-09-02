@@ -291,7 +291,7 @@ private:
                  BitTestInfo C, uint32_t W)
         : First(F), Range(R), SValue(SV), Reg(Rg), RegVT(RgVT), Emitted(E),
           ContiguousRange(CR), Parent(P), Default(D), Cases(std::move(C)),
-          Weight(W) {}
+          Weight(W), DefaultWeight(0) {}
     APInt First;
     APInt Range;
     const Value *SValue;
@@ -303,6 +303,7 @@ private:
     MachineBasicBlock *Default;
     BitTestInfo Cases;
     uint32_t Weight;
+    uint32_t DefaultWeight;
   };
 
   /// Minimum jump table density, in percent.
@@ -344,6 +345,7 @@ private:
     CaseClusterIt LastCluster;
     const ConstantInt *GE;
     const ConstantInt *LT;
+    uint32_t DefaultWeight;
   };
   typedef SmallVector<SwitchWorkListItem, 4> SwitchWorkList;
 
