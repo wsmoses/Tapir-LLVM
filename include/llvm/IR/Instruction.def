@@ -103,7 +103,6 @@ HANDLE_TERM_INST  ( 6, Resume     , ResumeInst)
 HANDLE_TERM_INST  ( 7, Unreachable, UnreachableInst)
 HANDLE_TERM_INST  ( 8, CleanupRet    , CleanupReturnInst)
 HANDLE_TERM_INST  ( 9, CatchRet      , CatchReturnInst)
-<<<<<<< HEAD
 HANDLE_TERM_INST  (10, CatchPad    , CatchPadInst)
 HANDLE_TERM_INST  (11, TerminatePad, TerminatePadInst)
 HANDLE_TERM_INST  (12, CatchEndPad , CatchEndPadInst)

@@ -1234,13 +1234,10 @@ LLVMTypeRef LLVMX86MMXType(void);
         macro(CatchPadInst)               \
         macro(TerminatePadInst)           \
         macro(CatchEndPadInst)            \
-<<<<<<< HEAD
+        macro(CleanupEndPadInst)            \
         macro(DetachInst)                   \
         macro(ReattachInst)                 \
         macro(SyncInst)                     \
-=======
-        macro(CleanupEndPadInst)            \
->>>>>>> 2354b37ae030104dd424149804946722fce72872
       macro(UnaryInstruction)               \
         macro(AllocaInst)                   \
         macro(CastInst)                     \
