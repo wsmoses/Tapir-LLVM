@@ -251,15 +251,16 @@ typedef enum {
   LLVMLandingPad     = 59,
   LLVMCleanupRet     = 61,
   LLVMCatchRet       = 62,
-  LLVMCatchPad     = 63,
-  LLVMTerminatePad = 64,
-  LLVMCleanupPad   = 65,
-  LLVMCatchEndPad  = 66,
+  LLVMCatchPad       = 63,
+  LLVMTerminatePad   = 64,
+  LLVMCleanupPad     = 65,
+  LLVMCatchEndPad    = 66,
+  LLVMCleanupEndPad  = 67,
 
   /* Parallel operators */
-  LLVMDetach         = 67,
-  LLVMReattach       = 68,
-  LLVMSync           = 69,
+  LLVMDetach         = 68,
+  LLVMReattach       = 69,
+  LLVMSync           = 70,
 
 } LLVMOpcode;
 
@@ -1233,9 +1234,13 @@ LLVMTypeRef LLVMX86MMXType(void);
         macro(CatchPadInst)               \
         macro(TerminatePadInst)           \
         macro(CatchEndPadInst)            \
+<<<<<<< HEAD
         macro(DetachInst)                   \
         macro(ReattachInst)                 \
         macro(SyncInst)                     \
+=======
+        macro(CleanupEndPadInst)            \
+>>>>>>> 2354b37ae030104dd424149804946722fce72872
       macro(UnaryInstruction)               \
         macro(AllocaInst)                   \
         macro(CastInst)                     \

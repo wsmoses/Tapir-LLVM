@@ -362,10 +362,10 @@ namespace bitc {
     FUNC_CODE_INST_TERMINATEPAD = 51, // TERMINATEPAD: [bb#,num,args...]
     FUNC_CODE_INST_CLEANUPPAD = 52, // CLEANUPPAD: [num,args...]
     FUNC_CODE_INST_CATCHENDPAD = 53, // CATCHENDPAD: [] or [bb#]
-
-    FUNC_CODE_INST_DETACH      = 54, // DETACH: [bb#, bb#]
-    FUNC_CODE_INST_REATTACH    = 55, // REATTACH
-    FUNC_CODE_INST_SYNC        = 56, // SYNC: [bb#]
+    FUNC_CODE_INST_CLEANUPENDPAD = 54, // CLEANUPENDPAD: [val] or [val,bb#]
+    FUNC_CODE_INST_DETACH      = 55, // DETACH: [bb#, bb#]
+    FUNC_CODE_INST_REATTACH    = 56, // REATTACH
+    FUNC_CODE_INST_SYNC        = 57, // SYNC: [bb#]
   };
 
   enum UseListCodes {
