@@ -256,6 +256,11 @@ static DecodeStatus DecodeCacheOpMM(MCInst &Inst,
                                     uint64_t Address,
                                     const void *Decoder);
 
+static DecodeStatus DecodeStoreEvaOpMM(MCInst &Inst,
+                                       unsigned Insn,
+                                       uint64_t Address,
+                                       const void *Decoder);
+
 static DecodeStatus DecodeSyncI(MCInst &Inst,
                                 unsigned Insn,
                                 uint64_t Address,
@@ -836,8 +841,21 @@ DecodeStatus MipsDisassembler::getInstruction(MCInst &Instr, uint64_t &Size,
   if (IsMicroMips) {
     Result = readInstruction16(Bytes, Address, Size, Insn, IsBigEndian);
 
+    if (hasMips32r6()) {
+      DEBUG(dbgs() << "Trying MicroMipsR616 table (16-bit instructions):\n");
+      // Calling the auto-generated decoder function for microMIPS32R6
+      // (and microMIPS64R6) 16-bit instructions.
+      Result = decodeInstruction(DecoderTableMicroMipsR616, Instr, Insn,
+                                 Address, this, STI);
+      if (Result != MCDisassembler::Fail) {
+        Size = 2;
+        return Result;
+      }
+    }
+
     DEBUG(dbgs() << "Trying MicroMips16 table (16-bit instructions):\n");
-    // Calling the auto-generated decoder function.
+    // Calling the auto-generated decoder function for microMIPS 16-bit
+    // instructions.
     Result = decodeInstruction(DecoderTableMicroMips16, Instr, Insn, Address,
                                this, STI);
     if (Result != MCDisassembler::Fail) {
@@ -854,13 +872,16 @@ DecodeStatus MipsDisassembler::getInstruction(MCInst &Instr, uint64_t &Size,
       // Calling the auto-generated decoder function.
       Result = decodeInstruction(DecoderTableMicroMipsR632, Instr, Insn, Address,
                                  this, STI);
-    } else {
-      DEBUG(dbgs() << "Trying MicroMips32 table (32-bit instructions):\n");
-      // Calling the auto-generated decoder function.
-      Result = decodeInstruction(DecoderTableMicroMips32, Instr, Insn, Address,
-                                 this, STI);
+      if (Result != MCDisassembler::Fail) {
+        Size = 4;
+        return Result;
+      }
     }
 
+    DEBUG(dbgs() << "Trying MicroMips32 table (32-bit instructions):\n");
+    // Calling the auto-generated decoder function.
+    Result = decodeInstruction(DecoderTableMicroMips32, Instr, Insn, Address,
+                               this, STI);
     if (Result != MCDisassembler::Fail) {
       Size = 4;
       return Result;
@@ -1144,6 +1165,24 @@ static DecodeStatus DecodeCacheOpR6(MCInst &Inst,
   Inst.addOperand(MCOperand::createReg(Base));
   Inst.addOperand(MCOperand::createImm(Offset));
   Inst.addOperand(MCOperand::createImm(Hint));
+
+  return MCDisassembler::Success;
+}
+
+static DecodeStatus DecodeStoreEvaOpMM(MCInst &Inst,
+                                       unsigned Insn,
+                                       uint64_t Address,
+                                       const void *Decoder) {
+  int Offset = SignExtend32<9>(Insn & 0x1ff);
+  unsigned Reg = fieldFromInstruction(Insn, 21, 5);
+  unsigned Base = fieldFromInstruction(Insn, 16, 5);
+
+  Reg = getReg(Decoder, Mips::GPR32RegClassID, Reg);
+  Base = getReg(Decoder, Mips::GPR32RegClassID, Base);
+
+  Inst.addOperand(MCOperand::createReg(Reg));
+  Inst.addOperand(MCOperand::createReg(Base));
+  Inst.addOperand(MCOperand::createImm(Offset));
 
   return MCDisassembler::Success;
 }
