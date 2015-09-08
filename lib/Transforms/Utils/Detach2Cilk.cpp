@@ -1111,6 +1111,38 @@ static llvm::Value* GetOrInitStackFrame(Function& F, bool fast = true) {
     inst = CallInst::Create(CILKRTS_FUNC(enter_frame_1, *F.getParent()), args, "" );
   }
   inst->insertAfter(alloc);
+  
+  std::vector<ReturnInst*> rets;
+    
+	for (Function::iterator i = F.begin(), e = F.end(); i != e; ++i) {
+		TerminatorInst* term = i->getTerminator();
+		if( term == nullptr ) continue;
+		if( ReturnInst* inst = llvm::dyn_cast<ReturnInst>(term) ) {
+			rets.emplace_back( inst );
+		} else continue;
+	}
+	
+	assert( rets.size() > 0 );
+	
+	Instruction* retInst = nullptr;
+	if( rets.size() > 1 ) {
+	  //TODO check this
+	  BasicBlock* retB = BasicBlock::Create( rets[0]->getContext(), "retMerge", rets[0]->getParent()->getParent() );
+	  PHINode* PN = nullptr;
+	  if( Value* V = rets[0]->getReturnValue() )
+	    PN = PHINode::Create( V->getType(), rets.size(), "finalRet", retB );
+	  for( auto& a : rets ) {
+	    if( PN )
+  	    PN->addIncoming( a->getReturnValue(), a->getParent() );
+	    ReplaceInstWithInst( a, BranchInst::Create( retB ) );
+	  }
+	  retInst = ReturnInst::Create( rets[0]->getContext(), PN, retB );
+	} else {
+	  retInst = rets[0];
+	}
+	
+	assert( retInst );
+  CallInst::Create( GetCilkParentEpilogue( *F.getParent() ), args, "", retInst );
   return alloc;
 }
 
