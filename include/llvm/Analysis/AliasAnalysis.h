@@ -406,6 +406,19 @@ public:
     return getModRefInfo(S, MemoryLocation(P, Size));
   }
 
+  /// getModRefInfo (for syncs) - Return information about whether
+  /// a particular store modifies or reads the specified memory location.
+  ModRefInfo getModRefInfo(const SyncInst *S, const MemoryLocation &Loc) {
+    // Conservatively correct.  (We could possibly be a bit smarter if
+    // Loc is a alloca that doesn't escape.)
+    return MRI_ModRef;
+  }
+
+  /// getModRefInfo (for syncs) - A convenience wrapper.
+  ModRefInfo getModRefInfo(const SyncInst *S, const Value *P, uint64_t Size) {
+    return getModRefInfo(S, MemoryLocation(P, Size));
+  }
+
   /// getModRefInfo (for cmpxchges) - Return information about whether
   /// a particular cmpxchg modifies or reads the specified memory location.
   ModRefInfo getModRefInfo(const AtomicCmpXchgInst *CX,
@@ -470,6 +483,7 @@ public:
     case Instruction::Load:   return getModRefInfo((const LoadInst*)I,  Loc);
     case Instruction::Store:  return getModRefInfo((const StoreInst*)I, Loc);
     case Instruction::Fence:  return getModRefInfo((const FenceInst*)I, Loc);
+    case Instruction::Sync:   return getModRefInfo((const SyncInst*)I, Loc);
     case Instruction::AtomicCmpXchg:
       return getModRefInfo((const AtomicCmpXchgInst*)I, Loc);
     case Instruction::AtomicRMW:
