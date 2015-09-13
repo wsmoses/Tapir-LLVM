@@ -261,6 +261,11 @@ static DecodeStatus DecodeStoreEvaOpMM(MCInst &Inst,
                                        uint64_t Address,
                                        const void *Decoder);
 
+static DecodeStatus DecodePrefeOpMM(MCInst &Inst,
+                                    unsigned Insn,
+                                    uint64_t Address,
+                                    const void *Decoder);
+
 static DecodeStatus DecodeSyncI(MCInst &Inst,
                                 unsigned Insn,
                                 uint64_t Address,
@@ -339,6 +344,11 @@ static DecodeStatus DecodeLiSimm7(MCInst &Inst,
                                   unsigned Value,
                                   uint64_t Address,
                                   const void *Decoder);
+
+static DecodeStatus DecodePOOL16BEncodedField(MCInst &Inst,
+                                              unsigned Value,
+                                              uint64_t Address,
+                                              const void *Decoder);
 
 static DecodeStatus DecodeSimm4(MCInst &Inst,
                                 unsigned Value,
@@ -1152,6 +1162,23 @@ static DecodeStatus DecodeCacheOpMM(MCInst &Inst,
   return MCDisassembler::Success;
 }
 
+static DecodeStatus DecodePrefeOpMM(MCInst &Inst,
+                                    unsigned Insn,
+                                    uint64_t Address,
+                                    const void *Decoder) {
+  int Offset = SignExtend32<9>(Insn & 0x1ff);
+  unsigned Base = fieldFromInstruction(Insn, 16, 5);
+  unsigned Hint = fieldFromInstruction(Insn, 21, 5);
+
+  Base = getReg(Decoder, Mips::GPR32RegClassID, Base);
+
+  Inst.addOperand(MCOperand::createReg(Base));
+  Inst.addOperand(MCOperand::createImm(Offset));
+  Inst.addOperand(MCOperand::createImm(Hint));
+
+  return MCDisassembler::Success;
+}
+
 static DecodeStatus DecodeCacheOpR6(MCInst &Inst,
                                     unsigned Insn,
                                     uint64_t Address,
@@ -1760,6 +1787,14 @@ static DecodeStatus DecodeLiSimm7(MCInst &Inst,
     Inst.addOperand(MCOperand::createImm(-1));
   else
     Inst.addOperand(MCOperand::createImm(Value));
+  return MCDisassembler::Success;
+}
+
+static DecodeStatus DecodePOOL16BEncodedField(MCInst &Inst,
+                                              unsigned Value,
+                                              uint64_t Address,
+                                              const void *Decoder) {
+  Inst.addOperand(MCOperand::createImm(Value == 0x0 ? 8 : Value));
   return MCDisassembler::Success;
 }
 

@@ -1174,3 +1174,14 @@ define i1 @PR23309v2(i32 %A, i32 %B) {
   %trunc = trunc i32 %sub to i1
   ret i1 %trunc
 }
+
+define i16 @PR24763(i8 %V) {
+; CHECK-LABEL: @PR24763(
+; CHECK-NEXT: %[[sh:.*]] = ashr i8
+; CHECK-NEXT: %[[ext:.*]] = sext i8 %[[sh]] to i16
+; CHECK-NEXT: ret i16 %[[ext]]
+  %conv = sext i8 %V to i32
+  %l = lshr i32 %conv, 1
+  %t = trunc i32 %l to i16
+  ret i16 %t
+}

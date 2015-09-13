@@ -418,6 +418,7 @@ bool Instruction::mayReadFromMemory() const {
   case Instruction::Sync: // Like Instruction::Fence
   case Instruction::AtomicCmpXchg:
   case Instruction::AtomicRMW:
+  case Instruction::CatchPad:
   case Instruction::CatchRet:
   case Instruction::TerminatePad:
     return true;
@@ -441,6 +442,7 @@ bool Instruction::mayWriteToMemory() const {
   case Instruction::VAArg:
   case Instruction::AtomicCmpXchg:
   case Instruction::AtomicRMW:
+  case Instruction::CatchPad:
   case Instruction::CatchRet:
   case Instruction::TerminatePad:
     return true;

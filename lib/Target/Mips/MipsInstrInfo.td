@@ -293,6 +293,12 @@ class INSN_MIPS5_32R2_NOT_32R6_64R6 {
   list<Predicate> InsnPredicates = [HasMips5_32r2, NotMips32r6, NotMips64r6];
 }
 
+// Class used for separating microMIPSr6 and microMIPS (r3) instruction.
+// It can be used only on instructions that doesn't inherit PredicateControl.
+class ISA_MICROMIPS_NOT_32R6_64R6 : PredicateControl {
+  let InsnPredicates = [InMicroMips, NotMips32r6, NotMips64r6];
+}
+
 //===----------------------------------------------------------------------===//
 
 class MipsPat<dag pattern, dag result> : Pat<pattern, result>, PredicateControl {
@@ -667,7 +673,7 @@ class shift_rotate_reg<string opstr, RegisterOperand RO, InstrItinClass itin,
          [(set RO:$rd, (OpNode RO:$rt, GPR32Opnd:$rs))], itin, FrmR,
          opstr>;
 
-// Load Upper Imediate
+// Load Upper Immediate
 class LoadUpper<string opstr, RegisterOperand RO, Operand Imm>:
   InstSE<(outs RO:$rt), (ins Imm:$imm16), !strconcat(opstr, "\t$rt, $imm16"),
          [], II_LUI, FrmI, opstr>, IsAsCheapAsAMove {

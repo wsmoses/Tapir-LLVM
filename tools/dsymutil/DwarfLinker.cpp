@@ -1103,52 +1103,74 @@ private:
   /// \brief Called at the end of a debug object link.
   void endDebugObject();
 
-  /// \defgroup FindValidRelocations Translate debug map into a list
-  /// of relevant relocations
-  ///
-  /// @{
-  struct ValidReloc {
-    uint32_t Offset;
-    uint32_t Size;
-    uint64_t Addend;
-    const DebugMapObject::DebugMapEntry *Mapping;
+  /// Keeps track of relocations.
+  class RelocationManager {
+    struct ValidReloc {
+      uint32_t Offset;
+      uint32_t Size;
+      uint64_t Addend;
+      const DebugMapObject::DebugMapEntry *Mapping;
 
-    ValidReloc(uint32_t Offset, uint32_t Size, uint64_t Addend,
-               const DebugMapObject::DebugMapEntry *Mapping)
-        : Offset(Offset), Size(Size), Addend(Addend), Mapping(Mapping) {}
+      ValidReloc(uint32_t Offset, uint32_t Size, uint64_t Addend,
+                 const DebugMapObject::DebugMapEntry *Mapping)
+          : Offset(Offset), Size(Size), Addend(Addend), Mapping(Mapping) {}
 
-    bool operator<(const ValidReloc &RHS) const { return Offset < RHS.Offset; }
+      bool operator<(const ValidReloc &RHS) const {
+        return Offset < RHS.Offset;
+      }
+    };
+
+    DwarfLinker &Linker;
+
+    /// \brief The valid relocations for the current DebugMapObject.
+    /// This vector is sorted by relocation offset.
+    std::vector<ValidReloc> ValidRelocs;
+
+    /// \brief Index into ValidRelocs of the next relocation to
+    /// consider. As we walk the DIEs in acsending file offset and as
+    /// ValidRelocs is sorted by file offset, keeping this index
+    /// uptodate is all we have to do to have a cheap lookup during the
+    /// root DIE selection and during DIE cloning.
+    unsigned NextValidReloc;
+
+  public:
+    RelocationManager(DwarfLinker &Linker)
+        : Linker(Linker), NextValidReloc(0) {}
+
+    bool hasValidRelocs() const { return !ValidRelocs.empty(); }
+    /// \brief Reset the NextValidReloc counter.
+    void resetValidRelocs() { NextValidReloc = 0; }
+
+    /// \defgroup FindValidRelocations Translate debug map into a list
+    /// of relevant relocations
+    ///
+    /// @{
+    bool findValidRelocsInDebugInfo(const object::ObjectFile &Obj,
+                                    const DebugMapObject &DMO);
+
+    bool findValidRelocs(const object::SectionRef &Section,
+                         const object::ObjectFile &Obj,
+                         const DebugMapObject &DMO);
+
+    void findValidRelocsMachO(const object::SectionRef &Section,
+                              const object::MachOObjectFile &Obj,
+                              const DebugMapObject &DMO);
+    /// @}
+
+    bool hasValidRelocation(uint32_t StartOffset, uint32_t EndOffset,
+                            CompileUnit::DIEInfo &Info);
+
+    bool applyValidRelocs(MutableArrayRef<char> Data, uint32_t BaseOffset,
+                          bool isLittleEndian);
   };
-
-  /// \brief The valid relocations for the current DebugMapObject.
-  /// This vector is sorted by relocation offset.
-  std::vector<ValidReloc> ValidRelocs;
-
-  /// \brief Index into ValidRelocs of the next relocation to
-  /// consider. As we walk the DIEs in acsending file offset and as
-  /// ValidRelocs is sorted by file offset, keeping this index
-  /// uptodate is all we have to do to have a cheap lookup during the
-  /// root DIE selection and during DIE cloning.
-  unsigned NextValidReloc;
-
-  bool findValidRelocsInDebugInfo(const object::ObjectFile &Obj,
-                                  const DebugMapObject &DMO);
-
-  bool findValidRelocs(const object::SectionRef &Section,
-                       const object::ObjectFile &Obj,
-                       const DebugMapObject &DMO);
-
-  void findValidRelocsMachO(const object::SectionRef &Section,
-                            const object::MachOObjectFile &Obj,
-                            const DebugMapObject &DMO);
-  /// @}
 
   /// \defgroup FindRootDIEs Find DIEs corresponding to debug map entries.
   ///
   /// @{
   /// \brief Recursively walk the \p DIE tree and look for DIEs to
   /// keep. Store that information in \p CU's DIEInfo.
-  void lookForDIEsToKeep(const DWARFDebugInfoEntryMinimal &DIE,
+  void lookForDIEsToKeep(RelocationManager &RelocMgr,
+                         const DWARFDebugInfoEntryMinimal &DIE,
                          const DebugMapObject &DMO, CompileUnit &CU,
                          unsigned Flags);
 
@@ -1159,24 +1181,29 @@ private:
     TF_DependencyWalk = 1 << 2,  ///< Walking the dependencies of a kept DIE.
     TF_ParentWalk = 1 << 3,      ///< Walking up the parents of a kept DIE.
     TF_ODR = 1 << 4,             ///< Use the ODR whhile keeping dependants.
+    TF_SkipPC = 1 << 5,          ///< Skip all location attributes.
   };
 
   /// \brief Mark the passed DIE as well as all the ones it depends on
   /// as kept.
-  void keepDIEAndDenpendencies(const DWARFDebugInfoEntryMinimal &DIE,
+  void keepDIEAndDenpendencies(RelocationManager &RelocMgr,
+                               const DWARFDebugInfoEntryMinimal &DIE,
                                CompileUnit::DIEInfo &MyInfo,
                                const DebugMapObject &DMO, CompileUnit &CU,
                                bool UseODR);
 
-  unsigned shouldKeepDIE(const DWARFDebugInfoEntryMinimal &DIE,
+  unsigned shouldKeepDIE(RelocationManager &RelocMgr,
+                         const DWARFDebugInfoEntryMinimal &DIE,
                          CompileUnit &Unit, CompileUnit::DIEInfo &MyInfo,
                          unsigned Flags);
 
-  unsigned shouldKeepVariableDIE(const DWARFDebugInfoEntryMinimal &DIE,
+  unsigned shouldKeepVariableDIE(RelocationManager &RelocMgr,
+                                 const DWARFDebugInfoEntryMinimal &DIE,
                                  CompileUnit &Unit,
                                  CompileUnit::DIEInfo &MyInfo, unsigned Flags);
 
-  unsigned shouldKeepSubprogramDIE(const DWARFDebugInfoEntryMinimal &DIE,
+  unsigned shouldKeepSubprogramDIE(RelocationManager &RelocMgr,
+                                   const DWARFDebugInfoEntryMinimal &DIE,
                                    CompileUnit &Unit,
                                    CompileUnit::DIEInfo &MyInfo,
                                    unsigned Flags);
@@ -1199,8 +1226,18 @@ private:
   /// applied to the entry point of the function to get the linked address.
   ///
   /// \returns the root of the cloned tree.
-  DIE *cloneDIE(const DWARFDebugInfoEntryMinimal &InputDIE, CompileUnit &U,
-                int64_t PCOffset, uint32_t OutOffset);
+  DIE *cloneDIE(RelocationManager &RelocMgr,
+                const DWARFDebugInfoEntryMinimal &InputDIE, CompileUnit &U,
+                int64_t PCOffset, uint32_t OutOffset, unsigned Flags);
+
+  /// Construct the output DIE tree by cloning the DIEs we chose to
+  /// keep above. If there are no valid relocs, then there's nothing
+  /// to clone/emit.
+  void cloneCompileUnit(RelocationManager &RelocMgr,
+                        MutableArrayRef<CompileUnit> CompileUnit,
+                        DWARFContextInMemory &DwarfContext);
+
+
 
   typedef DWARFAbbreviationDeclaration::AttributeSpec AttributeSpec;
 
@@ -1256,12 +1293,11 @@ private:
                                 const DWARFFormValue &Val, unsigned AttrSize,
                                 AttributesInfo &Info);
 
-  /// \brief Helper for cloneDIE.
-  bool applyValidRelocs(MutableArrayRef<char> Data, uint32_t BaseOffset,
-                        bool isLittleEndian);
-
   /// \brief Assign an abbreviation number to \p Abbrev
   void AssignAbbrev(DIEAbbrev &Abbrev);
+
+  /// Create a copy of abbreviation Abbrev.
+  void copyAbbrev(const DWARFAbbreviationDeclaration &Abbrev, bool hasODR);
 
   /// \brief FoldingSet that uniques the abbreviations.
   FoldingSet<DIEAbbrev> AbbreviationsSet;
@@ -1330,6 +1366,7 @@ private:
   LinkOptions Options;
   BinaryHolder BinHolder;
   std::unique_ptr<DwarfStreamer> Streamer;
+  uint64_t OutputDebugInfoSize;
 
   /// The units of the current debug map object.
   std::vector<CompileUnit> Units;
@@ -1697,7 +1734,6 @@ static unsigned getRefAddrSize(const DWARFUnit &U) {
 
 void DwarfLinker::startDebugObject(DWARFContext &Dwarf, DebugMapObject &Obj) {
   Units.reserve(Dwarf.getNumCompileUnits());
-  NextValidReloc = 0;
   // Iterate over the debug map entries and put all the ones that are
   // functions (because they have a size) into the Ranges map. This
   // map is very similar to the FunctionRanges that are stored in each
@@ -1723,7 +1759,6 @@ void DwarfLinker::startDebugObject(DWARFContext &Dwarf, DebugMapObject &Obj) {
 
 void DwarfLinker::endDebugObject() {
   Units.clear();
-  ValidRelocs.clear();
   Ranges.clear();
 
   for (auto I = DIEBlocks.begin(), E = DIEBlocks.end(); I != E; ++I)
@@ -1739,9 +1774,10 @@ void DwarfLinker::endDebugObject() {
 /// \brief Iterate over the relocations of the given \p Section and
 /// store the ones that correspond to debug map entries into the
 /// ValidRelocs array.
-void DwarfLinker::findValidRelocsMachO(const object::SectionRef &Section,
-                                       const object::MachOObjectFile &Obj,
-                                       const DebugMapObject &DMO) {
+void DwarfLinker::RelocationManager::
+findValidRelocsMachO(const object::SectionRef &Section,
+                     const object::MachOObjectFile &Obj,
+                     const DebugMapObject &DMO) {
   StringRef Contents;
   Section.getContents(Contents);
   DataExtractor Data(Contents, Obj.isLittleEndian(), 0);
@@ -1752,7 +1788,7 @@ void DwarfLinker::findValidRelocsMachO(const object::SectionRef &Section,
     unsigned RelocSize = 1 << Obj.getAnyRelocationLength(MachOReloc);
     uint64_t Offset64 = Reloc.getOffset();
     if ((RelocSize != 4 && RelocSize != 8)) {
-      reportWarning(" unsupported relocation in debug_info section.");
+      Linker.reportWarning(" unsupported relocation in debug_info section.");
       continue;
     }
     uint32_t Offset = Offset64;
@@ -1763,7 +1799,7 @@ void DwarfLinker::findValidRelocsMachO(const object::SectionRef &Section,
     if (Sym != Obj.symbol_end()) {
       ErrorOr<StringRef> SymbolName = Sym->getName();
       if (!SymbolName) {
-        reportWarning("error getting relocation symbol name.");
+        Linker.reportWarning("error getting relocation symbol name.");
         continue;
       }
       if (const auto *Mapping = DMO.lookupSymbol(*SymbolName))
@@ -1779,14 +1815,15 @@ void DwarfLinker::findValidRelocsMachO(const object::SectionRef &Section,
 
 /// \brief Dispatch the valid relocation finding logic to the
 /// appropriate handler depending on the object file format.
-bool DwarfLinker::findValidRelocs(const object::SectionRef &Section,
-                                  const object::ObjectFile &Obj,
-                                  const DebugMapObject &DMO) {
+bool DwarfLinker::RelocationManager::findValidRelocs(
+    const object::SectionRef &Section, const object::ObjectFile &Obj,
+    const DebugMapObject &DMO) {
   // Dispatch to the right handler depending on the file type.
   if (auto *MachOObj = dyn_cast<object::MachOObjectFile>(&Obj))
     findValidRelocsMachO(Section, *MachOObj, DMO);
   else
-    reportWarning(Twine("unsupported object file type: ") + Obj.getFileName());
+    Linker.reportWarning(Twine("unsupported object file type: ") +
+                         Obj.getFileName());
 
   if (ValidRelocs.empty())
     return false;
@@ -1804,8 +1841,9 @@ bool DwarfLinker::findValidRelocs(const object::SectionRef &Section,
 /// link by indicating which DIEs refer to symbols present in the
 /// linked binary.
 /// \returns wether there are any valid relocations in the debug info.
-bool DwarfLinker::findValidRelocsInDebugInfo(const object::ObjectFile &Obj,
-                                             const DebugMapObject &DMO) {
+bool DwarfLinker::RelocationManager::
+findValidRelocsInDebugInfo(const object::ObjectFile &Obj,
+                           const DebugMapObject &DMO) {
   // Find the debug_info section.
   for (const object::SectionRef &Section : Obj.sections()) {
     StringRef SectionName;
@@ -1824,8 +1862,9 @@ bool DwarfLinker::findValidRelocsInDebugInfo(const object::ObjectFile &Obj,
 /// This function must be called with offsets in strictly ascending
 /// order because it never looks back at relocations it already 'went past'.
 /// \returns true and sets Info.InDebugMap if it is the case.
-bool DwarfLinker::hasValidRelocation(uint32_t StartOffset, uint32_t EndOffset,
-                                     CompileUnit::DIEInfo &Info) {
+bool DwarfLinker::RelocationManager::
+hasValidRelocation(uint32_t StartOffset, uint32_t EndOffset,
+                   CompileUnit::DIEInfo &Info) {
   assert(NextValidReloc == 0 ||
          StartOffset > ValidRelocs[NextValidReloc - 1].Offset);
   if (NextValidReloc >= ValidRelocs.size())
@@ -1845,7 +1884,7 @@ bool DwarfLinker::hasValidRelocation(uint32_t StartOffset, uint32_t EndOffset,
 
   const auto &ValidReloc = ValidRelocs[NextValidReloc++];
   const auto &Mapping = ValidReloc.Mapping->getValue();
-  if (Options.Verbose)
+  if (Linker.Options.Verbose)
     outs() << "Found valid debug map entry: " << ValidReloc.Mapping->getKey()
            << " " << format("\t%016" PRIx64 " => %016" PRIx64,
                             uint64_t(Mapping.ObjectAddress),
@@ -1878,9 +1917,11 @@ getAttributeOffsets(const DWARFAbbreviationDeclaration *Abbrev, unsigned Idx,
 
 /// \brief Check if a variable describing DIE should be kept.
 /// \returns updated TraversalFlags.
-unsigned DwarfLinker::shouldKeepVariableDIE(
-    const DWARFDebugInfoEntryMinimal &DIE, CompileUnit &Unit,
-    CompileUnit::DIEInfo &MyInfo, unsigned Flags) {
+unsigned DwarfLinker::shouldKeepVariableDIE(RelocationManager &RelocMgr,
+                                            const DWARFDebugInfoEntryMinimal &DIE,
+                                            CompileUnit &Unit,
+                                            CompileUnit::DIEInfo &MyInfo,
+                                            unsigned Flags) {
   const auto *Abbrev = DIE.getAbbreviationDeclarationPtr();
 
   // Global variables with constant value can always be kept.
@@ -1905,7 +1946,7 @@ unsigned DwarfLinker::shouldKeepVariableDIE(
   // always check in the variable has a valid relocation, so that the
   // DIEInfo is filled. However, we don't want a static variable in a
   // function to force us to keep the enclosing function.
-  if (!hasValidRelocation(LocationOffset, LocationEndOffset, MyInfo) ||
+  if (!RelocMgr.hasValidRelocation(LocationOffset, LocationEndOffset, MyInfo) ||
       (Flags & TF_InFunctionScope))
     return Flags;
 
@@ -1918,6 +1959,7 @@ unsigned DwarfLinker::shouldKeepVariableDIE(
 /// \brief Check if a function describing DIE should be kept.
 /// \returns updated TraversalFlags.
 unsigned DwarfLinker::shouldKeepSubprogramDIE(
+    RelocationManager &RelocMgr,
     const DWARFDebugInfoEntryMinimal &DIE, CompileUnit &Unit,
     CompileUnit::DIEInfo &MyInfo, unsigned Flags) {
   const auto *Abbrev = DIE.getAbbreviationDeclarationPtr();
@@ -1938,7 +1980,7 @@ unsigned DwarfLinker::shouldKeepSubprogramDIE(
       DIE.getAttributeValueAsAddress(&OrigUnit, dwarf::DW_AT_low_pc, -1ULL);
   assert(LowPc != -1ULL && "low_pc attribute is not an address.");
   if (LowPc == -1ULL ||
-      !hasValidRelocation(LowPcOffset, LowPcEndOffset, MyInfo))
+      !RelocMgr.hasValidRelocation(LowPcOffset, LowPcEndOffset, MyInfo))
     return Flags;
 
   if (Options.Verbose)
@@ -1969,16 +2011,17 @@ unsigned DwarfLinker::shouldKeepSubprogramDIE(
 
 /// \brief Check if a DIE should be kept.
 /// \returns updated TraversalFlags.
-unsigned DwarfLinker::shouldKeepDIE(const DWARFDebugInfoEntryMinimal &DIE,
+unsigned DwarfLinker::shouldKeepDIE(RelocationManager &RelocMgr,
+                                    const DWARFDebugInfoEntryMinimal &DIE,
                                     CompileUnit &Unit,
                                     CompileUnit::DIEInfo &MyInfo,
                                     unsigned Flags) {
   switch (DIE.getTag()) {
   case dwarf::DW_TAG_constant:
   case dwarf::DW_TAG_variable:
-    return shouldKeepVariableDIE(DIE, Unit, MyInfo, Flags);
+    return shouldKeepVariableDIE(RelocMgr, DIE, Unit, MyInfo, Flags);
   case dwarf::DW_TAG_subprogram:
-    return shouldKeepSubprogramDIE(DIE, Unit, MyInfo, Flags);
+    return shouldKeepSubprogramDIE(RelocMgr, DIE, Unit, MyInfo, Flags);
   case dwarf::DW_TAG_module:
   case dwarf::DW_TAG_imported_module:
   case dwarf::DW_TAG_imported_declaration:
@@ -1998,7 +2041,8 @@ unsigned DwarfLinker::shouldKeepDIE(const DWARFDebugInfoEntryMinimal &DIE,
 /// back to lookForDIEsToKeep while adding TF_DependencyWalk to the
 /// TraversalFlags to inform it that it's not doing the primary DIE
 /// tree walk.
-void DwarfLinker::keepDIEAndDenpendencies(const DWARFDebugInfoEntryMinimal &DIE,
+void DwarfLinker::keepDIEAndDenpendencies(RelocationManager &RelocMgr,
+                                          const DWARFDebugInfoEntryMinimal &Die,
                                           CompileUnit::DIEInfo &MyInfo,
                                           const DebugMapObject &DMO,
                                           CompileUnit &CU, bool UseODR) {
@@ -2009,7 +2053,7 @@ void DwarfLinker::keepDIEAndDenpendencies(const DWARFDebugInfoEntryMinimal &DIE,
   unsigned AncestorIdx = MyInfo.ParentIdx;
   while (!CU.getInfo(AncestorIdx).Keep) {
     unsigned ODRFlag = UseODR ? TF_ODR : 0;
-    lookForDIEsToKeep(*Unit.getDIEAtIndex(AncestorIdx), DMO, CU,
+    lookForDIEsToKeep(RelocMgr, *Unit.getDIEAtIndex(AncestorIdx), DMO, CU,
                       TF_ParentWalk | TF_Keep | TF_DependencyWalk | ODRFlag);
     AncestorIdx = CU.getInfo(AncestorIdx).ParentIdx;
   }
@@ -2017,8 +2061,8 @@ void DwarfLinker::keepDIEAndDenpendencies(const DWARFDebugInfoEntryMinimal &DIE,
   // Then we need to mark all the DIEs referenced by this DIE's
   // attributes as kept.
   DataExtractor Data = Unit.getDebugInfoExtractor();
-  const auto *Abbrev = DIE.getAbbreviationDeclarationPtr();
-  uint32_t Offset = DIE.getOffset() + getULEB128Size(Abbrev->getCode());
+  const auto *Abbrev = Die.getAbbreviationDeclarationPtr();
+  uint32_t Offset = Die.getOffset() + getULEB128Size(Abbrev->getCode());
 
   // Mark all DIEs referenced through atttributes as kept.
   for (const auto &AttrSpec : Abbrev->attributes()) {
@@ -2032,7 +2076,7 @@ void DwarfLinker::keepDIEAndDenpendencies(const DWARFDebugInfoEntryMinimal &DIE,
     Val.extractValue(Data, &Offset, &Unit);
     CompileUnit *ReferencedCU;
     if (const auto *RefDIE =
-            resolveDIEReference(Val, Unit, DIE, ReferencedCU)) {
+            resolveDIEReference(Val, Unit, Die, ReferencedCU)) {
       uint32_t RefIdx = ReferencedCU->getOrigUnit().getDIEIndex(RefDIE);
       CompileUnit::DIEInfo &Info = ReferencedCU->getInfo(RefIdx);
       // If the referenced DIE has a DeclContext that has already been
@@ -2049,7 +2093,7 @@ void DwarfLinker::keepDIEAndDenpendencies(const DWARFDebugInfoEntryMinimal &DIE,
         continue;
 
       unsigned ODRFlag = UseODR ? TF_ODR : 0;
-      lookForDIEsToKeep(*RefDIE, DMO, *ReferencedCU,
+      lookForDIEsToKeep(RelocMgr, *RefDIE, DMO, *ReferencedCU,
                         TF_Keep | TF_DependencyWalk | ODRFlag);
     }
   }
@@ -2067,10 +2111,11 @@ void DwarfLinker::keepDIEAndDenpendencies(const DWARFDebugInfoEntryMinimal &DIE,
 /// also called, but during these dependency walks the file order is
 /// not respected. The TF_DependencyWalk flag tells us which kind of
 /// traversal we are currently doing.
-void DwarfLinker::lookForDIEsToKeep(const DWARFDebugInfoEntryMinimal &DIE,
+void DwarfLinker::lookForDIEsToKeep(RelocationManager &RelocMgr,
+                                    const DWARFDebugInfoEntryMinimal &Die,
                                     const DebugMapObject &DMO, CompileUnit &CU,
                                     unsigned Flags) {
-  unsigned Idx = CU.getOrigUnit().getDIEIndex(&DIE);
+  unsigned Idx = CU.getOrigUnit().getDIEIndex(&Die);
   CompileUnit::DIEInfo &MyInfo = CU.getInfo(Idx);
   bool AlreadyKept = MyInfo.Keep;
 
@@ -2083,12 +2128,12 @@ void DwarfLinker::lookForDIEsToKeep(const DWARFDebugInfoEntryMinimal &DIE,
   // We must not call shouldKeepDIE while called from keepDIEAndDenpendencies,
   // because it would screw up the relocation finding logic.
   if (!(Flags & TF_DependencyWalk))
-    Flags = shouldKeepDIE(DIE, CU, MyInfo, Flags);
+    Flags = shouldKeepDIE(RelocMgr, Die, CU, MyInfo, Flags);
 
   // If it is a newly kept DIE mark it as well as all its dependencies as kept.
   if (!AlreadyKept && (Flags & TF_Keep)) {
     bool UseOdr = (Flags & TF_DependencyWalk) ? (Flags & TF_ODR) : CU.hasODR();
-    keepDIEAndDenpendencies(DIE, MyInfo, DMO, CU, UseOdr);
+    keepDIEAndDenpendencies(RelocMgr, Die, MyInfo, DMO, CU, UseOdr);
   }
   // The TF_ParentWalk flag tells us that we are currently walking up
   // the parent chain of a required DIE, and we don't want to mark all
@@ -2096,15 +2141,15 @@ void DwarfLinker::lookForDIEsToKeep(const DWARFDebugInfoEntryMinimal &DIE,
   // DW_TAG_namespace node in the parent chain). There are however a
   // set of DIE types for which we want to ignore that directive and still
   // walk their children.
-  if (dieNeedsChildrenToBeMeaningful(DIE.getTag()))
+  if (dieNeedsChildrenToBeMeaningful(Die.getTag()))
     Flags &= ~TF_ParentWalk;
 
-  if (!DIE.hasChildren() || (Flags & TF_ParentWalk))
+  if (!Die.hasChildren() || (Flags & TF_ParentWalk))
     return;
 
-  for (auto *Child = DIE.getFirstChild(); Child && !Child->isNULL();
+  for (auto *Child = Die.getFirstChild(); Child && !Child->isNULL();
        Child = Child->getSibling())
-    lookForDIEsToKeep(*Child, DMO, CU, Flags);
+    lookForDIEsToKeep(RelocMgr, *Child, DMO, CU, Flags);
 }
 
 /// \brief Assign an abbreviation numer to \p Abbrev.
@@ -2338,6 +2383,7 @@ unsigned DwarfLinker::cloneScalarAttribute(
                    dwarf::Form(AttrSpec.Form), DIEInteger(Value));
   if (AttrSpec.Attr == dwarf::DW_AT_ranges)
     Unit.noteRangeAttribute(Die, Patch);
+
   // A more generic way to check for location attributes would be
   // nice, but it's very unlikely that any other attribute needs a
   // location list.
@@ -2407,8 +2453,9 @@ unsigned DwarfLinker::cloneAttribute(DIE &Die,
 /// monotonic \p BaseOffset values.
 ///
 /// \returns wether any reloc has been applied.
-bool DwarfLinker::applyValidRelocs(MutableArrayRef<char> Data,
-                                   uint32_t BaseOffset, bool isLittleEndian) {
+bool DwarfLinker::RelocationManager::
+applyValidRelocs(MutableArrayRef<char> Data, uint32_t BaseOffset,
+                 bool isLittleEndian) {
   assert((NextValidReloc == 0 ||
           BaseOffset > ValidRelocs[NextValidReloc - 1].Offset) &&
          "BaseOffset should only be increasing.");
@@ -2476,6 +2523,30 @@ static bool isTypeTag(uint16_t Tag) {
   return false;
 }
 
+static bool
+shouldSkipAttribute(DWARFAbbreviationDeclaration::AttributeSpec AttrSpec,
+                    uint16_t Tag, bool InDebugMap, bool SkipPC,
+                    bool InFunctionScope) {
+  switch (AttrSpec.Attr) {
+  default:
+    return false;
+  case dwarf::DW_AT_low_pc:
+  case dwarf::DW_AT_high_pc:
+  case dwarf::DW_AT_ranges:
+    return SkipPC;
+  case dwarf::DW_AT_location:
+  case dwarf::DW_AT_frame_base:
+    // FIXME: for some reason dsymutil-classic keeps the location
+    // attributes when they are of block type (ie. not location
+    // lists). This is totally wrong for globals where we will keep a
+    // wrong address. It is mostly harmless for locals, but there is
+    // no point in keeping these anyway when the function wasn't linked.
+    return (SkipPC || (!InFunctionScope && Tag == dwarf::DW_TAG_variable &&
+                       !InDebugMap)) &&
+           !DWARFFormValue(AttrSpec.Form).isFormClass(DWARFFormValue::FC_Block);
+  }
+}
+
 /// \brief Recursively clone \p InputDIE's subtrees that have been
 /// selected to appear in the linked output.
 ///
@@ -2483,9 +2554,10 @@ static bool isTypeTag(uint16_t Tag) {
 /// lie in the linked compile unit.
 ///
 /// \returns the cloned DIE object or null if nothing was selected.
-DIE *DwarfLinker::cloneDIE(const DWARFDebugInfoEntryMinimal &InputDIE,
+DIE *DwarfLinker::cloneDIE(RelocationManager &RelocMgr,
+                           const DWARFDebugInfoEntryMinimal &InputDIE,
                            CompileUnit &Unit, int64_t PCOffset,
-                           uint32_t OutOffset) {
+                           uint32_t OutOffset, unsigned Flags) {
   DWARFUnit &U = Unit.getOrigUnit();
   unsigned Idx = U.getDIEIndex(&InputDIE);
   CompileUnit::DIEInfo &Info = Unit.getInfo(Idx);
@@ -2522,7 +2594,7 @@ DIE *DwarfLinker::cloneDIE(const DWARFDebugInfoEntryMinimal &InputDIE,
   SmallString<40> DIECopy(Data.getData().substr(Offset, NextOffset - Offset));
   Data = DataExtractor(DIECopy, Data.isLittleEndian(), Data.getAddressSize());
   // Modify the copy with relocated addresses.
-  if (applyValidRelocs(DIECopy, Offset, Data.isLittleEndian())) {
+  if (RelocMgr.applyValidRelocs(DIECopy, Offset, Data.isLittleEndian())) {
     // If we applied relocations, we store the value of high_pc that was
     // potentially stored in the input DIE. If high_pc is an address
     // (Dwarf version == 2), then it might have been relocated to a
@@ -2551,7 +2623,27 @@ DIE *DwarfLinker::cloneDIE(const DWARFDebugInfoEntryMinimal &InputDIE,
     PCOffset = Info.AddrAdjust;
   AttrInfo.PCOffset = PCOffset;
 
+  if (Abbrev->getTag() == dwarf::DW_TAG_subprogram) {
+    Flags |= TF_InFunctionScope;
+    if (!Info.InDebugMap)
+      Flags |= TF_SkipPC;
+  }
+
+  bool Copied = false;
   for (const auto &AttrSpec : Abbrev->attributes()) {
+    if (shouldSkipAttribute(AttrSpec, Die->getTag(), Info.InDebugMap,
+                            Flags & TF_SkipPC, Flags & TF_InFunctionScope)) {
+      DWARFFormValue::skipValue(AttrSpec.Form, Data, &Offset, &U);
+      // FIXME: dsymutil-classic keeps the old abbreviation around
+      // even if it's not used. We can remove this (and the copyAbbrev
+      // helper) as soon as bit-for-bit compatibility is not a goal anymore.
+      if (!Copied) {
+        copyAbbrev(*InputDIE.getAbbreviationDeclarationPtr(), Unit.hasODR());
+        Copied = true;
+      }
+      continue;
+    }
+
     DWARFFormValue Val(AttrSpec.Form);
     uint32_t AttrSize = Offset;
     Val.extractValue(Data, &Offset, &U);
@@ -2603,7 +2695,8 @@ DIE *DwarfLinker::cloneDIE(const DWARFDebugInfoEntryMinimal &InputDIE,
   // Recursively clone children.
   for (auto *Child = InputDIE.getFirstChild(); Child && !Child->isNULL();
        Child = Child->getSibling()) {
-    if (DIE *Clone = cloneDIE(*Child, Unit, PCOffset, OutOffset)) {
+    if (DIE *Clone =
+            cloneDIE(RelocMgr, *Child, Unit, PCOffset, OutOffset, Flags)) {
       Die->addChild(Clone);
       OutOffset = Clone->getOffset() + Clone->getSize();
     }
@@ -2941,6 +3034,21 @@ void DwarfLinker::patchFrameInfoForObject(const DebugMapObject &DMO,
   }
 }
 
+void DwarfLinker::copyAbbrev(const DWARFAbbreviationDeclaration &Abbrev,
+                             bool hasODR) {
+  DIEAbbrev Copy(dwarf::Tag(Abbrev.getTag()),
+                 dwarf::Form(Abbrev.hasChildren()));
+
+  for (const auto &Attr : Abbrev.attributes()) {
+    uint16_t Form = Attr.Form;
+    if (hasODR && isODRAttribute(Attr.Attr))
+      Form = dwarf::DW_FORM_ref_addr;
+    Copy.AddAttribute(dwarf::Attribute(Attr.Attr), dwarf::Form(Form));
+  }
+
+  AssignAbbrev(Copy);
+}
+
 ErrorOr<const object::ObjectFile &>
 DwarfLinker::loadObject(BinaryHolder &BinaryHolder, DebugMapObject &Obj,
                         const DebugMap &Map) {
@@ -2956,13 +3064,53 @@ DwarfLinker::loadObject(BinaryHolder &BinaryHolder, DebugMapObject &Obj,
   return ErrOrObj;
 }
 
+void DwarfLinker::cloneCompileUnit(RelocationManager &RelocMgr,
+                                   MutableArrayRef<CompileUnit> CompileUnits,
+                                   DWARFContextInMemory &DwarfContext) {
+  if (!Streamer)
+    return;
+
+  for (auto &CurrentUnit : CompileUnits) {
+    const auto *InputDIE = CurrentUnit.getOrigUnit().getUnitDIE();
+    CurrentUnit.setStartOffset(OutputDebugInfoSize);
+    DIE *OutputDIE = cloneDIE(RelocMgr, *InputDIE, CurrentUnit,
+                              0 /* PC offset */, 11 /* Unit Header size */, 0);
+    CurrentUnit.setOutputUnitDIE(OutputDIE);
+    OutputDebugInfoSize = CurrentUnit.computeNextUnitOffset();
+    if (Options.NoOutput)
+      continue;
+    // FIXME: for compatibility with the classic dsymutil, we emit
+    // an empty line table for the unit, even if the unit doesn't
+    // actually exist in the DIE tree.
+    patchLineTableForUnit(CurrentUnit, DwarfContext);
+    if (!OutputDIE)
+      continue;
+    patchRangesForUnit(CurrentUnit, DwarfContext);
+    Streamer->emitLocationsForUnit(CurrentUnit, DwarfContext);
+    emitAcceleratorEntriesForUnit(CurrentUnit);
+  }
+
+  if (Options.NoOutput)
+    return;
+
+  // Emit all the compile unit's debug information.
+  for (auto &CurrentUnit : CompileUnits) {
+    generateUnitRanges(CurrentUnit);
+    CurrentUnit.fixupForwardReferences();
+    Streamer->emitCompileUnitHeader(CurrentUnit);
+    if (!CurrentUnit.getOutputUnitDIE())
+      continue;
+    Streamer->emitDIE(*CurrentUnit.getOutputUnitDIE());
+  }
+}
+
 bool DwarfLinker::link(const DebugMap &Map) {
 
   if (!createStreamer(Map.getTriple(), OutputFilename))
     return false;
 
   // Size of the DIEs (and headers) generated for the linked output.
-  uint64_t OutputDebugInfoSize = 0;
+  OutputDebugInfoSize = 0;
   // A unique ID that identifies each compile unit.
   unsigned UnitID = 0;
   for (const auto &Obj : Map.objects()) {
@@ -2975,7 +3123,8 @@ bool DwarfLinker::link(const DebugMap &Map) {
       continue;
 
     // Look for relocations that correspond to debug map entries.
-    if (!findValidRelocsInDebugInfo(*ErrOrObj, *Obj)) {
+    RelocationManager RelocMgr(*this);
+    if (!RelocMgr.findValidRelocsInDebugInfo(*ErrOrObj, *Obj)) {
       if (Options.Verbose)
         outs() << "No valid relocations found. Skipping.\n";
       continue;
@@ -3004,50 +3153,16 @@ bool DwarfLinker::link(const DebugMap &Map) {
     // references require the ParentIdx to be setup for every CU in
     // the object file before calling this.
     for (auto &CurrentUnit : Units)
-      lookForDIEsToKeep(*CurrentUnit.getOrigUnit().getUnitDIE(), *Obj,
+      lookForDIEsToKeep(RelocMgr, *CurrentUnit.getOrigUnit().getUnitDIE(), *Obj,
                         CurrentUnit, 0);
 
     // The calls to applyValidRelocs inside cloneDIE will walk the
     // reloc array again (in the same way findValidRelocsInDebugInfo()
     // did). We need to reset the NextValidReloc index to the beginning.
-    NextValidReloc = 0;
-
-    // Construct the output DIE tree by cloning the DIEs we chose to
-    // keep above. If there are no valid relocs, then there's nothing
-    // to clone/emit.
-    if (!ValidRelocs.empty())
-      for (auto &CurrentUnit : Units) {
-        const auto *InputDIE = CurrentUnit.getOrigUnit().getUnitDIE();
-        CurrentUnit.setStartOffset(OutputDebugInfoSize);
-        DIE *OutputDIE = cloneDIE(*InputDIE, CurrentUnit, 0 /* PCOffset */,
-                                  11 /* Unit Header size */);
-        CurrentUnit.setOutputUnitDIE(OutputDIE);
-        OutputDebugInfoSize = CurrentUnit.computeNextUnitOffset();
-        if (Options.NoOutput)
-          continue;
-        // FIXME: for compatibility with the classic dsymutil, we emit
-        // an empty line table for the unit, even if the unit doesn't
-        // actually exist in the DIE tree.
-        patchLineTableForUnit(CurrentUnit, DwarfContext);
-        if (!OutputDIE)
-          continue;
-        patchRangesForUnit(CurrentUnit, DwarfContext);
-        Streamer->emitLocationsForUnit(CurrentUnit, DwarfContext);
-        emitAcceleratorEntriesForUnit(CurrentUnit);
-      }
-
-    // Emit all the compile unit's debug information.
-    if (!ValidRelocs.empty() && !Options.NoOutput)
-      for (auto &CurrentUnit : Units) {
-        generateUnitRanges(CurrentUnit);
-        CurrentUnit.fixupForwardReferences();
-        Streamer->emitCompileUnitHeader(CurrentUnit);
-        if (!CurrentUnit.getOutputUnitDIE())
-          continue;
-        Streamer->emitDIE(*CurrentUnit.getOutputUnitDIE());
-      }
-
-    if (!ValidRelocs.empty() && !Options.NoOutput && !Units.empty())
+    RelocMgr.resetValidRelocs();
+    if (RelocMgr.hasValidRelocs())
+      cloneCompileUnit(RelocMgr, Units, DwarfContext);
+    if (!Options.NoOutput && !Units.empty())
       patchFrameInfoForObject(*Obj, DwarfContext,
                               Units[0].getOrigUnit().getAddressByteSize());
 
