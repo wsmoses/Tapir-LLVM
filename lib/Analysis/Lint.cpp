@@ -831,7 +831,7 @@ Value *Lint::findValueImpl(Value *V, bool OffsetOk,
         break;
       if (Value *U =
           FindAvailableLoadedValue(L->getPointerOperand(),
-                                   BB, BBI, DEF_MAX_INSTS_TO_SCAN, AA))
+                                   BB, BBI, DefMaxInstsToScan, AA))
         return findValueImpl(U, OffsetOk, Visited);
       if (BBI != BB->begin()) break;
       BB = BB->getUniquePredecessor();

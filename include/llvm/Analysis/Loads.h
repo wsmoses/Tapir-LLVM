@@ -16,6 +16,7 @@
 
 #include "llvm/Analysis/AliasAnalysis.h"
 #include "llvm/IR/BasicBlock.h"
+#include "llvm/Support/CommandLine.h"
 
 namespace llvm {
 
@@ -29,18 +30,9 @@ class MDNode;
 bool isSafeToLoadUnconditionally(Value *V, Instruction *ScanFrom,
                                  unsigned Align);
 
-/// DEF_MAX_INSTS_TO_SCAN - the default number of maximum instructions
+/// DefMaxInstsToScan - the default number of maximum instructions
 /// to scan in the block, used by FindAvailableLoadedValue().
-/// FindAvailableLoadedValue() was introduced in r60148, to improve jump
-/// threading in part by eliminating partially redundant loads.
-/// At that point, the value of MaxInstsToScan was already set to '6'
-/// without documented explanation.
-/// FIXME: Ask r60148 author for details, and complete this documentation.
-/// NOTE: As of now, every use of FindAvailableLoadedValue() uses this default
-/// value of '6'.
-#ifndef DEF_MAX_INSTS_TO_SCAN
-#define DEF_MAX_INSTS_TO_SCAN 6
-#endif
+extern cl::opt<unsigned> DefMaxInstsToScan;
 
 /// FindAvailableLoadedValue - Scan the ScanBB block backwards (starting at
 /// the instruction before ScanFrom) checking to see if we have the value at
@@ -61,7 +53,7 @@ bool isSafeToLoadUnconditionally(Value *V, Instruction *ScanFrom,
 /// is found, it is left unmodified.
 Value *FindAvailableLoadedValue(Value *Ptr, BasicBlock *ScanBB,
                                 BasicBlock::iterator &ScanFrom,
-                                unsigned MaxInstsToScan = DEF_MAX_INSTS_TO_SCAN,
+                                unsigned MaxInstsToScan = DefMaxInstsToScan,
                                 AliasAnalysis *AA = nullptr,
                                 AAMDNodes *AATags = nullptr);
 

@@ -752,7 +752,7 @@ Instruction *InstCombiner::visitLoadInst(LoadInst &LI) {
   AAMDNodes AATags;
   if (Value *AvailableVal =
       FindAvailableLoadedValue(Op, LI.getParent(), BBI,
-                               DEF_MAX_INSTS_TO_SCAN, AA, &AATags)) {
+                               DefMaxInstsToScan, AA, &AATags)) {
     if (LoadInst *NLI = dyn_cast<LoadInst>(AvailableVal)) {
       unsigned KnownIDs[] = {
         LLVMContext::MD_tbaa,

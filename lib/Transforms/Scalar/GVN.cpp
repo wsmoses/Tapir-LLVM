@@ -1957,10 +1957,8 @@ bool GVN::processLoad(LoadInst *L) {
       ++NumGVNLoad;
       return true;
     }
-  }
 
-  // If the value isn't available, don't do anything!
-  if (Dep.isClobber()) {
+    // If the value isn't available, don't do anything!
     DEBUG(
       // fast print dep, using operator<< on instruction is too slow.
       dbgs() << "GVN: load ";
