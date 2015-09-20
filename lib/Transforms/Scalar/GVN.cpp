@@ -1554,8 +1554,12 @@ bool GVN::PerformLoadPRE(LoadInst *LI, AvailValInBlkVect &ValuesPerBlock,
     if (IsValueFullyAvailableInBlock(Pred, FullyAvailableBlocks, 0)) {
       continue;
     }
+    if (isa<ReattachInst>(Pred->getTerminator())) {
+      continue;
+    }
 
-    if (Pred->getTerminator()->getNumSuccessors() != 1) {
+    if (Pred->getTerminator()->getNumSuccessors() != 1 &&
+	!isa<DetachInst>(Pred->getTerminator())) {
       if (isa<IndirectBrInst>(Pred->getTerminator())) {
         DEBUG(dbgs() << "COULD NOT PRE LOAD BECAUSE OF INDBR CRITICAL EDGE '"
               << Pred->getName() << "': " << *LI << '\n');
@@ -1717,6 +1721,20 @@ bool GVN::processNonLocalLoad(LoadInst *LI) {
       dbgs() << " has unknown dependencies\n";
     );
     return false;
+  }
+
+  // If we depend on a detach instruction, reject.
+  for (unsigned i = 0, e = NumDeps; i != e; ++i) {
+    MemDepResult DepInfo = Deps[i].getResult();
+    if (!(DepInfo.getInst()))
+      continue;
+    if (isa<DetachInst>(DepInfo.getInst())||
+	isa<SyncInst>(DepInfo.getInst())) {
+      DEBUG(dbgs() << "GVN: Cannot process" << *LI <<
+	    " due to dependency on" <<
+	    *(DepInfo.getInst()) << "\n");
+      return false;
+    }
   }
 
   // If this load follows a GEP, see if we can PRE the indices before analyzing.
@@ -2583,6 +2601,8 @@ bool GVN::performScalarPRE(Instruction *CurInst) {
   unsigned NumWithout = 0;
   BasicBlock *PREPred = nullptr;
   BasicBlock *CurrentBlock = CurInst->getParent();
+  BasicBlock *DetachPred = nullptr, *ReattachPred = nullptr;
+  Value *DetachV = nullptr, *ReattachV = nullptr;
   predMap.clear();
 
   for (pred_iterator PI = pred_begin(CurrentBlock), PE = pred_end(CurrentBlock);
@@ -2599,17 +2619,36 @@ bool GVN::performScalarPRE(Instruction *CurInst) {
       break;
     }
 
+    // Ignore reattach predecessors for determining whether to perform
+    // PRE.  These predecessors have the same available values as
+    // their corresponding detach predecessors.
+    if (isa<ReattachInst>(P->getTerminator())) {
+      ReattachPred = P;
+    }
+
     Value *predV = findLeader(P, ValNo);
+
+    if (isa<DetachInst>(P->getTerminator())) {
+      assert(nullptr == DetachPred && "Multiple detach predecessors found!");
+      DetachPred = P;
+    }
+
     if (!predV) {
-      predMap.push_back(std::make_pair(static_cast<Value *>(nullptr), P));
-      PREPred = P;
-      ++NumWithout;
+      if (!isa<ReattachInst>(P->getTerminator())) {
+	predMap.push_back(std::make_pair(static_cast<Value *>(nullptr), P));
+	PREPred = P;
+	++NumWithout;
+      }
     } else if (predV == CurInst) {
       /* CurInst dominates this predecessor. */
       NumWithout = 2;
       break;
     } else {
       predMap.push_back(std::make_pair(predV, P));
+      if (isa<DetachInst>(P->getTerminator())) 
+	DetachV = predV;
+      if (isa<ReattachInst>(P->getTerminator()))
+	ReattachV = predV;
       ++NumWith;
     }
   }
@@ -2619,25 +2658,34 @@ bool GVN::performScalarPRE(Instruction *CurInst) {
   if (NumWithout > 1 || NumWith == 0)
     return false;
 
+  // If the reattach predecessor has a value that does not match the
+  // detach predecessor's value, assume that this is not a redundant
+  // instruction.
+  if (ReattachV && ReattachV != DetachV)
+    return false;
+
+  if (ReattachPred) {
+    assert(DetachPred && "Reattach predecessor found with no detach predecessor");
+    if (nullptr != DetachV)
+      predMap.push_back(std::make_pair(DetachV, ReattachPred));
+  }
+
   // We may have a case where all predecessors have the instruction,
   // and we just need to insert a phi node. Otherwise, perform
   // insertion.
   Instruction *PREInstr = nullptr;
 
   if (NumWithout != 0) {
-    // Don't do PRE across indirect branch, detach, or reattach.
-    // (Detach-reattach pairs create unsplittable critical edges in
-    // the CFG.)
-    if (isa<IndirectBrInst>(PREPred->getTerminator()) ||
-        isa<DetachInst>(PREPred->getTerminator()) ||
-        isa<ReattachInst>(PREPred->getTerminator()))
+    // Don't do PRE across indirect branch.
+    if (isa<IndirectBrInst>(PREPred->getTerminator()))
       return false;
 
     // We can't do PRE safely on a critical edge, so instead we schedule
     // the edge to be split and perform the PRE the next time we iterate
     // on the function.
     unsigned SuccNum = GetSuccessorNumber(PREPred, CurrentBlock);
-    if (isCriticalEdge(PREPred->getTerminator(), SuccNum)) {
+    if (isCriticalEdge(PREPred->getTerminator(), SuccNum) &&
+	!isa<DetachInst>(PREPred->getTerminator())) {
       toSplit.push_back(std::make_pair(PREPred->getTerminator(), SuccNum));
       return false;
     }
@@ -2648,6 +2696,9 @@ bool GVN::performScalarPRE(Instruction *CurInst) {
       DEBUG(verifyRemoved(PREInstr));
       delete PREInstr;
       return false;
+    } else if (DetachPred == PREPred && ReattachPred) {
+      assert(nullptr == DetachV && "Detach predecessor already had a value");
+      predMap.push_back(std::make_pair(PREInstr, ReattachPred));
     }
   }
 
