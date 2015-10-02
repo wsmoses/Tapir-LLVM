@@ -2906,7 +2906,7 @@ bool X86FastISel::fastLowerCall(CallLoweringInfo &CLI) {
   CCInfo.AnalyzeCallOperands(OutVTs, OutFlags, CC_X86);
 
   // Get a count of how many bytes are to be pushed on the stack.
-  unsigned NumBytes = CCInfo.getNextStackOffset();
+  unsigned NumBytes = CCInfo.getAlignedCallFrameSize();
 
   // Issue CALLSEQ_START
   unsigned AdjStackDown = TII.getCallFrameSetupOpcode();
@@ -3231,6 +3231,30 @@ X86FastISel::fastSelectInstruction(const Instruction *I)  {
       return X86SelectTrunc(I);
     unsigned Reg = getRegForValue(I->getOperand(0));
     if (Reg == 0) return false;
+    updateValueMap(I, Reg);
+    return true;
+  }
+  case Instruction::BitCast: {
+    // Select SSE2/AVX bitcasts between 128/256 bit vector types.
+    if (!Subtarget->hasSSE2())
+      return false;
+
+    EVT SrcVT = TLI.getValueType(DL, I->getOperand(0)->getType());
+    EVT DstVT = TLI.getValueType(DL, I->getType());
+
+    if (!SrcVT.isSimple() || !DstVT.isSimple())
+      return false;
+
+    if (!SrcVT.is128BitVector() &&
+        !(Subtarget->hasAVX() && SrcVT.is256BitVector()))
+      return false;
+
+    unsigned Reg = getRegForValue(I->getOperand(0));
+    if (Reg == 0)
+      return false;
+      
+    // No instruction is needed for conversion. Reuse the register used by
+    // the fist operand.
     updateValueMap(I, Reg);
     return true;
   }

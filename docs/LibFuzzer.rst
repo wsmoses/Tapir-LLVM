@@ -68,6 +68,7 @@ The most important flags are::
   sync_timeout                       	600	Minimum timeout between syncs.
   use_traces                            0       Experimental: use instruction traces
   only_ascii                            0       If 1, generate only ASCII (isprint+isspace) inputs.
+  test_single_input                     ""      Use specified file content as test input. Test will be run only once. Useful for debugging a particular case.
 
 
 For the full list of flags run the fuzzer binary with ``-help=1``.
@@ -361,11 +362,12 @@ When run in dissassembly mode, the inputs are opcodes to be disassembled. The
 fuzzer will consume as many instructions as possible and will stop when it
 finds an invalid instruction or runs out of data.
 
-Please note that the command line interface differs from that of other fuzzers.
-The fuzzer arguments are specified with ``-fuzzer-args`` while other arguments
-control the operation mode and target in a similar manner to ``llvm-mc``.
+Please note that the command line interface differs slightly from that of other
+fuzzers. The fuzzer arguments should follow ``--fuzzer-args`` and should have
+a single dash, while other arguments control the operation mode and target in a
+similar manner to ``llvm-mc`` and should have two dashes. For example::
 
-Unfortunately, this fuzzer is currently unable to use the -jobs option.
+  llvm-mc-fuzzer --triple=aarch64-linux-gnu --disassemble --fuzzer-args -max_len=4 -jobs=10
 
 Buildbot
 --------

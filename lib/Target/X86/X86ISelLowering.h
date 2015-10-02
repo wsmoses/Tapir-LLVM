@@ -410,6 +410,9 @@ namespace llvm {
       /// SSE4A Extraction and Insertion.
       EXTRQI, INSERTQI,
 
+      // XOP arithmetic/logical shifts
+      VPSHA, VPSHL,
+
       // Vector multiply packed unsigned doubleword integers
       PMULUDQ,
       // Vector multiply packed signed doubleword integers
@@ -890,6 +893,12 @@ namespace llvm {
     /// space and offset as appropriate.
     bool getStackCookieLocation(unsigned &AddressSpace,
                                 unsigned &Offset) const override;
+
+    /// Return true if the target stores SafeStack pointer at a fixed offset in
+    /// some non-standard address space, and populates the address space and
+    /// offset as appropriate.
+    bool getSafeStackPointerLocation(unsigned &AddressSpace,
+                                     unsigned &Offset) const override;
 
     SDValue BuildFILD(SDValue Op, EVT SrcVT, SDValue Chain, SDValue StackSlot,
                       SelectionDAG &DAG) const;

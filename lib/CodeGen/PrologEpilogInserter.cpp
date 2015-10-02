@@ -92,9 +92,6 @@ private:
                            int &SPAdj);
   void scavengeFrameVirtualRegs(MachineFunction &Fn);
   void insertPrologEpilogCode(MachineFunction &Fn);
-
-  // Convenience for recognizing return blocks.
-  bool isReturnBlock(const MachineBasicBlock *MBB) const;
 };
 } // namespace
 
@@ -129,10 +126,6 @@ void PEI::getAnalysisUsage(AnalysisUsage &AU) const {
   MachineFunctionPass::getAnalysisUsage(AU);
 }
 
-bool PEI::isReturnBlock(const MachineBasicBlock* MBB) const {
-  return (MBB && !MBB->empty() && MBB->back().isReturn());
-}
-
 /// Compute the set of return blocks
 void PEI::calculateSets(MachineFunction &Fn) {
   const MachineFrameInfo *MFI = Fn.getFrameInfo();
@@ -149,7 +142,7 @@ void PEI::calculateSets(MachineFunction &Fn) {
     // If RestoreBlock does not have any successor and is not a return block
     // then the end point is unreachable and we do not need to insert any
     // epilogue.
-    if (!RestoreBlock->succ_empty() || isReturnBlock(RestoreBlock))
+    if (!RestoreBlock->succ_empty() || RestoreBlock->isReturnBlock())
       RestoreBlocks.push_back(RestoreBlock);
     return;
   }
@@ -159,7 +152,7 @@ void PEI::calculateSets(MachineFunction &Fn) {
   for (MachineBasicBlock &MBB : Fn) {
     if (MBB.isEHFuncletEntry())
       SaveBlocks.push_back(&MBB);
-    if (isReturnBlock(&MBB))
+    if (MBB.isReturnBlock())
       RestoreBlocks.push_back(&MBB);
   }
 }
@@ -409,7 +402,7 @@ static void updateLiveness(MachineFunction &MF) {
     const MachineBasicBlock *CurBB = WorkList.pop_back_val();
     // By construction, the region that is after the save point is
     // dominated by the Save and post-dominated by the Restore.
-    if (CurBB == Save)
+    if (CurBB == Save && Save != Restore)
       continue;
     // Enqueue all the successors not already visited.
     // Those are by construction either before Save or after Restore.
@@ -421,10 +414,13 @@ static void updateLiveness(MachineFunction &MF) {
   const std::vector<CalleeSavedInfo> &CSI = MFI->getCalleeSavedInfo();
 
   for (unsigned i = 0, e = CSI.size(); i != e; ++i) {
-    for (MachineBasicBlock *MBB : Visited)
+    for (MachineBasicBlock *MBB : Visited) {
+      MCPhysReg Reg = CSI[i].getReg();
       // Add the callee-saved register as live-in.
       // It's killed at the spill.
-      MBB->addLiveIn(CSI[i].getReg());
+      if (!MBB->isLiveIn(Reg))
+        MBB->addLiveIn(Reg);
+    }
   }
 }
 
@@ -504,7 +500,7 @@ void PEI::insertCSRSpillsAndRestores(MachineFunction &Fn) {
 static inline void
 AdjustStackOffset(MachineFrameInfo *MFI, int FrameIdx,
                   bool StackGrowsDown, int64_t &Offset,
-                  unsigned &MaxAlign) {
+                  unsigned &MaxAlign, unsigned Skew) {
   // If the stack grows down, add the object size to find the lowest address.
   if (StackGrowsDown)
     Offset += MFI->getObjectSize(FrameIdx);
@@ -516,7 +512,7 @@ AdjustStackOffset(MachineFrameInfo *MFI, int FrameIdx,
   MaxAlign = std::max(MaxAlign, Align);
 
   // Adjust to alignment boundary.
-  Offset = RoundUpToAlignment(Offset, Align);
+  Offset = RoundUpToAlignment(Offset, Align, Skew);
 
   if (StackGrowsDown) {
     DEBUG(dbgs() << "alloc FI(" << FrameIdx << ") at SP[" << -Offset << "]\n");
@@ -534,12 +530,12 @@ static void
 AssignProtectedObjSet(const StackObjSet &UnassignedObjs,
                       SmallSet<int, 16> &ProtectedObjs,
                       MachineFrameInfo *MFI, bool StackGrowsDown,
-                      int64_t &Offset, unsigned &MaxAlign) {
+                      int64_t &Offset, unsigned &MaxAlign, unsigned Skew) {
 
   for (StackObjSet::const_iterator I = UnassignedObjs.begin(),
         E = UnassignedObjs.end(); I != E; ++I) {
     int i = *I;
-    AdjustStackOffset(MFI, i, StackGrowsDown, Offset, MaxAlign);
+    AdjustStackOffset(MFI, i, StackGrowsDown, Offset, MaxAlign, Skew);
     ProtectedObjs.insert(i);
   }
 }
@@ -566,6 +562,9 @@ void PEI::calculateFrameObjectOffsets(MachineFunction &Fn) {
   assert(LocalAreaOffset >= 0
          && "Local area offset should be in direction of stack growth");
   int64_t Offset = LocalAreaOffset;
+
+  // Skew to be applied to alignment.
+  unsigned Skew = TFI.getStackAlignmentSkew(Fn);
 
   // If there are fixed sized objects that are preallocated in the local area,
   // non-fixed objects can't be allocated right at the start of local area.
@@ -597,7 +596,7 @@ void PEI::calculateFrameObjectOffsets(MachineFunction &Fn) {
 
       unsigned Align = MFI->getObjectAlignment(i);
       // Adjust to alignment boundary
-      Offset = RoundUpToAlignment(Offset, Align);
+      Offset = RoundUpToAlignment(Offset, Align, Skew);
 
       MFI->setObjectOffset(i, -Offset);        // Set the computed offset
     }
@@ -606,7 +605,7 @@ void PEI::calculateFrameObjectOffsets(MachineFunction &Fn) {
     for (int i = MaxCSFI; i >= MinCSFI ; --i) {
       unsigned Align = MFI->getObjectAlignment(i);
       // Adjust to alignment boundary
-      Offset = RoundUpToAlignment(Offset, Align);
+      Offset = RoundUpToAlignment(Offset, Align, Skew);
 
       MFI->setObjectOffset(i, Offset);
       Offset += MFI->getObjectSize(i);
@@ -628,7 +627,7 @@ void PEI::calculateFrameObjectOffsets(MachineFunction &Fn) {
     RS->getScavengingFrameIndices(SFIs);
     for (SmallVectorImpl<int>::iterator I = SFIs.begin(),
            IE = SFIs.end(); I != IE; ++I)
-      AdjustStackOffset(MFI, *I, StackGrowsDown, Offset, MaxAlign);
+      AdjustStackOffset(MFI, *I, StackGrowsDown, Offset, MaxAlign, Skew);
   }
 
   // FIXME: Once this is working, then enable flag will change to a target
@@ -639,7 +638,7 @@ void PEI::calculateFrameObjectOffsets(MachineFunction &Fn) {
     unsigned Align = MFI->getLocalFrameMaxAlign();
 
     // Adjust to alignment boundary.
-    Offset = RoundUpToAlignment(Offset, Align);
+    Offset = RoundUpToAlignment(Offset, Align, Skew);
 
     DEBUG(dbgs() << "Local frame base offset: " << Offset << "\n");
 
@@ -666,7 +665,7 @@ void PEI::calculateFrameObjectOffsets(MachineFunction &Fn) {
     StackObjSet AddrOfObjs;
 
     AdjustStackOffset(MFI, MFI->getStackProtectorIndex(), StackGrowsDown,
-                      Offset, MaxAlign);
+                      Offset, MaxAlign, Skew);
 
     // Assign large stack objects first.
     for (unsigned i = 0, e = MFI->getObjectIndexEnd(); i != e; ++i) {
@@ -699,11 +698,11 @@ void PEI::calculateFrameObjectOffsets(MachineFunction &Fn) {
     }
 
     AssignProtectedObjSet(LargeArrayObjs, ProtectedObjs, MFI, StackGrowsDown,
-                          Offset, MaxAlign);
+                          Offset, MaxAlign, Skew);
     AssignProtectedObjSet(SmallArrayObjs, ProtectedObjs, MFI, StackGrowsDown,
-                          Offset, MaxAlign);
+                          Offset, MaxAlign, Skew);
     AssignProtectedObjSet(AddrOfObjs, ProtectedObjs, MFI, StackGrowsDown,
-                          Offset, MaxAlign);
+                          Offset, MaxAlign, Skew);
   }
 
   // Then assign frame offsets to stack objects that are not used to spill
@@ -723,7 +722,7 @@ void PEI::calculateFrameObjectOffsets(MachineFunction &Fn) {
     if (ProtectedObjs.count(i))
       continue;
 
-    AdjustStackOffset(MFI, i, StackGrowsDown, Offset, MaxAlign);
+    AdjustStackOffset(MFI, i, StackGrowsDown, Offset, MaxAlign, Skew);
   }
 
   // Make sure the special register scavenging spill slot is closest to the
@@ -733,7 +732,7 @@ void PEI::calculateFrameObjectOffsets(MachineFunction &Fn) {
     RS->getScavengingFrameIndices(SFIs);
     for (SmallVectorImpl<int>::iterator I = SFIs.begin(),
            IE = SFIs.end(); I != IE; ++I)
-      AdjustStackOffset(MFI, *I, StackGrowsDown, Offset, MaxAlign);
+      AdjustStackOffset(MFI, *I, StackGrowsDown, Offset, MaxAlign, Skew);
   }
 
   if (!TFI.targetHandlesStackFrameRounding()) {
@@ -758,7 +757,7 @@ void PEI::calculateFrameObjectOffsets(MachineFunction &Fn) {
     // If the frame pointer is eliminated, all frame offsets will be relative to
     // SP not FP. Align to MaxAlign so this works.
     StackAlign = std::max(StackAlign, MaxAlign);
-    Offset = RoundUpToAlignment(Offset, StackAlign);
+    Offset = RoundUpToAlignment(Offset, StackAlign, Skew);
   }
 
   // Update frame info to pretend that this is part of the stack...

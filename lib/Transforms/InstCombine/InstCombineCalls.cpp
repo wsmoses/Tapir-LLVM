@@ -936,12 +936,6 @@ Instruction *InstCombiner::visitCallInst(CallInst &CI) {
     break;
   }
 
-  case Intrinsic::x86_sse41_pmovsxbd:
-  case Intrinsic::x86_sse41_pmovsxbq:
-  case Intrinsic::x86_sse41_pmovsxbw:
-  case Intrinsic::x86_sse41_pmovsxdq:
-  case Intrinsic::x86_sse41_pmovsxwd:
-  case Intrinsic::x86_sse41_pmovsxwq:
   case Intrinsic::x86_avx2_pmovsxbd:
   case Intrinsic::x86_avx2_pmovsxbq:
   case Intrinsic::x86_avx2_pmovsxbw:
@@ -1167,6 +1161,47 @@ Instruction *InstCombiner::visitCallInst(CallInst &CI) {
       return SelectInst::Create(NewSelector, Op1, Op0, "blendv");
     }
     break;
+  }
+
+  case Intrinsic::x86_ssse3_pshuf_b_128:
+  case Intrinsic::x86_avx2_pshuf_b: {
+    // Turn pshufb(V1,mask) -> shuffle(V1,Zero,mask) if mask is a constant.
+    auto *V = II->getArgOperand(1);
+    auto *VTy = cast<VectorType>(V->getType());
+    unsigned NumElts = VTy->getNumElements();
+    assert((NumElts == 16 || NumElts == 32) &&
+           "Unexpected number of elements in shuffle mask!");
+    // Initialize the resulting shuffle mask to all zeroes.
+    uint32_t Indexes[32] = {0};
+
+    if (auto *Mask = dyn_cast<ConstantDataVector>(V)) {
+      // Each byte in the shuffle control mask forms an index to permute the
+      // corresponding byte in the destination operand.
+      for (unsigned I = 0; I < NumElts; ++I) {
+        int8_t Index = Mask->getElementAsInteger(I);
+        // If the most significant bit (bit[7]) of each byte of the shuffle
+        // control mask is set, then zero is written in the result byte.
+        // The zero vector is in the right-hand side of the resulting
+        // shufflevector.
+ 
+        // The value of each index is the least significant 4 bits of the
+        // shuffle control byte.      
+        Indexes[I] = (Index < 0) ? NumElts : Index & 0xF;
+      }
+    } else if (!isa<ConstantAggregateZero>(V))
+      break;
+
+    // The value of each index for the high 128-bit lane is the least
+    // significant 4 bits of the respective shuffle control byte.
+    for (unsigned I = 16; I < NumElts; ++I)
+      Indexes[I] += I & 0xF0;
+
+    auto NewC = ConstantDataVector::get(V->getContext(),
+                                        makeArrayRef(Indexes, NumElts));
+    auto V1 = II->getArgOperand(0);
+    auto V2 = Constant::getNullValue(II->getType());
+    auto Shuffle = Builder->CreateShuffleVector(V1, V2, NewC);
+    return ReplaceInstUsesWith(CI, Shuffle);
   }
 
   case Intrinsic::x86_avx_vpermilvar_ps:
@@ -1396,6 +1431,29 @@ Instruction *InstCombiner::visitCallInst(CallInst &CI) {
     // restore.
     if (!CannotRemove && (isa<ReturnInst>(TI) || isa<ResumeInst>(TI)))
       return EraseInstFromFunction(CI);
+    break;
+  }
+  case Intrinsic::lifetime_start: {
+    // Remove trivially empty lifetime_start/end ranges, i.e. a start
+    // immediately followed by an end (ignoring debuginfo or other
+    // lifetime markers in between).
+    BasicBlock::iterator BI = II, BE = II->getParent()->end();
+    for (++BI; BI != BE; ++BI) {
+      if (IntrinsicInst *LTE = dyn_cast<IntrinsicInst>(BI)) {
+        if (isa<DbgInfoIntrinsic>(LTE) ||
+            LTE->getIntrinsicID() == Intrinsic::lifetime_start)
+          continue;
+        if (LTE->getIntrinsicID() == Intrinsic::lifetime_end) {
+          if (II->getOperand(0) == LTE->getOperand(0) &&
+              II->getOperand(1) == LTE->getOperand(1)) {
+            EraseInstFromFunction(*LTE);
+            return EraseInstFromFunction(*II);
+          }
+          continue;
+        }
+      }
+      break;
+    }
     break;
   }
   case Intrinsic::assume: {

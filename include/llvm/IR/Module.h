@@ -333,6 +333,11 @@ public:
   /// registered in this LLVMContext.
   void getMDKindNames(SmallVectorImpl<StringRef> &Result) const;
 
+  /// Populate client supplied SmallVector with the bundle tags registered in
+  /// this LLVMContext.  The bundle tags are ordered by increasing bundle IDs.
+  /// \see LLVMContext::getOperandBundleTagID
+  void getOperandBundleTags(SmallVectorImpl<StringRef> &Result) const;
+
   /// Return the type with the specified name, or null if there is none by that
   /// name.
   StructType *getTypeByName(StringRef Name) const;
@@ -651,7 +656,8 @@ public:
   /// uselistorder directives so that use-lists can be recreated when reading
   /// the assembly.
   void print(raw_ostream &OS, AssemblyAnnotationWriter *AAW,
-             bool ShouldPreserveUseListOrder = false) const;
+             bool ShouldPreserveUseListOrder = false,
+             bool IsForDebug = false) const;
 
   /// Dump the module to stderr (for debugging).
   void dump() const;

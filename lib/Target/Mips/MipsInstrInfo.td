@@ -208,6 +208,9 @@ def IsNotNaCl    :    Predicate<"!Subtarget->isTargetNaCl()">;
 def UseTCCInDIV    :  AssemblerPredicate<"FeatureUseTCCInDIV">;
 def HasEVA       :    Predicate<"Subtarget->hasEVA()">,
                       AssemblerPredicate<"FeatureEVA,FeatureMips32r2">;
+def HasMSA : Predicate<"Subtarget->hasMSA()">,
+             AssemblerPredicate<"FeatureMSA">;
+
 
 //===----------------------------------------------------------------------===//
 // Mips GPR size adjectives.
@@ -298,6 +301,14 @@ class INSN_MIPS4_32R2_NOT_32R6_64R6 {
 // MIPS32r6 and MIPS64r6.
 class INSN_MIPS5_32R2_NOT_32R6_64R6 {
   list<Predicate> InsnPredicates = [HasMips5_32r2, NotMips32r6, NotMips64r6];
+}
+
+class ASE_MSA {
+  list<Predicate> InsnPredicates = [HasMSA];
+}
+
+class ASE_MSA64 {
+  list<Predicate> InsnPredicates = [HasMSA, HasMips64];
 }
 
 // Class used for separating microMIPSr6 and microMIPS (r3) instruction.
@@ -1498,9 +1509,11 @@ def CLZ : MMRel, CountLeading0<"clz", GPR32Opnd>, CLO_FM<0x20>,
 def CLO : MMRel, CountLeading1<"clo", GPR32Opnd>, CLO_FM<0x21>,
           ISA_MIPS32_NOT_32R6_64R6;
 
-/// Word Swap Bytes Within Halfwords
-def WSBH : MMRel, SubwordSwap<"wsbh", GPR32Opnd, II_WSBH>, SEB_FM<2, 0x20>,
-           ISA_MIPS32R2;
+let AdditionalPredicates = [NotInMicroMips] in {
+  /// Word Swap Bytes Within Halfwords
+  def WSBH : MMRel, SubwordSwap<"wsbh", GPR32Opnd, II_WSBH>, SEB_FM<2, 0x20>,
+             ISA_MIPS32R2;
+}
 
 /// No operation.
 def NOP : PseudoSE<(outs), (ins), []>, PseudoInstExpansion<(SLL ZERO, ZERO, 0)>;
@@ -1758,6 +1771,9 @@ def JalTwoReg : MipsAsmPseudoInst<(outs GPR32Opnd:$rd), (ins GPR32Opnd:$rs),
                       "jal\t$rd, $rs"> ;
 def JalOneReg : MipsAsmPseudoInst<(outs), (ins GPR32Opnd:$rs),
                       "jal\t$rs"> ;
+
+def NORImm : MipsAsmPseudoInst<(outs), (ins GPR32Opnd:$rs, GPR32Opnd:$rt, simm16:$imm),
+                               "nor\t$rs, $rt, $imm"> ;
 
 let hasDelaySlot = 1 in {
 def BneImm : MipsAsmPseudoInst<(outs GPR32Opnd:$rt),

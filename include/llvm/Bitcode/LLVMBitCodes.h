@@ -43,6 +43,11 @@ namespace bitc {
     TYPE_BLOCK_ID_NEW,
 
     USELIST_BLOCK_ID,
+
+    MODULE_STRTAB_BLOCK_ID,
+    FUNCTION_SUMMARY_BLOCK_ID,
+
+    OPERAND_BUNDLE_TAGS_BLOCK_ID
   };
 
 
@@ -129,6 +134,10 @@ namespace bitc {
     TYPE_CODE_FUNCTION = 21,    // FUNCTION: [vararg, retty, paramty x N]
 
     TYPE_CODE_TOKEN = 22        // TOKEN
+  };
+
+  enum OperandBundleTagCode {
+    OPERAND_BUNDLE_TAG = 1,     // TAG: [strchr x N]
   };
 
   // The type symbol table only has one code (TST_ENTRY_CODE).
@@ -369,9 +378,10 @@ namespace bitc {
     FUNC_CODE_INST_CLEANUPPAD = 52, // CLEANUPPAD: [num,args...]
     FUNC_CODE_INST_CATCHENDPAD = 53, // CATCHENDPAD: [] or [bb#]
     FUNC_CODE_INST_CLEANUPENDPAD = 54, // CLEANUPENDPAD: [val] or [val,bb#]
-    FUNC_CODE_INST_DETACH      = 55, // DETACH: [bb#, bb#]
-    FUNC_CODE_INST_REATTACH    = 56, // REATTACH
-    FUNC_CODE_INST_SYNC        = 57, // SYNC: [bb#]
+    FUNC_CODE_OPERAND_BUNDLE = 55, // OPERAND_BUNDLE: [tag#, value...]
+    FUNC_CODE_INST_DETACH      = 56, // DETACH: [bb#, bb#]
+    FUNC_CODE_INST_REATTACH    = 57, // REATTACH
+    FUNC_CODE_INST_SYNC        = 58, // SYNC: [bb#]
   };
 
   enum UseListCodes {

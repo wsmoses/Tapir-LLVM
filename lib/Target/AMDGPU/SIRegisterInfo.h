@@ -48,17 +48,11 @@ public:
 
   /// \returns true if this class contains only SGPR registers
   bool isSGPRClass(const TargetRegisterClass *RC) const {
-    if (!RC)
-      return false;
-
     return !hasVGPRs(RC);
   }
 
   /// \returns true if this class ID contains only SGPR registers
   bool isSGPRClassID(unsigned RCID) const {
-    if (static_cast<int>(RCID) == -1)
-      return false;
-
     return isSGPRClass(getRegClass(RCID));
   }
 
@@ -74,6 +68,11 @@ public:
   /// be returned.
   const TargetRegisterClass *getSubRegClass(const TargetRegisterClass *RC,
                                             unsigned SubIdx) const;
+
+  bool shouldRewriteCopySrc(const TargetRegisterClass *DefRC,
+                            unsigned DefSubReg,
+                            const TargetRegisterClass *SrcRC,
+                            unsigned SrcSubReg) const override;
 
   /// \p Channel This is the register channel (e.g. a value from 0-16), not the
   ///            SubReg index.
@@ -91,15 +90,18 @@ public:
   bool opCanUseInlineConstant(unsigned OpType) const;
 
   enum PreloadedValue {
-    TGID_X,
-    TGID_Y,
-    TGID_Z,
-    SCRATCH_WAVE_OFFSET,
-    SCRATCH_PTR,
-    INPUT_PTR,
-    TIDIG_X,
-    TIDIG_Y,
-    TIDIG_Z
+    // SGPRS:
+    SCRATCH_PTR         =  0,
+    INPUT_PTR           =  3,
+    TGID_X              = 10,
+    TGID_Y              = 11,
+    TGID_Z              = 12,
+    SCRATCH_WAVE_OFFSET = 14,
+    // VGPRS:
+    FIRST_VGPR_VALUE    = 15,
+    TIDIG_X             = FIRST_VGPR_VALUE,
+    TIDIG_Y             = 16,
+    TIDIG_Z             = 17,
   };
 
   /// \brief Returns the physical register that \p Value is stored in.

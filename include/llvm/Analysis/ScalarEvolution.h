@@ -253,6 +253,10 @@ namespace llvm {
     /// conditions dominating the backedge of a loop.
     bool WalkingBEDominatingConds;
 
+    /// Set to true by isKnownPredicateViaSplitting when we're trying to prove a
+    /// predicate by splitting it into a set of independent predicates.
+    bool ProvingSplitPredicate;
+
     /// Information about the number of loop iterations for which a loop exit's
     /// branch condition evaluates to the not-taken path.  This is a temporary
     /// pair of exact and max expressions that are eventually summarized in
@@ -411,6 +415,13 @@ namespace llvm {
     /// Provide the special handling we need to analyze PHI SCEVs.
     const SCEV *createNodeForPHI(PHINode *PN);
 
+    /// Provide special handling for a select-like instruction (currently this
+    /// is either a select instruction or a phi node).  \p I is the instruction
+    /// being processed, and it is assumed equivalent to "Cond ? TrueVal :
+    /// FalseVal".
+    const SCEV *createNodeForSelect(Instruction *I, Value *Cond, Value *TrueVal,
+                                    Value *FalseVal);
+
     /// Provide the special handling we need to analyze GEP SCEVs.
     const SCEV *createNodeForGEP(GEPOperator *GEP);
 
@@ -507,6 +518,13 @@ namespace llvm {
                        bool Inverse);
 
     /// Test whether the condition described by Pred, LHS, and RHS is true
+    /// whenever the condition described by FoundPred, FoundLHS, FoundRHS is
+    /// true.
+    bool isImpliedCond(ICmpInst::Predicate Pred, const SCEV *LHS,
+                       const SCEV *RHS, ICmpInst::Predicate FoundPred,
+                       const SCEV *FoundLHS, const SCEV *FoundRHS);
+
+    /// Test whether the condition described by Pred, LHS, and RHS is true
     /// whenever the condition described by Pred, FoundLHS, and FoundRHS is
     /// true.
     bool isImpliedCondOperands(ICmpInst::Predicate Pred,
@@ -529,6 +547,17 @@ namespace llvm {
                                         const SCEV *FoundLHS,
                                         const SCEV *FoundRHS);
 
+    /// Test whether the condition described by Pred, LHS, and RHS is true
+    /// whenever the condition described by Pred, FoundLHS, and FoundRHS is
+    /// true.
+    ///
+    /// This routine tries to rule out certain kinds of integer overflow, and
+    /// then tries to reason about arithmetic properties of the predicates.
+    bool isImpliedCondOperandsViaNoOverflow(ICmpInst::Predicate Pred,
+                                            const SCEV *LHS, const SCEV *RHS,
+                                            const SCEV *FoundLHS,
+                                            const SCEV *FoundRHS);
+
     /// If we know that the specified Phi is in the header of its containing
     /// loop, we know the loop executes a constant number of times, and the PHI
     /// node is just a recurrence involving constants, fold it.
@@ -540,6 +569,11 @@ namespace llvm {
     ///
     bool isKnownPredicateWithRanges(ICmpInst::Predicate Pred,
                                     const SCEV *LHS, const SCEV *RHS);
+
+    /// Try to split Pred LHS RHS into logical conjunctions (and's) and try to
+    /// prove them individually.
+    bool isKnownPredicateViaSplitting(ICmpInst::Predicate Pred, const SCEV *LHS,
+                                      const SCEV *RHS);
 
     /// Drop memoized information computed for S.
     void forgetMemoizedResults(const SCEV *S);
@@ -678,6 +712,12 @@ namespace llvm {
     const SCEV *getUMinExpr(const SCEV *LHS, const SCEV *RHS);
     const SCEV *getUnknown(Value *V);
     const SCEV *getCouldNotCompute();
+
+    /// \brief Return a SCEV for the constant 0 of a specific type.
+    const SCEV *getZero(Type *Ty) { return getConstant(Ty, 0); }
+
+    /// \brief Return a SCEV for the constant 1 of a specific type.
+    const SCEV *getOne(Type *Ty) { return getConstant(Ty, 1); }
 
     /// Return an expression for sizeof AllocTy that is type IntTy
     ///
