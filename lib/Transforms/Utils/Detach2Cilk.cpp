@@ -13,6 +13,8 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/Transforms/Scalar.h"
+#include "llvm/ADT/SmallPtrSet.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/Analysis/AssumptionCache.h"
 #include "llvm/IR/Constants.h"
@@ -31,6 +33,7 @@
 #include "llvm/IR/ValueSymbolTable.h"
 
 #include "llvm/IR/InstIterator.h"
+#include "llvm/Support/Debug.h"
 #include <iostream>
 
 #define DEBUG_TYPE "detach2cilk"
@@ -1090,7 +1093,7 @@ static llvm::AllocaInst *CreateStackFrame(Function &F) {
   
 	Instruction* I = F.getEntryBlock().getFirstNonPHIOrDbgOrLifetime();
 
-	AllocaInst* SF = new AllocaInst(SFTy, /*size*/nullptr, /*name*/stack_frame_name, /*insert before*/I);
+	AllocaInst* SF = new AllocaInst(SFTy, /*size*/nullptr, 8, /*name*/stack_frame_name, /*insert before*/I);
 	if( I == nullptr ) {
 		F.getEntryBlock().getInstList().push_back( SF );
 	}
@@ -1212,12 +1215,17 @@ bool createDetach(DetachInst& detach, Function& F){
 	BasicBlock* Spawned  = detach.getSuccessor(0);
 	BasicBlock* Continue = detach.getSuccessor(1);
 
-	std::set<BasicBlock*> functionPieces;
-	std::vector<BasicBlock*> todo = { Spawned };
+	// std::set<BasicBlock*> functionPieces;
+	// std::vector<BasicBlock*> todo = { Spawned };
+	SmallPtrSet<BasicBlock *, 32> functionPieces;
+	SmallVector<BasicBlock *, 32> todo;
+	todo.push_back(Spawned);
 
 	while( todo.size() > 0 ){
-		BasicBlock* BB = todo.back(); todo.pop_back();
-		functionPieces.insert(BB);
+		BasicBlock* BB = todo.pop_back_val();
+		// functionPieces.insert(BB);
+		if (!functionPieces.insert(BB).second)
+		  continue;
 
 		TerminatorInst* term = BB->getTerminator();      
 		if( term == nullptr ) return false;
@@ -1249,20 +1257,26 @@ bool createDetach(DetachInst& detach, Function& F){
 
 	std::vector<BasicBlock*> blocks( functionPieces.begin(), functionPieces.end() );
 	for( auto& a : blocks ){
-		if( a == Spawned ) {
+	  if( a == Spawned ) {
 			//assert only came from the detach
 			for (pred_iterator PI = pred_begin(a), E = pred_end(a); PI != E; ++PI) {
 				BasicBlock *Pred = *PI;
-				if( Pred != detach.getParent() ) {
-					assert( 0 && "Block inside of detached context branched into from outside branch context from detach");
-				}
+				if ( Pred == a ) continue;
+				assert(Pred == detach.getParent() &&
+				       "Block inside of detached context branched into from outside branch context from detach");
+				// if( Pred != detach.getParent() ) {
+				//   DEBUG(dbgs() << "Bad pred " << *Pred);
+				// 	assert( 0 && "Block inside of detached context branched into from outside branch context from detach");
+				// }
 			}
 		} else {
 			for (pred_iterator PI = pred_begin(a), E = pred_end(a); PI != E; ++PI) {
 				BasicBlock *Pred = *PI;
-				if( functionPieces.find(Pred) == functionPieces.end() ) {
-					assert( 0 && "Block inside of detached context branched into from outside branch context");
-				}
+				assert(functionPieces.count(Pred) &&
+				       "Block inside of detached context branched into from outside branch context");
+				// if( functionPieces.find(Pred) == functionPieces.end() ) {
+				// 	assert( 0 && "Block inside of detached context branched into from outside branch context");
+				// }
 			}
 		}
 	}
@@ -1317,9 +1331,14 @@ bool createDetach(DetachInst& detach, Function& F){
 	assert(sf);
 	Value* args[1] = { sf };
 
-  //TODO check difference between frame fast and frame fast 1
-	Instruction* call = CallInst::Create(CILKRTS_FUNC(enter_frame_fast_1, *M), args, "", extracted->getEntryBlock().getTerminator() );
 
+	//TODO check difference between frame fast and frame fast 1
+	Instruction* call = CallInst::Create(CILKRTS_FUNC(enter_frame_fast_1, *M), args, "", extracted->getEntryBlock().getTerminator() );
+	// IRBuilder<> B(call);
+	// // sf->worker = 0;
+	// StoreField(B,
+	// 	   Constant::getNullValue(TypeBuilder<__cilkrts_worker*, false>::get(M->getContext())),
+	// 	   sf, StackFrameBuilder::worker);
 	Instruction* call2 = CallInst::Create(CILKRTS_FUNC(detach, *M), args, "", extracted->getEntryBlock().getTerminator() );
 
 	ReturnInst* ret = nullptr;
@@ -1339,6 +1358,7 @@ bool createDetach(DetachInst& detach, Function& F){
 	   __cilkrts_leave_frame(&sf);
 	 */
 	CallInst::Create(GetCilkParentEpilogue(*M), ArrayRef<Value*>(args),"",ret);
+	// CallInst::Create(GetCilkHelperEpilogue(*M), ArrayRef<Value*>(args),"",ret);
 
 
 	/*
