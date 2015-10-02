@@ -219,9 +219,15 @@ FunctionPass *createPromoteMemoryToRegisterPass();
 
 //===----------------------------------------------------------------------===//
 //
-// PromoteDetachToCilkk
+// PromoteDetachToCilk
 //
 FunctionPass *createPromoteDetachToCilkPass();
+
+//===----------------------------------------------------------------------===//
+//
+// PromoteDetachToCilksan
+//
+FunctionPass *createPromoteDetachToCilksanPass();
 
 //===----------------------------------------------------------------------===//
 //
