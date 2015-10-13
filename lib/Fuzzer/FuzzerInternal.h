@@ -53,8 +53,19 @@ void ComputeSHA1(const uint8_t *Data, size_t Len, uint8_t *Out);
 // Changes U to contain only ASCII (isprint+isspace) characters.
 // Returns true iff U has been changed.
 bool ToASCII(Unit &U);
+bool IsASCII(const Unit &U);
 
 int NumberOfCpuCores();
+
+// Dictionary.
+
+// Parses one dictionary entry.
+// If successfull, write the enty to Unit and returns true,
+// otherwise returns false.
+bool ParseOneDictionaryEntry(const std::string &Str, Unit *U);
+// Parses the dictionary file, fills Units, returns true iff all lines
+// were parsed succesfully.
+bool ParseDictionaryFile(const std::string &Text, std::vector<Unit> *Units);
 
 class Fuzzer {
  public:
@@ -79,10 +90,11 @@ class Fuzzer {
     std::string OutputCorpus;
     std::string SyncCommand;
     std::vector<std::string> Tokens;
+    std::vector<Unit> Dictionary;
   };
   Fuzzer(UserSuppliedFuzzer &USF, FuzzingOptions Options);
   void AddToCorpus(const Unit &U) { Corpus.push_back(U); }
-  void Loop(size_t NumIterations);
+  void Loop();
   void ShuffleAndMinimize();
   void InitializeTraceState();
   size_t CorpusSize() const { return Corpus.size(); }
@@ -103,10 +115,10 @@ class Fuzzer {
   static void StaticAlarmCallback();
 
   Unit SubstituteTokens(const Unit &U) const;
+  void ExecuteCallback(const Unit &U);
 
  private:
   void AlarmCallback();
-  void ExecuteCallback(const Unit &U);
   void MutateAndTestOne(Unit *U);
   void ReportNewCoverage(size_t NewCoverage, const Unit &U);
   size_t RunOne(const Unit &U);

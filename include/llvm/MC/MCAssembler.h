@@ -576,8 +576,6 @@ private:
 
   MCObjectWriter &Writer;
 
-  raw_ostream &OS;
-
   SectionListType Sections;
 
   SymbolDataListType Symbols;
@@ -715,16 +713,13 @@ public:
 
 public:
   /// Construct a new assembler instance.
-  ///
-  /// \param OS The stream to output to.
   //
   // FIXME: How are we going to parameterize this? Two obvious options are stay
   // concrete and require clients to pass in a target like object. The other
   // option is to make this abstract, and have targets provide concrete
   // implementations as we do with AsmParser.
   MCAssembler(MCContext &Context_, MCAsmBackend &Backend_,
-              MCCodeEmitter &Emitter_, MCObjectWriter &Writer_,
-              raw_ostream &OS);
+              MCCodeEmitter &Emitter_, MCObjectWriter &Writer_);
   ~MCAssembler();
 
   /// Reuse an assembler instance

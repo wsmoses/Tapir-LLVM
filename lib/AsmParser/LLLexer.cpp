@@ -587,6 +587,8 @@ lltok::Kind LLLexer::LexIdentifier() {
   KEYWORD(preserve_mostcc);
   KEYWORD(preserve_allcc);
   KEYWORD(ghccc);
+  KEYWORD(hhvmcc);
+  KEYWORD(hhvm_ccc);
 
   KEYWORD(cc);
   KEYWORD(c);
@@ -760,6 +762,7 @@ lltok::Kind LLLexer::LexIdentifier() {
   INSTKEYWORD(terminatepad, TerminatePad);
   INSTKEYWORD(cleanuppad,   CleanupPad);
   INSTKEYWORD(catchendpad,  CatchEndPad);
+  INSTKEYWORD(cleanupendpad, CleanupEndPad);
 #undef INSTKEYWORD
 
 #define DWKEYWORD(TYPE, TOKEN)                                                 \
