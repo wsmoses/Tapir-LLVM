@@ -97,17 +97,17 @@ void MCAsmLayout::invalidateFragmentsFrom(MCFragment *F) {
 
 void MCAsmLayout::ensureValid(const MCFragment *F) const {
   MCSection *Sec = F->getParent();
-  MCFragment *Cur = LastValidFragment[Sec];
-  if (!Cur)
-    Cur = Sec->begin();
+  MCSection::iterator I;
+  if (MCFragment *Cur = LastValidFragment[Sec])
+    I = ++MCSection::iterator(Cur);
   else
-    Cur = Cur->getNextNode();
+    I = Sec->begin();
 
   // Advance the layout position until the fragment is valid.
   while (!isFragmentValid(F)) {
-    assert(Cur && "Layout bookkeeping error");
-    const_cast<MCAsmLayout*>(this)->layoutFragment(Cur);
-    Cur = Cur->getNextNode();
+    assert(I != Sec->end() && "Layout bookkeeping error");
+    const_cast<MCAsmLayout *>(this)->layoutFragment(&*I);
+    ++I;
   }
 }
 
@@ -277,7 +277,7 @@ MCFragment::MCFragment(FragmentType Kind, bool HasInstructions,
     : Kind(Kind), HasInstructions(HasInstructions), AlignToBundleEnd(false),
       BundlePadding(BundlePadding), Parent(Parent), Atom(nullptr),
       Offset(~UINT64_C(0)) {
-  if (Parent)
+  if (Parent && !isDummy())
     Parent->getFragmentList().push_back(this);
 }
 
@@ -319,6 +319,9 @@ void MCFragment::destroy() {
     case FT_SafeSEH:
       delete cast<MCSafeSEHFragment>(this);
       return;
+    case FT_Dummy:
+      delete cast<MCDummyFragment>(this);
+      return;
   }
 }
 
@@ -355,6 +358,14 @@ void MCAssembler::reset() {
   getEmitter().reset();
   getWriter().reset();
   getLOHContainer().reset();
+}
+
+bool MCAssembler::registerSection(MCSection &Section) {
+  if (Section.isRegistered())
+    return false;
+  Sections.push_back(&Section);
+  Section.setIsRegistered(true);
+  return true;
 }
 
 bool MCAssembler::isThumbFunc(const MCSymbol *Symbol) const {
@@ -403,7 +414,7 @@ const MCSymbol *MCAssembler::getAtom(const MCSymbol &S) const {
     return &S;
 
   // Absolute and undefined symbols have no defining atom.
-  if (!S.getFragment())
+  if (!S.isInSection())
     return nullptr;
 
   // Non-linker visible symbols in sections which can't be atomized have no
@@ -539,6 +550,8 @@ uint64_t MCAssembler::computeFragmentSize(const MCAsmLayout &Layout,
     return cast<MCDwarfLineAddrFragment>(F).getContents().size();
   case MCFragment::FT_DwarfFrame:
     return cast<MCDwarfCallFrameFragment>(F).getContents().size();
+  case MCFragment::FT_Dummy:
+    llvm_unreachable("Should not have been added");
   }
 
   llvm_unreachable("invalid fragment kind");
@@ -772,6 +785,8 @@ static void writeFragment(const MCAssembler &Asm, const MCAsmLayout &Layout,
     OW->writeBytes(CF.getContents());
     break;
   }
+  case MCFragment::FT_Dummy:
+    llvm_unreachable("Should not have been added");
   }
 
   assert(OW->getStream().tell() - Start == FragmentSize &&
@@ -1080,7 +1095,7 @@ bool MCAssembler::layoutSectionOnce(MCAsmLayout &Layout, MCSection &Sec) {
       break;
     }
     if (RelaxedFrag && !FirstRelaxedFragment)
-      FirstRelaxedFragment = I;
+      FirstRelaxedFragment = &*I;
   }
   if (FirstRelaxedFragment) {
     Layout.invalidateFragmentsFrom(FirstRelaxedFragment);
@@ -1139,6 +1154,9 @@ void MCFragment::dump() {
   case MCFragment::FT_DwarfFrame: OS << "MCDwarfCallFrameFragment"; break;
   case MCFragment::FT_LEB:   OS << "MCLEBFragment"; break;
   case MCFragment::FT_SafeSEH:    OS << "MCSafeSEHFragment"; break;
+  case MCFragment::FT_Dummy:
+    OS << "MCDummyFragment";
+    break;
   }
 
   OS << "<MCFragment " << (void*) this << " LayoutOrder:" << LayoutOrder
@@ -1237,6 +1255,8 @@ void MCFragment::dump() {
     OS << " Sym:" << F->getSymbol();
     break;
   }
+  case MCFragment::FT_Dummy:
+    break;
   }
   OS << ">";
 }

@@ -78,7 +78,7 @@ public:
         : PhysReg(PhysReg), LaneMask(LaneMask) {}
   };
 
-protected:
+private:
   typedef ilist<MachineInstr> Instructions;
   Instructions Insts;
   const BasicBlock *BB;
@@ -181,7 +181,7 @@ public:
     Ty &operator*() const { return *MII; }
     Ty *operator->() const { return &operator*(); }
 
-    operator Ty*() const { return MII; }
+    operator Ty *() const { return MII.getNodePtrUnchecked(); }
 
     bool operator==(const bundle_iterator &X) const {
       return MII == X.MII;
@@ -600,7 +600,7 @@ public:
   /// remove_instr to remove individual instructions from a bundle.
   MachineInstr *remove(MachineInstr *I) {
     assert(!I->isBundled() && "Cannot remove bundled instructions");
-    return Insts.remove(I);
+    return Insts.remove(instr_iterator(I));
   }
 
   /// Remove the possibly bundled instruction from the instruction list

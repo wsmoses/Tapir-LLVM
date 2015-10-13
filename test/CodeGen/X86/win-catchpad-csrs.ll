@@ -72,7 +72,7 @@ catchendblock:                                    ; preds = %catch,
 ; X86: jmp [[contbb]]
 
 ; X86: "?catch$[[catch1bb:[0-9]+]]@?0?try_catch_catch@4HA":
-; X86: LBB0_[[catch1bb]]: # %catch{{$}}
+; X86: LBB0_[[catch1bb]]: # %catch.dispatch{{$}}
 ; X86: pushl %ebp
 ; X86-NOT: pushl
 ; X86: subl $16, %esp
@@ -119,10 +119,12 @@ catchendblock:                                    ; preds = %catch,
 ; X64: retq
 
 ; X64: "?catch$[[catch1bb:[0-9]+]]@?0?try_catch_catch@4HA":
-; X64: LBB0_[[catch1bb]]: # %catch{{$}}
+; X64: LBB0_[[catch1bb]]: # %catch.dispatch{{$}}
 ; X64: movq %rdx, 16(%rsp)
 ; X64: pushq %rbp
 ; X64: .seh_pushreg 5
+; X64: pushq %rsi
+; X64: .seh_pushreg 6
 ; X64: subq $32, %rsp
 ; X64: .seh_stackalloc 32
 ; X64: leaq 32(%rdx), %rbp
@@ -131,6 +133,7 @@ catchendblock:                                    ; preds = %catch,
 ; X64: callq f
 ; X64: leaq [[contbb]](%rip), %rax
 ; X64: addq $32, %rsp
+; X64: popq %rsi
 ; X64: popq %rbp
 ; X64: retq
 

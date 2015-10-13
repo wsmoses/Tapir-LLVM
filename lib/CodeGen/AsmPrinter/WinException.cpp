@@ -38,6 +38,7 @@
 #include "llvm/Target/TargetLoweringObjectFile.h"
 #include "llvm/Target/TargetOptions.h"
 #include "llvm/Target/TargetRegisterInfo.h"
+#include "llvm/Target/TargetSubtargetInfo.h"
 using namespace llvm;
 
 WinException::WinException(AsmPrinter *A) : EHStreamer(A) {
@@ -66,7 +67,6 @@ void WinException::beginFunction(const MachineFunction *MF) {
   bool hasEHFunclets = MMI->hasEHFunclets();
 
   const Function *F = MF->getFunction();
-  const Function *ParentF = MMI->getWinEHParent(F);
 
   shouldEmitMoves = Asm->needsSEHMoves();
 
@@ -90,11 +90,8 @@ void WinException::beginFunction(const MachineFunction *MF) {
 
   // If we're not using CFI, we don't want the CFI or the personality, but we
   // might want EH tables if we had EH pads.
-  // FIXME: If WinEHPrepare outlined something, we should emit the LSDA. Remove
-  // this once WinEHPrepare stops doing that.
   if (!Asm->MAI->usesWindowsCFI()) {
-    shouldEmitLSDA =
-        hasEHFunclets || (F->hasFnAttribute("wineh-parent") && F == ParentF);
+    shouldEmitLSDA = hasEHFunclets;
     shouldEmitPersonality = false;
     return;
   }
@@ -113,10 +110,10 @@ void WinException::endFunction(const MachineFunction *MF) {
   if (F->hasPersonalityFn())
     Per = classifyEHPersonality(F->getPersonalityFn());
 
-  // Get rid of any dead landing pads if we're not using a Windows EH scheme. In
-  // Windows EH schemes, the landing pad is not actually reachable. It only
-  // exists so that we can emit the right table data.
-  if (!isMSVCEHPersonality(Per))
+  // Get rid of any dead landing pads if we're not using funclets. In funclet
+  // schemes, the landing pad is not actually reachable. It only exists so
+  // that we can emit the right table data.
+  if (!isFuncletEHPersonality(Per))
     MMI->TidyLandingPads();
 
   endFunclet();
@@ -149,27 +146,24 @@ void WinException::endFunction(const MachineFunction *MF) {
   }
 }
 
-/// Retreive the MCSymbol for a GlobalValue or MachineBasicBlock. GlobalValues
-/// are used in the old WinEH scheme, and they will be removed eventually.
-static MCSymbol *getMCSymbolForMBBOrGV(AsmPrinter *Asm, ValueOrMBB Handler) {
-  if (!Handler)
+/// Retreive the MCSymbol for a GlobalValue or MachineBasicBlock.
+static MCSymbol *getMCSymbolForMBB(AsmPrinter *Asm,
+                                   const MachineBasicBlock *MBB) {
+  if (!MBB)
     return nullptr;
-  if (Handler.is<const MachineBasicBlock *>()) {
-    auto *MBB = Handler.get<const MachineBasicBlock *>();
-    assert(MBB->isEHFuncletEntry());
 
-    // Give catches and cleanups a name based off of their parent function and
-    // their funclet entry block's number.
-    const MachineFunction *MF = MBB->getParent();
-    const Function *F = MF->getFunction();
-    StringRef FuncLinkageName = GlobalValue::getRealLinkageName(F->getName());
-    MCContext &Ctx = MF->getContext();
-    StringRef HandlerPrefix = MBB->isCleanupFuncletEntry() ? "dtor" : "catch";
-    return Ctx.getOrCreateSymbol("?" + HandlerPrefix + "$" +
-                                 Twine(MBB->getNumber()) + "@?0?" +
-                                 FuncLinkageName + "@4HA");
-  }
-  return Asm->getSymbol(cast<GlobalValue>(Handler.get<const Value *>()));
+  assert(MBB->isEHFuncletEntry());
+
+  // Give catches and cleanups a name based off of their parent function and
+  // their funclet entry block's number.
+  const MachineFunction *MF = MBB->getParent();
+  const Function *F = MF->getFunction();
+  StringRef FuncLinkageName = GlobalValue::getRealLinkageName(F->getName());
+  MCContext &Ctx = MF->getContext();
+  StringRef HandlerPrefix = MBB->isCleanupFuncletEntry() ? "dtor" : "catch";
+  return Ctx.getOrCreateSymbol("?" + HandlerPrefix + "$" +
+                               Twine(MBB->getNumber()) + "@?0?" +
+                               FuncLinkageName + "@4HA");
 }
 
 void WinException::beginFunclet(const MachineBasicBlock &MBB,
@@ -179,7 +173,7 @@ void WinException::beginFunclet(const MachineBasicBlock &MBB,
   const Function *F = Asm->MF->getFunction();
   // If a symbol was not provided for the funclet, invent one.
   if (!Sym) {
-    Sym = getMCSymbolForMBBOrGV(Asm, &MBB);
+    Sym = getMCSymbolForMBB(Asm, &MBB);
 
     // Describe our funclet symbol as a function with internal linkage.
     Asm->OutStreamer->BeginCOFFSymbolDef(Sym);
@@ -280,7 +274,6 @@ const MCExpr *WinException::create32bitRef(const MCSymbol *Value) {
 const MCExpr *WinException::create32bitRef(const Value *V) {
   if (!V)
     return MCConstantExpr::create(0, Asm->OutContext);
-  // FIXME: Delete the GlobalValue case once the new IR is fully functional.
   if (const auto *GV = dyn_cast<GlobalValue>(V))
     return create32bitRef(Asm->getSymbol(GV));
   return create32bitRef(MMI->getAddrLabelSymbol(cast<BasicBlock>(V)));
@@ -292,6 +285,15 @@ const MCExpr *WinException::getLabelPlusOne(MCSymbol *Label) {
                                  Asm->OutContext);
 }
 
+int WinException::getFrameIndexOffset(int FrameIndex) {
+  const TargetFrameLowering &TFI = *Asm->MF->getSubtarget().getFrameLowering();
+  unsigned UnusedReg;
+  if (Asm->MAI->usesWindowsCFI())
+    return TFI.getFrameIndexReferenceFromSP(*Asm->MF, FrameIndex, UnusedReg);
+  return TFI.getFrameIndexReference(*Asm->MF, FrameIndex, UnusedReg);
+}
+
+namespace {
 /// Information describing an invoke range.
 struct InvokeRange {
   MCSymbol *BeginLabel = nullptr;
@@ -329,6 +331,7 @@ private:
   MachineBasicBlock::const_iterator MBBIEnd;
   InvokeRange CurRange;
 };
+} // end anonymous namespace
 
 /// Invoke label range iteration logic. Increment MBBI until we find the next
 /// EH_LABEL pair, and then update MBBI to point after the end label.
@@ -415,163 +418,101 @@ void WinException::emitCSpecificHandlerTable(const MachineFunction *MF) {
   MCContext &Ctx = Asm->OutContext;
 
   WinEHFuncInfo &FuncInfo = MMI->getWinEHFuncInfo(MF->getFunction());
-  if (!FuncInfo.SEHUnwindMap.empty()) {
-    // Remember what state we were in the last time we found a begin try label.
-    // This allows us to coalesce many nearby invokes with the same state into
-    // one entry.
-    int LastEHState = -1;
-    MCSymbol *LastBeginLabel = nullptr;
-    MCSymbol *LastEndLabel = nullptr;
 
-    // Use the assembler to compute the number of table entries through label
-    // difference and division.
-    MCSymbol *TableBegin = Ctx.createTempSymbol("lsda_begin");
-    MCSymbol *TableEnd = Ctx.createTempSymbol("lsda_end");
-    const MCExpr *LabelDiff =
-        MCBinaryExpr::createSub(MCSymbolRefExpr::create(TableEnd, Ctx),
-                                MCSymbolRefExpr::create(TableBegin, Ctx), Ctx);
-    const MCExpr *EntrySize = MCConstantExpr::create(16, Ctx);
-    const MCExpr *EntryCount =
-        MCBinaryExpr::createDiv(LabelDiff, EntrySize, Ctx);
-    OS.EmitValue(EntryCount, 4);
+  // Remember what state we were in the last time we found a begin try label.
+  // This allows us to coalesce many nearby invokes with the same state into
+  // one entry.
+  int LastEHState = -1;
+  MCSymbol *LastBeginLabel = nullptr;
+  MCSymbol *LastEndLabel = nullptr;
 
-    OS.EmitLabel(TableBegin);
+  // Use the assembler to compute the number of table entries through label
+  // difference and division.
+  MCSymbol *TableBegin =
+      Ctx.createTempSymbol("lsda_begin", /*AlwaysAddSuffix=*/true);
+  MCSymbol *TableEnd =
+      Ctx.createTempSymbol("lsda_end", /*AlwaysAddSuffix=*/true);
+  const MCExpr *LabelDiff =
+      MCBinaryExpr::createSub(MCSymbolRefExpr::create(TableEnd, Ctx),
+                              MCSymbolRefExpr::create(TableBegin, Ctx), Ctx);
+  const MCExpr *EntrySize = MCConstantExpr::create(16, Ctx);
+  const MCExpr *EntryCount = MCBinaryExpr::createDiv(LabelDiff, EntrySize, Ctx);
+  OS.EmitValue(EntryCount, 4);
 
-    // Iterate over all the invoke try ranges. Unlike MSVC, LLVM currently only
-    // models exceptions from invokes. LLVM also allows arbitrary reordering of
-    // the code, so our tables end up looking a bit different. Rather than
-    // trying to match MSVC's tables exactly, we emit a denormalized table.  For
-    // each range of invokes in the same state, we emit table entries for all
-    // the actions that would be taken in that state. This means our tables are
-    // slightly bigger, which is OK.
-    for (const auto &MBB : *MF) {
-      for (InvokeRange &I : invoke_ranges(FuncInfo, MBB)) {
-        // If this invoke is in the same state as the last invoke and there were
-        // no non-throwing calls between it, extend the range to include both
-        // and continue.
-        if (!I.SawPotentiallyThrowing && I.State == LastEHState) {
-          LastEndLabel = I.EndLabel;
-          continue;
-        }
+  OS.EmitLabel(TableBegin);
 
-        // If this invoke ends a previous one, emit all the actions for this
-        // state.
-        if (LastEHState != -1) {
-          assert(LastBeginLabel && LastEndLabel);
-          for (int State = LastEHState; State != -1;) {
-            SEHUnwindMapEntry &UME = FuncInfo.SEHUnwindMap[State];
-            const MCExpr *FilterOrFinally;
-            const MCExpr *ExceptOrNull;
-            auto *Handler = UME.Handler.get<MachineBasicBlock *>();
-            if (UME.IsFinally) {
-              FilterOrFinally = create32bitRef(Handler->getSymbol());
-              ExceptOrNull = MCConstantExpr::create(0, Ctx);
-            } else {
-              // For an except, the filter can be 1 (catch-all) or a function
-              // label.
-              FilterOrFinally = UME.Filter ? create32bitRef(UME.Filter)
-                                           : MCConstantExpr::create(1, Ctx);
-              ExceptOrNull = create32bitRef(Handler->getSymbol());
-            }
+  // Iterate over all the invoke try ranges. Unlike MSVC, LLVM currently only
+  // models exceptions from invokes. LLVM also allows arbitrary reordering of
+  // the code, so our tables end up looking a bit different. Rather than
+  // trying to match MSVC's tables exactly, we emit a denormalized table.  For
+  // each range of invokes in the same state, we emit table entries for all
+  // the actions that would be taken in that state. This means our tables are
+  // slightly bigger, which is OK.
+  for (const auto &MBB : *MF) {
+    // Break out before we enter into a finally funclet.
+    // FIXME: We need to emit separate EH tables for cleanups.
+    if (MBB.isEHFuncletEntry() && &MBB != MF->begin())
+      break;
 
-            OS.EmitValue(getLabelPlusOne(LastBeginLabel), 4);
-            OS.EmitValue(getLabelPlusOne(LastEndLabel), 4);
-            OS.EmitValue(FilterOrFinally, 4);
-            OS.EmitValue(ExceptOrNull, 4);
-
-            State = UME.ToState;
-          }
-        }
-
-        LastBeginLabel = I.BeginLabel;
+    for (InvokeRange &I : invoke_ranges(FuncInfo, MBB)) {
+      // If this invoke is in the same state as the last invoke and there were
+      // no non-throwing calls between it, extend the range to include both
+      // and continue.
+      if (!I.SawPotentiallyThrowing && I.State == LastEHState) {
         LastEndLabel = I.EndLabel;
-        LastEHState = I.State;
+        continue;
       }
+
+      // If this invoke ends a previous one, emit all the actions for this
+      // state.
+      if (LastEHState != -1)
+        emitSEHActionsForRange(FuncInfo, LastBeginLabel, LastEndLabel,
+                               LastEHState);
+
+      LastBeginLabel = I.BeginLabel;
+      LastEndLabel = I.EndLabel;
+      LastEHState = I.State;
     }
-    OS.EmitLabel(TableEnd);
-    return;
   }
 
-  // Simplifying assumptions for first implementation:
-  // - Cleanups are not implemented.
-  // - Filters are not implemented.
+  // Hitting the end of the function causes us to emit the range for the
+  // previous invoke.
+  if (LastEndLabel)
+    emitSEHActionsForRange(FuncInfo, LastBeginLabel, LastEndLabel, LastEHState);
 
-  // The Itanium LSDA table sorts similar landing pads together to simplify the
-  // actions table, but we don't need that.
-  const std::vector<LandingPadInfo> &PadInfos = MMI->getLandingPads();
-  SmallVector<const LandingPadInfo *, 64> LandingPads;
-  LandingPads.reserve(PadInfos.size());
-  for (const auto &LP : PadInfos)
-    LandingPads.push_back(&LP);
+  OS.EmitLabel(TableEnd);
+}
 
-  // Compute label ranges for call sites as we would for the Itanium LSDA, but
-  // use an all zero action table because we aren't using these actions.
-  SmallVector<unsigned, 64> FirstActions;
-  FirstActions.resize(LandingPads.size());
-  SmallVector<CallSiteEntry, 64> CallSites;
-  computeCallSiteTable(CallSites, LandingPads, FirstActions);
+void WinException::emitSEHActionsForRange(WinEHFuncInfo &FuncInfo,
+                                          MCSymbol *BeginLabel,
+                                          MCSymbol *EndLabel, int State) {
+  auto &OS = *Asm->OutStreamer;
+  MCContext &Ctx = Asm->OutContext;
 
-  MCSymbol *EHFuncBeginSym = Asm->getFunctionBegin();
-  MCSymbol *EHFuncEndSym = Asm->getFunctionEnd();
-
-  // Emit the number of table entries.
-  unsigned NumEntries = 0;
-  for (const CallSiteEntry &CSE : CallSites) {
-    if (!CSE.LPad)
-      continue; // Ignore gaps.
-    NumEntries += CSE.LPad->SEHHandlers.size();
-  }
-  OS.EmitIntValue(NumEntries, 4);
-
-  // If there are no actions, we don't need to iterate again.
-  if (NumEntries == 0)
-    return;
-
-  // Emit the four-label records for each call site entry. The table has to be
-  // sorted in layout order, and the call sites should already be sorted.
-  for (const CallSiteEntry &CSE : CallSites) {
-    // Ignore gaps. Unlike the Itanium model, unwinding through a frame without
-    // an EH table entry will propagate the exception rather than terminating
-    // the program.
-    if (!CSE.LPad)
-      continue;
-    const LandingPadInfo *LPad = CSE.LPad;
-
-    // Compute the label range. We may reuse the function begin and end labels
-    // rather than forming new ones.
-    const MCExpr *Begin =
-        create32bitRef(CSE.BeginLabel ? CSE.BeginLabel : EHFuncBeginSym);
-    const MCExpr *End;
-    if (CSE.EndLabel) {
-      // The interval is half-open, so we have to add one to include the return
-      // address of the last invoke in the range.
-      End = getLabelPlusOne(CSE.EndLabel);
+  assert(BeginLabel && EndLabel);
+  while (State != -1) {
+    SEHUnwindMapEntry &UME = FuncInfo.SEHUnwindMap[State];
+    const MCExpr *FilterOrFinally;
+    const MCExpr *ExceptOrNull;
+    auto *Handler = UME.Handler.get<MachineBasicBlock *>();
+    if (UME.IsFinally) {
+      FilterOrFinally = create32bitRef(getMCSymbolForMBB(Asm, Handler));
+      ExceptOrNull = MCConstantExpr::create(0, Ctx);
     } else {
-      End = create32bitRef(EHFuncEndSym);
+      // For an except, the filter can be 1 (catch-all) or a function
+      // label.
+      FilterOrFinally = UME.Filter ? create32bitRef(UME.Filter)
+                                   : MCConstantExpr::create(1, Ctx);
+      ExceptOrNull = create32bitRef(Handler->getSymbol());
     }
 
-    // Emit an entry for each action.
-    for (SEHHandler Handler : LPad->SEHHandlers) {
-      OS.EmitValue(Begin, 4);
-      OS.EmitValue(End, 4);
+    OS.EmitValue(getLabelPlusOne(BeginLabel), 4);
+    OS.EmitValue(getLabelPlusOne(EndLabel), 4);
+    OS.EmitValue(FilterOrFinally, 4);
+    OS.EmitValue(ExceptOrNull, 4);
 
-      // Emit the filter or finally function pointer, if present. Otherwise,
-      // emit '1' to indicate a catch-all.
-      const Function *F = Handler.FilterOrFinally;
-      if (F)
-        OS.EmitValue(create32bitRef(Asm->getSymbol(F)), 4);
-      else
-        OS.EmitIntValue(1, 4);
-
-      // Emit the recovery address, if present. Otherwise, this must be a
-      // finally.
-      const BlockAddress *BA = Handler.RecoverBA;
-      if (BA)
-        OS.EmitValue(
-            create32bitRef(Asm->GetBlockAddressSymbol(BA)), 4);
-      else
-        OS.EmitIntValue(0, 4);
-    }
+    assert(UME.ToState < State && "states should decrease");
+    State = UME.ToState;
   }
 }
 
@@ -595,10 +536,14 @@ void WinException::emitCXXFrameHandler3Table(const MachineFunction *MF) {
     emitEHRegistrationOffsetLabel(FuncInfo, FuncLinkageName);
   }
 
+  int UnwindHelpOffset = 0;
+  if (Asm->MAI->usesWindowsCFI())
+    UnwindHelpOffset = getFrameIndexOffset(FuncInfo.UnwindHelpFrameIdx);
+
   MCSymbol *UnwindMapXData = nullptr;
   MCSymbol *TryBlockMapXData = nullptr;
   MCSymbol *IPToStateXData = nullptr;
-  if (!FuncInfo.UnwindMap.empty())
+  if (!FuncInfo.CxxUnwindMap.empty())
     UnwindMapXData = Asm->OutContext.getOrCreateSymbol(
         Twine("$stateUnwindMap$", FuncLinkageName));
   if (!FuncInfo.TryBlockMap.empty())
@@ -626,14 +571,14 @@ void WinException::emitCXXFrameHandler3Table(const MachineFunction *MF) {
   OS.EmitValueToAlignment(4);
   OS.EmitLabel(FuncInfoXData);
   OS.EmitIntValue(0x19930522, 4);                      // MagicNumber
-  OS.EmitIntValue(FuncInfo.UnwindMap.size(), 4);       // MaxState
+  OS.EmitIntValue(FuncInfo.CxxUnwindMap.size(), 4);       // MaxState
   OS.EmitValue(create32bitRef(UnwindMapXData), 4);     // UnwindMap
   OS.EmitIntValue(FuncInfo.TryBlockMap.size(), 4);     // NumTryBlocks
   OS.EmitValue(create32bitRef(TryBlockMapXData), 4);   // TryBlockMap
   OS.EmitIntValue(IPToStateTable.size(), 4);           // IPMapEntries
   OS.EmitValue(create32bitRef(IPToStateXData), 4);     // IPToStateMap
   if (Asm->MAI->usesWindowsCFI())
-    OS.EmitIntValue(FuncInfo.UnwindHelpFrameOffset, 4); // UnwindHelp
+    OS.EmitIntValue(UnwindHelpOffset, 4);              // UnwindHelp
   OS.EmitIntValue(0, 4);                               // ESTypeList
   OS.EmitIntValue(1, 4);                               // EHFlags
 
@@ -643,8 +588,9 @@ void WinException::emitCXXFrameHandler3Table(const MachineFunction *MF) {
   // };
   if (UnwindMapXData) {
     OS.EmitLabel(UnwindMapXData);
-    for (const WinEHUnwindMapEntry &UME : FuncInfo.UnwindMap) {
-      MCSymbol *CleanupSym = getMCSymbolForMBBOrGV(Asm, UME.Cleanup);
+    for (const CxxUnwindMapEntry &UME : FuncInfo.CxxUnwindMap) {
+      MCSymbol *CleanupSym =
+          getMCSymbolForMBB(Asm, UME.Cleanup.dyn_cast<MachineBasicBlock *>());
       OS.EmitIntValue(UME.ToState, 4);             // ToState
       OS.EmitValue(create32bitRef(CleanupSym), 4); // Action
     }
@@ -676,7 +622,7 @@ void WinException::emitCXXFrameHandler3Table(const MachineFunction *MF) {
       assert(0 <= TBME.TryLow && "bad trymap interval");
       assert(TBME.TryLow <= TBME.TryHigh && "bad trymap interval");
       assert(TBME.TryHigh < TBME.CatchHigh && "bad trymap interval");
-      assert(TBME.CatchHigh < int(FuncInfo.UnwindMap.size()) &&
+      assert(TBME.CatchHigh < int(FuncInfo.CxxUnwindMap.size()) &&
              "bad trymap interval");
 
       OS.EmitIntValue(TBME.TryLow, 4);                    // TryLow
@@ -701,17 +647,11 @@ void WinException::emitCXXFrameHandler3Table(const MachineFunction *MF) {
       OS.EmitLabel(HandlerMapXData);
       for (const WinEHHandlerType &HT : TBME.HandlerArray) {
         // Get the frame escape label with the offset of the catch object. If
-        // the index is -1, then there is no catch object, and we should emit an
-        // offset of zero, indicating that no copy will occur.
+        // the index is INT_MAX, then there is no catch object, and we should
+        // emit an offset of zero, indicating that no copy will occur.
         const MCExpr *FrameAllocOffsetRef = nullptr;
-        if (HT.CatchObjRecoverIdx >= 0) {
-          MCSymbol *FrameAllocOffset =
-              Asm->OutContext.getOrCreateFrameAllocSymbol(
-                  FuncLinkageName, HT.CatchObjRecoverIdx);
-          FrameAllocOffsetRef = MCSymbolRefExpr::create(
-              FrameAllocOffset, MCSymbolRefExpr::VK_None, Asm->OutContext);
-        } else if (HT.CatchObj.FrameOffset != INT_MAX) {
-          int Offset = HT.CatchObj.FrameOffset;
+        if (HT.CatchObj.FrameIndex != INT_MAX) {
+          int Offset = getFrameIndexOffset(HT.CatchObj.FrameIndex);
           // For 32-bit, the catch object offset is relative to the end of the
           // EH registration node. For 64-bit, it's relative to SP at the end of
           // the prologue.
@@ -724,7 +664,8 @@ void WinException::emitCXXFrameHandler3Table(const MachineFunction *MF) {
           FrameAllocOffsetRef = MCConstantExpr::create(0, Asm->OutContext);
         }
 
-        MCSymbol *HandlerSym = getMCSymbolForMBBOrGV(Asm, HT.Handler);
+        MCSymbol *HandlerSym =
+            getMCSymbolForMBB(Asm, HT.Handler.dyn_cast<MachineBasicBlock *>());
 
         OS.EmitIntValue(HT.Adjectives, 4);                  // Adjectives
         OS.EmitValue(create32bitRef(HT.TypeDescriptor), 4); // Type
@@ -732,7 +673,6 @@ void WinException::emitCXXFrameHandler3Table(const MachineFunction *MF) {
         OS.EmitValue(create32bitRef(HandlerSym), 4);        // Handler
 
         if (shouldEmitPersonality) {
-          // With the new IR, this is always 16 + 8 + getMaxCallFrameSize().
           // Keep this in sync with X86FrameLowering::emitPrologue.
           int ParentFrameOffset =
               16 + 8 + MF->getFrameInfo()->getMaxCallFrameSize();
@@ -787,7 +727,7 @@ void WinException::computeIP2StateTable(
       // Emit an entry indicating that PCs after 'Label' have this EH state.
       if (I.State != LastEHState)
         IPToStateTable.push_back(
-            std::make_pair(create32bitRef(I.BeginLabel), I.State));
+            std::make_pair(getLabelPlusOne(I.BeginLabel), I.State));
       LastEHState = I.State;
       LastEndLabel = I.EndLabel;
     }
@@ -860,63 +800,15 @@ void WinException::emitExceptHandlerTable(const MachineFunction *MF) {
     BaseState = -2;
   }
 
-  if (!FuncInfo.SEHUnwindMap.empty()) {
-    for (SEHUnwindMapEntry &UME : FuncInfo.SEHUnwindMap) {
-      MCSymbol *ExceptOrFinally =
-          UME.Handler.get<MachineBasicBlock *>()->getSymbol();
-      OS.EmitIntValue(UME.ToState, 4);                  // ToState
-      OS.EmitValue(create32bitRef(UME.Filter), 4);      // Filter
-      OS.EmitValue(create32bitRef(ExceptOrFinally), 4); // Except/Finally
-    }
-    return;
-  }
-  // FIXME: The following code is for the old landingpad-based SEH
-  // implementation. Remove it when possible.
-
-  // Build a list of pointers to LandingPadInfos and then sort by WinEHState.
-  const std::vector<LandingPadInfo> &PadInfos = MMI->getLandingPads();
-  SmallVector<const LandingPadInfo *, 4> LPads;
-  LPads.reserve((PadInfos.size()));
-  for (const LandingPadInfo &LPInfo : PadInfos)
-    LPads.push_back(&LPInfo);
-  std::sort(LPads.begin(), LPads.end(),
-            [](const LandingPadInfo *L, const LandingPadInfo *R) {
-              return L->WinEHState < R->WinEHState;
-            });
-
-  // For each action in each lpad, emit one of these:
-  // struct ScopeTableEntry {
-  //   int32_t EnclosingLevel;
-  //   int32_t (__cdecl *Filter)();
-  //   void *HandlerOrFinally;
-  // };
-  //
-  // The "outermost" action will use BaseState as its enclosing level. Each
-  // other action will refer to the previous state as its enclosing level.
-  int CurState = 0;
-  for (const LandingPadInfo *LPInfo : LPads) {
-    int EnclosingLevel = BaseState;
-    assert(CurState + int(LPInfo->SEHHandlers.size()) - 1 ==
-               LPInfo->WinEHState &&
-           "gaps in the SEH scope table");
-    for (auto I = LPInfo->SEHHandlers.rbegin(), E = LPInfo->SEHHandlers.rend();
-         I != E; ++I) {
-      const SEHHandler &Handler = *I;
-      const BlockAddress *BA = Handler.RecoverBA;
-      const Function *F = Handler.FilterOrFinally;
-      assert(F && "cannot catch all in 32-bit SEH without filter function");
-      const MCExpr *FilterOrNull =
-          create32bitRef(BA ? Asm->getSymbol(F) : nullptr);
-      const MCExpr *ExceptOrFinally = create32bitRef(
-          BA ? Asm->GetBlockAddressSymbol(BA) : Asm->getSymbol(F));
-
-      OS.EmitIntValue(EnclosingLevel, 4);
-      OS.EmitValue(FilterOrNull, 4);
-      OS.EmitValue(ExceptOrFinally, 4);
-
-      // The next state unwinds to this state.
-      EnclosingLevel = CurState;
-      CurState++;
-    }
+  assert(!FuncInfo.SEHUnwindMap.empty());
+  for (SEHUnwindMapEntry &UME : FuncInfo.SEHUnwindMap) {
+    MCSymbol *ExceptOrFinally =
+        UME.Handler.get<MachineBasicBlock *>()->getSymbol();
+    // -1 is usually the base state for "unwind to caller", but for
+    // _except_handler4 it's -2. Do that replacement here if necessary.
+    int ToState = UME.ToState == -1 ? BaseState : UME.ToState;
+    OS.EmitIntValue(ToState, 4);                      // ToState
+    OS.EmitValue(create32bitRef(UME.Filter), 4);      // Filter
+    OS.EmitValue(create32bitRef(ExceptOrFinally), 4); // Except/Finally
   }
 }

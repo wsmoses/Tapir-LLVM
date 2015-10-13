@@ -69,6 +69,9 @@ void SystemZInstrInfo::splitMove(MachineBasicBlock::iterator MI,
   MachineOperand &LowOffsetOp = MI->getOperand(2);
   LowOffsetOp.setImm(LowOffsetOp.getImm() + 8);
 
+  // Clear the kill flag for the address reg in the first instruction.
+  EarlierMI->getOperand(1).setIsKill(false);
+
   // Set the opcodes.
   unsigned HighOpcode = getOpcodeForOffset(NewOpcode, HighOffsetOp.getImm());
   unsigned LowOpcode = getOpcodeForOffset(NewOpcode, LowOffsetOp.getImm());
@@ -111,7 +114,7 @@ void SystemZInstrInfo::expandRIPseudo(MachineInstr *MI, unsigned LowOpcode,
 }
 
 // MI is a three-operand RIE-style pseudo instruction.  Replace it with
-// LowOpcode3 if the registers are both low GR32s, otherwise use a move
+// LowOpcodeK if the registers are both low GR32s, otherwise use a move
 // followed by HighOpcode or LowOpcode, depending on whether the target
 // is a high or low GR32.
 void SystemZInstrInfo::expandRIEPseudo(MachineInstr *MI, unsigned LowOpcode,
@@ -129,6 +132,7 @@ void SystemZInstrInfo::expandRIEPseudo(MachineInstr *MI, unsigned LowOpcode,
                   MI->getOperand(1).isKill());
     MI->setDesc(get(DestIsHigh ? HighOpcode : LowOpcode));
     MI->getOperand(1).setReg(DestReg);
+    MI->tieOperands(0, 1);
   }
 }
 

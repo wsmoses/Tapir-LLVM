@@ -10,10 +10,7 @@
 #ifndef LLVM_MC_MCASSEMBLER_H
 #define LLVM_MC_MCASSEMBLER_H
 
-#include "llvm/ADT/DenseMap.h"
-#include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/SmallPtrSet.h"
-#include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/ilist.h"
 #include "llvm/ADT/ilist_node.h"
 #include "llvm/ADT/iterator.h"
@@ -22,12 +19,7 @@
 #include "llvm/MC/MCFixup.h"
 #include "llvm/MC/MCInst.h"
 #include "llvm/MC/MCLinkerOptimizationHint.h"
-#include "llvm/MC/MCSection.h"
 #include "llvm/MC/MCSubtargetInfo.h"
-#include "llvm/Support/Casting.h"
-#include "llvm/Support/DataTypes.h"
-#include <algorithm>
-#include <vector> // FIXME: Shouldn't be needed.
 
 namespace llvm {
 class raw_ostream;
@@ -60,7 +52,8 @@ public:
     FT_Dwarf,
     FT_DwarfFrame,
     FT_LEB,
-    FT_SafeSEH
+    FT_SafeSEH,
+    FT_Dummy
   };
 
 private:
@@ -144,7 +137,17 @@ public:
   /// and only some fragments have a meaningful implementation.
   void setBundlePadding(uint8_t N) { BundlePadding = N; }
 
+  /// \brief Return true if given frgment has FT_Dummy type.
+  bool isDummy() const { return Kind == FT_Dummy; }
+
   void dump();
+};
+
+class MCDummyFragment : public MCFragment {
+public:
+  explicit MCDummyFragment(MCSection *Sec)
+      : MCFragment(FT_Dummy, false, 0, Sec){};
+  static bool classof(const MCFragment *F) { return F->getKind() == FT_Dummy; }
 };
 
 /// Interface implemented by fragments that contain encoded instructions and/or
@@ -860,13 +863,7 @@ public:
   /// \name Backend Data Access
   /// @{
 
-  bool registerSection(MCSection &Section) {
-    if (Section.isRegistered())
-      return false;
-    Sections.push_back(&Section);
-    Section.setIsRegistered(true);
-    return true;
-  }
+  bool registerSection(MCSection &Section);
 
   void registerSymbol(const MCSymbol &Symbol, bool *Created = nullptr);
 

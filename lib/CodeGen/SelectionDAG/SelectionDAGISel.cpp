@@ -922,13 +922,45 @@ void SelectionDAGISel::DoInstructionSelection() {
   PostprocessISelDAG();
 }
 
+static bool hasExceptionPointerOrCodeUser(const CatchPadInst *CPI) {
+  for (const User *U : CPI->users()) {
+    if (const IntrinsicInst *EHPtrCall = dyn_cast<IntrinsicInst>(U)) {
+      Intrinsic::ID IID = EHPtrCall->getIntrinsicID();
+      if (IID == Intrinsic::eh_exceptionpointer ||
+          IID == Intrinsic::eh_exceptioncode)
+        return true;
+    }
+  }
+  return false;
+}
+
 /// PrepareEHLandingPad - Emit an EH_LABEL, set up live-in registers, and
 /// do other setup for EH landing-pad blocks.
 bool SelectionDAGISel::PrepareEHLandingPad() {
   MachineBasicBlock *MBB = FuncInfo->MBB;
-
+  const BasicBlock *LLVMBB = MBB->getBasicBlock();
   const TargetRegisterClass *PtrRC =
       TLI->getRegClassFor(TLI->getPointerTy(CurDAG->getDataLayout()));
+
+  // Catchpads have one live-in register, which typically holds the exception
+  // pointer or code.
+  if (const auto *CPI = dyn_cast<CatchPadInst>(LLVMBB->getFirstNonPHI())) {
+    if (hasExceptionPointerOrCodeUser(CPI)) {
+      // Get or create the virtual register to hold the pointer or code.  Mark
+      // the live in physreg and copy into the vreg.
+      MCPhysReg EHPhysReg = TLI->getExceptionPointerRegister();
+      assert(EHPhysReg && "target lacks exception pointer register");
+      MBB->addLiveIn(EHPhysReg);
+      unsigned VReg = FuncInfo->getCatchPadExceptionPointerVReg(CPI, PtrRC);
+      BuildMI(*MBB, FuncInfo->InsertPt, SDB->getCurDebugLoc(),
+              TII->get(TargetOpcode::COPY), VReg)
+          .addReg(EHPhysReg, RegState::Kill);
+    }
+    return true;
+  }
+
+  if (!LLVMBB->isLandingPad())
+    return true;
 
   // Add a label to mark the beginning of the landing pad.  Deletion of the
   // landing pad can thus be detected via the MachineModuleInfo.
@@ -940,44 +972,6 @@ bool SelectionDAGISel::PrepareEHLandingPad() {
   const MCInstrDesc &II = TII->get(TargetOpcode::EH_LABEL);
   BuildMI(*MBB, FuncInfo->InsertPt, SDB->getCurDebugLoc(), II)
     .addSym(Label);
-
-  // If this is an MSVC-style personality function, we need to split the landing
-  // pad into several BBs.
-  const BasicBlock *LLVMBB = MBB->getBasicBlock();
-  const Constant *Personality = MF->getFunction()->getPersonalityFn();
-  if (const auto *PF = dyn_cast<Function>(Personality->stripPointerCasts()))
-    MF->getMMI().addPersonality(PF);
-  EHPersonality PersonalityType = classifyEHPersonality(Personality);
-
-  if (isMSVCEHPersonality(PersonalityType)) {
-    SmallVector<MachineBasicBlock *, 4> ClauseBBs;
-    const IntrinsicInst *ActionsCall =
-        dyn_cast<IntrinsicInst>(LLVMBB->getFirstInsertionPt());
-    // Get all invoke BBs that unwind to this landingpad.
-    SmallVector<MachineBasicBlock *, 4> InvokeBBs(MBB->pred_begin(),
-                                                  MBB->pred_end());
-    if (ActionsCall && ActionsCall->getIntrinsicID() == Intrinsic::eh_actions) {
-      // If this is a call to llvm.eh.actions followed by indirectbr, then we've
-      // run WinEHPrepare, and we should remove this block from the machine CFG.
-      // Mark the targets of the indirectbr as landingpads instead.
-      for (const BasicBlock *LLVMSucc : successors(LLVMBB)) {
-        MachineBasicBlock *ClauseBB = FuncInfo->MBBMap[LLVMSucc];
-        // Add the edge from the invoke to the clause.
-        for (MachineBasicBlock *InvokeBB : InvokeBBs)
-          InvokeBB->addSuccessor(ClauseBB);
-
-        // Mark the clause as a landing pad or MI passes will delete it.
-        ClauseBB->setIsEHPad();
-      }
-    }
-
-    // Remove the edge from the invoke to the lpad.
-    for (MachineBasicBlock *InvokeBB : InvokeBBs)
-      InvokeBB->removeSuccessor(MBB);
-
-    // Don't select instructions for the landingpad.
-    return false;
-  }
 
   // Mark exception register as live in.
   if (unsigned Reg = TLI->getExceptionPointerRegister())
@@ -1159,10 +1153,9 @@ void SelectionDAGISel::SelectAllBasicBlocks(const Function &Fn) {
     // Setup an EH landing-pad block.
     FuncInfo->ExceptionPointerVirtReg = 0;
     FuncInfo->ExceptionSelectorVirtReg = 0;
-    if (LLVMBB->isLandingPad())
+    if (LLVMBB->isEHPad())
       if (!PrepareEHLandingPad())
         continue;
-
 
     // Before doing SelectionDAG ISel, see if FastISel has been requested.
     if (FastIS) {

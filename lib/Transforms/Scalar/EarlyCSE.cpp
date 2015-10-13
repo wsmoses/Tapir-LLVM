@@ -290,12 +290,19 @@ public:
   /// current generation count.  The current generation count is incremented
   /// after every possibly writing memory operation, which ensures that we only
   /// CSE loads with other loads that have no intervening store.
-  typedef RecyclingAllocator<
-      BumpPtrAllocator,
-      ScopedHashTableVal<Value *, std::pair<Value *, unsigned>>>
+  struct LoadValue {
+    Value *Data;
+    unsigned Generation;
+    int MatchingId;
+    LoadValue() : Data(nullptr), Generation(0), MatchingId(-1) {}
+    LoadValue(Value *Data, unsigned Generation, unsigned MatchingId)
+        : Data(Data), Generation(Generation), MatchingId(MatchingId) {}
+  };
+  typedef RecyclingAllocator<BumpPtrAllocator,
+                             ScopedHashTableVal<Value *, LoadValue>>
       LoadMapAllocator;
-  typedef ScopedHashTable<Value *, std::pair<Value *, unsigned>,
-                          DenseMapInfo<Value *>, LoadMapAllocator> LoadHTType;
+  typedef ScopedHashTable<Value *, LoadValue, DenseMapInfo<Value *>,
+                          LoadMapAllocator> LoadHTType;
   LoadHTType AvailableLoads;
 
   /// \brief A scoped hash table of the current values of read-only call
@@ -410,17 +417,17 @@ private:
         Ptr = SI->getPointerOperand();
       }
     }
-    bool isLoad() { return Load; }
-    bool isStore() { return Store; }
-    bool isVolatile() { return Vol; }
-    bool isMatchingMemLoc(const ParseMemoryInst &Inst) {
+    bool isLoad() const { return Load; }
+    bool isStore() const { return Store; }
+    bool isVolatile() const { return Vol; }
+    bool isMatchingMemLoc(const ParseMemoryInst &Inst) const {
       return Ptr == Inst.Ptr && MatchingId == Inst.MatchingId;
     }
-    bool isValid() { return Ptr != nullptr; }
-    int getMatchingId() { return MatchingId; }
-    Value *getPtr() { return Ptr; }
-    bool mayReadFromMemory() { return MayReadFromMemory; }
-    bool mayWriteToMemory() { return MayWriteToMemory; }
+    bool isValid() const { return Ptr != nullptr; }
+    int getMatchingId() const { return MatchingId; }
+    Value *getPtr() const { return Ptr; }
+    bool mayReadFromMemory() const { return MayReadFromMemory; }
+    bool mayWriteToMemory() const { return MayWriteToMemory; }
 
   private:
     bool Load;
@@ -560,13 +567,13 @@ bool EarlyCSE::processNode(DomTreeNode *Node) {
 
       // If we have an available version of this load, and if it is the right
       // generation, replace this instruction.
-      std::pair<Value *, unsigned> InVal =
-          AvailableLoads.lookup(MemInst.getPtr());
-      if (InVal.first != nullptr && InVal.second == CurrentGeneration) {
-        Value *Op = getOrCreateResult(InVal.first, Inst->getType());
+      LoadValue InVal = AvailableLoads.lookup(MemInst.getPtr());
+      if (InVal.Data != nullptr && InVal.Generation == CurrentGeneration &&
+          InVal.MatchingId == MemInst.getMatchingId()) {
+        Value *Op = getOrCreateResult(InVal.Data, Inst->getType());
         if (Op != nullptr) {
           DEBUG(dbgs() << "EarlyCSE CSE LOAD: " << *Inst
-                       << "  to: " << *InVal.first << '\n');
+                       << "  to: " << *InVal.Data << '\n');
           if (!Inst->use_empty())
             Inst->replaceAllUsesWith(Op);
           Inst->eraseFromParent();
@@ -577,8 +584,9 @@ bool EarlyCSE::processNode(DomTreeNode *Node) {
       }
 
       // Otherwise, remember that we have this instruction.
-      AvailableLoads.insert(MemInst.getPtr(), std::pair<Value *, unsigned>(
-                                                  Inst, CurrentGeneration));
+      AvailableLoads.insert(
+          MemInst.getPtr(),
+          LoadValue(Inst, CurrentGeneration, MemInst.getMatchingId()));
       LastStore = nullptr;
       continue;
     }
@@ -652,8 +660,9 @@ bool EarlyCSE::processNode(DomTreeNode *Node) {
         // version of the pointer.  It is safe to forward from volatile stores
         // to non-volatile loads, so we don't have to check for volatility of
         // the store.
-        AvailableLoads.insert(MemInst.getPtr(), std::pair<Value *, unsigned>(
-                                                    Inst, CurrentGeneration));
+        AvailableLoads.insert(
+            MemInst.getPtr(),
+            LoadValue(Inst, CurrentGeneration, MemInst.getMatchingId()));
 
         // Remember that this was the last store we saw for DSE.
         if (!MemInst.isVolatile())

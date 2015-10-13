@@ -31,15 +31,15 @@ using namespace llvm;
 
 /// \brief Write samples to a text file.
 bool SampleProfileWriterText::write(StringRef FName, const FunctionSamples &S) {
-  if (S.empty())
-    return true;
-
-  OS << FName << ":" << S.getTotalSamples() << ":" << S.getHeadSamples()
-     << "\n";
+  OS << FName << ":" << S.getTotalSamples();
+  if (Indent == 0)
+    OS << ":" << S.getHeadSamples();
+  OS << "\n";
 
   for (const auto &I : S.getBodySamples()) {
     LineLocation Loc = I.first;
     const SampleRecord &Sample = I.second;
+    OS.indent(Indent + 1);
     if (Loc.Discriminator == 0)
       OS << Loc.LineOffset << ": ";
     else
@@ -51,6 +51,19 @@ bool SampleProfileWriterText::write(StringRef FName, const FunctionSamples &S) {
       OS << " " << J.first() << ":" << J.second;
     OS << "\n";
   }
+
+  Indent += 1;
+  for (const auto &I : S.getCallsiteSamples()) {
+    CallsiteLocation Loc = I.first;
+    const FunctionSamples &CalleeSamples = I.second;
+    OS.indent(Indent);
+    if (Loc.Discriminator == 0)
+      OS << Loc.LineOffset << ": ";
+    else
+      OS << Loc.LineOffset << "." << Loc.Discriminator << ": ";
+    write(Loc.CalleeName, CalleeSamples);
+  }
+  Indent -= 1;
 
   return true;
 }
@@ -71,14 +84,13 @@ SampleProfileWriterBinary::SampleProfileWriterBinary(StringRef F,
 /// \returns true if the samples were written successfully, false otherwise.
 bool SampleProfileWriterBinary::write(StringRef FName,
                                       const FunctionSamples &S) {
-  if (S.empty())
-    return true;
-
   OS << FName;
   encodeULEB128(0, OS);
   encodeULEB128(S.getTotalSamples(), OS);
   encodeULEB128(S.getHeadSamples(), OS);
   encodeULEB128(S.getBodySamples().size(), OS);
+
+  // Emit all the body samples.
   for (const auto &I : S.getBodySamples()) {
     LineLocation Loc = I.first;
     const SampleRecord &Sample = I.second;
@@ -93,6 +105,16 @@ bool SampleProfileWriterBinary::write(StringRef FName,
       encodeULEB128(0, OS);
       encodeULEB128(CalleeSamples, OS);
     }
+  }
+
+  // Recursively emit all the callsite samples.
+  encodeULEB128(S.getCallsiteSamples().size(), OS);
+  for (const auto &J : S.getCallsiteSamples()) {
+    CallsiteLocation Loc = J.first;
+    const FunctionSamples &CalleeSamples = J.second;
+    encodeULEB128(Loc.LineOffset, OS);
+    encodeULEB128(Loc.Discriminator, OS);
+    write(Loc.CalleeName, CalleeSamples);
   }
 
   return true;

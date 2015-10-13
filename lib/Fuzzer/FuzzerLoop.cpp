@@ -48,8 +48,10 @@ void Fuzzer::StaticDeathCallback() {
 
 void Fuzzer::DeathCallback() {
   Printf("DEATH:\n");
-  Print(CurrentUnit, "\n");
-  PrintUnitInASCIIOrTokens(CurrentUnit, "\n");
+  if (CurrentUnit.size() <= kMaxUnitSizeToPrint) {
+    Print(CurrentUnit, "\n");
+    PrintUnitInASCIIOrTokens(CurrentUnit, "\n");
+  }
   WriteUnitToFileWithPrefix(CurrentUnit, "crash-");
 }
 
@@ -69,9 +71,10 @@ void Fuzzer::AlarmCallback() {
     Printf("ALARM: working on the last Unit for %zd seconds\n", Seconds);
     Printf("       and the timeout value is %d (use -timeout=N to change)\n",
            Options.UnitTimeoutSec);
-    if (CurrentUnit.size() <= kMaxUnitSizeToPrint)
+    if (CurrentUnit.size() <= kMaxUnitSizeToPrint) {
       Print(CurrentUnit, "\n");
-    PrintUnitInASCIIOrTokens(CurrentUnit, "\n");
+      PrintUnitInASCIIOrTokens(CurrentUnit, "\n");
+    }
     WriteUnitToFileWithPrefix(CurrentUnit, "timeout-");
     exit(1);
   }
@@ -156,11 +159,7 @@ void Fuzzer::ShuffleAndMinimize() {
 size_t Fuzzer::RunOne(const Unit &U) {
   UnitStartTime = system_clock::now();
   TotalNumberOfRuns++;
-  size_t Res = 0;
-  if (Options.UseFullCoverageSet)
-    Res = RunOneMaximizeFullCoverageSet(U);
-  else
-    Res = RunOneMaximizeTotalCoverage(U);
+  size_t Res = RunOneMaximizeTotalCoverage(U);
   auto UnitStopTime = system_clock::now();
   auto TimeOfUnit =
       duration_cast<seconds>(UnitStopTime - UnitStartTime).count();
@@ -168,8 +167,6 @@ size_t Fuzzer::RunOne(const Unit &U) {
       TimeOfUnit >= Options.ReportSlowUnits) {
     TimeOfLongestUnitInSeconds = TimeOfUnit;
     Printf("Slowest unit: %zd s:\n", TimeOfLongestUnitInSeconds);
-    if (U.size() <= kMaxUnitSizeToPrint)
-      Print(U, "\n");
     WriteUnitToFileWithPrefix(U, "slow-unit-");
   }
   return Res;
@@ -181,14 +178,6 @@ void Fuzzer::RunOneAndUpdateCorpus(Unit &U) {
   if (Options.OnlyASCII)
     ToASCII(U);
   ReportNewCoverage(RunOne(U), U);
-}
-
-static uintptr_t HashOfArrayOfPCs(uintptr_t *PCs, uintptr_t NumPCs) {
-  uintptr_t Res = 0;
-  for (uintptr_t i = 0; i < NumPCs; i++) {
-    Res = (Res + PCs[i]) * 7;
-  }
-  return Res;
 }
 
 Unit Fuzzer::SubstituteTokens(const Unit &U) const {
@@ -206,28 +195,14 @@ Unit Fuzzer::SubstituteTokens(const Unit &U) const {
 }
 
 void Fuzzer::ExecuteCallback(const Unit &U) {
+  int Res = 0;
   if (Options.Tokens.empty()) {
-    USF.TargetFunction(U.data(), U.size());
+    Res = USF.TargetFunction(U.data(), U.size());
   } else {
     auto T = SubstituteTokens(U);
-    USF.TargetFunction(T.data(), T.size());
+    Res = USF.TargetFunction(T.data(), T.size());
   }
-}
-
-// Experimental.
-// Fuly reset the current coverage state, run a single unit,
-// compute a hash function from the full coverage set,
-// return non-zero if the hash value is new.
-// This produces tons of new units and as is it's only suitable for small tests,
-// e.g. test/FullCoverageSetTest.cpp. FIXME: make it scale.
-size_t Fuzzer::RunOneMaximizeFullCoverageSet(const Unit &U) {
-  __sanitizer_reset_coverage();
-  ExecuteCallback(U);
-  uintptr_t *PCs;
-  uintptr_t NumPCs =__sanitizer_get_coverage_guards(&PCs);
-  if (FullCoverageSets.insert(HashOfArrayOfPCs(PCs, NumPCs)).second)
-    return FullCoverageSets.size();
-  return 0;
+  assert(Res == 0);
 }
 
 size_t Fuzzer::RunOneMaximizeTotalCoverage(const Unit &U) {
@@ -262,9 +237,10 @@ void Fuzzer::WriteToOutputCorpus(const Unit &U) {
 }
 
 void Fuzzer::WriteUnitToFileWithPrefix(const Unit &U, const char *Prefix) {
-  std::string Path = Prefix + Hash(U);
+  std::string Path = Options.ArtifactPrefix + Prefix + Hash(U);
   WriteToFile(U, Path);
-  Printf("Test unit written to %s\n", Path.c_str());
+  Printf("artifact_prefix='%s'; Test unit written to %s\n",
+         Options.ArtifactPrefix.c_str(), Path.c_str());
   if (U.size() <= kMaxUnitSizeToPrint) {
     Printf("Base64: ");
     PrintFileAsBase64(Path);
@@ -336,6 +312,10 @@ void Fuzzer::Loop() {
       SyncCorpus();
       RereadOutputCorpus();
       if (TotalNumberOfRuns >= Options.MaxNumberOfRuns)
+        return;
+      if (Options.MaxTotalTimeSec > 0 &&
+          secondsSinceProcessStartUp() >
+              static_cast<size_t>(Options.MaxTotalTimeSec))
         return;
       CurrentUnit = Corpus[J1];
       // Optionally, cross with another unit.

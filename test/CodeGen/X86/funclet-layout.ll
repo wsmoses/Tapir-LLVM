@@ -93,17 +93,18 @@ unreachable:                                      ; preds = %catch, %entry
 ; CHECK: # %try.cont.5
 ; CHECK: retq
 
-; The inner catch funclet contains %catch.3
-; CHECK: # %catch.3
+; The outer catch funclet contains %catch.dispatch
+; CHECK: # %catch.dispatch{{$}}
+; CHECK: callq _CxxThrowException
+; CHECK: # %unreachable
+; CHECK: ud2
+
+; The inner catch funclet contains %catch.dispatch.1
+; CHECK: # %catch.dispatch.1
 ; CHECK: retq
 
-; The outer catch funclet contains %catch and %try.cont
-; CHECK: # %catch{{$}}
-; CHECK: # %try.cont{{$}}
-; CHECK: retq
 
-
-define void @test3() #0 personality i8* bitcast (i32 (...)* @__CxxFrameHandler3 to i8*) {
+define void @test3(i1 %V) #0 personality i8* bitcast (i32 (...)* @__CxxFrameHandler3 to i8*) {
 entry:
   invoke void @g()
           to label %try.cont unwind label %catch.dispatch
@@ -128,7 +129,15 @@ catchendblock:                                    ; preds = %catch.dispatch.1
   catchendpad unwind to caller
 
 try.cont:                                         ; preds = %entry
-  ret void
+  br i1 %V, label %exit_one, label %exit_two
+
+exit_one:
+  tail call void @exit(i32 0)
+  unreachable
+
+exit_two:
+  tail call void @exit(i32 0)
+  unreachable
 }
 
 ; CHECK-LABEL: test3:
@@ -136,15 +145,20 @@ try.cont:                                         ; preds = %entry
 ; The entry funclet contains %entry and %try.cont
 ; CHECK: # %entry
 ; CHECK: # %try.cont
-; CHECK: retq
-
-; The catch(int) funclet contains %catch.2
-; CHECK: # %catch.2
 ; CHECK: callq exit
+; CHECK-NOT: # exit_one
+; CHECK-NOT: # exit_two
+; CHECK: ud2
 
-; The catch(...) funclet contains %catch
-; CHECK: # %catch{{$}}
+; The catch(...) funclet contains %catch.dispatch
+; CHECK: # %catch.dispatch{{$}}
 ; CHECK: callq exit
+; CHECK: ud2
+
+; The catch(int) funclet contains %catch.dispatch.1
+; CHECK: # %catch.dispatch.1
+; CHECK: callq exit
+; CHECK: ud2
 
 declare void @exit(i32) noreturn nounwind
 declare void @_CxxThrowException(i8*, %eh.ThrowInfo*)

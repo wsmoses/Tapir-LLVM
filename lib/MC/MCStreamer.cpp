@@ -188,11 +188,9 @@ void MCStreamer::InitSections(bool NoExecStack) {
   SwitchSection(getContext().getObjectFileInfo()->getTextSection());
 }
 
-void MCStreamer::AssignSection(MCSymbol *Symbol, MCSection *Section) {
-  if (Section)
-    Symbol->setSection(*Section);
-  else
-    Symbol->setUndefined();
+void MCStreamer::AssignFragment(MCSymbol *Symbol, MCFragment *Fragment) {
+  assert(Fragment);
+  Symbol->setFragment(Fragment);
 
   // As we emit symbols into a section, track the order so that they can
   // be sorted upon later. Zero is reserved to mean 'unemitted'.
@@ -202,7 +200,8 @@ void MCStreamer::AssignSection(MCSymbol *Symbol, MCSection *Section) {
 void MCStreamer::EmitLabel(MCSymbol *Symbol) {
   assert(!Symbol->isVariable() && "Cannot emit a variable symbol!");
   assert(getCurrentSection().first && "Cannot emit before setting section!");
-  AssignSection(Symbol, getCurrentSection().first);
+  assert(!Symbol->getFragment() && "Unexpected fragment on symbol data!");
+  Symbol->setFragment(&getCurrentSectionOnly()->getDummyFragment());
 
   MCTargetStreamer *TS = getTargetStreamer();
   if (TS)
@@ -356,6 +355,14 @@ void MCStreamer::EmitCFIRestore(int64_t Register) {
 void MCStreamer::EmitCFIEscape(StringRef Values) {
   MCSymbol *Label = EmitCFICommon();
   MCCFIInstruction Instruction = MCCFIInstruction::createEscape(Label, Values);
+  MCDwarfFrameInfo *CurFrame = getCurrentDwarfFrameInfo();
+  CurFrame->Instructions.push_back(Instruction);
+}
+
+void MCStreamer::EmitCFIGnuArgsSize(int64_t Size) {
+  MCSymbol *Label = EmitCFICommon();
+  MCCFIInstruction Instruction = 
+    MCCFIInstruction::createGnuArgsSize(Label, Size);
   MCDwarfFrameInfo *CurFrame = getCurrentDwarfFrameInfo();
   CurFrame->Instructions.push_back(Instruction);
 }

@@ -262,7 +262,7 @@ Value *SafeStack::getOrCreateUnsafeStackPtr(IRBuilder<> &IRB, Function &F) {
   }
 
   // Android provides a libc function that returns the stack pointer address.
-  if (TargetTriple.getEnvironment() == llvm::Triple::Android) {
+  if (TargetTriple.isAndroid()) {
     Value *Fn = M.getOrInsertFunction(kUnsafeStackPtrAddrFn,
                                       StackPtrTy->getPointerTo(0), nullptr);
     return IRB.CreateCall(Fn);
@@ -278,7 +278,7 @@ Value *SafeStack::getOrCreateUnsafeStackPtr(IRBuilder<> &IRB, Function &F) {
       UnsafeStackPtr = new GlobalVariable(
           /*Module=*/M, /*Type=*/StackPtrTy,
           /*isConstant=*/false, /*Linkage=*/GlobalValue::ExternalLinkage,
-          /*Initializer=*/0, /*Name=*/kUnsafeStackPtrVar,
+          /*Initializer=*/nullptr, /*Name=*/kUnsafeStackPtrVar,
           /*InsertBefore=*/nullptr,
           /*ThreadLocalMode=*/GlobalValue::InitialExecTLSModel);
     } else {
@@ -619,7 +619,7 @@ bool SafeStack::runOnFunction(Function &F) {
   return true;
 }
 
-} // end anonymous namespace
+} // anonymous namespace
 
 char SafeStack::ID = 0;
 INITIALIZE_TM_PASS_BEGIN(SafeStack, "safe-stack",
