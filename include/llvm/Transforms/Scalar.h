@@ -122,6 +122,13 @@ Pass *createIndVarSimplifyPass();
 
 //===----------------------------------------------------------------------===//
 //
+// Loop2Cilk - Transform induction variables in a program to all
+// use a single canonical induction variable per loop.
+//
+Pass *createLoop2CilkPass();
+
+//===----------------------------------------------------------------------===//
+//
 // InstructionCombining - Combine instructions to form fewer, simple
 // instructions. This pass does not modify the CFG, and has a tendency to make
 // instructions dead, so a subsequent DCE pass is useful.
