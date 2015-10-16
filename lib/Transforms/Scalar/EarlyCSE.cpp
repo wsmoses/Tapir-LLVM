@@ -264,7 +264,6 @@ namespace {
 /// expected that a later pass of GVN will catch the interesting/hard cases.
 class EarlyCSE {
 public:
-  Function &F;
   const TargetLibraryInfo &TLI;
   const TargetTransformInfo &TTI;
   DominatorTree &DT;
@@ -316,10 +315,9 @@ public:
   unsigned CurrentGeneration;
 
   /// \brief Set up the EarlyCSE runner for a particular function.
-  EarlyCSE(Function &F, const TargetLibraryInfo &TLI,
-           const TargetTransformInfo &TTI, DominatorTree &DT,
-           AssumptionCache &AC)
-      : F(F), TLI(TLI), TTI(TTI), DT(DT), AC(AC), CurrentGeneration(0) {}
+  EarlyCSE(const TargetLibraryInfo &TLI, const TargetTransformInfo &TTI,
+           DominatorTree &DT, AssumptionCache &AC)
+      : TLI(TLI), TTI(TTI), DT(DT), AC(AC), CurrentGeneration(0) {}
 
   bool run();
 
@@ -505,7 +503,7 @@ bool EarlyCSE::processNode(DomTreeNode *Node) {
   // See if any instructions in the block can be eliminated.  If so, do it.  If
   // not, add them to AvailableValues.
   for (BasicBlock::iterator I = BB->begin(), E = BB->end(); I != E;) {
-    Instruction *Inst = I++;
+    Instruction *Inst = &*I++;
 
     // Dead instructions should just be removed.
     if (isInstructionTriviallyDead(Inst, &TLI)) {
@@ -735,7 +733,7 @@ PreservedAnalyses EarlyCSEPass::run(Function &F,
   auto &DT = AM->getResult<DominatorTreeAnalysis>(F);
   auto &AC = AM->getResult<AssumptionAnalysis>(F);
 
-  EarlyCSE CSE(F, TLI, TTI, DT, AC);
+  EarlyCSE CSE(TLI, TTI, DT, AC);
 
   if (!CSE.run())
     return PreservedAnalyses::all();
@@ -772,7 +770,7 @@ public:
     auto &DT = getAnalysis<DominatorTreeWrapperPass>().getDomTree();
     auto &AC = getAnalysis<AssumptionCacheTracker>().getAssumptionCache(F);
 
-    EarlyCSE CSE(F, TLI, TTI, DT, AC);
+    EarlyCSE CSE(TLI, TTI, DT, AC);
 
     return CSE.run();
   }

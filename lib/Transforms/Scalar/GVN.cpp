@@ -2440,7 +2440,7 @@ bool GVN::runOnFunction(Function& F) {
   // Merge unconditional branches, allowing PRE to catch more
   // optimization opportunities.
   for (Function::iterator FI = F.begin(), FE = F.end(); FI != FE; ) {
-    BasicBlock *BB = FI++;
+    BasicBlock *BB = &*FI++;
 
     bool removedBlock =
         MergeBlockIntoPredecessor(BB, DT, /* LoopInfo */ nullptr, MD);
@@ -2496,8 +2496,8 @@ bool GVN::processBlock(BasicBlock *BB) {
   for (BasicBlock::iterator BI = BB->begin(), BE = BB->end();
        BI != BE;) {
     if (!ReplaceWithConstMap.empty())
-      ChangedFunction |= replaceOperandsWithConsts(BI);
-    ChangedFunction |= processInstruction(BI);
+      ChangedFunction |= replaceOperandsWithConsts(&*BI);
+    ChangedFunction |= processInstruction(&*BI);
 
     if (InstrsToErase.empty()) {
       ++BI;
@@ -2710,7 +2710,7 @@ bool GVN::performScalarPRE(Instruction *CurInst) {
   // Create a PHI to make the value available in this block.
   PHINode *Phi =
       PHINode::Create(CurInst->getType(), predMap.size(),
-                      CurInst->getName() + ".pre-phi", CurrentBlock->begin());
+                      CurInst->getName() + ".pre-phi", &CurrentBlock->front());
   for (unsigned i = 0, e = predMap.size(); i != e; ++i) {
     if (Value *V = predMap[i].first)
       Phi->addIncoming(V, predMap[i].second);
@@ -2753,7 +2753,7 @@ bool GVN::performPRE(Function &F) {
     for (BasicBlock::iterator BI = CurrentBlock->begin(),
                               BE = CurrentBlock->end();
          BI != BE;) {
-      Instruction *CurInst = BI++;
+      Instruction *CurInst = &*BI++;
       Changed = performScalarPRE(CurInst);
     }
   }
