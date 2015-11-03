@@ -1406,22 +1406,24 @@ bool createDetach(DetachInst& detach, Function& F){
 
   std::vector<BasicBlock*> blocks( functionPieces.begin(), functionPieces.end() );
   for( auto& a : blocks ){
+    
+      printf("chillz:%s\n", a->getName().str().c_str() );
     if( a == Spawned ) {
       //assert only came from the detach
       for (pred_iterator PI = pred_begin(a), E = pred_end(a); PI != E; ++PI) {
-	BasicBlock *Pred = *PI;
-	if ( Pred == a ) continue;
-	assert(Pred == detach.getParent() &&
-	       "Block inside of detached context branched into from outside branch context from detach");
+	      BasicBlock *Pred = *PI;
+	      if ( Pred == a ) continue;
+	      assert(Pred == detach.getParent() && "Block inside of detached context branched into from outside branch context from detach");
 	// if( Pred != detach.getParent() ) {
 	//   assert( 0 && "Block inside of detached context branched into from outside branch context from detach");
-	// }
+	      // }
       }
     } else {
+      printf("BB:%s\n", a->getName().str().c_str() );
       for (pred_iterator PI = pred_begin(a), E = pred_end(a); PI != E; ++PI) {
-	BasicBlock *Pred = *PI;
-	assert(functionPieces.count(Pred) &&
-	       "Block inside of detached context branched into from outside branch context");
+	      BasicBlock *Pred = *PI;
+        printf("block:%s pred %s count:%u\n", a->getName().str().c_str(), Pred->getName().str().c_str(), functionPieces.count(Pred) );
+	      assert(functionPieces.count(Pred) && "Block inside of detached context branched into from outside branch context");
 	// if( functionPieces.find(Pred) == functionPieces.end() ) {
 	//   assert( 0 && "Block inside of detached context branched into from outside branch context");
 	// }

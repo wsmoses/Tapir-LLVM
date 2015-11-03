@@ -11,8 +11,12 @@
 // exposed by the Utils library.
 //
 //===----------------------------------------------------------------------===//
+#ifndef CILK_ABI_H_
+#define CILK_ABI_H_
 
 #include "llvm/Transforms/Scalar.h"
+#include "llvm/ADT/SmallPtrSet.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/Analysis/AssumptionCache.h"
 #include "llvm/IR/Constants.h"
@@ -31,6 +35,8 @@
 #include "llvm/IR/ValueSymbolTable.h"
 
 #include "llvm/IR/InstIterator.h"
+#include "llvm/Support/Debug.h"
+#include <iostream>
 
 namespace {
 
@@ -113,10 +119,12 @@ DEFAULT_GET_CILKRTS_FUNC(rethrow)
 DEFAULT_GET_CILKRTS_FUNC(leave_frame)
 DEFAULT_GET_CILKRTS_FUNC(get_tls_worker)
 DEFAULT_GET_CILKRTS_FUNC(bind_thread_1)
+DEFAULT_GET_CILKRTS_FUNC(cilk_for_32)
+DEFAULT_GET_CILKRTS_FUNC(cilk_for_64)
 
 	typedef std::map<llvm::LLVMContext*, llvm::StructType*> TypeBuilderCache;
 }
-namespace llvm {
+	namespace llvm {
 
 		/// Specializations of llvm::TypeBuilder for:
 		///   __cilkrts_pedigree,
@@ -144,6 +152,7 @@ namespace llvm {
 					};
 			};
 
+		template <bool X>
 			class TypeBuilder<__cilkrts_worker, X> {
 				public:
 					static StructType *get(LLVMContext &C) {
@@ -237,15 +246,15 @@ typedef llvm::TypeBuilder<__cilkrts_stack_frame, false> StackFrameBuilder;
 typedef llvm::TypeBuilder<__cilkrts_worker, false> WorkerBuilder;
 typedef llvm::TypeBuilder<__cilkrts_pedigree, false> PedigreeBuilder;
 
-static llvm::Value *GEP(llvm::IRBuilder<> &B, llvm::Value *Base, int field) {
+static Value *GEP(IRBuilder<> &B, Value *Base, int field) {
 	return B.CreateConstInBoundsGEP2_32(nullptr, Base, 0, field);
 }
 
-static void StoreField(llvm::IRBuilder<> &B, llvm::Value *Val, llvm::Value *Dst, int field) {
+static void StoreField(IRBuilder<> &B, Value *Val, Value *Dst, int field) {
 	B.CreateStore(Val, GEP(B, Dst, field));
 }
 
-static llvm::Value *LoadField(llvm::IRBuilder<> &B, llvm::Value *Src, int field) {
+static Value *LoadField(IRBuilder<> &B, Value *Src, int field) {
 	return B.CreateLoad(GEP(B, Src, field));
 }
 
@@ -1086,7 +1095,7 @@ static llvm::AllocaInst *CreateStackFrame(Function &F) {
   
 	Instruction* I = F.getEntryBlock().getFirstNonPHIOrDbgOrLifetime();
 
-	AllocaInst* SF = new AllocaInst(SFTy, /*size*/nullptr, /*name*/stack_frame_name, /*insert before*/I);
+	AllocaInst* SF = new AllocaInst(SFTy, /*size*/nullptr, 8, /*name*/stack_frame_name, /*insert before*/I);
 	if( I == nullptr ) {
 		F.getEntryBlock().getInstList().push_back( SF );
 	}
@@ -1094,7 +1103,7 @@ static llvm::AllocaInst *CreateStackFrame(Function &F) {
   return SF;
 }
 
-static llvm::Value* GetOrInitStackFrame(Function& F, bool fast = true) {
+static inline llvm::Value* GetOrInitStackFrame(Function& F, bool fast = true) {
   llvm::Value* V = LookupStackFrame(F);
   if( V ) return V;
   
@@ -1187,11 +1196,12 @@ Value* saveStack( Instruction& insertBefore ) {
 //#####################################################################################################3333
 
 
-void createSync(SyncInst& inst, Function& F){
+static inline void createSync(SyncInst& inst){
+	Function& F = *(inst.getParent()->getParent());
 	Module* M = F.getParent();
 
-  llvm::Value* args[1] = { LookupStackFrame( F ) };
-  assert( args[0] && "sync used in function without frame!" );
+	llvm::Value* args[1] = { LookupStackFrame( F ) };
+	assert( args[0] && "sync used in function without frame!" );
 	CallInst::Create( GetCilkSyncFn( *M ), args, "", /*insert before*/&inst );
 
 	BranchInst* toReplace = BranchInst::Create( inst.getSuccessor(0) );
@@ -1199,98 +1209,23 @@ void createSync(SyncInst& inst, Function& F){
 	ReplaceInstWithInst(&inst, toReplace);
 }
 
-Function* extractDetachToFunction( BasicBlock* Spawned ) {
+static inline void replaceInList( llvm::Value* v, llvm::Value* replaceWith, SmallPtrSet<BasicBlock*,32>& blocks ) {
+    AShrOperator::use_iterator UI = v->use_begin(), E = v->use_end();
+    for (; UI != E;) {
+      Use &U = *UI;
+      ++UI;
+      auto *Usr = dyn_cast<Instruction>(U.getUser());
+      if (Usr && ( blocks.count(Usr->getParent()) ) ) {
+        U.set(replaceWith);
+      }
+    }
 
-	BasicBlock* Spawned  = detach.getSuccessor(0);
-	BasicBlock* Continue = detach.getSuccessor(1);
-
-	std::set<BasicBlock*> functionPieces;
-	std::vector<BasicBlock*> todo = { Spawned };
-
-	while( todo.size() > 0 ){
-		BasicBlock* BB = todo.back(); todo.pop_back();
-		functionPieces.insert(BB);
-
-		TerminatorInst* term = BB->getTerminator();      
-		if( term == nullptr ) return false;
-		if( ReattachInst* inst = llvm::dyn_cast<ReattachInst>(term) ) {
-			//only analyze reattaches going to the same continuation
-			if( inst->getSuccessor(0) != Continue ) continue;
-			BranchInst* toReplace = BranchInst::Create( Continue );
-			ReplaceInstWithInst(inst, toReplace);
-			continue;
-		} else if( DetachInst* inst = llvm::dyn_cast<DetachInst>(term) ) {
-			assert( inst != &detach && "Found recursive detach!" );
-			todo.emplace_back( inst->getSuccessor(0) );
-			todo.emplace_back( inst->getSuccessor(1) );
-			continue;
-		} else if( SyncInst* inst = llvm::dyn_cast<SyncInst>(term) ) {
-			//only sync inner elements, consider as branch
-			todo.emplace_back( inst->getSuccessor(0) );
-			continue;
-		} else if( BranchInst* inst = llvm::dyn_cast<BranchInst>(term) ) {
-			//only sync inner elements, consider as branch
-			for( unsigned idx = 0, max = inst->getNumSuccessors(); idx < max; idx++ )
-				todo.emplace_back( inst->getSuccessor(idx) );
-			continue;
-		} else {
-			assert( 0 && "Detached block did not absolutely terminate in reattach");
-			return false;
-		}
-	}
-
-	std::vector<BasicBlock*> blocks( functionPieces.begin(), functionPieces.end() );
-	for( auto& a : blocks ){
-		if( a == Spawned ) {
-			//assert only came from the detach
-			for (pred_iterator PI = pred_begin(a), E = pred_end(a); PI != E; ++PI) {
-				BasicBlock *Pred = *PI;
-				if( Pred != detach.getParent() ) {
-					assert( 0 && "Block inside of detached context branched into from outside branch context from detach");
-				}
-			}
-		} else {
-			for (pred_iterator PI = pred_begin(a), E = pred_end(a); PI != E; ++PI) {
-				BasicBlock *Pred = *PI;
-				if( functionPieces.find(Pred) == functionPieces.end() ) {
-					assert( 0 && "Block inside of detached context branched into from outside branch context");
-				}
-			}
-		}
-	}
-	
-  
-	//replace with branch to succesor
-	//entry / cilk.spawn.savestate
-	{
-    Value *SF = GetOrInitStackFrame( F, /*isFast*/ false );
-    assert(SF && "null stack frame unexpected");
-
-	  IRBuilder<> B(&detach);
-	  
-    // Need to save state before spawning
-    Value *C = EmitCilkSetJmp(B, SF, *M);
-    C = B.CreateICmpEQ(C, ConstantInt::get(C->getType(), 0));
-    B.CreateCondBr(C, Spawned, Continue);
-    
-    detach.eraseFromParent();
-	}
-
-	/*
-	   std::cerr << "<todo>" << std::endl << std::flush;
-	   for( auto& a: blocks ) { a->dump(); std::cerr << std::endl << std::flush; }
-	   std::cerr << "</todo>" << std::endl << std::flush;
-	 */
-
-	CodeExtractor extractor( ArrayRef<BasicBlock*>( blocks ), /*dominator tree -- todo? */ nullptr );
-	assert( extractor.isEligible() && "Code not able to be extracted!" );
-	Function* extracted = extractor.extractCodeRegion();
-	assert( extracted && "could not extract code" );
-  return extracted;
 }
 
 //Returns true if success
-bool createDetach(DetachInst& detach, Function& F){
+static inline Function* extractDetachBodyToFunction(DetachInst& detach, llvm::CallInst** call = 0, llvm::Value* closure = 0, llvm::Value** closed = 0 ) {
+  llvm::BasicBlock* detB = detach.getParent();
+	Function& F = *(detB->getParent());
 	Module* M = F.getParent();
 	LLVMContext& Context = F.getContext();
 	const DataLayout& DL = M->getDataLayout();
@@ -1298,20 +1233,25 @@ bool createDetach(DetachInst& detach, Function& F){
 	BasicBlock* Spawned  = detach.getSuccessor(0);
 	BasicBlock* Continue = detach.getSuccessor(1);
 
-	std::set<BasicBlock*> functionPieces;
-	std::vector<BasicBlock*> todo = { Spawned };
+	SmallPtrSet<BasicBlock *, 32> functionPieces;
+	SmallVector<BasicBlock *, 32> todo;
+	todo.push_back(Spawned);
 
+  SmallVector<BasicBlock*, 32 > reattachB;
 	while( todo.size() > 0 ){
-		BasicBlock* BB = todo.back(); todo.pop_back();
-		functionPieces.insert(BB);
+		BasicBlock* BB = todo.pop_back_val();
+		// functionPieces.insert(BB);
+		if (!functionPieces.insert(BB).second)
+		  continue;
 
 		TerminatorInst* term = BB->getTerminator();      
-		if( term == nullptr ) return false;
+		if( term == nullptr ) return nullptr;
 		if( ReattachInst* inst = llvm::dyn_cast<ReattachInst>(term) ) {
 			//only analyze reattaches going to the same continuation
 			if( inst->getSuccessor(0) != Continue ) continue;
 			BranchInst* toReplace = BranchInst::Create( Continue );
 			ReplaceInstWithInst(inst, toReplace);
+      reattachB.push_back(BB);
 			continue;
 		} else if( DetachInst* inst = llvm::dyn_cast<DetachInst>(term) ) {
 			assert( inst != &detach && "Found recursive detach!" );
@@ -1329,87 +1269,169 @@ bool createDetach(DetachInst& detach, Function& F){
 			continue;
 		} else {
 			assert( 0 && "Detached block did not absolutely terminate in reattach");
-			return false;
+			return nullptr;
 		}
 	}
 
 	std::vector<BasicBlock*> blocks( functionPieces.begin(), functionPieces.end() );
 	for( auto& a : blocks ){
-		if( a == Spawned ) {
+	  if( a == Spawned ) {
 			//assert only came from the detach
 			for (pred_iterator PI = pred_begin(a), E = pred_end(a); PI != E; ++PI) {
 				BasicBlock *Pred = *PI;
-				if( Pred != detach.getParent() ) {
-					assert( 0 && "Block inside of detached context branched into from outside branch context from detach");
-				}
+				if ( Pred == a ) continue;
+				assert(Pred == detach.getParent() &&
+				       "Block inside of detached context branched into from outside branch context from detach");
+				// if( Pred != detach.getParent() ) {
+				//   DEBUG(dbgs() << "Bad pred " << *Pred);
+				// 	assert( 0 && "Block inside of detached context branched into from outside branch context from detach");
+				// }
 			}
 		} else {
 			for (pred_iterator PI = pred_begin(a), E = pred_end(a); PI != E; ++PI) {
 				BasicBlock *Pred = *PI;
-				if( functionPieces.find(Pred) == functionPieces.end() ) {
-					assert( 0 && "Block inside of detached context branched into from outside branch context");
-				}
+        //printf("block:%s pred %s count:%u\n", a->getName().str().c_str(), Pred->getName().str().c_str(), functionPieces.count(Pred) );
+				assert(functionPieces.count(Pred) &&
+				       "Block inside of detached context branched into from outside branch context");
+				// if( functionPieces.find(Pred) == functionPieces.end() ) {
+				// 	assert( 0 && "Block inside of detached context branched into from outside branch context");
+				// }
 			}
 		}
 	}
-	
-  
-	//replace with branch to succesor
-	//entry / cilk.spawn.savestate
-	{
-    Value *SF = GetOrInitStackFrame( F, /*isFast*/ false );
-    assert(SF && "null stack frame unexpected");
 
-	  IRBuilder<> B(&detach);
-	  
-    // Need to save state before spawning
-    Value *C = EmitCilkSetJmp(B, SF, *M);
-    C = B.CreateICmpEQ(C, ConstantInt::get(C->getType(), 0));
-    B.CreateCondBr(C, Spawned, Continue);
-    
-    detach.eraseFromParent();
-	}
+  PHINode *rstart = 0, *rend = 0;
+  Instruction* inst = 0;
+  PHINode *fake;
+  Instruction* add = 0;
+  if( closure ) {
+      
+    IRBuilder<> inspawn(Spawned->getFirstNonPHI());
 
-	/*
-	   std::cerr << "<todo>" << std::endl << std::flush;
-	   for( auto& a: blocks ) { a->dump(); std::cerr << std::endl << std::flush; }
-	   std::cerr << "</todo>" << std::endl << std::flush;
-	 */
+    SetVector<Value*> Inputs, Outputs;
+	  CodeExtractor extractor( ArrayRef<BasicBlock*>( blocks ), /*dominator tree -- todo? */ nullptr );
+    extractor.findInputsOutputs(Inputs, Outputs);
+    Inputs.insert(Outputs.begin(), Outputs.end());
+    SmallVector<Type*,0> types;
+    for(auto& a: Inputs) {
+      if( a == closure ) continue;
+        types.push_back(a->getType());
+    };
+    StructType* st = StructType::get(F.getContext(), types);
+    IRBuilder<> builder(&detach);
+    rend   = PHINode::Create( closure->getType(), 2, "", &detB->front() );
+    rstart = PHINode::Create( closure->getType(), 2, "", &detB->front() );
+    llvm::AllocaInst* alloc = builder.CreateAlloca(st);
+    unsigned i=0;
+    for(auto& a: Inputs) {
+      if( a == closure ) continue;
+      auto V = builder.CreateConstGEP2_32(st, alloc, 0U, i);
+      builder.CreateStore(a, V);
+      auto ld = inspawn.CreateLoad(inspawn.CreateConstGEP2_32(st, alloc, 0U, i));
+      replaceInList( a, ld, functionPieces );
+      i++;
+    }
+    assert( closed );
+    *closed = alloc;
+    // force it to be used, in right order
+    add  = dyn_cast<Instruction>(inspawn.CreateAdd(rstart, rstart));
+    assert( add );
+    inst = dyn_cast<Instruction>(inspawn.CreateAdd(rend,   rend));
+    assert( inst);
+    BasicBlock* lp = Spawned->splitBasicBlock(inst);
+
+    PHINode* idx = PHINode::Create( closure->getType(), 2, "", &Spawned->front() );
+    idx->addIncoming( rstart, detB );
+
+    fake = PHINode::Create( alloc->getType(), 2, "", &Spawned->front() );
+    fake->addIncoming( alloc, detB );
+
+    functionPieces.insert(lp);
+    blocks.push_back(lp);
+
+    BasicBlock* next = BasicBlock::Create( lp->getContext(), "next", &F );
+    blocks.push_back(next);
+    functionPieces.insert(next);
+
+    for( auto a : reattachB ) {
+      if( a == Spawned ) {
+        a = lp;
+      }
+      ((BranchInst*) a->getTerminator() )->setSuccessor(0, next );
+    }
+    IRBuilder<> nextB(next);
+    auto p1 = nextB.CreateAdd(idx, ConstantInt::get(idx->getType(), 1, false) );
+    nextB.CreateCondBr( nextB.CreateICmpEQ( p1, rend ), Continue, Spawned );
+    idx->addIncoming( p1, next );
+    fake->addIncoming( alloc, next );
+
+    replaceInList( closure, idx, functionPieces );
+  }
 
 	CodeExtractor extractor( ArrayRef<BasicBlock*>( blocks ), /*dominator tree -- todo? */ nullptr );
 	assert( extractor.isEligible() && "Code not able to be extracted!" );
+
+
+  if( closure ) {
+    SetVector<Value*> Inputs, Outputs;
+    extractor.findInputsOutputs(Inputs, Outputs);
+    assert( Outputs.size() == 0 );
+    assert( Inputs.size() == 3 );
+    assert( Inputs[1] == rstart );
+    assert( Inputs[2] == rend );
+  }
+
 	Function* extracted = extractor.extractCodeRegion();
 	assert( extracted && "could not extract code" );
 
-  /*
-    // Emit call to the helper function
-    Function *Helper = EmitSpawnCapturedStmt(*D->getCapturedStmt(), VD);
 
-    // Register the spawn helper function.
-    registerSpawnFunction(*extracted);
+    TerminatorInst* bi = llvm::dyn_cast<TerminatorInst>(detB->getTerminator() );
+    assert( bi );
+    Spawned = (detach.getSuccessor(0) == Continue)?detach.getSuccessor(1):detach.getSuccessor(0);
+    CallInst* cal = llvm::dyn_cast<CallInst>(Spawned->getFirstNonPHI());
+    assert(cal);
+    if( call ) *call = cal;
 
-    // Set other attributes.
-    setHelperAttributes(*this, D->getSpawnStmt(), Helper);
-  */
-    
+
+  if( closure ) {
+    cal->eraseFromParent();
+    rstart->eraseFromParent();
+    rend->eraseFromParent();
+    inst->eraseFromParent();
+    add->eraseFromParent();
+    fake->eraseFromParent();
+
+  }
+
+  	return extracted;
+}
+
+static inline bool makeFunctionDetachable( Function& extracted ) {
+	Module* M = extracted.getParent();
+	LLVMContext& Context = extracted.getContext();
+	const DataLayout& DL = M->getDataLayout();
 	/*
 	   __cilkrts_stack_frame sf;
 	   __cilkrts_enter_frame_fast(&sf);
 	   __cilkrts_detach();
-	 *x = f(y);
-	 */
+	   *x = f(y);
+	*/
 
-	llvm::Value* sf = CreateStackFrame( *extracted );
+	llvm::Value* sf = CreateStackFrame( extracted );
 	assert(sf);
 	Value* args[1] = { sf };
 
-  //TODO check difference between frame fast and frame fast 1
-	Instruction* call = CallInst::Create(CILKRTS_FUNC(enter_frame_fast_1, *M), args, "", extracted->getEntryBlock().getTerminator() );
-
-	Instruction* call2 = CallInst::Create(CILKRTS_FUNC(detach, *M), args, "", extracted->getEntryBlock().getTerminator() );
+	//TODO check difference between frame fast and frame fast 1
+	Instruction* call = CallInst::Create(CILKRTS_FUNC(enter_frame_fast_1, *M), args, "", extracted.getEntryBlock().getTerminator() );
+	// IRBuilder<> B(call);
+	// // sf->worker = 0;
+	// StoreField(B,
+	// 	   Constant::getNullValue(TypeBuilder<__cilkrts_worker*, false>::get(M->getContext())),
+	// 	   sf, StackFrameBuilder::worker);
+	Instruction* call2 = CallInst::Create(CILKRTS_FUNC(detach, *M), args, "", extracted.getEntryBlock().getTerminator() );
 
 	ReturnInst* ret = nullptr;
-	for (Function::iterator i = extracted->begin(), e = extracted->end(); i != e; ++i) {
+	for (Function::iterator i = extracted.begin(), e = extracted.end(); i != e; ++i) {
 		BasicBlock* bb = i;
 		TerminatorInst* term = bb->getTerminator();
 		if( !term ) continue;
@@ -1419,9 +1441,61 @@ bool createDetach(DetachInst& detach, Function& F){
 		}
 	}
 	assert( ret && "No return from extract function" );
+	//TODO alow to work for functions with multiple returns
 
-	CallInst::Create(GetCilkParentEpilogue(*M), ArrayRef<Value*>(args),"",ret);
+	/* 
+	   __cilkrts_pop_frame(&sf);
+	   if (sf->flags)
+	   __cilkrts_leave_frame(&sf);
+	*/
+  //TODO WHY I
+  auto PE = GetCilkParentEpilogue(*M);
+
+  CallInst::Create(PE, args,"",ret);
+  return true;
+}
+
+static inline bool createDetach(DetachInst& detach) {
+  BasicBlock* detB = detach.getParent();
+	Function& F = *(detB->getParent());
+        
+	BasicBlock* Spawned  = detach.getSuccessor(0);
+	BasicBlock* Continue = detach.getSuccessor(1);
+
+	Module* M = F.getParent();
+	LLVMContext& Context = F.getContext();
+	const DataLayout& DL = M->getDataLayout();
+
+	//replace with branch to succesor
+	//entry / cilk.spawn.savestate
+    	Value *SF = GetOrInitStackFrame( F, /*isFast*/ false );
+    	assert(SF && "null stack frame unexpected");
+
+	Function* extracted = extractDetachBodyToFunction( detach );
+
+  TerminatorInst* bi = llvm::dyn_cast<TerminatorInst>(detB->getTerminator() );
+  assert( bi );
+  Spawned = (detach.getSuccessor(0) == Continue)?detach.getSuccessor(1):detach.getSuccessor(0);
+
+	assert( extracted && "could not extract detach body to function" );
+
+
+	IRBuilder<> B(bi);
+	  
+    	// Need to save state before spawning
+    	Value *C = EmitCilkSetJmp(B, SF, *M);
+    	C = B.CreateICmpEQ(C, ConstantInt::get(C->getType(), 0));
+    	B.CreateCondBr(C, Spawned, Continue);
+    
+    	detach.eraseFromParent();
+ 
+        makeFunctionDetachable( *extracted );
+
 
 	return true;
 }
 
+}  // end of cilk namespace
+}  // end of llvm namespace
+
+#endif
