@@ -385,7 +385,8 @@ static ld_plugin_status claim_file_hook(const ld_plugin_input_file *file,
 
   // If we are doing ThinLTO compilation, don't need to process the symbols.
   // Later we simply build a combined index file after all files are claimed.
-  if (options::thinlto) return LDPS_OK;
+  if (options::thinlto)
+    return LDPS_OK;
 
   for (auto &Sym : Obj->symbols()) {
     uint32_t Symflags = Sym.getFlags();
@@ -544,7 +545,7 @@ static const char *getResolutionName(ld_plugin_symbol_resolution R) {
 }
 
 namespace {
-class LocalValueMaterializer : public ValueMaterializer {
+class LocalValueMaterializer final : public ValueMaterializer {
   DenseSet<GlobalValue *> &Dropped;
   DenseMap<GlobalObject *, GlobalObject *> LocalVersions;
 
@@ -602,8 +603,9 @@ static void freeSymName(ld_plugin_symbol &Sym) {
   Sym.comdat_key = nullptr;
 }
 
-static std::unique_ptr<FunctionInfoIndex> getFunctionIndexForFile(
-    LLVMContext &Context, claimed_file &F, ld_plugin_input_file &Info) {
+static std::unique_ptr<FunctionInfoIndex>
+getFunctionIndexForFile(LLVMContext &Context, claimed_file &F,
+                        ld_plugin_input_file &Info) {
 
   if (get_symbols(F.handle, F.syms.size(), &F.syms[0]) != LDPS_OK)
     message(LDPL_FATAL, "Failed to get symbol information");
@@ -896,7 +898,7 @@ static ld_plugin_status allSymbolsReadHook(raw_fd_ostream *ApiFile) {
   // function index/summary and emit it. We don't need to parse the modules
   // and link them in this case.
   if (options::thinlto) {
-    std::unique_ptr<FunctionInfoIndex> CombinedIndex(new FunctionInfoIndex());
+    FunctionInfoIndex CombinedIndex;
     uint64_t NextModuleId = 0;
     for (claimed_file &F : Modules) {
       ld_plugin_input_file File;
@@ -905,7 +907,7 @@ static ld_plugin_status allSymbolsReadHook(raw_fd_ostream *ApiFile) {
 
       std::unique_ptr<FunctionInfoIndex> Index =
           getFunctionIndexForFile(Context, F, File);
-      CombinedIndex->mergeFrom(std::move(Index), ++NextModuleId);
+      CombinedIndex.mergeFrom(std::move(Index), ++NextModuleId);
     }
 
     std::error_code EC;
@@ -914,7 +916,7 @@ static ld_plugin_status allSymbolsReadHook(raw_fd_ostream *ApiFile) {
     if (EC)
       message(LDPL_FATAL, "Unable to open %s.thinlto.bc for writing: %s",
               output_name.data(), EC.message().c_str());
-    WriteFunctionSummaryToFile(CombinedIndex.get(), OS);
+    WriteFunctionSummaryToFile(CombinedIndex, OS);
     OS.close();
 
     cleanup_hook();

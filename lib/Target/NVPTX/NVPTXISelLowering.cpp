@@ -2044,11 +2044,8 @@ bool llvm::isImageOrSamplerVal(const Value *arg, const Module *context) {
   auto *STy = dyn_cast<StructType>(PTy->getElementType());
   const std::string TypeName = STy && !STy->isLiteral() ? STy->getName() : "";
 
-  for (int i = 0, e = array_lengthof(specialTypes); i != e; ++i)
-    if (TypeName == specialTypes[i])
-      return true;
-
-  return false;
+  return std::find(std::begin(specialTypes), std::end(specialTypes),
+                   TypeName) != std::end(specialTypes);
 }
 
 SDValue NVPTXTargetLowering::LowerFormalArguments(
@@ -2074,10 +2071,9 @@ SDValue NVPTXTargetLowering::LowerFormalArguments(
 
   std::vector<Type *> argTypes;
   std::vector<const Argument *> theArgs;
-  for (Function::const_arg_iterator I = F->arg_begin(), E = F->arg_end();
-       I != E; ++I) {
-    theArgs.push_back(I);
-    argTypes.push_back(I->getType());
+  for (const Argument &I : F->args()) {
+    theArgs.push_back(&I);
+    argTypes.push_back(I.getType());
   }
   // argTypes.size() (or theArgs.size()) and Ins.size() need not match.
   // Ins.size() will be larger

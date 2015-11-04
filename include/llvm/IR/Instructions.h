@@ -1603,8 +1603,10 @@ public:
     return static_cast<CallingConv::ID>(getSubclassDataFromInstruction() >> 2);
   }
   void setCallingConv(CallingConv::ID CC) {
+    auto ID = static_cast<unsigned>(CC);
+    assert(!(ID & ~CallingConv::MaxID) && "Unsupported calling convention");
     setInstructionSubclassData((getSubclassDataFromInstruction() & 3) |
-                               (static_cast<unsigned>(CC) << 2));
+                               (ID << 2));
   }
 
   /// getAttributes - Return the parameter attributes for this call.
@@ -1661,6 +1663,13 @@ public:
   /// parameter (0=unknown).
   uint64_t getDereferenceableOrNullBytes(unsigned i) const {
     return AttributeList.getDereferenceableOrNullBytes(i);
+  }
+
+  /// @brief Determine if the parameter or return value is marked with NoAlias
+  /// attribute.
+  /// @param n The parameter to check. 1 is the first parameter, 0 is the return
+  bool doesNotAlias(unsigned n) const {
+    return AttributeList.hasAttribute(n, Attribute::NoAlias);
   }
 
   /// \brief Return true if the call should not be treated as a call to a
@@ -1787,6 +1796,12 @@ private:
   template <typename AttrKind> bool hasFnAttrImpl(AttrKind A) const {
     if (AttributeList.hasAttribute(AttributeSet::FunctionIndex, A))
       return true;
+
+    // Operand bundles override attributes on the called function, but don't
+    // override attributes directly present on the call instruction.
+    if (isFnAttrDisallowedByOpBundle(A))
+      return false;
+
     if (const Function *F = getCalledFunction())
       return F->getAttributes().hasAttribute(AttributeSet::FunctionIndex, A);
     return false;
@@ -3468,7 +3483,9 @@ public:
     return static_cast<CallingConv::ID>(getSubclassDataFromInstruction());
   }
   void setCallingConv(CallingConv::ID CC) {
-    setInstructionSubclassData(static_cast<unsigned>(CC));
+    auto ID = static_cast<unsigned>(CC);
+    assert(!(ID & ~CallingConv::MaxID) && "Unsupported calling convention");
+    setInstructionSubclassData(ID);
   }
 
   /// getAttributes - Return the parameter attributes for this invoke.
@@ -3517,6 +3534,13 @@ public:
   /// parameter (0=unknown).
   uint64_t getDereferenceableOrNullBytes(unsigned i) const {
     return AttributeList.getDereferenceableOrNullBytes(i);
+  }
+
+  /// @brief Determine if the parameter or return value is marked with NoAlias
+  /// attribute.
+  /// @param n The parameter to check. 1 is the first parameter, 0 is the return
+  bool doesNotAlias(unsigned n) const {
+    return AttributeList.hasAttribute(n, Attribute::NoAlias);
   }
 
   /// \brief Return true if the call should not be treated as a call to a

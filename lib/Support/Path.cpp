@@ -455,17 +455,15 @@ void append(SmallVectorImpl<char> &path, const Twine &a,
   if (!c.isTriviallyEmpty()) components.push_back(c.toStringRef(c_storage));
   if (!d.isTriviallyEmpty()) components.push_back(d.toStringRef(d_storage));
 
-  for (SmallVectorImpl<StringRef>::const_iterator i = components.begin(),
-                                                  e = components.end();
-                                                  i != e; ++i) {
+  for (auto &component : components) {
     bool path_has_sep = !path.empty() && is_separator(path[path.size() - 1]);
-    bool component_has_sep = !i->empty() && is_separator((*i)[0]);
-    bool is_root_name = has_root_name(*i);
+    bool component_has_sep = !component.empty() && is_separator(component[0]);
+    bool is_root_name = has_root_name(component);
 
     if (path_has_sep) {
       // Strip separators from beginning of component.
-      size_t loc = i->find_first_not_of(separators);
-      StringRef c = i->substr(loc);
+      size_t loc = component.find_first_not_of(separators);
+      StringRef c = component.substr(loc);
 
       // Append it.
       path.append(c.begin(), c.end());
@@ -477,7 +475,7 @@ void append(SmallVectorImpl<char> &path, const Twine &a,
       path.push_back(preferred_separator);
     }
 
-    path.append(i->begin(), i->end());
+    path.append(component.begin(), component.end());
   }
 }
 
@@ -1096,3 +1094,20 @@ std::error_code directory_entry::status(file_status &result) const {
 #if defined(LLVM_ON_WIN32)
 #include "Windows/Path.inc"
 #endif
+
+namespace llvm {
+namespace sys {
+namespace path {
+
+bool user_cache_directory(SmallVectorImpl<char> &Result, const Twine &Path1,
+                          const Twine &Path2, const Twine &Path3) {
+  if (getUserCacheDir(Result)) {
+    append(Result, Path1, Path2, Path3);
+    return true;
+  }
+  return false;
+}
+
+} // end namespace path
+} // end namsspace sys
+} // end namespace llvm

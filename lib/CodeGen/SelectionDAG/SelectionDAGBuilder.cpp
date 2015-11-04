@@ -899,7 +899,8 @@ void SelectionDAGBuilder::visit(const Instruction &I) {
 
   visit(I.getOpcode(), I);
 
-  if (!isa<TerminatorInst>(&I) && !HasTailCall)
+  if (!isa<TerminatorInst>(&I) && !HasTailCall &&
+      !isStatepoint(&I)) // statepoints handle their exports internally
     CopyToExportRegsIfNeeded(&I);
 
   CurInst = nullptr;
@@ -1499,9 +1500,13 @@ uint32_t SelectionDAGBuilder::getEdgeWeight(const MachineBasicBlock *Src,
 void SelectionDAGBuilder::
 addSuccessorWithWeight(MachineBasicBlock *Src, MachineBasicBlock *Dst,
                        uint32_t Weight /* = 0 */) {
-  if (!Weight)
-    Weight = getEdgeWeight(Src, Dst);
-  Src->addSuccessor(Dst, Weight);
+  if (!FuncInfo.BPI)
+    Src->addSuccessorWithoutWeight(Dst);
+  else {
+    if (!Weight)
+      Weight = getEdgeWeight(Src, Dst);
+    Src->addSuccessor(Dst, Weight);
+  }
 }
 
 
@@ -1989,7 +1994,7 @@ SelectionDAGBuilder::visitSPDescriptorFailure(StackProtectorDescriptor &SPD) {
   const TargetLowering &TLI = DAG.getTargetLoweringInfo();
   SDValue Chain =
       TLI.makeLibCall(DAG, RTLIB::STACKPROTECTOR_CHECK_FAIL, MVT::isVoid,
-                      nullptr, 0, false, getCurSDLoc(), false, false).second;
+                      None, false, getCurSDLoc(), false, false).second;
   DAG.setRoot(Chain);
 }
 
@@ -5318,7 +5323,8 @@ SelectionDAGBuilder::visitIntrinsicCall(const CallInst &I, unsigned Intrinsic) {
     unsigned VReg = FuncInfo.getCatchPadExceptionPointerVReg(CPI, PtrRC);
     SDValue N =
         DAG.getCopyFromReg(DAG.getEntryNode(), getCurSDLoc(), VReg, PtrVT);
-    N = DAG.getZExtOrTrunc(N, getCurSDLoc(), MVT::i32);
+    if (Intrinsic == Intrinsic::eh_exceptioncode)
+      N = DAG.getZExtOrTrunc(N, getCurSDLoc(), MVT::i32);
     setValue(&I, N);
     return nullptr;
   }

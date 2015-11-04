@@ -992,13 +992,38 @@ MachineVerifier::visitMachineOperand(const MachineOperand *MO, unsigned MONum) {
   case MachineOperand::MO_FrameIndex:
     if (LiveStks && LiveStks->hasInterval(MO->getIndex()) &&
         LiveInts && !LiveInts->isNotInMIMap(MI)) {
-      LiveInterval &LI = LiveStks->getInterval(MO->getIndex());
+      int FI = MO->getIndex();
+      LiveInterval &LI = LiveStks->getInterval(FI);
       SlotIndex Idx = LiveInts->getInstructionIndex(MI);
-      if (MI->mayLoad() && !LI.liveAt(Idx.getRegSlot(true))) {
+
+      bool stores = MI->mayStore();
+      bool loads = MI->mayLoad();
+      // For a memory-to-memory move, we need to check if the frame
+      // index is used for storing or loading, by inspecting the
+      // memory operands.
+      if (stores && loads) {
+        for (auto *MMO : MI->memoperands()) {
+          const PseudoSourceValue *PSV = MMO->getPseudoValue();
+          if (PSV == nullptr) continue;
+          const FixedStackPseudoSourceValue *Value =
+            dyn_cast<FixedStackPseudoSourceValue>(PSV);
+          if (Value == nullptr) continue;
+          if (Value->getFrameIndex() != FI) continue;
+
+          if (MMO->isStore())
+            loads = false;
+          else
+            stores = false;
+          break;
+        }
+        if (loads == stores)
+          report("Missing fixed stack memoperand.", MI);
+      }
+      if (loads && !LI.liveAt(Idx.getRegSlot(true))) {
         report("Instruction loads from dead spill slot", MO, MONum);
         errs() << "Live stack: " << LI << '\n';
       }
-      if (MI->mayStore() && !LI.liveAt(Idx.getRegSlot())) {
+      if (stores && !LI.liveAt(Idx.getRegSlot())) {
         report("Instruction stores to dead spill slot", MO, MONum);
         errs() << "Live stack: " << LI << '\n';
       }

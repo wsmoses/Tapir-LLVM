@@ -14,6 +14,7 @@ add_public_tablegen_target(HexagonCommonTableGen)
 add_llvm_target(HexagonCodeGen
   BitTracker.cpp
   HexagonAsmPrinter.cpp
+  HexagonBitSimplify.cpp
   HexagonBitTracker.cpp
   HexagonCFGOptimizer.cpp
   HexagonCommonGEP.cpp
@@ -35,11 +36,13 @@ add_llvm_target(HexagonCodeGen
   HexagonMachineScheduler.cpp
   HexagonMCInstLower.cpp
   HexagonNewValueJump.cpp
+  HexagonOptimizeSZextends.cpp
   HexagonPeephole.cpp
   HexagonRegisterInfo.cpp
-  HexagonRemoveSZExtArgs.cpp
   HexagonSelectionDAGInfo.cpp
   HexagonSplitConst32AndConst64.cpp
+  HexagonSplitDouble.cpp
+  HexagonStoreWidening.cpp
   HexagonSubtarget.cpp
   HexagonTargetMachine.cpp
   HexagonTargetObjectFile.cpp

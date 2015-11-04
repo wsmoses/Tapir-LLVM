@@ -92,10 +92,10 @@ struct RewriteStatepointsForGC : public ModulePass {
       Changed |= runOnFunction(F);
 
     if (Changed) {
-      // stripDereferenceabilityInfo asserts that shouldRewriteStatepointsIn
+      // stripNonValidAttributes asserts that shouldRewriteStatepointsIn
       // returns true for at least one function in the module.  Since at least
       // one function changed, we know that the precondition is satisfied.
-      stripDereferenceabilityInfo(M);
+      stripNonValidAttributes(M);
     }
 
     return Changed;
@@ -112,15 +112,16 @@ struct RewriteStatepointsForGC : public ModulePass {
   /// dereferenceability that are no longer valid/correct after
   /// RewriteStatepointsForGC has run.  This is because semantically, after
   /// RewriteStatepointsForGC runs, all calls to gc.statepoint "free" the entire
-  /// heap.  stripDereferenceabilityInfo (conservatively) restores correctness
+  /// heap.  stripNonValidAttributes (conservatively) restores correctness
   /// by erasing all attributes in the module that externally imply
   /// dereferenceability.
-  ///
-  void stripDereferenceabilityInfo(Module &M);
+  /// Similar reasoning also applies to the noalias attributes. gc.statepoint
+  /// can touch the entire heap including noalias objects.
+  void stripNonValidAttributes(Module &M);
 
-  // Helpers for stripDereferenceabilityInfo
-  void stripDereferenceabilityInfoFromBody(Function &F);
-  void stripDereferenceabilityInfoFromPrototype(Function &F);
+  // Helpers for stripNonValidAttributes
+  void stripNonValidAttributesFromBody(Function &F);
+  void stripNonValidAttributesFromPrototype(Function &F);
 };
 } // namespace
 
@@ -1239,36 +1240,28 @@ static void recomputeLiveInValues(
   }
 }
 
-// When inserting gc.relocate calls, we need to ensure there are no uses
-// of the original value between the gc.statepoint and the gc.relocate call.
-// One case which can arise is a phi node starting one of the successor blocks.
-// We also need to be able to insert the gc.relocates only on the path which
-// goes through the statepoint.  We might need to split an edge to make this
-// possible.
+// When inserting gc.relocate and gc.result calls, we need to ensure there are
+// no uses of the original value / return value between the gc.statepoint and
+// the gc.relocate / gc.result call.  One case which can arise is a phi node
+// starting one of the successor blocks.  We also need to be able to insert the
+// gc.relocates only on the path which goes through the statepoint.  We might
+// need to split an edge to make this possible.
 static BasicBlock *
 normalizeForInvokeSafepoint(BasicBlock *BB, BasicBlock *InvokeParent,
                             DominatorTree &DT) {
   BasicBlock *Ret = BB;
-  if (!BB->getUniquePredecessor()) {
+  if (!BB->getUniquePredecessor())
     Ret = SplitBlockPredecessors(BB, InvokeParent, "", &DT);
-  }
 
-  // Now that 'ret' has unique predecessor we can safely remove all phi nodes
+  // Now that 'Ret' has unique predecessor we can safely remove all phi nodes
   // from it
   FoldSingleEntryPHINodes(Ret);
-  assert(!isa<PHINode>(Ret->begin()));
+  assert(!isa<PHINode>(Ret->begin()) &&
+         "All PHI nodes should have been removed!");
 
-  // At this point, we can safely insert a gc.relocate as the first instruction
-  // in Ret if needed.
+  // At this point, we can safely insert a gc.relocate or gc.result as the first
+  // instruction in Ret if needed.
   return Ret;
-}
-
-static int find_index(ArrayRef<Value *> livevec, Value *val) {
-  auto itr = std::find(livevec.begin(), livevec.end(), val);
-  assert(livevec.end() != itr);
-  size_t index = std::distance(livevec.begin(), itr);
-  assert(index < livevec.size());
-  return index;
 }
 
 // Create new attribute set containing only attributes which can be transferred
@@ -1325,7 +1318,15 @@ static void CreateGCRelocates(ArrayRef<Value *> LiveVariables,
                               IRBuilder<> Builder) {
   if (LiveVariables.empty())
     return;
-  
+
+  auto FindIndex = [](ArrayRef<Value *> LiveVec, Value *Val) {
+    auto ValIt = std::find(LiveVec.begin(), LiveVec.end(), Val);
+    assert(ValIt != LiveVec.end() && "Val not found in LiveVec!");
+    size_t Index = std::distance(LiveVec.begin(), ValIt);
+    assert(Index < LiveVec.size() && "Bug in std::find?");
+    return Index;
+  };
+
   // All gc_relocate are set to i8 addrspace(1)* type. We originally generated
   // unique declarations for each pointer type, but this proved problematic
   // because the intrinsic mangling code is incomplete and fragile.  Since
@@ -1341,9 +1342,8 @@ static void CreateGCRelocates(ArrayRef<Value *> LiveVariables,
   for (unsigned i = 0; i < LiveVariables.size(); i++) {
     // Generate the gc.relocate call and save the result
     Value *BaseIdx =
-      Builder.getInt32(LiveStart + find_index(LiveVariables, BasePtrs[i]));
-    Value *LiveIdx =
-      Builder.getInt32(LiveStart + find_index(LiveVariables, LiveVariables[i]));
+      Builder.getInt32(LiveStart + FindIndex(LiveVariables, BasePtrs[i]));
+    Value *LiveIdx = Builder.getInt32(LiveStart + i);
 
     // only specify a debug name if we can give a useful one
     CallInst *Reloc = Builder.CreateCall(
@@ -2493,8 +2493,8 @@ static bool insertParsePoints(Function &F, DominatorTree &DT, Pass *P,
 
 // Handles both return values and arguments for Functions and CallSites.
 template <typename AttrHolder>
-static void RemoveDerefAttrAtIndex(LLVMContext &Ctx, AttrHolder &AH,
-                                   unsigned Index) {
+static void RemoveNonValidAttrAtIndex(LLVMContext &Ctx, AttrHolder &AH,
+                                      unsigned Index) {
   AttrBuilder R;
   if (AH.getDereferenceableBytes(Index))
     R.addAttribute(Attribute::get(Ctx, Attribute::Dereferenceable,
@@ -2502,6 +2502,8 @@ static void RemoveDerefAttrAtIndex(LLVMContext &Ctx, AttrHolder &AH,
   if (AH.getDereferenceableOrNullBytes(Index))
     R.addAttribute(Attribute::get(Ctx, Attribute::DereferenceableOrNull,
                                   AH.getDereferenceableOrNullBytes(Index)));
+  if (AH.doesNotAlias(Index))
+    R.addAttribute(Attribute::NoAlias);
 
   if (!R.empty())
     AH.setAttributes(AH.getAttributes().removeAttributes(
@@ -2509,18 +2511,18 @@ static void RemoveDerefAttrAtIndex(LLVMContext &Ctx, AttrHolder &AH,
 }
 
 void
-RewriteStatepointsForGC::stripDereferenceabilityInfoFromPrototype(Function &F) {
+RewriteStatepointsForGC::stripNonValidAttributesFromPrototype(Function &F) {
   LLVMContext &Ctx = F.getContext();
 
   for (Argument &A : F.args())
     if (isa<PointerType>(A.getType()))
-      RemoveDerefAttrAtIndex(Ctx, F, A.getArgNo() + 1);
+      RemoveNonValidAttrAtIndex(Ctx, F, A.getArgNo() + 1);
 
   if (isa<PointerType>(F.getReturnType()))
-    RemoveDerefAttrAtIndex(Ctx, F, AttributeSet::ReturnIndex);
+    RemoveNonValidAttrAtIndex(Ctx, F, AttributeSet::ReturnIndex);
 }
 
-void RewriteStatepointsForGC::stripDereferenceabilityInfoFromBody(Function &F) {
+void RewriteStatepointsForGC::stripNonValidAttributesFromBody(Function &F) {
   if (F.empty())
     return;
 
@@ -2550,9 +2552,9 @@ void RewriteStatepointsForGC::stripDereferenceabilityInfoFromBody(Function &F) {
     if (CallSite CS = CallSite(&I)) {
       for (int i = 0, e = CS.arg_size(); i != e; i++)
         if (isa<PointerType>(CS.getArgument(i)->getType()))
-          RemoveDerefAttrAtIndex(Ctx, CS, i + 1);
+          RemoveNonValidAttrAtIndex(Ctx, CS, i + 1);
       if (isa<PointerType>(CS.getType()))
-        RemoveDerefAttrAtIndex(Ctx, CS, AttributeSet::ReturnIndex);
+        RemoveNonValidAttrAtIndex(Ctx, CS, AttributeSet::ReturnIndex);
     }
   }
 }
@@ -2571,17 +2573,17 @@ static bool shouldRewriteStatepointsIn(Function &F) {
     return false;
 }
 
-void RewriteStatepointsForGC::stripDereferenceabilityInfo(Module &M) {
+void RewriteStatepointsForGC::stripNonValidAttributes(Module &M) {
 #ifndef NDEBUG
   assert(std::any_of(M.begin(), M.end(), shouldRewriteStatepointsIn) &&
          "precondition!");
 #endif
 
   for (Function &F : M)
-    stripDereferenceabilityInfoFromPrototype(F);
+    stripNonValidAttributesFromPrototype(F);
 
   for (Function &F : M)
-    stripDereferenceabilityInfoFromBody(F);
+    stripNonValidAttributesFromBody(F);
 }
 
 bool RewriteStatepointsForGC::runOnFunction(Function &F) {

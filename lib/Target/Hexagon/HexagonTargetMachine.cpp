@@ -33,6 +33,9 @@ static cl::opt<bool> DisableHexagonCFGOpt("disable-hexagon-cfgopt",
   cl::Hidden, cl::ZeroOrMore, cl::init(false),
   cl::desc("Disable Hexagon CFG Optimization"));
 
+static cl::opt<bool> DisableStoreWidening("disable-store-widen",
+  cl::Hidden, cl::init(false), cl::desc("Disable store widening"));
+
 static cl::opt<bool> EnableExpandCondsets("hexagon-expand-condsets",
   cl::init(true), cl::Hidden, cl::ZeroOrMore,
   cl::desc("Early expansion of MUX"));
@@ -56,6 +59,15 @@ static cl::opt<bool> EnableGenPred("hexagon-gen-pred", cl::init(true),
   cl::Hidden, cl::desc("Enable conversion of arithmetic operations to "
   "predicate instructions"));
 
+static cl::opt<bool> DisableHSDR("disable-hsdr", cl::init(false), cl::Hidden,
+  cl::desc("Disable splitting double registers"));
+
+static cl::opt<bool> EnableBitSimplify("hexagon-bit", cl::init(true),
+  cl::Hidden, cl::desc("Bit simplification"));
+
+static cl::opt<bool> EnableLoopResched("hexagon-loop-resched", cl::init(true),
+  cl::Hidden, cl::desc("Loop rescheduling"));
+
 /// HexagonTargetMachineModule - Note that this is used on hosts that
 /// cannot link in a library unless there are references into the
 /// library.  In particular, it seems that it is not possible to get
@@ -78,6 +90,8 @@ SchedCustomRegistry("hexagon", "Run Hexagon's custom scheduler",
                     createVLIWMachineSched);
 
 namespace llvm {
+  FunctionPass *createHexagonBitSimplify();
+  FunctionPass *createHexagonCallFrameInformation();
   FunctionPass *createHexagonCFGOptimizer();
   FunctionPass *createHexagonCommonGEP();
   FunctionPass *createHexagonCopyToCombine();
@@ -92,11 +106,14 @@ namespace llvm {
   FunctionPass *createHexagonHardwareLoops();
   FunctionPass *createHexagonISelDag(HexagonTargetMachine &TM,
                                      CodeGenOpt::Level OptLevel);
+  FunctionPass *createHexagonLoopRescheduling();
   FunctionPass *createHexagonNewValueJump();
+  FunctionPass *createHexagonOptimizeSZextends();
   FunctionPass *createHexagonPacketizer();
   FunctionPass *createHexagonPeephole();
-  FunctionPass *createHexagonRemoveExtendArgs(const HexagonTargetMachine &TM);
   FunctionPass *createHexagonSplitConst32AndConst64();
+  FunctionPass *createHexagonSplitDoubleRegs();
+  FunctionPass *createHexagonStoreWidening();
 } // end namespace llvm;
 
 /// HexagonTargetMachine ctor - Create an ILP32 architecture model.
@@ -206,7 +223,7 @@ bool HexagonPassConfig::addInstSelector() {
   bool NoOpt = (getOptLevel() == CodeGenOpt::None);
 
   if (!NoOpt)
-    addPass(createHexagonRemoveExtendArgs(TM));
+    addPass(createHexagonOptimizeSZextends());
 
   addPass(createHexagonISelDag(TM, getOptLevel()));
 
@@ -214,6 +231,15 @@ bool HexagonPassConfig::addInstSelector() {
     // Create logical operations on predicate registers.
     if (EnableGenPred)
       addPass(createHexagonGenPredicate(), false);
+    // Rotate loops to expose bit-simplification opportunities.
+    if (EnableLoopResched)
+      addPass(createHexagonLoopRescheduling(), false);
+    // Split double registers.
+    if (!DisableHSDR)
+      addPass(createHexagonSplitDoubleRegs());
+    // Bit simplification.
+    if (EnableBitSimplify)
+      addPass(createHexagonBitSimplify(), false);
     addPass(createHexagonPeephole());
     printAndVerify("After hexagon peephole pass");
     if (EnableGenInsert)
@@ -226,9 +252,12 @@ bool HexagonPassConfig::addInstSelector() {
 }
 
 void HexagonPassConfig::addPreRegAlloc() {
-  if (getOptLevel() != CodeGenOpt::None)
+  if (getOptLevel() != CodeGenOpt::None) {
+    if (!DisableStoreWidening)
+      addPass(createHexagonStoreWidening(), false);
     if (!DisableHardwareLoops)
       addPass(createHexagonHardwareLoops(), false);
+  }
 }
 
 void HexagonPassConfig::addPostRegAlloc() {
@@ -263,4 +292,7 @@ void HexagonPassConfig::addPreEmitPass() {
 
     addPass(createHexagonPacketizer(), false);
   }
+
+  // Add CFI instructions if necessary.
+  addPass(createHexagonCallFrameInformation(), false);
 }

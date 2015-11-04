@@ -82,6 +82,10 @@ unsigned ArchiveMemberHeader::getGID() const {
   return Ret;
 }
 
+Archive::Child::Child(const Archive *Parent, StringRef Data,
+                      uint16_t StartOfFile)
+    : Parent(Parent), Data(Data), StartOfFile(StartOfFile) {}
+
 Archive::Child::Child(const Archive *Parent, const char *Start)
     : Parent(Parent) {
   if (!Start)
@@ -179,17 +183,11 @@ ErrorOr<StringRef> Archive::Child::getName() const {
     std::size_t offset;
     if (name.substr(1).rtrim(" ").getAsInteger(10, offset))
       llvm_unreachable("Long name offset is not an integer");
-    const char *addr = Parent->StringTable->Data.begin()
-                       + sizeof(ArchiveMemberHeader)
-                       + offset;
+
     // Verify it.
-    if (Parent->StringTable == Parent->child_end()
-        || addr < (Parent->StringTable->Data.begin()
-                   + sizeof(ArchiveMemberHeader))
-        || addr > (Parent->StringTable->Data.begin()
-                   + sizeof(ArchiveMemberHeader)
-                   + Parent->StringTable->getSize()))
+    if (offset >= Parent->StringTable.size())
       return object_error::parse_failed;
+    const char *addr = Parent->StringTable.begin() + offset;
 
     // GNU long file names end with a "/\n".
     if (Parent->kind() == K_GNU || Parent->kind() == K_MIPS64) {
@@ -238,9 +236,13 @@ ErrorOr<std::unique_ptr<Archive>> Archive::create(MemoryBufferRef Source) {
   return std::move(Ret);
 }
 
+void Archive::setFirstRegular(const Child &C) {
+  FirstRegularData = C.Data;
+  FirstRegularStartOfFile = C.StartOfFile;
+}
+
 Archive::Archive(MemoryBufferRef Source, std::error_code &ec)
-    : Binary(Binary::ID_Archive, Source), SymbolTable(child_end()),
-      StringTable(child_end()), FirstRegular(child_end()) {
+    : Binary(Binary::ID_Archive, Source) {
   StringRef Buffer = Data.getBuffer();
   // Check for sufficient magic.
   if (Buffer.startswith(ThinMagic)) {
@@ -284,9 +286,11 @@ Archive::Archive(MemoryBufferRef Source, std::error_code &ec)
 
   if (Name == "__.SYMDEF") {
     Format = K_BSD;
-    SymbolTable = i;
+    // We know that the symbol table is not an external file, so we just assert
+    // there is no error.
+    SymbolTable = *i->getBuffer();
     ++i;
-    FirstRegular = i;
+    setFirstRegular(*i);
     ec = std::error_code();
     return;
   }
@@ -300,10 +304,12 @@ Archive::Archive(MemoryBufferRef Source, std::error_code &ec)
       return;
     Name = NameOrErr.get();
     if (Name == "__.SYMDEF SORTED" || Name == "__.SYMDEF") {
-      SymbolTable = i;
+      // We know that the symbol table is not an external file, so we just
+      // assert there is no error.
+      SymbolTable = *i->getBuffer();
       ++i;
     }
-    FirstRegular = i;
+    setFirstRegular(*i);
     return;
   }
 
@@ -314,7 +320,9 @@ Archive::Archive(MemoryBufferRef Source, std::error_code &ec)
 
   bool has64SymTable = false;
   if (Name == "/" || Name == "/SYM64/") {
-    SymbolTable = i;
+    // We know that the symbol table is not an external file, so we just assert
+    // there is no error.
+    SymbolTable = *i->getBuffer();
     if (Name == "/SYM64/")
       has64SymTable = true;
 
@@ -328,16 +336,18 @@ Archive::Archive(MemoryBufferRef Source, std::error_code &ec)
 
   if (Name == "//") {
     Format = has64SymTable ? K_MIPS64 : K_GNU;
-    StringTable = i;
+    // The string table is never an external member, so we just assert on the
+    // ErrorOr.
+    StringTable = *i->getBuffer();
     ++i;
-    FirstRegular = i;
+    setFirstRegular(*i);
     ec = std::error_code();
     return;
   }
 
   if (Name[0] != '/') {
     Format = has64SymTable ? K_MIPS64 : K_GNU;
-    FirstRegular = i;
+    setFirstRegular(*i);
     ec = std::error_code();
     return;
   }
@@ -348,11 +358,13 @@ Archive::Archive(MemoryBufferRef Source, std::error_code &ec)
   }
 
   Format = K_COFF;
-  SymbolTable = i;
+  // We know that the symbol table is not an external file, so we just assert
+  // there is no error.
+  SymbolTable = *i->getBuffer();
 
   ++i;
   if (i == e) {
-    FirstRegular = i;
+    setFirstRegular(*i);
     ec = std::error_code();
     return;
   }
@@ -360,11 +372,13 @@ Archive::Archive(MemoryBufferRef Source, std::error_code &ec)
   Name = i->getRawName();
 
   if (Name == "//") {
-    StringTable = i;
+    // The string table is never an external member, so we just assert on the
+    // ErrorOr.
+    StringTable = *i->getBuffer();
     ++i;
   }
 
-  FirstRegular = i;
+  setFirstRegular(*i);
   ec = std::error_code();
 }
 
@@ -373,7 +387,7 @@ Archive::child_iterator Archive::child_begin(bool SkipInternal) const {
     return child_end();
 
   if (SkipInternal)
-    return FirstRegular;
+    return Child(this, FirstRegularData, FirstRegularStartOfFile);
 
   const char *Loc = Data.getBufferStart() + strlen(Magic);
   Child c(this, Loc);
@@ -388,7 +402,7 @@ StringRef Archive::Symbol::getName() const {
   return Parent->getSymbolTable().begin() + StringIndex;
 }
 
-ErrorOr<Archive::child_iterator> Archive::Symbol::getMember() const {
+ErrorOr<Archive::Child> Archive::Symbol::getMember() const {
   const char *Buf = Parent->getSymbolTable().begin();
   const char *Offsets = Buf;
   if (Parent->kind() == K_MIPS64)
@@ -433,8 +447,7 @@ ErrorOr<Archive::child_iterator> Archive::Symbol::getMember() const {
   }
 
   const char *Loc = Parent->getData().begin() + Offset;
-  child_iterator Iter(Child(Parent, Loc));
-  return Iter;
+  return Child(Parent, Loc);
 }
 
 Archive::Symbol Archive::Symbol::getNext() const {
@@ -553,6 +566,4 @@ Archive::child_iterator Archive::findSym(StringRef name) const {
   return child_end();
 }
 
-bool Archive::hasSymbolTable() const {
-  return SymbolTable != child_end();
-}
+bool Archive::hasSymbolTable() const { return !SymbolTable.empty(); }

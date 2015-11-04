@@ -1453,8 +1453,13 @@ Instruction *InstCombiner::visitGetElementPtrInst(GetElementPtrInst &GEP) {
       }
     }
 
-    GetElementPtrInst *NewGEP = cast<GetElementPtrInst>(Op1->clone());
+    // If not all GEPs are identical we'll have to create a new PHI node.
+    // Check that the old PHI node has only one use so that it will get
+    // removed.
+    if (DI != -1 && !PN->hasOneUse())
+      return nullptr;
 
+    GetElementPtrInst *NewGEP = cast<GetElementPtrInst>(Op1->clone());
     if (DI == -1) {
       // All the GEPs feeding the PHI are identical. Clone one down into our
       // BB so that it can be merged with the current GEP.
@@ -2689,6 +2694,12 @@ static bool TryToSinkInstruction(Instruction *I, BasicBlock *DestBlock) {
         &DestBlock->getParent()->getEntryBlock())
     return false;
 
+  // Do not sink convergent call instructions.
+  if (auto *CI = dyn_cast<CallInst>(I)) {
+    if (CI->isConvergent())
+      return false;
+  }
+
   // We can only sink load instructions if there is nothing between the load and
   // the end of block that could change the value.
   if (I->mayReadFromMemory()) {
@@ -2724,6 +2735,27 @@ bool InstCombiner::run() {
         (I->getNumOperands() == 0 || isa<Constant>(I->getOperand(0)))) {
       if (Constant *C = ConstantFoldInstruction(I, DL, TLI)) {
         DEBUG(dbgs() << "IC: ConstFold to: " << *C << " from: " << *I << '\n');
+
+        // Add operands to the worklist.
+        ReplaceInstUsesWith(*I, C);
+        ++NumConstProp;
+        EraseInstFromFunction(*I);
+        MadeIRChange = true;
+        continue;
+      }
+    }
+
+    // In general, it is possible for computeKnownBits to determine all bits in a
+    // value even when the operands are not all constants.
+    if (!I->use_empty() && I->getType()->isIntegerTy()) {
+      unsigned BitWidth = I->getType()->getScalarSizeInBits();
+      APInt KnownZero(BitWidth, 0);
+      APInt KnownOne(BitWidth, 0);
+      computeKnownBits(I, KnownZero, KnownOne, /*Depth*/0, I);
+      if ((KnownZero | KnownOne).isAllOnesValue()) {
+        Constant *C = ConstantInt::get(I->getContext(), KnownOne);
+        DEBUG(dbgs() << "IC: ConstFold (all bits known) to: " << *C <<
+                        " from: " << *I << '\n');
 
         // Add operands to the worklist.
         ReplaceInstUsesWith(*I, C);
@@ -2948,8 +2980,7 @@ static bool AddReachableCodeToWorklist(BasicBlock *BB, const DataLayout &DL,
   // of the function down.  This jives well with the way that it adds all uses
   // of instructions to the worklist after doing a transformation, thus avoiding
   // some N^2 behavior in pathological cases.
-  ICWorklist.AddInitialGroup(&InstrsForInstCombineWorklist[0],
-                             InstrsForInstCombineWorklist.size());
+  ICWorklist.AddInitialGroup(InstrsForInstCombineWorklist);
 
   return MadeIRChange;
 }

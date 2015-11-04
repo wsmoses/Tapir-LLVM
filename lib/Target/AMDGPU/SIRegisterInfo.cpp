@@ -41,13 +41,22 @@ BitVector SIRegisterInfo::getReservedRegs(const MachineFunction &MF) const {
   reserveRegisterTuples(Reserved, AMDGPU::EXEC);
   reserveRegisterTuples(Reserved, AMDGPU::FLAT_SCR);
 
-  // Reserve some VGPRs to use as temp registers in case we have to spill VGPRs
-  reserveRegisterTuples(Reserved, AMDGPU::VGPR254);
-  reserveRegisterTuples(Reserved, AMDGPU::VGPR255);
+  // Reserve the last 2 registers so we will always have at least 2 more that
+  // will physically contain VCC.
+  reserveRegisterTuples(Reserved, AMDGPU::SGPR102_SGPR103);
+
+  const AMDGPUSubtarget &ST = MF.getSubtarget<AMDGPUSubtarget>();
+
+  if (ST.getGeneration() >= AMDGPUSubtarget::VOLCANIC_ISLANDS) {
+    // SI/CI have 104 SGPRs. VI has 102. We need to shift down the reservation
+    // for VCC/FLAT_SCR.
+    reserveRegisterTuples(Reserved, AMDGPU::SGPR98_SGPR99);
+    reserveRegisterTuples(Reserved, AMDGPU::SGPR100_SGPR101);
+  }
 
   // Tonga and Iceland can only allocate a fixed number of SGPRs due
   // to a hw bug.
-  if (MF.getSubtarget<AMDGPUSubtarget>().hasSGPRInitBug()) {
+  if (ST.hasSGPRInitBug()) {
     unsigned NumSGPRs = AMDGPU::SGPR_32RegClass.getNumRegs();
     // Reserve some SGPRs for FLAT_SCRATCH and VCC (4 SGPRs).
     // Assume XNACK_MASK is unused.
@@ -331,7 +340,7 @@ unsigned SIRegisterInfo::getHWRegIndex(unsigned Reg) const {
 const TargetRegisterClass *SIRegisterInfo::getPhysRegClass(unsigned Reg) const {
   assert(!TargetRegisterInfo::isVirtualRegister(Reg));
 
-  static const TargetRegisterClass *BaseClasses[] = {
+  static const TargetRegisterClass *const BaseClasses[] = {
     &AMDGPU::VGPR_32RegClass,
     &AMDGPU::SReg_32RegClass,
     &AMDGPU::VReg_64RegClass,

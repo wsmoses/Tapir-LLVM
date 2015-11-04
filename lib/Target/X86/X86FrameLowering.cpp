@@ -786,7 +786,7 @@ void X86FrameLowering::emitPrologue(MachineFunction &MF,
   // NumBytes value that we would've used for the parent frame.
   unsigned ParentFrameNumBytes = NumBytes;
   if (IsFunclet)
-    NumBytes = MFI->getMaxCallFrameSize();
+    NumBytes = getWinEHFuncletFrameSize(MF);
 
   // Skip the callee-saved push instructions.
   bool PushedRegs = false;
@@ -1039,6 +1039,22 @@ static bool isFuncletReturnInstr(MachineInstr *MI) {
   llvm_unreachable("impossible");
 }
 
+unsigned X86FrameLowering::getWinEHFuncletFrameSize(const MachineFunction &MF) const {
+  // This is the size of the pushed CSRs.
+  unsigned CSSize =
+      MF.getInfo<X86MachineFunctionInfo>()->getCalleeSavedFrameSize();
+  // This is the amount of stack a funclet needs to allocate.
+  unsigned MaxCallSize = MF.getFrameInfo()->getMaxCallFrameSize();
+  // RBP is not included in the callee saved register block. After pushing RBP,
+  // everything is 16 byte aligned. Everything we allocate before an outgoing
+  // call must also be 16 byte aligned.
+  unsigned FrameSizeMinusRBP =
+      RoundUpToAlignment(CSSize + MaxCallSize, getStackAlignment());
+  // Subtract out the size of the callee saved registers. This is how much stack
+  // each funclet will allocate.
+  return FrameSizeMinusRBP - CSSize;
+}
+
 void X86FrameLowering::emitEpilogue(MachineFunction &MF,
                                     MachineBasicBlock &MBB) const {
   const MachineFrameInfo *MFI = MF.getFrameInfo();
@@ -1067,7 +1083,7 @@ void X86FrameLowering::emitEpilogue(MachineFunction &MF,
   uint64_t NumBytes = 0;
 
   if (MBBI->getOpcode() == X86::CATCHRET) {
-    NumBytes = MFI->getMaxCallFrameSize();
+    NumBytes = getWinEHFuncletFrameSize(MF);
     assert(hasFP(MF) && "EH funclets without FP not yet implemented");
     MachineBasicBlock *TargetMBB = MBBI->getOperand(0).getMBB();
 
@@ -1086,7 +1102,7 @@ void X86FrameLowering::emitEpilogue(MachineFunction &MF,
     RestoreMBB = TargetMBB;
     if (STI.is32Bit()) {
       RestoreMBB = MF.CreateMachineBasicBlock(MBB.getBasicBlock());
-      MF.insert(TargetMBB, RestoreMBB);
+      MF.insert(TargetMBB->getIterator(), RestoreMBB);
       MBB.removeSuccessor(TargetMBB);
       MBB.addSuccessor(RestoreMBB);
       RestoreMBB->addSuccessor(TargetMBB);
@@ -1107,7 +1123,7 @@ void X86FrameLowering::emitEpilogue(MachineFunction &MF,
           .addMBB(TargetMBB);
     }
   } else if (MBBI->getOpcode() == X86::CLEANUPRET) {
-    NumBytes = MFI->getMaxCallFrameSize();
+    NumBytes = getWinEHFuncletFrameSize(MF);
     assert(hasFP(MF) && "EH funclets without FP not yet implemented");
     BuildMI(MBB, MBBI, DL, TII.get(Is64Bit ? X86::POP64r : X86::POP32r),
             MachineFramePtr)
@@ -1162,6 +1178,9 @@ void X86FrameLowering::emitEpilogue(MachineFunction &MF,
           .addReg(ReturnReg)
           .addMBB(RestoreMBB);
     }
+    // Record that we've taken the address of RestoreMBB and no longer just
+    // reference it in a terminator.
+    RestoreMBB->setHasAddressTaken();
   }
 
   if (MBBI != MBB.end())
@@ -2086,18 +2105,23 @@ eliminateCallFramePseudoInstr(MachineFunction &MF, MachineBasicBlock &MBB,
     unsigned StackAlign = getStackAlignment();
     Amount = RoundUpToAlignment(Amount, StackAlign);
 
+    MachineModuleInfo &MMI = MF.getMMI();
+    const Function *Fn = MF.getFunction();
+    bool WindowsCFI = MF.getTarget().getMCAsmInfo()->usesWindowsCFI();
+    bool DwarfCFI = !WindowsCFI && 
+                    (MMI.hasDebugInfo() || Fn->needsUnwindTableEntry());
+
     // If we have any exception handlers in this function, and we adjust
-    // the SP before calls, we may need to indicate this to the unwinder,
-    // using GNU_ARGS_SIZE. Note that this may be necessary
-    // even when Amount == 0, because the preceding function may have
-    // set a non-0 GNU_ARGS_SIZE.
+    // the SP before calls, we may need to indicate this to the unwinder
+    // using GNU_ARGS_SIZE. Note that this may be necessary even when
+    // Amount == 0, because the preceding function may have set a non-0
+    // GNU_ARGS_SIZE.
     // TODO: We don't need to reset this between subsequent functions,
     // if it didn't change.
-    bool HasDwarfEHHandlers =
-      !MF.getTarget().getMCAsmInfo()->usesWindowsCFI() &&
-      !MF.getMMI().getLandingPads().empty();
+    bool HasDwarfEHHandlers = !WindowsCFI &&
+                              !MF.getMMI().getLandingPads().empty();
 
-    if (HasDwarfEHHandlers && !isDestroy && 
+    if (HasDwarfEHHandlers && !isDestroy &&
         MF.getInfo<X86MachineFunctionInfo>()->getHasPushSequences())
       BuildCFI(MBB, I, DL,
                MCCFIInstruction::createGnuArgsSize(nullptr, Amount));
@@ -2109,13 +2133,35 @@ eliminateCallFramePseudoInstr(MachineFunction &MF, MachineBasicBlock &MBB,
     // (Pushes of argument for frame setup, callee pops for frame destroy)
     Amount -= InternalAmt;
 
+    // If this is a callee-pop calling convention, and we're emitting precise
+    // SP-based CFI, emit a CFA adjust for the amount the callee popped.
+    if (isDestroy && InternalAmt && DwarfCFI && !hasFP(MF) && 
+        MMI.usePreciseUnwindInfo())
+      BuildCFI(MBB, I, DL, 
+               MCCFIInstruction::createAdjustCfaOffset(nullptr, -InternalAmt));
+
     if (Amount) {
       // Add Amount to SP to destroy a frame, and subtract to setup.
       int Offset = isDestroy ? Amount : -Amount;
 
-      if (!(MF.getFunction()->optForMinSize() && 
+      if (!(Fn->optForMinSize() && 
             adjustStackWithPops(MBB, I, DL, Offset)))
         BuildStackAdjustment(MBB, I, DL, Offset, /*InEpilogue=*/false);
+    }
+
+    if (DwarfCFI && !hasFP(MF)) {
+      // If we don't have FP, but need to generate unwind information,
+      // we need to set the correct CFA offset after the stack adjustment.
+      // How much we adjust the CFA offset depends on whether we're emitting
+      // CFI only for EH purposes or for debugging. EH only requires the CFA
+      // offset to be correct at each call site, while for debugging we want
+      // it to be more precise.
+      int CFAOffset = Amount;
+      if (!MMI.usePreciseUnwindInfo())
+        CFAOffset += InternalAmt;
+      CFAOffset = isDestroy ? -CFAOffset : CFAOffset;
+      BuildCFI(MBB, I, DL, 
+               MCCFIInstruction::createAdjustCfaOffset(nullptr, CFAOffset));
     }
 
     return;
@@ -2210,4 +2256,16 @@ MachineBasicBlock::iterator X86FrameLowering::restoreWin32EHStackPointers(
     llvm_unreachable("32-bit frames with WinEH must use FramePtr or BasePtr");
   }
   return MBBI;
+}
+
+unsigned X86FrameLowering::getWinEHParentFrameOffset(const MachineFunction &MF) const {
+  // RDX, the parent frame pointer, is homed into 16(%rsp) in the prologue.
+  unsigned Offset = 16;
+  // RBP is immediately pushed.
+  Offset += SlotSize;
+  // All callee-saved registers are then pushed.
+  Offset += MF.getInfo<X86MachineFunctionInfo>()->getCalleeSavedFrameSize();
+  // Every funclet allocates enough stack space for the largest outgoing call.
+  Offset += getWinEHFuncletFrameSize(MF);
+  return Offset;
 }

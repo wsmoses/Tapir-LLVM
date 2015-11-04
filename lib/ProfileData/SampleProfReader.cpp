@@ -21,13 +21,13 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/ProfileData/SampleProfReader.h"
+#include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorOr.h"
 #include "llvm/Support/LEB128.h"
 #include "llvm/Support/LineIterator.h"
 #include "llvm/Support/MemoryBuffer.h"
-#include "llvm/ADT/DenseMap.h"
-#include "llvm/ADT/SmallVector.h"
 
 using namespace llvm::sampleprof;
 using namespace llvm;
@@ -100,6 +100,12 @@ static bool ParseHead(const StringRef &Input, StringRef &FName,
   return true;
 }
 
+
+/// \brief Returns true if line offset \p L is legal (only has 16 bits).
+static bool isOffsetLegal(unsigned L) {
+  return (L & 0xffff) == L;
+}
+
 /// \brief Parse \p Input as line sample.
 ///
 /// \param Input input line.
@@ -124,7 +130,7 @@ static bool ParseLine(const StringRef &Input, bool &IsCallsite, uint32_t &Depth,
   StringRef Loc = Input.substr(Depth, n1 - Depth);
   size_t n2 = Loc.find('.');
   if (n2 == StringRef::npos) {
-    if (Loc.getAsInteger(10, LineOffset))
+    if (Loc.getAsInteger(10, LineOffset) || !isOffsetLegal(LineOffset))
       return false;
     Discriminator = 0;
   } else {
@@ -293,15 +299,10 @@ ErrorOr<StringRef> SampleProfileReaderBinary::readStringFromTable() {
 
 std::error_code
 SampleProfileReaderBinary::readProfile(FunctionSamples &FProfile) {
-  auto Val = readNumber<uint64_t>();
-  if (std::error_code EC = Val.getError())
+  auto NumSamples = readNumber<uint64_t>();
+  if (std::error_code EC = NumSamples.getError())
     return EC;
-  FProfile.addTotalSamples(*Val);
-
-  Val = readNumber<uint64_t>();
-  if (std::error_code EC = Val.getError())
-    return EC;
-  FProfile.addHeadSamples(*Val);
+  FProfile.addTotalSamples(*NumSamples);
 
   // Read the samples in the body.
   auto NumRecords = readNumber<uint32_t>();
@@ -312,6 +313,10 @@ SampleProfileReaderBinary::readProfile(FunctionSamples &FProfile) {
     auto LineOffset = readNumber<uint64_t>();
     if (std::error_code EC = LineOffset.getError())
       return EC;
+
+    if (!isOffsetLegal(*LineOffset)) {
+      return std::error_code();
+    }
 
     auto Discriminator = readNumber<uint64_t>();
     if (std::error_code EC = Discriminator.getError())
@@ -370,12 +375,18 @@ SampleProfileReaderBinary::readProfile(FunctionSamples &FProfile) {
 
 std::error_code SampleProfileReaderBinary::read() {
   while (!at_eof()) {
+    auto NumHeadSamples = readNumber<uint64_t>();
+    if (std::error_code EC = NumHeadSamples.getError())
+      return EC;
+
     auto FName(readStringFromTable());
     if (std::error_code EC = FName.getError())
       return EC;
 
     Profiles[*FName] = FunctionSamples();
     FunctionSamples &FProfile = Profiles[*FName];
+
+    FProfile.addHeadSamples(*NumHeadSamples);
 
     if (std::error_code EC = readProfile(FProfile))
       return EC;

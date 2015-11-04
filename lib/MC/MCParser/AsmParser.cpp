@@ -690,9 +690,8 @@ bool AsmParser::Run(bool NoInitialTextSection, bool NoFinalize) {
         // FIXME: We would really like to refer back to where the symbol was
         // first referenced for a source location. We need to add something
         // to track that. Currently, we just point to the end of the file.
-        printMessage(getLexer().getLoc(), SourceMgr::DK_Error,
-                     "assembler local symbol '" + Sym->getName() +
-                         "' not defined");
+        return Error(getLexer().getLoc(), "assembler local symbol '" +
+                                              Sym->getName() + "' not defined");
     }
   }
 
@@ -1102,8 +1101,9 @@ bool AsmParser::parseAbsoluteExpression(int64_t &Res) {
   return false;
 }
 
-unsigned AsmParser::getBinOpPrecedence(AsmToken::TokenKind K,
-                                       MCBinaryExpr::Opcode &Kind) {
+static unsigned getDarwinBinOpPrecedence(AsmToken::TokenKind K,
+                                         MCBinaryExpr::Opcode &Kind,
+                                         bool ShouldUseLogicalShr) {
   switch (K) {
   default:
     return 0; // not a binop.
@@ -1155,7 +1155,7 @@ unsigned AsmParser::getBinOpPrecedence(AsmToken::TokenKind K,
     Kind = MCBinaryExpr::Shl;
     return 4;
   case AsmToken::GreaterGreater:
-    Kind = MAI.shouldUseLogicalShr() ? MCBinaryExpr::LShr : MCBinaryExpr::AShr;
+    Kind = ShouldUseLogicalShr ? MCBinaryExpr::LShr : MCBinaryExpr::AShr;
     return 4;
 
   // High Intermediate Precedence: +, -
@@ -1177,6 +1177,89 @@ unsigned AsmParser::getBinOpPrecedence(AsmToken::TokenKind K,
     Kind = MCBinaryExpr::Mod;
     return 6;
   }
+}
+
+static unsigned getGNUBinOpPrecedence(AsmToken::TokenKind K,
+                                      MCBinaryExpr::Opcode &Kind,
+                                      bool ShouldUseLogicalShr) {
+  switch (K) {
+  default:
+    return 0; // not a binop.
+
+  // Lowest Precedence: &&, ||
+  case AsmToken::AmpAmp:
+    Kind = MCBinaryExpr::LAnd;
+    return 2;
+  case AsmToken::PipePipe:
+    Kind = MCBinaryExpr::LOr;
+    return 1;
+
+  // Low Precedence: ==, !=, <>, <, <=, >, >=
+  case AsmToken::EqualEqual:
+    Kind = MCBinaryExpr::EQ;
+    return 3;
+  case AsmToken::ExclaimEqual:
+  case AsmToken::LessGreater:
+    Kind = MCBinaryExpr::NE;
+    return 3;
+  case AsmToken::Less:
+    Kind = MCBinaryExpr::LT;
+    return 3;
+  case AsmToken::LessEqual:
+    Kind = MCBinaryExpr::LTE;
+    return 3;
+  case AsmToken::Greater:
+    Kind = MCBinaryExpr::GT;
+    return 3;
+  case AsmToken::GreaterEqual:
+    Kind = MCBinaryExpr::GTE;
+    return 3;
+
+  // Low Intermediate Precedence: +, -
+  case AsmToken::Plus:
+    Kind = MCBinaryExpr::Add;
+    return 4;
+  case AsmToken::Minus:
+    Kind = MCBinaryExpr::Sub;
+    return 4;
+
+  // High Intermediate Precedence: |, &, ^
+  //
+  // FIXME: gas seems to support '!' as an infix operator?
+  case AsmToken::Pipe:
+    Kind = MCBinaryExpr::Or;
+    return 5;
+  case AsmToken::Caret:
+    Kind = MCBinaryExpr::Xor;
+    return 5;
+  case AsmToken::Amp:
+    Kind = MCBinaryExpr::And;
+    return 5;
+
+  // Highest Precedence: *, /, %, <<, >>
+  case AsmToken::Star:
+    Kind = MCBinaryExpr::Mul;
+    return 6;
+  case AsmToken::Slash:
+    Kind = MCBinaryExpr::Div;
+    return 6;
+  case AsmToken::Percent:
+    Kind = MCBinaryExpr::Mod;
+    return 6;
+  case AsmToken::LessLess:
+    Kind = MCBinaryExpr::Shl;
+    return 6;
+  case AsmToken::GreaterGreater:
+    Kind = ShouldUseLogicalShr ? MCBinaryExpr::LShr : MCBinaryExpr::AShr;
+    return 6;
+  }
+}
+
+unsigned AsmParser::getBinOpPrecedence(AsmToken::TokenKind K,
+                                       MCBinaryExpr::Opcode &Kind) {
+  bool ShouldUseLogicalShr = MAI.shouldUseLogicalShr();
+  return IsDarwin ? getDarwinBinOpPrecedence(K, Kind, ShouldUseLogicalShr)
+                  : getGNUBinOpPrecedence(K, Kind, ShouldUseLogicalShr);
 }
 
 /// \brief Parse all binary operators with precedence >= 'Precedence'.
@@ -4709,10 +4792,16 @@ bool AsmParser::parseMSInlineAsm(
       OS << ".byte";
       break;
     case AOK_Align: {
-      unsigned Val = AR.Val;
-      OS << ".align " << Val;
+      // MS alignment directives are measured in bytes. If the native assembler
+      // measures alignment in bytes, we can pass it straight through.
+      OS << ".align";
+      if (getContext().getAsmInfo()->getAlignmentIsInBytes())
+        break;
 
-      // Skip the original immediate.
+      // Alignment is in log2 form, so print that instead and skip the original
+      // immediate.
+      unsigned Val = AR.Val;
+      OS << ' ' << Val;
       assert(Val < 10 && "Expected alignment less then 2^10.");
       AdditionalSkip = (Val < 4) ? 2 : Val < 7 ? 3 : 4;
       break;

@@ -1391,7 +1391,7 @@ static void printMachOUniversalHeaders(const object::MachOUniversalBinary *UB,
   }
 }
 
-static void printArchiveChild(Archive::Child &C, bool verbose,
+static void printArchiveChild(const Archive::Child &C, bool verbose,
                               bool print_offset) {
   if (print_offset)
     outs() << C.getChildOffset() << "\t";
@@ -1452,13 +1452,8 @@ static void printArchiveChild(Archive::Child &C, bool verbose,
 }
 
 static void printArchiveHeaders(Archive *A, bool verbose, bool print_offset) {
-  if (A->hasSymbolTable()) {
-    Archive::child_iterator S = A->getSymbolTableChild();
-    Archive::Child C = *S;
-    printArchiveChild(C, verbose, print_offset);
-  }
-  for (Archive::child_iterator I = A->child_begin(), E = A->child_end(); I != E;
-       ++I) {
+  for (Archive::child_iterator I = A->child_begin(false), E = A->child_end();
+       I != E; ++I) {
     Archive::Child C = *I;
     printArchiveChild(C, verbose, print_offset);
   }
@@ -4351,7 +4346,7 @@ static bool print_class_ro64_t(uint64_t p, struct DisassembleInfo *info,
   if (cro.baseProperties + n_value != 0)
     print_objc_property_list64(cro.baseProperties + n_value, info);
 
-  is_meta_class = (cro.flags & RO_META) ? true : false;
+  is_meta_class = (cro.flags & RO_META) != 0;
   return true;
 }
 
@@ -4415,7 +4410,7 @@ static bool print_class_ro32_t(uint32_t p, struct DisassembleInfo *info,
          << format("0x%" PRIx32, cro.baseProperties) << "\n";
   if (cro.baseProperties != 0)
     print_objc_property_list32(cro.baseProperties, info);
-  is_meta_class = (cro.flags & RO_META) ? true : false;
+  is_meta_class = (cro.flags & RO_META) != 0;
   return true;
 }
 
@@ -7624,12 +7619,25 @@ static void PrintRpathLoadCommand(MachO::rpath_command rpath, const char *Ptr) {
 }
 
 static void PrintVersionMinLoadCommand(MachO::version_min_command vd) {
-  if (vd.cmd == MachO::LC_VERSION_MIN_MACOSX)
-    outs() << "      cmd LC_VERSION_MIN_MACOSX\n";
-  else if (vd.cmd == MachO::LC_VERSION_MIN_IPHONEOS)
-    outs() << "      cmd LC_VERSION_MIN_IPHONEOS\n";
-  else
-    outs() << "      cmd " << vd.cmd << " (?)\n";
+  StringRef LoadCmdName;
+  switch (vd.cmd) {
+  case MachO::LC_VERSION_MIN_MACOSX:
+    LoadCmdName = "LC_VERSION_MIN_MACOSX";
+    break;
+  case MachO::LC_VERSION_MIN_IPHONEOS:
+    LoadCmdName = "LC_VERSION_MIN_IPHONEOS";
+    break;
+  case MachO::LC_VERSION_MIN_TVOS:
+    LoadCmdName = "LC_VERSION_MIN_TVOS";
+    break;
+  case MachO::LC_VERSION_MIN_WATCHOS:
+    LoadCmdName = "LC_VERSION_MIN_WATCHOS";
+    break;
+  default:
+    llvm_unreachable("Unknown version min load command");
+  }
+
+  outs() << "      cmd " << LoadCmdName << '\n';
   outs() << "  cmdsize " << vd.cmdsize;
   if (vd.cmdsize != sizeof(struct MachO::version_min_command))
     outs() << " Incorrect size\n";
@@ -8344,7 +8352,9 @@ static void PrintLoadCommands(const MachOObjectFile *Obj, uint32_t filetype,
       MachO::rpath_command Rpath = Obj->getRpathCommand(Command);
       PrintRpathLoadCommand(Rpath, Command.Ptr);
     } else if (Command.C.cmd == MachO::LC_VERSION_MIN_MACOSX ||
-               Command.C.cmd == MachO::LC_VERSION_MIN_IPHONEOS) {
+               Command.C.cmd == MachO::LC_VERSION_MIN_IPHONEOS ||
+               Command.C.cmd == MachO::LC_VERSION_MIN_TVOS ||
+               Command.C.cmd == MachO::LC_VERSION_MIN_WATCHOS) {
       MachO::version_min_command Vd = Obj->getVersionMinLoadCommand(Command);
       PrintVersionMinLoadCommand(Vd);
     } else if (Command.C.cmd == MachO::LC_SOURCE_VERSION) {

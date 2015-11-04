@@ -220,6 +220,10 @@ AArch64TargetLowering::AArch64TargetLowering(const TargetMachine &TM,
   // AArch64 lacks both left-rotate and popcount instructions.
   setOperationAction(ISD::ROTL, MVT::i32, Expand);
   setOperationAction(ISD::ROTL, MVT::i64, Expand);
+  for (MVT VT : MVT::vector_valuetypes()) {
+    setOperationAction(ISD::ROTL, VT, Expand);
+    setOperationAction(ISD::ROTR, VT, Expand);
+  }
 
   // AArch64 doesn't have {U|S}MUL_LOHI.
   setOperationAction(ISD::UMUL_LOHI, MVT::i64, Expand);
@@ -1659,8 +1663,7 @@ getAArch64XALUOOp(AArch64CC::CondCode &CC, SDValue Op, SelectionDAG &DAG) {
 SDValue AArch64TargetLowering::LowerF128Call(SDValue Op, SelectionDAG &DAG,
                                              RTLIB::Libcall Call) const {
   SmallVector<SDValue, 2> Ops(Op->op_begin(), Op->op_end());
-  return makeLibCall(DAG, Call, MVT::f128, &Ops[0], Ops.size(), false,
-                     SDLoc(Op)).first;
+  return makeLibCall(DAG, Call, MVT::f128, Ops, false, SDLoc(Op)).first;
 }
 
 static SDValue LowerXOR(SDValue Op, SelectionDAG &DAG) {
@@ -1839,8 +1842,8 @@ SDValue AArch64TargetLowering::LowerFP_ROUND(SDValue Op,
   // precise. That doesn't take part in the LibCall so we can't directly use
   // LowerF128Call.
   SDValue SrcVal = Op.getOperand(0);
-  return makeLibCall(DAG, LC, Op.getValueType(), &SrcVal, 1,
-                     /*isSigned*/ false, SDLoc(Op)).first;
+  return makeLibCall(DAG, LC, Op.getValueType(), SrcVal, /*isSigned*/ false,
+                     SDLoc(Op)).first;
 }
 
 static SDValue LowerVectorFP_TO_INT(SDValue Op, SelectionDAG &DAG) {
@@ -1896,8 +1899,7 @@ SDValue AArch64TargetLowering::LowerFP_TO_INT(SDValue Op,
     LC = RTLIB::getFPTOUINT(Op.getOperand(0).getValueType(), Op.getValueType());
 
   SmallVector<SDValue, 2> Ops(Op->op_begin(), Op->op_end());
-  return makeLibCall(DAG, LC, Op.getValueType(), &Ops[0], Ops.size(), false,
-                     SDLoc(Op)).first;
+  return makeLibCall(DAG, LC, Op.getValueType(), Ops, false, SDLoc(Op)).first;
 }
 
 static SDValue LowerVectorINT_TO_FP(SDValue Op, SelectionDAG &DAG) {
@@ -9771,6 +9773,20 @@ static void ReplaceBITCASTResults(SDNode *N, SmallVectorImpl<SDValue> &Results,
   Results.push_back(DAG.getNode(ISD::TRUNCATE, DL, MVT::i16, Op));
 }
 
+static void ReplaceReductionResults(SDNode *N,
+                                    SmallVectorImpl<SDValue> &Results,
+                                    SelectionDAG &DAG, unsigned InterOp,
+                                    unsigned AcrossOp) {
+  EVT LoVT, HiVT;
+  SDValue Lo, Hi;
+  SDLoc dl(N);
+  std::tie(LoVT, HiVT) = DAG.GetSplitDestVTs(N->getValueType(0));
+  std::tie(Lo, Hi) = DAG.SplitVectorOperand(N, 0);
+  SDValue InterVal = DAG.getNode(InterOp, dl, LoVT, Lo, Hi);
+  SDValue SplitVal = DAG.getNode(AcrossOp, dl, LoVT, InterVal);
+  Results.push_back(SplitVal);
+}
+
 void AArch64TargetLowering::ReplaceNodeResults(
     SDNode *N, SmallVectorImpl<SDValue> &Results, SelectionDAG &DAG) const {
   switch (N->getOpcode()) {
@@ -9778,6 +9794,24 @@ void AArch64TargetLowering::ReplaceNodeResults(
     llvm_unreachable("Don't know how to custom expand this");
   case ISD::BITCAST:
     ReplaceBITCASTResults(N, Results, DAG);
+    return;
+  case AArch64ISD::SADDV:
+    ReplaceReductionResults(N, Results, DAG, ISD::ADD, AArch64ISD::SADDV);
+    return;
+  case AArch64ISD::UADDV:
+    ReplaceReductionResults(N, Results, DAG, ISD::ADD, AArch64ISD::UADDV);
+    return;
+  case AArch64ISD::SMINV:
+    ReplaceReductionResults(N, Results, DAG, ISD::SMIN, AArch64ISD::SMINV);
+    return;
+  case AArch64ISD::UMINV:
+    ReplaceReductionResults(N, Results, DAG, ISD::UMIN, AArch64ISD::UMINV);
+    return;
+  case AArch64ISD::SMAXV:
+    ReplaceReductionResults(N, Results, DAG, ISD::SMAX, AArch64ISD::SMAXV);
+    return;
+  case AArch64ISD::UMAXV:
+    ReplaceReductionResults(N, Results, DAG, ISD::UMAX, AArch64ISD::UMAXV);
     return;
   case ISD::FP_TO_UINT:
   case ISD::FP_TO_SINT:
@@ -9920,4 +9954,20 @@ bool AArch64TargetLowering::functionArgumentNeedsConsecutiveRegisters(
 bool AArch64TargetLowering::shouldNormalizeToSelectSequence(LLVMContext &,
                                                             EVT) const {
   return false;
+}
+
+Value *AArch64TargetLowering::getSafeStackPointerLocation(IRBuilder<> &IRB) const {
+  if (!Subtarget->isTargetAndroid())
+    return TargetLowering::getSafeStackPointerLocation(IRB);
+
+  // Android provides a fixed TLS slot for the SafeStack pointer. See the
+  // definition of TLS_SLOT_SAFESTACK in
+  // https://android.googlesource.com/platform/bionic/+/master/libc/private/bionic_tls.h
+  const unsigned TlsOffset = 0x48;
+  Module *M = IRB.GetInsertBlock()->getParent()->getParent();
+  Function *ThreadPointerFunc =
+      Intrinsic::getDeclaration(M, Intrinsic::aarch64_thread_pointer);
+  return IRB.CreatePointerCast(
+      IRB.CreateConstGEP1_32(IRB.CreateCall(ThreadPointerFunc), TlsOffset),
+      Type::getInt8PtrTy(IRB.getContext())->getPointerTo(0));
 }

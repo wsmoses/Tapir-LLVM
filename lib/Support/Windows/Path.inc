@@ -348,10 +348,12 @@ std::error_code equivalent(const Twine &A, const Twine &B, bool &result) {
 static bool isReservedName(StringRef path) {
   // This list of reserved names comes from MSDN, at:
   // http://msdn.microsoft.com/en-us/library/aa365247%28v=vs.85%29.aspx
-  static const char *sReservedNames[] = { "nul", "con", "prn", "aux",
-                              "com1", "com2", "com3", "com4", "com5", "com6",
-                              "com7", "com8", "com9", "lpt1", "lpt2", "lpt3",
-                              "lpt4", "lpt5", "lpt6", "lpt7", "lpt8", "lpt9" };
+  static const char *const sReservedNames[] = { "nul", "con", "prn", "aux",
+                                                "com1", "com2", "com3", "com4",
+                                                "com5", "com6", "com7", "com8",
+                                                "com9", "lpt1", "lpt2", "lpt3",
+                                                "lpt4", "lpt5", "lpt6", "lpt7",
+                                                "lpt8", "lpt9" };
 
   // First, check to see if this is a device namespace, which always
   // starts with \\.\, since device namespaces are not legal file paths.
@@ -752,9 +754,8 @@ std::error_code openFileForWrite(const Twine &Name, int &ResultFD,
 } // end namespace fs
 
 namespace path {
-
-namespace {
-bool getKnownFolderPath(KNOWNFOLDERID folderId, SmallVectorImpl<char> &result) {
+static bool getKnownFolderPath(KNOWNFOLDERID folderId,
+                               SmallVectorImpl<char> &result) {
   wchar_t *path = nullptr;
   if (::SHGetKnownFolderPath(folderId, KF_FLAG_CREATE, nullptr, &path) != S_OK)
     return false;
@@ -763,6 +764,9 @@ bool getKnownFolderPath(KNOWNFOLDERID folderId, SmallVectorImpl<char> &result) {
   ::CoTaskMemFree(path);
   return ok;
 }
+
+bool getUserCacheDir(SmallVectorImpl<char> &Result) {
+  return getKnownFolderPath(FOLDERID_LocalAppData, Result);
 }
 
 bool home_directory(SmallVectorImpl<char> &result) {

@@ -1097,7 +1097,9 @@ static bool HoistThenElseCodeToIf(BranchInst *BI,
     unsigned KnownIDs[] = {
         LLVMContext::MD_tbaa,    LLVMContext::MD_range,
         LLVMContext::MD_fpmath,  LLVMContext::MD_invariant_load,
-        LLVMContext::MD_nonnull, LLVMContext::MD_invariant_group};
+        LLVMContext::MD_nonnull, LLVMContext::MD_invariant_group,
+        LLVMContext::MD_align,   LLVMContext::MD_dereferenceable,
+        LLVMContext::MD_dereferenceable_or_null};
     combineMetadata(I1, I2, KnownIDs);
     I2->eraseFromParent();
     Changed = true;
@@ -2390,6 +2392,19 @@ static bool SimplifyCondBranchToCondBranch(BranchInst *PBI, BranchInst *BI,
     if (CE->canTrap())
       return false;
 
+  // If BI is reached from the true path of PBI and PBI's condition implies
+  // BI's condition, we know the direction of the BI branch.
+  if (PBI->getSuccessor(0) == BI->getParent() &&
+      isImpliedCondition(PBI->getCondition(), BI->getCondition()) &&
+      PBI->getSuccessor(0) != PBI->getSuccessor(1) &&
+      BB->getSinglePredecessor()) {
+    // Turn this into a branch on constant.
+    auto *OldCond = BI->getCondition();
+    BI->setCondition(ConstantInt::getTrue(BB->getContext()));
+    RecursivelyDeleteTriviallyDeadInstructions(OldCond);
+    return true;  // Nuke the branch on constant.
+  }
+
   // If this is a conditional branch in an empty block, and if any
   // predecessors are a conditional branch to one of our destinations,
   // fold the conditions into logical ops and one cond br.
@@ -2571,7 +2586,8 @@ static bool SimplifyTerminatorOnSelect(TerminatorInst *OldTerm, Value *Cond,
     else if (Succ == KeepEdge2)
       KeepEdge2 = nullptr;
     else
-      Succ->removePredecessor(OldTerm->getParent());
+      Succ->removePredecessor(OldTerm->getParent(),
+                              /*DontDeleteUselessPHIs=*/true);
   }
 
   IRBuilder<> Builder(OldTerm);
@@ -3177,8 +3193,7 @@ bool SimplifyCFGOpt::SimplifyUnreachable(UnreachableInst *UI) {
                isa<CatchEndPadInst>(TI) || isa<TerminatePadInst>(TI)) {
       removeUnwindEdge(TI->getParent());
       Changed = true;
-    } else if (isa<CleanupReturnInst>(TI) || isa<CleanupEndPadInst>(TI) ||
-               isa<CatchReturnInst>(TI)) {
+    } else if (isa<CleanupReturnInst>(TI) || isa<CleanupEndPadInst>(TI)) {
       new UnreachableInst(TI->getContext(), TI);
       TI->eraseFromParent();
       Changed = true;

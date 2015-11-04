@@ -914,13 +914,13 @@ private:
     N->recalculateHash();
   }
   template <class NodeTy>
-  static void dispatchRecalculateHash(NodeTy *N, std::false_type) {}
+  static void dispatchRecalculateHash(NodeTy *, std::false_type) {}
   template <class NodeTy>
   static void dispatchResetHash(NodeTy *N, std::true_type) {
     N->setHash(0);
   }
   template <class NodeTy>
-  static void dispatchResetHash(NodeTy *N, std::false_type) {}
+  static void dispatchResetHash(NodeTy *, std::false_type) {}
 
 public:
   typedef const MDOperand *op_iterator;
@@ -964,6 +964,8 @@ public:
   static MDNode *getMostGenericFPMath(MDNode *A, MDNode *B);
   static MDNode *getMostGenericRange(MDNode *A, MDNode *B);
   static MDNode *getMostGenericAliasScope(MDNode *A, MDNode *B);
+  static MDNode *getMostGenericAlignmentOrDereferenceable(MDNode *A, MDNode *B);
+
 };
 
 /// \brief Tuple of metadata.

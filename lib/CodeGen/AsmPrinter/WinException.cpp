@@ -273,12 +273,10 @@ const MCExpr *WinException::create32bitRef(const MCSymbol *Value) {
                                  Asm->OutContext);
 }
 
-const MCExpr *WinException::create32bitRef(const Value *V) {
-  if (!V)
+const MCExpr *WinException::create32bitRef(const GlobalValue *GV) {
+  if (!GV)
     return MCConstantExpr::create(0, Asm->OutContext);
-  if (const auto *GV = dyn_cast<GlobalValue>(V))
-    return create32bitRef(Asm->getSymbol(GV));
-  return create32bitRef(MMI->getAddrLabelSymbol(cast<BasicBlock>(V)));
+  return create32bitRef(Asm->getSymbol(GV));
 }
 
 const MCExpr *WinException::getLabelPlusOne(const MCSymbol *Label) {
@@ -611,7 +609,6 @@ void WinException::emitCXXFrameHandler3Table(const MachineFunction *MF) {
     computeIP2StateTable(MF, FuncInfo, IPToStateTable);
   } else {
     FuncInfoXData = Asm->OutContext.getOrCreateLSDASymbol(FuncLinkageName);
-    emitEHRegistrationOffsetLabel(FuncInfo, FuncLinkageName);
   }
 
   int UnwindHelpOffset = 0;
@@ -710,6 +707,13 @@ void WinException::emitCXXFrameHandler3Table(const MachineFunction *MF) {
       OS.EmitValue(create32bitRef(HandlerMapXData), 4);   // HandlerArray
     }
 
+    // All funclets use the same parent frame offset currently.
+    unsigned ParentFrameOffset = 0;
+    if (shouldEmitPersonality) {
+      const TargetFrameLowering *TFI = MF->getSubtarget().getFrameLowering();
+      ParentFrameOffset = TFI->getWinEHParentFrameOffset(*MF);
+    }
+
     for (size_t I = 0, E = FuncInfo.TryBlockMap.size(); I != E; ++I) {
       WinEHTryBlockMapEntry &TBME = FuncInfo.TryBlockMap[I];
       MCSymbol *HandlerMapXData = HandlerMaps[I];
@@ -749,13 +753,8 @@ void WinException::emitCXXFrameHandler3Table(const MachineFunction *MF) {
         OS.EmitValue(create32bitRef(HT.TypeDescriptor), 4); // Type
         OS.EmitValue(FrameAllocOffsetRef, 4);               // CatchObjOffset
         OS.EmitValue(create32bitRef(HandlerSym), 4);        // Handler
-
-        if (shouldEmitPersonality) {
-          // Keep this in sync with X86FrameLowering::emitPrologue.
-          int ParentFrameOffset =
-              16 + 8 + MF->getFrameInfo()->getMaxCallFrameSize();
+        if (shouldEmitPersonality)
           OS.EmitIntValue(ParentFrameOffset, 4); // ParentFrameOffset
-        }
       }
     }
   }
@@ -937,7 +936,7 @@ void WinException::emitCLRExceptionTable(const MachineFunction *MF) {
            "ill-formed state numbering");
   }
   // Map the main function to the NullState.
-  HandlerStates[MF->begin()] = NullState;
+  HandlerStates[&MF->front()] = NullState;
 
   // Write out a sentinel indicating the end of the standard (Windows) xdata
   // and the start of the additional (CLR) info.
@@ -971,12 +970,12 @@ void WinException::emitCLRExceptionTable(const MachineFunction *MF) {
                                        FuncletEnd = MF->begin(),
                                        End = MF->end();
        FuncletStart != End; FuncletStart = FuncletEnd) {
-    int FuncletState = HandlerStates[FuncletStart];
+    int FuncletState = HandlerStates[&*FuncletStart];
     // Find the end of the funclet
     MCSymbol *EndSymbol = FuncEndSym;
     while (++FuncletEnd != End) {
       if (FuncletEnd->isEHFuncletEntry()) {
-        EndSymbol = getMCSymbolForMBB(Asm, FuncletEnd);
+        EndSymbol = getMCSymbolForMBB(Asm, &*FuncletEnd);
         break;
       }
     }

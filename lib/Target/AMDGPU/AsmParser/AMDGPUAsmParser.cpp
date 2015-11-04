@@ -258,7 +258,7 @@ public:
   void print(raw_ostream &OS) const override {
     switch (Kind) {
     case Register:
-      OS << "<register " << getReg() << '>';
+      OS << "<register " << getReg() << " mods: " << Reg.Modifiers << '>';
       break;
     case Immediate:
       OS << getImm();
@@ -447,10 +447,10 @@ struct OptionalOperand {
 
 }
 
-static unsigned getRegClass(bool IsVgpr, unsigned RegWidth) {
+static int getRegClass(bool IsVgpr, unsigned RegWidth) {
   if (IsVgpr) {
     switch (RegWidth) {
-      default: llvm_unreachable("Unknown register width");
+      default: return -1;
       case 1: return AMDGPU::VGPR_32RegClassID;
       case 2: return AMDGPU::VReg_64RegClassID;
       case 3: return AMDGPU::VReg_96RegClassID;
@@ -461,7 +461,7 @@ static unsigned getRegClass(bool IsVgpr, unsigned RegWidth) {
   }
 
   switch (RegWidth) {
-    default: llvm_unreachable("Unknown register width");
+    default: return -1;
     case 1: return AMDGPU::SGPR_32RegClassID;
     case 2: return AMDGPU::SGPR_64RegClassID;
     case 4: return AMDGPU::SReg_128RegClassID;
@@ -475,11 +475,11 @@ static unsigned getRegForName(StringRef RegName) {
   return StringSwitch<unsigned>(RegName)
     .Case("exec", AMDGPU::EXEC)
     .Case("vcc", AMDGPU::VCC)
-    .Case("flat_scr", AMDGPU::FLAT_SCR)
+    .Case("flat_scratch", AMDGPU::FLAT_SCR)
     .Case("m0", AMDGPU::M0)
     .Case("scc", AMDGPU::SCC)
-    .Case("flat_scr_lo", AMDGPU::FLAT_SCR_LO)
-    .Case("flat_scr_hi", AMDGPU::FLAT_SCR_HI)
+    .Case("flat_scratch_lo", AMDGPU::FLAT_SCR_LO)
+    .Case("flat_scratch_hi", AMDGPU::FLAT_SCR_HI)
     .Case("vcc_lo", AMDGPU::VCC_LO)
     .Case("vcc_hi", AMDGPU::VCC_HI)
     .Case("exec_lo", AMDGPU::EXEC_LO)
@@ -541,15 +541,24 @@ bool AMDGPUAsmParser::ParseRegister(unsigned &RegNo, SMLoc &StartLoc, SMLoc &End
       RegIndexInClass = RegLo;
     } else {
       // SGPR registers are aligned.  Max alignment is 4 dwords.
-      RegIndexInClass = RegLo / std::min(RegWidth, 4u);
+      unsigned Size = std::min(RegWidth, 4u);
+      if (RegLo % Size != 0)
+        return true;
+
+      RegIndexInClass = RegLo / Size;
     }
   }
 
-  const MCRegisterInfo *TRC = getContext().getRegisterInfo();
-  unsigned RC = getRegClass(IsVgpr, RegWidth);
-  if (RegIndexInClass > TRC->getRegClass(RC).getNumRegs())
+  const MCRegisterInfo *TRI = getContext().getRegisterInfo();
+  int RCID = getRegClass(IsVgpr, RegWidth);
+  if (RCID == -1)
     return true;
-  RegNo = TRC->getRegClass(RC).getRegister(RegIndexInClass);
+
+  const MCRegisterClass RC = TRI->getRegClass(RCID);
+  if (RegIndexInClass >= RC.getNumRegs())
+    return true;
+
+  RegNo = RC.getRegister(RegIndexInClass);
   return false;
 }
 
@@ -987,13 +996,11 @@ AMDGPUAsmParser::parseOperand(OperandVector &Operands, StringRef Mnemonic) {
       int64_t IntVal;
       if (getParser().parseAbsoluteExpression(IntVal))
         return MatchOperand_ParseFail;
-      APInt IntVal32(32, IntVal);
-      if (IntVal32.getSExtValue() != IntVal) {
+      if (!isInt<32>(IntVal) && !isUInt<32>(IntVal)) {
         Error(S, "invalid immediate: only 32-bit values are legal");
         return MatchOperand_ParseFail;
       }
 
-      IntVal = IntVal32.getSExtValue();
       if (Negate)
         IntVal *= -1;
       Operands.push_back(AMDGPUOperand::CreateImm(IntVal, S));
