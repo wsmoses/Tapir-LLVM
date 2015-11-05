@@ -4783,12 +4783,17 @@ static bool serializeDetachesToImmediateSync(BasicBlock *BB) {
 /// false if BB does not terminate with a reattach or predecessor does
 /// terminate with detach.
 static bool serializeTrivialDetachedBlock(BasicBlock *BB) {
-  Instruction *I = BB->getFirstNonPHIOrDbgOrLifetime();
+  Instruction *I = BB->getFirstNonPHI();
   if (ReattachInst *RI = dyn_cast<ReattachInst>(I)) {
     // This detached block is empty
-    BasicBlock *PredBB = BB->getUniquePredecessor();
-    assert(PredBB && "Detached block does not have a unique predecessor.");
-    if (DetachInst *DI = dyn_cast<DetachInst>(PredBB->getTerminator())) {
+    // Scan predecessors to verify that all of them detach BB.
+    for (BasicBlock *PredBB : predecessors(BB)) {
+      if (!isa<DetachInst>(PredBB->getTerminator()))
+	return false;
+    }
+    // All predecessors detach BB, so we can serialize
+    for (BasicBlock *PredBB : predecessors(BB)) {
+      DetachInst *DI = dyn_cast<DetachInst>(PredBB->getTerminator());
       BasicBlock *Detached = DI->getSuccessor(0);
       BasicBlock *Continue = DI->getSuccessor(1);
       assert(RI->getSuccessor(0) == Continue &&
@@ -4796,20 +4801,16 @@ static bool serializeTrivialDetachedBlock(BasicBlock *BB) {
       // Remove the predecessor through the detach from the continue
       // block.
       Continue->removePredecessor(PredBB);
-      {
-        // Replace the detach with an unconditional branch.
-        IRBuilder<> Builder(DI);
-        Builder.CreateBr(Detached);
-        DI->eraseFromParent();
-      }
-      {
-        // Replace the reattach with an unconditional branch.
-        IRBuilder<> Builder(RI);
-        Builder.CreateBr(Continue);
-        RI->eraseFromParent();
-      }
-      return true;
+      // Serialize the detach: replace it with an unconditional branch.
+      IRBuilder<> Builder(DI);
+      Builder.CreateBr(Detached);
+      DI->eraseFromParent();
     }
+    // Serialize the reattach: replace it with an unconditional branch.
+    IRBuilder<> Builder(RI);
+    Builder.CreateBr(RI->getSuccessor(0));
+    RI->eraseFromParent();
+    return true;
   }
   return false;
 }
