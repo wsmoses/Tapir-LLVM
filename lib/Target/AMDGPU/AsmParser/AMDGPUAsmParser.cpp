@@ -28,7 +28,9 @@
 #include "llvm/MC/MCRegisterInfo.h"
 #include "llvm/MC/MCStreamer.h"
 #include "llvm/MC/MCSubtargetInfo.h"
+#include "llvm/MC/MCSymbolELF.h"
 #include "llvm/MC/MCTargetAsmParser.h"
+#include "llvm/Support/ELF.h"
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/TargetRegistry.h"
 #include "llvm/Support/raw_ostream.h"
@@ -330,6 +332,15 @@ class AMDGPUAsmParser : public MCTargetAsmParser {
   MCAsmParser &Parser;
 
   unsigned ForcedEncodingSize;
+
+  bool isVI() const {
+    return STI.getFeatureBits()[AMDGPU::FeatureVolcanicIslands];
+  }
+
+  bool hasSGPR102_SGPR103() const {
+    return !isVI();
+  }
+
   /// @name Auto-generated Match Functions
   /// {
 
@@ -345,6 +356,8 @@ private:
   bool ParseAMDKernelCodeTValue(StringRef ID, amd_kernel_code_t &Header);
   bool ParseDirectiveAMDKernelCodeT();
   bool ParseSectionDirectiveHSAText();
+  bool subtargetHasRegister(const MCRegisterInfo &MRI, unsigned RegNo) const;
+  bool ParseDirectiveAMDGPUHsaKernel();
 
 public:
 public:
@@ -356,7 +369,7 @@ public:
                const MCInstrInfo &MII,
                const MCTargetOptions &Options)
       : MCTargetAsmParser(Options), STI(STI), MII(MII), Parser(_Parser),
-        ForcedEncodingSize(0){
+        ForcedEncodingSize(0) {
 
     if (STI.getFeatureBits().none()) {
       // Set default features.
@@ -559,7 +572,7 @@ bool AMDGPUAsmParser::ParseRegister(unsigned &RegNo, SMLoc &StartLoc, SMLoc &End
     return true;
 
   RegNo = RC.getRegister(RegIndexInClass);
-  return false;
+  return !subtargetHasRegister(*TRI, RegNo);
 }
 
 unsigned AMDGPUAsmParser::checkTargetMatchPredicate(MCInst &Inst) {
@@ -932,6 +945,18 @@ bool AMDGPUAsmParser::ParseSectionDirectiveHSAText() {
   return false;
 }
 
+bool AMDGPUAsmParser::ParseDirectiveAMDGPUHsaKernel() {
+  if (getLexer().isNot(AsmToken::Identifier))
+    return TokError("expected symbol name");
+
+  StringRef KernelName = Parser.getTok().getString();
+
+  getTargetStreamer().EmitAMDGPUSymbolType(KernelName,
+                                           ELF::STT_AMDGPU_HSA_KERNEL);
+  Lex();
+  return false;
+}
+
 bool AMDGPUAsmParser::ParseDirective(AsmToken DirectiveID) {
   StringRef IDVal = DirectiveID.getString();
 
@@ -946,6 +971,25 @@ bool AMDGPUAsmParser::ParseDirective(AsmToken DirectiveID) {
 
   if (IDVal == ".hsatext" || IDVal == ".text")
     return ParseSectionDirectiveHSAText();
+
+  if (IDVal == ".amdgpu_hsa_kernel")
+    return ParseDirectiveAMDGPUHsaKernel();
+
+  return true;
+}
+
+bool AMDGPUAsmParser::subtargetHasRegister(const MCRegisterInfo &MRI,
+                                           unsigned RegNo) const {
+  if (!isVI())
+    return true;
+
+  // VI only has 102 SGPRs, so make sure we aren't trying to use the 2 more that
+  // SI/CI have.
+  for (MCRegAliasIterator R(AMDGPU::SGPR102_SGPR103, &MRI, true);
+       R.isValid(); ++R) {
+    if (*R == RegNo)
+      return false;
+  }
 
   return true;
 }

@@ -129,13 +129,20 @@ public:
   void BuildCFI(MachineBasicBlock &MBB, MachineBasicBlock::iterator MBBI,
                 DebugLoc DL, MCCFIInstruction CFIInst) const;
 
+  /// Sets up EBP and optionally ESI based on the incoming EBP value.  Only
+  /// needed for 32-bit. Used in funclet prologues and at catchret destinations.
+  MachineBasicBlock::iterator
+  restoreWin32EHStackPointers(MachineBasicBlock &MBB,
+                              MachineBasicBlock::iterator MBBI, DebugLoc DL,
+                              bool RestoreSP = false) const;
+
 private:
   uint64_t calculateMaxStackAlign(const MachineFunction &MF) const;
 
   /// Aligns the stack pointer by ANDing it with -MaxAlign.
   void BuildStackAlignAND(MachineBasicBlock &MBB,
                           MachineBasicBlock::iterator MBBI, DebugLoc DL,
-                          uint64_t MaxAlign) const;
+                          unsigned Reg, uint64_t MaxAlign) const;
 
   /// Make small positive stack adjustments using POPs.
   bool adjustStackWithPops(MachineBasicBlock &MBB,
@@ -147,13 +154,6 @@ private:
                                            MachineBasicBlock::iterator MBBI,
                                            DebugLoc DL, int64_t Offset,
                                            bool InEpilogue) const;
-
-  /// Sets up EBP and optionally ESI based on the incoming EBP value.  Only
-  /// needed for 32-bit. Used in funclet prologues and at catchret destinations.
-  MachineBasicBlock::iterator
-  restoreWin32EHStackPointers(MachineBasicBlock &MBB,
-                              MachineBasicBlock::iterator MBBI, DebugLoc DL,
-                              bool RestoreSP = false) const;
 
   unsigned getWinEHFuncletFrameSize(const MachineFunction &MF) const;
 };

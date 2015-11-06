@@ -567,7 +567,7 @@ public:
 
   /// \brief Emit NumBytes worth of zeros.
   /// This function properly handles data in virtual sections.
-  virtual void EmitZeros(uint64_t NumBytes);
+  void EmitZeros(uint64_t NumBytes);
 
   /// \brief Emit some number of copies of \p Value until the byte alignment \p
   /// ByteAlignment is reached.
@@ -611,9 +611,7 @@ public:
   /// \param Offset - The offset to reach. This may be an expression, but the
   /// expression must be associated with the current section.
   /// \param Value - The value to use when filling bytes.
-  /// \return false on success, true if the offset was invalid.
-  virtual bool EmitValueToOffset(const MCExpr *Offset,
-                                 unsigned char Value = 0);
+  virtual void emitValueToOffset(const MCExpr *Offset, unsigned char Value = 0);
 
   /// @}
 
