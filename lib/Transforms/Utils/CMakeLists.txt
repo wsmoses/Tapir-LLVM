@@ -11,6 +11,7 @@ add_llvm_library(LLVMTransformUtils
   CodeExtractor.cpp
   CtorUtils.cpp
   DemoteRegToStack.cpp
+  Detach2Cilk.cpp
   FlattenCFG.cpp
   GlobalStatus.cpp
   InlineFunction.cpp

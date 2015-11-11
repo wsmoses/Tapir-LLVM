@@ -24,6 +24,8 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "llvm/ADT/SmallPtrSet.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/Analysis/AliasAnalysis.h"
 #include "llvm/Analysis/BasicAliasAnalysis.h"
 #include "llvm/Analysis/CFG.h"
@@ -271,6 +273,82 @@ ModRefInfo AAResults::getModRefInfo(const AtomicRMWInst *RMW,
     return MRI_NoModRef;
 
   return MRI_ModRef;
+}
+
+ModRefInfo AAResults::getModRefInfo(const DetachInst *D,
+                                    const MemoryLocation &Loc) {
+  ModRefInfo Result = MRI_NoModRef;
+  SmallPtrSet<const BasicBlock *, 32> Visited;
+  SmallVector<const BasicBlock *, 32> WorkList;
+  WorkList.push_back(D->getSuccessor(0));
+  while(!WorkList.empty()) {
+    const BasicBlock *BB = WorkList.pop_back_val();
+    if (!Visited.insert(BB).second)
+      continue;
+
+    BasicBlock::const_iterator I = BB->front();
+    BasicBlock::const_iterator E = BB->back();
+    ++E;
+    for (; I != E; ++I) {
+      // Ignore sync instructions in this analysis
+      if (isa<SyncInst>(I))
+	continue;
+
+      Result = ModRefInfo(Result | getModRefInfo(I, Loc));
+
+      // Early-exit the moment we reach the top of the lattice.
+      if (Result == MRI_ModRef)
+	return Result;
+    }
+
+    // Add successors
+    const TerminatorInst *T = BB->getTerminator();
+    if (!isa<ReattachInst>(T) ||
+	T->getSuccessor(0) != D->getSuccessor(1))
+      for (unsigned idx = 0, max = T->getNumSuccessors(); idx < max; ++idx)
+	WorkList.push_back(T->getSuccessor(idx));
+  }
+
+  return Result;
+}
+
+ModRefInfo AAResults::getModRefInfo(const SyncInst *S,
+                                    const MemoryLocation &Loc) {
+  ModRefInfo Result = MRI_NoModRef;
+  SmallPtrSet<const BasicBlock *, 32> Visited;
+  SmallVector<const BasicBlock *, 32> WorkList;
+  WorkList.push_back(S->getParent());
+  while(!WorkList.empty()) {
+    const BasicBlock *BB = WorkList.pop_back_val();
+    if (!Visited.insert(BB).second)
+      continue;
+
+    const TerminatorInst *T = BB->getTerminator();
+    if (isa<DetachInst>(T)) {
+      Result = ModRefInfo(Result | getModRefInfo(T, Loc));
+
+      // Early-exit the moment we reach the top of the lattice.
+      if (Result == MRI_ModRef)
+	return Result;
+    }
+    // Add predecessors
+    for (const_pred_iterator PI = pred_begin(BB), E = pred_end(BB);
+	 PI != E; ++PI) {
+      const BasicBlock *Pred = *PI;
+      const TerminatorInst *PT = Pred->getTerminator();
+      // Ignore reattached predecessors and predecessors that end in
+      // syncs, because this sync does not wait on those predecessors.
+      if (isa<ReattachInst>(PT) || isa<SyncInst>(PT))
+	continue;
+      // If this block is detached, ignore the predecessor that
+      // detaches it.
+      if (isa<DetachInst>(PT) && PT->getSuccessor(0) == BB)
+	continue;
+      WorkList.push_back(Pred);
+    }
+  }
+
+  return Result;
 }
 
 /// \brief Return information about whether a particular call site modifies

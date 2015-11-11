@@ -737,8 +737,8 @@ public:
   /// \brief Create a detach 'detach Detached, Continue' instruction.
   DetachInst *CreateDetach(BasicBlock *Detached, BasicBlock *Continue,
                            MDNode *BranchWeights = nullptr) {
-    return Insert(addBranchWeights(DetachInst::Create(Detached, Continue),
-                                   BranchWeights));
+    return Insert(addBranchMetadata(DetachInst::Create(Detached, Continue),
+                                    BranchWeights, nullptr));
   }
 
   /// \brief Create a reattach 'reattach DetachContinue' instruction.

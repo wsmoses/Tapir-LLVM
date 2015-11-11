@@ -418,7 +418,6 @@ enum { BITCODE_CURRENT_EPOCH = 0 };
     FUNC_CODE_INST_CLEANUPPAD = 52, // CLEANUPPAD: [num,args...]
     FUNC_CODE_INST_CATCHENDPAD = 53, // CATCHENDPAD: [] or [bb#]
     FUNC_CODE_INST_CLEANUPENDPAD = 54, // CLEANUPENDPAD: [val] or [val,bb#]
-
     FUNC_CODE_OPERAND_BUNDLE = 55, // OPERAND_BUNDLE: [tag#, value...]
 
     FUNC_CODE_INST_DETACH      = 56, // DETACH: [bb#, bb#]
