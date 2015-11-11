@@ -65,8 +65,8 @@ char MemoryDependenceAnalysis::ID = 0;
 // Register this pass...
 INITIALIZE_PASS_BEGIN(MemoryDependenceAnalysis, "memdep",
                 "Memory Dependence Analysis", false, true)
-INITIALIZE_AG_DEPENDENCY(AliasAnalysis)
 INITIALIZE_PASS_DEPENDENCY(AssumptionCacheTracker)
+INITIALIZE_PASS_DEPENDENCY(AAResultsWrapperPass)
 INITIALIZE_PASS_DEPENDENCY(TargetLibraryInfoWrapperPass)
 INITIALIZE_PASS_END(MemoryDependenceAnalysis, "memdep",
                       "Memory Dependence Analysis", false, true)
@@ -94,12 +94,12 @@ void MemoryDependenceAnalysis::releaseMemory() {
 void MemoryDependenceAnalysis::getAnalysisUsage(AnalysisUsage &AU) const {
   AU.setPreservesAll();
   AU.addRequired<AssumptionCacheTracker>();
-  AU.addRequiredTransitive<AliasAnalysis>();
+  AU.addRequiredTransitive<AAResultsWrapperPass>();
   AU.addRequiredTransitive<TargetLibraryInfoWrapperPass>();
 }
 
 bool MemoryDependenceAnalysis::runOnFunction(Function &F) {
-  AA = &getAnalysis<AliasAnalysis>();
+  AA = &getAnalysis<AAResultsWrapperPass>().getAAResults();
   AC = &getAnalysis<AssumptionCacheTracker>().getAssumptionCache(F);
   DominatorTreeWrapperPass *DTWP =
       getAnalysisIfAvailable<DominatorTreeWrapperPass>();
@@ -216,7 +216,7 @@ getCallSiteDependencyFrom(CallSite CS, bool isReadOnlyCall,
     if (!Limit)
       return MemDepResult::getUnknown();
 
-    Instruction *Inst = --ScanIt;
+    Instruction *Inst = &*--ScanIt;
 
     // If this inst is a memory op, get the pointer it accessed
     MemoryLocation Loc;
@@ -380,6 +380,75 @@ MemDepResult MemoryDependenceAnalysis::getPointerDependencyFrom(
     const MemoryLocation &MemLoc, bool isLoad, BasicBlock::iterator ScanIt,
     BasicBlock *BB, Instruction *QueryInst) {
 
+  if (QueryInst != nullptr) {
+    if (auto *LI = dyn_cast<LoadInst>(QueryInst)) {
+      MemDepResult invariantGroupDependency =
+          getInvariantGroupPointerDependency(LI, BB);
+
+      if (invariantGroupDependency.isDef())
+        return invariantGroupDependency;
+    }
+  }
+  return getSimplePointerDependencyFrom(MemLoc, isLoad, ScanIt, BB, QueryInst);
+}
+
+MemDepResult
+MemoryDependenceAnalysis::getInvariantGroupPointerDependency(LoadInst *LI,
+                                                             BasicBlock *BB) {
+  Value *LoadOperand = LI->getPointerOperand();
+  // It's is not safe to walk the use list of global value, because function
+  // passes aren't allowed to look outside their functions.
+  if (isa<GlobalValue>(LoadOperand))
+    return MemDepResult::getUnknown();
+
+  auto *InvariantGroupMD = LI->getMetadata(LLVMContext::MD_invariant_group);
+  if (!InvariantGroupMD)
+    return MemDepResult::getUnknown();
+
+  MemDepResult Result = MemDepResult::getUnknown();
+  llvm::SmallSet<Value *, 14> Seen;
+  // Queue to process all pointers that are equivalent to load operand.
+  llvm::SmallVector<Value *, 8> LoadOperandsQueue;
+  LoadOperandsQueue.push_back(LoadOperand);
+  while (!LoadOperandsQueue.empty()) {
+    Value *Ptr = LoadOperandsQueue.pop_back_val();
+    if (isa<GlobalValue>(Ptr))
+      continue;
+
+    if (auto *BCI = dyn_cast<BitCastInst>(Ptr)) {
+      if (!Seen.count(BCI->getOperand(0))) {
+        LoadOperandsQueue.push_back(BCI->getOperand(0));
+        Seen.insert(BCI->getOperand(0));
+      }
+    }
+
+    for (Use &Us : Ptr->uses()) {
+      auto *U = dyn_cast<Instruction>(Us.getUser());
+      if (!U || U == LI || !DT->dominates(U, LI))
+        continue;
+
+      if (auto *BCI = dyn_cast<BitCastInst>(U)) {
+        if (!Seen.count(BCI)) {
+          LoadOperandsQueue.push_back(BCI);
+          Seen.insert(BCI);
+        }
+        continue;
+      }
+      // If we hit load/store with the same invariant.group metadata (and the
+      // same pointer operand) we can assume that value pointed by pointer
+      // operand didn't change.
+      if ((isa<LoadInst>(U) || isa<StoreInst>(U)) && U->getParent() == BB &&
+          U->getMetadata(LLVMContext::MD_invariant_group) == InvariantGroupMD)
+        return MemDepResult::getDef(U);
+    }
+  }
+  return Result;
+}
+
+MemDepResult MemoryDependenceAnalysis::getSimplePointerDependencyFrom(
+    const MemoryLocation &MemLoc, bool isLoad, BasicBlock::iterator ScanIt,
+    BasicBlock *BB, Instruction *QueryInst) {
+
   const Value *MemLocBase = nullptr;
   int64_t MemLocOffset = 0;
   unsigned Limit = BlockScanLimit;
@@ -433,7 +502,7 @@ MemDepResult MemoryDependenceAnalysis::getPointerDependencyFrom(
 
   // Walk backwards through the basic block, looking for dependencies.
   while (ScanIt != BB->begin()) {
-    Instruction *Inst = --ScanIt;
+    Instruction *Inst = &*--ScanIt;
 
     if (IntrinsicInst *II = dyn_cast<IntrinsicInst>(Inst))
       // Debug intrinsics don't (and can't) cause dependencies.
@@ -698,13 +767,13 @@ MemDepResult MemoryDependenceAnalysis::getDependency(Instruction *QueryInst) {
       if (IntrinsicInst *II = dyn_cast<IntrinsicInst>(QueryInst))
         isLoad |= II->getIntrinsicID() == Intrinsic::lifetime_start;
 
-      LocalCache = getPointerDependencyFrom(MemLoc, isLoad, ScanPos,
-                                            QueryParent, QueryInst);
+      LocalCache = getPointerDependencyFrom(
+          MemLoc, isLoad, ScanPos->getIterator(), QueryParent, QueryInst);
     } else if (isa<CallInst>(QueryInst) || isa<InvokeInst>(QueryInst)) {
       CallSite QueryCS(QueryInst);
       bool isReadOnly = AA->onlyReadsMemory(QueryCS);
-      LocalCache = getCallSiteDependencyFrom(QueryCS, isReadOnly, ScanPos,
-                                             QueryParent);
+      LocalCache = getCallSiteDependencyFrom(
+          QueryCS, isReadOnly, ScanPos->getIterator(), QueryParent);
     } else
       // Non-memory instruction.
       LocalCache = MemDepResult::getUnknown();
@@ -827,7 +896,7 @@ MemoryDependenceAnalysis::getNonLocalCallDependency(CallSite QueryCS) {
     BasicBlock::iterator ScanPos = DirtyBB->end();
     if (ExistingResult) {
       if (Instruction *Inst = ExistingResult->getResult().getInst()) {
-        ScanPos = Inst;
+        ScanPos = Inst->getIterator();
         // We're removing QueryInst's use of Inst.
         RemoveFromReverseMap(ReverseNonLocalDeps, Inst,
                              QueryCS.getInstruction());
@@ -966,11 +1035,11 @@ MemDepResult MemoryDependenceAnalysis::GetNonLocalInfoForBlock(
     assert(ExistingResult->getResult().getInst()->getParent() == BB &&
            "Instruction invalidated?");
     ++NumCacheDirtyNonLocalPtr;
-    ScanPos = ExistingResult->getResult().getInst();
+    ScanPos = ExistingResult->getResult().getInst()->getIterator();
 
     // Eliminating the dirty entry from 'Cache', so update the reverse info.
     ValueIsLoadPair CacheKey(Loc.Ptr, isLoad);
-    RemoveFromReverseMap(ReverseNonLocalPtrDeps, ScanPos, CacheKey);
+    RemoveFromReverseMap(ReverseNonLocalPtrDeps, &*ScanPos, CacheKey);
   } else {
     ++NumUncacheNonLocalPtr;
   }
@@ -1521,7 +1590,7 @@ void MemoryDependenceAnalysis::removeInstruction(Instruction *RemInst) {
   // the entire block to get to this point.
   MemDepResult NewDirtyVal;
   if (!RemInst->isTerminator())
-    NewDirtyVal = MemDepResult::getDirty(++BasicBlock::iterator(RemInst));
+    NewDirtyVal = MemDepResult::getDirty(&*++RemInst->getIterator());
 
   ReverseDepMapType::iterator ReverseDepIt = ReverseLocalDeps.find(RemInst);
   if (ReverseDepIt != ReverseLocalDeps.end()) {

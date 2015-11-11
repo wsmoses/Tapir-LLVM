@@ -347,7 +347,7 @@ class CBranchBitNum<string opstr, DAGOperand opnd, PatFrag cond_op,
   InstSE<(outs), (ins RO:$rs, uimm5_64:$p, opnd:$offset),
          !strconcat(opstr, "\t$rs, $p, $offset"),
          [(brcond (i32 (cond_op (and RO:$rs, (shl shift, immZExt5_64:$p)), 0)),
-                  bb:$offset)], IIBranch, FrmI, opstr> {
+                  bb:$offset)], II_BBIT, FrmI, opstr> {
   let isBranch = 1;
   let isTerminator = 1;
   let hasDelaySlot = 1;
@@ -545,6 +545,18 @@ def : MipsPat<(brcond (i32 (setne (and i64:$lhs, PowerOf2LO:$mask), 0)), bb:$dst
 def : MipsPat<(brcond (i32 (setne (and i64:$lhs, PowerOf2HI:$mask), 0)), bb:$dst),
               (BBIT132 i64:$lhs, (Log2HI PowerOf2HI:$mask), bb:$dst)>;
 }
+
+// Atomic load patterns.
+def : MipsPat<(atomic_load_8 addr:$a), (LB64 addr:$a)>;
+def : MipsPat<(atomic_load_16 addr:$a), (LH64 addr:$a)>;
+def : MipsPat<(atomic_load_32 addr:$a), (LW64 addr:$a)>;
+def : MipsPat<(atomic_load_64 addr:$a), (LD addr:$a)>;
+
+// Atomic store patterns.
+def : MipsPat<(atomic_store_8 addr:$a, GPR64:$v), (SB64 GPR64:$v, addr:$a)>;
+def : MipsPat<(atomic_store_16 addr:$a, GPR64:$v), (SH64 GPR64:$v, addr:$a)>;
+def : MipsPat<(atomic_store_32 addr:$a, GPR64:$v), (SW64 GPR64:$v, addr:$a)>;
+def : MipsPat<(atomic_store_64 addr:$a, GPR64:$v), (SD GPR64:$v, addr:$a)>;
 
 //===----------------------------------------------------------------------===//
 // Instruction aliases

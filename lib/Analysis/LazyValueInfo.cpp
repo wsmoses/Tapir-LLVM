@@ -26,6 +26,7 @@
 #include "llvm/IR/Dominators.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/IntrinsicInst.h"
+#include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/PatternMatch.h"
 #include "llvm/IR/ValueHandle.h"
 #include "llvm/Support/Debug.h"
@@ -497,6 +498,25 @@ LVILatticeVal LazyValueInfoCache::getBlockValue(Value *Val, BasicBlock *BB) {
   return lookup(Val)[BB];
 }
 
+static LVILatticeVal getFromRangeMetadata(Instruction *BBI) {
+  switch (BBI->getOpcode()) {
+  default: break;
+  case Instruction::Load:
+  case Instruction::Call:
+  case Instruction::Invoke:
+    if (MDNode *Ranges = BBI->getMetadata(LLVMContext::MD_range)) 
+      if (isa<IntegerType>(BBI->getType())) {
+        ConstantRange Result = getConstantRangeFromMetadata(*Ranges);
+        return LVILatticeVal::getRange(Result);
+      }
+    break;
+  };
+  // Nothing known - Note that we do not want overdefined here.  We may know
+  // something else about the value and not having range metadata shouldn't
+  // cause us to throw away those facts.
+  return LVILatticeVal();
+}
+
 bool LazyValueInfoCache::solveBlockValue(Value *Val, BasicBlock *BB) {
   if (isa<Constant>(Val))
     return true;
@@ -531,11 +551,17 @@ bool LazyValueInfoCache::solveBlockValue(Value *Val, BasicBlock *BB) {
     return true;
   }
 
-  if (AllocaInst *AI = dyn_cast<AllocaInst>(BBI)) {
-    Res = LVILatticeVal::getNot(ConstantPointerNull::get(AI->getType()));
+  // If this value is a nonnull pointer, record it's range and bailout.
+  PointerType *PT = dyn_cast<PointerType>(BBI->getType());
+  if (PT && isKnownNonNull(BBI)) {
+    Res = LVILatticeVal::getNot(ConstantPointerNull::get(PT));
     insertResult(Val, BB, Res);
     return true;
   }
+
+  // If this is an instruction which supports range metadata, return the
+  // implied range.  TODO: This should be an intersection, not a union.
+  Res.mergeIn(getFromRangeMetadata(BBI), DL);
 
   // We can only analyze the definitions of certain classes of instructions
   // (integral binops and casts at the moment), so bail if this isn't one.
@@ -1013,6 +1039,8 @@ LVILatticeVal LazyValueInfoCache::getValueAt(Value *V, Instruction *CxtI) {
         << CxtI->getName() << "'\n");
 
   LVILatticeVal Result;
+  if (auto *I = dyn_cast<Instruction>(V))
+    Result = getFromRangeMetadata(I);
   mergeAssumeBlockValueConstantRange(V, Result, CxtI);
 
   DEBUG(dbgs() << "  Result = " << Result << "\n");
@@ -1270,18 +1298,67 @@ LazyValueInfo::getPredicateAt(unsigned Pred, Value *V, Constant *C,
   if (Ret != Unknown)
     return Ret;
 
-  // TODO: Move this logic inside getValueAt so that it can be cached rather
-  // than re-queried on each call. This would also allow us to merge the
-  // underlying lattice values to get more information.
+  // Note: The following bit of code is somewhat distinct from the rest of LVI;
+  // LVI as a whole tries to compute a lattice value which is conservatively
+  // correct at a given location.  In this case, we have a predicate which we
+  // weren't able to prove about the merged result, and we're pushing that
+  // predicate back along each incoming edge to see if we can prove it
+  // separately for each input.  As a motivating example, consider:
+  // bb1:
+  //   %v1 = ... ; constantrange<1, 5>
+  //   br label %merge
+  // bb2:
+  //   %v2 = ... ; constantrange<10, 20>
+  //   br label %merge
+  // merge:
+  //   %phi = phi [%v1, %v2] ; constantrange<1,20>
+  //   %pred = icmp eq i32 %phi, 8
+  // We can't tell from the lattice value for '%phi' that '%pred' is false
+  // along each path, but by checking the predicate over each input separately,
+  // we can.
+  // We limit the search to one step backwards from the current BB and value.
+  // We could consider extending this to search further backwards through the
+  // CFG and/or value graph, but there are non-obvious compile time vs quality
+  // tradeoffs.  
   if (CxtI) {
+    BasicBlock *BB = CxtI->getParent();
+
+    // Function entry or an unreachable block.  Bail to avoid confusing
+    // analysis below.
+    pred_iterator PI = pred_begin(BB), PE = pred_end(BB);
+    if (PI == PE)
+      return Unknown;
+
+    // If V is a PHI node in the same block as the context, we need to ask
+    // questions about the predicate as applied to the incoming value along
+    // each edge. This is useful for eliminating cases where the predicate is
+    // known along all incoming edges.
+    if (auto *PHI = dyn_cast<PHINode>(V))
+      if (PHI->getParent() == BB) {
+        Tristate Baseline = Unknown;
+        for (unsigned i = 0, e = PHI->getNumIncomingValues(); i < e; i++) {
+          Value *Incoming = PHI->getIncomingValue(i);
+          BasicBlock *PredBB = PHI->getIncomingBlock(i);
+          // Note that PredBB may be BB itself.        
+          Tristate Result = getPredicateOnEdge(Pred, Incoming, C, PredBB, BB,
+                                               CxtI);
+          
+          // Keep going as long as we've seen a consistent known result for
+          // all inputs.
+          Baseline = (i == 0) ? Result /* First iteration */
+            : (Baseline == Result ? Baseline : Unknown); /* All others */
+          if (Baseline == Unknown)
+            break;
+        }
+        if (Baseline != Unknown)
+          return Baseline;
+      }    
+
     // For a comparison where the V is outside this block, it's possible
     // that we've branched on it before. Look to see if the value is known
     // on all incoming edges.
-    BasicBlock *BB = CxtI->getParent();
-    pred_iterator PI = pred_begin(BB), PE = pred_end(BB);
-    if (PI != PE &&
-        (!isa<Instruction>(V) ||
-         cast<Instruction>(V)->getParent() != BB)) {
+    if (!isa<Instruction>(V) ||
+        cast<Instruction>(V)->getParent() != BB) {
       // For predecessor edge, determine if the comparison is true or false
       // on that edge. If they're all true or all false, we can conclude
       // the value of the comparison in this block.

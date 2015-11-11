@@ -99,7 +99,7 @@ static bool populateDependencyMatrix(CharMatrix &DepMatrix, unsigned Level,
         return false;
       if (St && !St->isSimple())
         return false;
-      MemInstr.push_back(I);
+      MemInstr.push_back(&*I);
     }
   }
 
@@ -438,7 +438,7 @@ struct LoopInterchange : public FunctionPass {
 
   void getAnalysisUsage(AnalysisUsage &AU) const override {
     AU.addRequired<ScalarEvolutionWrapperPass>();
-    AU.addRequired<AliasAnalysis>();
+    AU.addRequired<AAResultsWrapperPass>();
     AU.addRequired<DominatorTreeWrapperPass>();
     AU.addRequired<LoopInfoWrapperPass>();
     AU.addRequired<DependenceAnalysis>();
@@ -996,7 +996,7 @@ void LoopInterchangeTransform::removeChildLoop(Loop *OuterLoop,
       return;
     }
   }
-  assert(false && "Couldn't find loop");
+  llvm_unreachable("Couldn't find loop");
 }
 
 void LoopInterchangeTransform::restructureLoops(Loop *InnerLoop,
@@ -1113,8 +1113,8 @@ static void moveBBContents(BasicBlock *FromBB, Instruction *InsertBefore) {
   auto &ToList = InsertBefore->getParent()->getInstList();
   auto &FromList = FromBB->getInstList();
 
-  ToList.splice(InsertBefore, FromList, FromList.begin(),
-                FromBB->getTerminator());
+  ToList.splice(InsertBefore->getIterator(), FromList, FromList.begin(),
+                FromBB->getTerminator()->getIterator());
 }
 
 void LoopInterchangeTransform::adjustOuterLoopPreheader() {
@@ -1286,7 +1286,7 @@ bool LoopInterchangeTransform::adjustLoopLinks() {
 char LoopInterchange::ID = 0;
 INITIALIZE_PASS_BEGIN(LoopInterchange, "loop-interchange",
                       "Interchanges loops for cache reuse", false, false)
-INITIALIZE_AG_DEPENDENCY(AliasAnalysis)
+INITIALIZE_PASS_DEPENDENCY(AAResultsWrapperPass)
 INITIALIZE_PASS_DEPENDENCY(DependenceAnalysis)
 INITIALIZE_PASS_DEPENDENCY(DominatorTreeWrapperPass)
 INITIALIZE_PASS_DEPENDENCY(ScalarEvolutionWrapperPass)

@@ -355,8 +355,8 @@ void RegDefsUses::addLiveOut(const MachineBasicBlock &MBB,
   for (MachineBasicBlock::const_succ_iterator SI = MBB.succ_begin(),
        SE = MBB.succ_end(); SI != SE; ++SI)
     if (*SI != &SuccBB)
-      for (unsigned LI : (*SI)->liveins())
-        Uses.set(LI);
+      for (const auto &LI : (*SI)->liveins())
+        Uses.set(LI.PhysReg);
 }
 
 bool RegDefsUses::update(const MachineInstr &MI, unsigned Begin, unsigned End) {
@@ -597,7 +597,7 @@ bool Filler::runOnMachineBasicBlock(MachineBasicBlock &MBB) {
         // Get instruction with delay slot.
         MachineBasicBlock::instr_iterator DSI(I);
 
-        if (InMicroMipsMode && TII->GetInstSizeInBytes(std::next(DSI)) == 2 &&
+        if (InMicroMipsMode && TII->GetInstSizeInBytes(&*std::next(DSI)) == 2 &&
             DSI->isCall()) {
           // If instruction in delay slot is 16b change opcode to
           // corresponding instruction with short delay slot.

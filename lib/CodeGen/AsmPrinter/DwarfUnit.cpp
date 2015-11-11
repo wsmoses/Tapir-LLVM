@@ -693,6 +693,8 @@ DIE *DwarfUnit::getOrCreateContextDIE(const DIScope *Context) {
     return getOrCreateNameSpace(NS);
   if (auto *SP = dyn_cast<DISubprogram>(Context))
     return getOrCreateSubprogramDIE(SP);
+  if (auto *M = dyn_cast<DIModule>(Context))
+    return getOrCreateModule(M);
   return getDIE(Context);
 }
 
@@ -1149,6 +1151,14 @@ bool DwarfUnit::applySubprogramDefinitionAttributes(const DISubprogram *SP,
                       "definition DIE was created in "
                       "getOrCreateSubprogramDIE");
     DeclLinkageName = SPDecl->getLinkageName();
+    unsigned DeclID =
+        getOrCreateSourceID(SPDecl->getFilename(), SPDecl->getDirectory());
+    unsigned DefID = getOrCreateSourceID(SP->getFilename(), SP->getDirectory());
+    if (DeclID != DefID)
+      addUInt(SPDie, dwarf::DW_AT_decl_file, None, DefID);
+
+    if (SP->getLine() != SPDecl->getLine())
+      addUInt(SPDie, dwarf::DW_AT_decl_line, None, SP->getLine());
   }
 
   // Add function template parameters.

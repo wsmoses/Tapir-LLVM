@@ -155,7 +155,7 @@ namespace llvm {
              "Attempt to construct index with 0 pointer.");
     }
 
-    /// Returns true if this is a valid index. Invalid indicies do
+    /// Returns true if this is a valid index. Invalid indices do
     /// not point into an index table, and cannot be compared.
     bool isValid() const {
       return lie.getPointer();
@@ -272,7 +272,7 @@ namespace llvm {
     SlotIndex getNextSlot() const {
       Slot s = getSlot();
       if (s == Slot_Dead) {
-        return SlotIndex(listEntry()->getNextNode(), Slot_Block);
+        return SlotIndex(&*++listEntry()->getIterator(), Slot_Block);
       }
       return SlotIndex(listEntry(), s + 1);
     }
@@ -280,7 +280,7 @@ namespace llvm {
     /// Returns the next index. This is the index corresponding to the this
     /// index's slot, but for the next instruction.
     SlotIndex getNextIndex() const {
-      return SlotIndex(listEntry()->getNextNode(), getSlot());
+      return SlotIndex(&*++listEntry()->getIterator(), getSlot());
     }
 
     /// Returns the previous slot in the index list. This could be either the
@@ -292,7 +292,7 @@ namespace llvm {
     SlotIndex getPrevSlot() const {
       Slot s = getSlot();
       if (s == Slot_Block) {
-        return SlotIndex(listEntry()->getPrevNode(), Slot_Dead);
+        return SlotIndex(&*--listEntry()->getIterator(), Slot_Dead);
       }
       return SlotIndex(listEntry(), s - 1);
     }
@@ -300,7 +300,7 @@ namespace llvm {
     /// Returns the previous index. This is the index corresponding to this
     /// index's slot, but for the previous instruction.
     SlotIndex getPrevIndex() const {
-      return SlotIndex(listEntry()->getPrevNode(), getSlot());
+      return SlotIndex(&*--listEntry()->getIterator(), getSlot());
     }
 
   };
@@ -427,11 +427,11 @@ namespace llvm {
     /// Returns the next non-null index, if one exists.
     /// Otherwise returns getLastIndex().
     SlotIndex getNextNonNullIndex(SlotIndex Index) {
-      IndexList::iterator I = Index.listEntry();
+      IndexList::iterator I = Index.listEntry()->getIterator();
       IndexList::iterator E = indexList.end();
       while (++I != E)
         if (I->getInstr())
-          return SlotIndex(I, Index.getSlot());
+          return SlotIndex(&*I, Index.getSlot());
       // We reached the end of the function.
       return getLastIndex();
     }
@@ -541,17 +541,6 @@ namespace llvm {
       return J->second;
     }
 
-    bool findLiveInMBBs(SlotIndex start, SlotIndex end,
-                        SmallVectorImpl<MachineBasicBlock*> &mbbs) const {
-      bool resVal = false;
-      for (MBBIndexIterator itr = findMBBIndex(start);
-           itr != MBBIndexEnd() && itr->first < end; ++itr) {
-        mbbs.push_back(itr->second);
-        resVal = true;
-      }
-      return resVal;
-    }
-
     /// Returns the MBB covering the given range, or null if the range covers
     /// more than one basic block.
     MachineBasicBlock* getMBBCoveringRange(SlotIndex start, SlotIndex end) const {
@@ -594,11 +583,11 @@ namespace llvm {
       IndexList::iterator prevItr, nextItr;
       if (Late) {
         // Insert mi's index immediately before the following instruction.
-        nextItr = getIndexAfter(mi).listEntry();
+        nextItr = getIndexAfter(mi).listEntry()->getIterator();
         prevItr = std::prev(nextItr);
       } else {
         // Insert mi's index immediately after the preceding instruction.
-        prevItr = getIndexBefore(mi).listEntry();
+        prevItr = getIndexBefore(mi).listEntry()->getIterator();
         nextItr = std::next(prevItr);
       }
 
@@ -660,11 +649,11 @@ namespace llvm {
       if (nextMBB == mbb->getParent()->end()) {
         startEntry = &indexList.back();
         endEntry = createEntry(nullptr, 0);
-        newItr = indexList.insertAfter(startEntry, endEntry);
+        newItr = indexList.insertAfter(startEntry->getIterator(), endEntry);
       } else {
         startEntry = createEntry(nullptr, 0);
-        endEntry = getMBBStartIdx(nextMBB).listEntry();
-        newItr = indexList.insert(endEntry, startEntry);
+        endEntry = getMBBStartIdx(&*nextMBB).listEntry();
+        newItr = indexList.insert(endEntry->getIterator(), startEntry);
       }
 
       SlotIndex startIdx(startEntry, SlotIndex::Slot_Block);

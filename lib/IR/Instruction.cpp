@@ -28,7 +28,7 @@ Instruction::Instruction(Type *ty, unsigned it, Use *Ops, unsigned NumOps,
   if (InsertBefore) {
     BasicBlock *BB = InsertBefore->getParent();
     assert(BB && "Instruction to insert before is not in a basic block!");
-    BB->getInstList().insert(InsertBefore, this);
+    BB->getInstList().insert(InsertBefore->getIterator(), this);
   }
 }
 
@@ -64,31 +64,32 @@ Module *Instruction::getModule() {
 
 
 void Instruction::removeFromParent() {
-  getParent()->getInstList().remove(this);
+  getParent()->getInstList().remove(getIterator());
 }
 
 iplist<Instruction>::iterator Instruction::eraseFromParent() {
-  return getParent()->getInstList().erase(this);
+  return getParent()->getInstList().erase(getIterator());
 }
 
 /// insertBefore - Insert an unlinked instructions into a basic block
 /// immediately before the specified instruction.
 void Instruction::insertBefore(Instruction *InsertPos) {
-  InsertPos->getParent()->getInstList().insert(InsertPos, this);
+  InsertPos->getParent()->getInstList().insert(InsertPos->getIterator(), this);
 }
 
 /// insertAfter - Insert an unlinked instructions into a basic block
 /// immediately after the specified instruction.
 void Instruction::insertAfter(Instruction *InsertPos) {
-  InsertPos->getParent()->getInstList().insertAfter(InsertPos, this);
+  InsertPos->getParent()->getInstList().insertAfter(InsertPos->getIterator(),
+                                                    this);
 }
 
 /// moveBefore - Unlink this instruction from its current basic block and
 /// insert it into the basic block that MovePos lives in, right before
 /// MovePos.
 void Instruction::moveBefore(Instruction *MovePos) {
-  MovePos->getParent()->getInstList().splice(MovePos,getParent()->getInstList(),
-                                             this);
+  MovePos->getParent()->getInstList().splice(
+      MovePos->getIterator(), getParent()->getInstList(), getIterator());
 }
 
 /// Set or clear the unsafe-algebra flag on this instruction, which must be an
@@ -196,6 +197,7 @@ const char *Instruction::getOpcodeName(unsigned OpCode) {
   case Invoke: return "invoke";
   case Resume: return "resume";
   case Unreachable: return "unreachable";
+  case CleanupEndPad: return "cleanupendpad";
   case CleanupRet: return "cleanupret";
   case CatchEndPad: return "catchendpad";
   case CatchRet: return "catchret";
@@ -417,6 +419,7 @@ bool Instruction::mayReadFromMemory() const {
   case Instruction::Sync: // Like Instruction::Fence
   case Instruction::AtomicCmpXchg:
   case Instruction::AtomicRMW:
+  case Instruction::CatchPad:
   case Instruction::CatchRet:
   case Instruction::TerminatePad:
     return true;
@@ -440,6 +443,7 @@ bool Instruction::mayWriteToMemory() const {
   case Instruction::VAArg:
   case Instruction::AtomicCmpXchg:
   case Instruction::AtomicRMW:
+  case Instruction::CatchPad:
   case Instruction::CatchRet:
   case Instruction::TerminatePad:
     return true;
@@ -472,6 +476,8 @@ bool Instruction::mayThrow() const {
     return !CI->doesNotThrow();
   if (const auto *CRI = dyn_cast<CleanupReturnInst>(this))
     return CRI->unwindsToCaller();
+  if (const auto *CEPI = dyn_cast<CleanupEndPadInst>(this))
+    return CEPI->unwindsToCaller();
   if (const auto *CEPI = dyn_cast<CatchEndPadInst>(this))
     return CEPI->unwindsToCaller();
   if (const auto *TPI = dyn_cast<TerminatePadInst>(this))

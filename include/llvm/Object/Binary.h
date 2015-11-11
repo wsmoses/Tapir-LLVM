@@ -42,7 +42,8 @@ protected:
     ID_Archive,
     ID_MachOUniversalBinary,
     ID_COFFImportFile,
-    ID_IR, // LLVM IR
+    ID_IR,            // LLVM IR
+    ID_FunctionIndex, // Function summary index
 
     // Object and children.
     ID_StartObjects,
@@ -121,6 +122,8 @@ public:
   bool isIR() const {
     return TypeID == ID_IR;
   }
+
+  bool isFunctionIndex() const { return TypeID == ID_FunctionIndex; }
 
   bool isLittleEndian() const {
     return !(TypeID == ID_ELF32B || TypeID == ID_ELF64B ||

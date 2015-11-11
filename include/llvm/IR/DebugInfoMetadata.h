@@ -1026,7 +1026,8 @@ public:
   DIImportedEntityArray getImportedEntities() const {
     return cast_or_null<MDTuple>(getRawImportedEntities());
   }
-  unsigned getDWOId() const { return DWOId; }
+  uint64_t getDWOId() const { return DWOId; }
+  void setDWOId(uint64_t DwoId) { DWOId = DwoId; }
 
   MDString *getRawProducer() const { return getOperandAs<MDString>(1); }
   MDString *getRawFlags() const { return getOperandAs<MDString>(2); }
@@ -1236,14 +1237,13 @@ class DISubprogram : public DILocalScope {
           DISubroutineType *Type, bool IsLocalToUnit, bool IsDefinition,
           unsigned ScopeLine, DITypeRef ContainingType, unsigned Virtuality,
           unsigned VirtualIndex, unsigned Flags, bool IsOptimized,
-          Constant *Function, DITemplateParameterArray TemplateParams,
-          DISubprogram *Declaration, DILocalVariableArray Variables,
-          StorageType Storage, bool ShouldCreate = true) {
+          DITemplateParameterArray TemplateParams, DISubprogram *Declaration,
+          DILocalVariableArray Variables, StorageType Storage,
+          bool ShouldCreate = true) {
     return getImpl(Context, Scope, getCanonicalMDString(Context, Name),
                    getCanonicalMDString(Context, LinkageName), File, Line, Type,
                    IsLocalToUnit, IsDefinition, ScopeLine, ContainingType,
                    Virtuality, VirtualIndex, Flags, IsOptimized,
-                   Function ? ConstantAsMetadata::get(Function) : nullptr,
                    TemplateParams.get(), Declaration, Variables.get(), Storage,
                    ShouldCreate);
   }
@@ -1252,17 +1252,16 @@ class DISubprogram : public DILocalScope {
           MDString *LinkageName, Metadata *File, unsigned Line, Metadata *Type,
           bool IsLocalToUnit, bool IsDefinition, unsigned ScopeLine,
           Metadata *ContainingType, unsigned Virtuality, unsigned VirtualIndex,
-          unsigned Flags, bool IsOptimized, Metadata *Function,
-          Metadata *TemplateParams, Metadata *Declaration, Metadata *Variables,
-          StorageType Storage, bool ShouldCreate = true);
+          unsigned Flags, bool IsOptimized, Metadata *TemplateParams,
+          Metadata *Declaration, Metadata *Variables, StorageType Storage,
+          bool ShouldCreate = true);
 
   TempDISubprogram cloneImpl() const {
-    return getTemporary(getContext(), getScope(), getName(), getLinkageName(),
-                        getFile(), getLine(), getType(), isLocalToUnit(),
-                        isDefinition(), getScopeLine(), getContainingType(),
-                        getVirtuality(), getVirtualIndex(), getFlags(),
-                        isOptimized(), getFunctionConstant(),
-                        getTemplateParams(), getDeclaration(), getVariables());
+    return getTemporary(
+        getContext(), getScope(), getName(), getLinkageName(), getFile(),
+        getLine(), getType(), isLocalToUnit(), isDefinition(), getScopeLine(),
+        getContainingType(), getVirtuality(), getVirtualIndex(), getFlags(),
+        isOptimized(), getTemplateParams(), getDeclaration(), getVariables());
   }
 
 public:
@@ -1272,13 +1271,12 @@ public:
                      bool IsLocalToUnit, bool IsDefinition, unsigned ScopeLine,
                      DITypeRef ContainingType, unsigned Virtuality,
                      unsigned VirtualIndex, unsigned Flags, bool IsOptimized,
-                     Constant *Function = nullptr,
                      DITemplateParameterArray TemplateParams = nullptr,
                      DISubprogram *Declaration = nullptr,
                      DILocalVariableArray Variables = nullptr),
                     (Scope, Name, LinkageName, File, Line, Type, IsLocalToUnit,
                      IsDefinition, ScopeLine, ContainingType, Virtuality,
-                     VirtualIndex, Flags, IsOptimized, Function, TemplateParams,
+                     VirtualIndex, Flags, IsOptimized, TemplateParams,
                      Declaration, Variables))
   DEFINE_MDNODE_GET(
       DISubprogram,
@@ -1286,11 +1284,11 @@ public:
        unsigned Line, Metadata *Type, bool IsLocalToUnit, bool IsDefinition,
        unsigned ScopeLine, Metadata *ContainingType, unsigned Virtuality,
        unsigned VirtualIndex, unsigned Flags, bool IsOptimized,
-       Metadata *Function = nullptr, Metadata *TemplateParams = nullptr,
-       Metadata *Declaration = nullptr, Metadata *Variables = nullptr),
+       Metadata *TemplateParams = nullptr, Metadata *Declaration = nullptr,
+       Metadata *Variables = nullptr),
       (Scope, Name, LinkageName, File, Line, Type, IsLocalToUnit, IsDefinition,
        ScopeLine, ContainingType, Virtuality, VirtualIndex, Flags, IsOptimized,
-       Function, TemplateParams, Declaration, Variables))
+       TemplateParams, Declaration, Variables))
 
   TempDISubprogram clone() const { return cloneImpl(); }
 
@@ -1349,11 +1347,6 @@ public:
     return DITypeRef(getRawContainingType());
   }
 
-  Constant *getFunctionConstant() const {
-    if (auto *C = cast_or_null<ConstantAsMetadata>(getRawFunction()))
-      return C->getValue();
-    return nullptr;
-  }
   DITemplateParameterArray getTemplateParams() const {
     return cast_or_null<MDTuple>(getRawTemplateParams());
   }
@@ -1367,28 +1360,9 @@ public:
   Metadata *getRawScope() const { return getOperand(1); }
   Metadata *getRawType() const { return getOperand(5); }
   Metadata *getRawContainingType() const { return getOperand(6); }
-  Metadata *getRawFunction() const { return getOperand(7); }
-  Metadata *getRawTemplateParams() const { return getOperand(8); }
-  Metadata *getRawDeclaration() const { return getOperand(9); }
-  Metadata *getRawVariables() const { return getOperand(10); }
-
-  /// \brief Get a pointer to the function this subprogram describes.
-  ///
-  /// This dyn_casts \a getFunctionConstant() to \a Function.
-  ///
-  /// FIXME: Should this be looking through bitcasts?
-  Function *getFunction() const;
-
-  /// \brief Replace the function.
-  ///
-  /// If \a isUniqued() and not \a isResolved(), this could node will be
-  /// RAUW'ed and deleted out from under the caller.  Use a \a TrackingMDRef if
-  /// that's a problem.
-  /// @{
-  void replaceFunction(Function *F);
-  void replaceFunction(ConstantAsMetadata *MD) { replaceOperandWith(7, MD); }
-  void replaceFunction(std::nullptr_t) { replaceOperandWith(7, nullptr); }
-  /// @}
+  Metadata *getRawTemplateParams() const { return getOperand(7); }
+  Metadata *getRawDeclaration() const { return getOperand(8); }
+  Metadata *getRawVariables() const { return getOperand(9); }
 
   /// \brief Check if this subprogram describes the given function.
   ///
@@ -1412,13 +1386,6 @@ public:
 
   Metadata *getRawScope() const { return getOperand(1); }
 
-  /// \brief Forwarding accessors to LexicalBlock.
-  ///
-  /// TODO: Remove these and update code to use \a DILexicalBlock directly.
-  /// @{
-  inline unsigned getLine() const;
-  inline unsigned getColumn() const;
-  /// @}
   static bool classof(const Metadata *MD) {
     return MD->getMetadataID() == DILexicalBlockKind ||
            MD->getMetadataID() == DILexicalBlockFileKind;
@@ -1475,18 +1442,6 @@ public:
     return MD->getMetadataID() == DILexicalBlockKind;
   }
 };
-
-unsigned DILexicalBlockBase::getLine() const {
-  if (auto *N = dyn_cast<DILexicalBlock>(this))
-    return N->getLine();
-  return 0;
-}
-
-unsigned DILexicalBlockBase::getColumn() const {
-  if (auto *N = dyn_cast<DILexicalBlock>(this))
-    return N->getColumn();
-  return 0;
-}
 
 class DILexicalBlockFile : public DILexicalBlockBase {
   friend class LLVMContextImpl;

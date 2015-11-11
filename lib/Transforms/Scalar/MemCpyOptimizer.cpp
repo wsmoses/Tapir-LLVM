@@ -17,6 +17,7 @@
 #include "llvm/ADT/Statistic.h"
 #include "llvm/Analysis/AliasAnalysis.h"
 #include "llvm/Analysis/AssumptionCache.h"
+#include "llvm/Analysis/GlobalsModRef.h"
 #include "llvm/Analysis/MemoryDependenceAnalysis.h"
 #include "llvm/Analysis/TargetLibraryInfo.h"
 #include "llvm/Analysis/ValueTracking.h"
@@ -324,9 +325,9 @@ namespace {
       AU.addRequired<AssumptionCacheTracker>();
       AU.addRequired<DominatorTreeWrapperPass>();
       AU.addRequired<MemoryDependenceAnalysis>();
-      AU.addRequired<AliasAnalysis>();
+      AU.addRequired<AAResultsWrapperPass>();
       AU.addRequired<TargetLibraryInfoWrapperPass>();
-      AU.addPreserved<AliasAnalysis>();
+      AU.addPreserved<GlobalsAAWrapperPass>();
       AU.addPreserved<MemoryDependenceAnalysis>();
     }
 
@@ -359,7 +360,8 @@ INITIALIZE_PASS_DEPENDENCY(AssumptionCacheTracker)
 INITIALIZE_PASS_DEPENDENCY(DominatorTreeWrapperPass)
 INITIALIZE_PASS_DEPENDENCY(MemoryDependenceAnalysis)
 INITIALIZE_PASS_DEPENDENCY(TargetLibraryInfoWrapperPass)
-INITIALIZE_AG_DEPENDENCY(AliasAnalysis)
+INITIALIZE_PASS_DEPENDENCY(AAResultsWrapperPass)
+INITIALIZE_PASS_DEPENDENCY(GlobalsAAWrapperPass)
 INITIALIZE_PASS_END(MemCpyOpt, "memcpyopt", "MemCpy Optimization",
                     false, false)
 
@@ -377,7 +379,7 @@ Instruction *MemCpyOpt::tryMergingIntoMemset(Instruction *StartInst,
   // are stored.
   MemsetRanges Ranges(DL);
 
-  BasicBlock::iterator BI = StartInst;
+  BasicBlock::iterator BI(StartInst);
   for (++BI; !isa<TerminatorInst>(BI); ++BI) {
     if (!isa<StoreInst>(BI) && !isa<MemSetInst>(BI)) {
       // If the instruction is readnone, ignore it, otherwise bail out.  We
@@ -432,7 +434,7 @@ Instruction *MemCpyOpt::tryMergingIntoMemset(Instruction *StartInst,
   // If we create any memsets, we put it right before the first instruction that
   // isn't part of the memset block.  This ensure that the memset is dominated
   // by any addressing instruction needed by the start of the block.
-  IRBuilder<> Builder(BI);
+  IRBuilder<> Builder(&*BI);
 
   // Now that we have full information about ranges, loop over the ranges and
   // emit memset's for anything big enough to be worthwhile.
@@ -486,6 +488,16 @@ Instruction *MemCpyOpt::tryMergingIntoMemset(Instruction *StartInst,
 
 bool MemCpyOpt::processStore(StoreInst *SI, BasicBlock::iterator &BBI) {
   if (!SI->isSimple()) return false;
+
+  // Avoid merging nontemporal stores since the resulting
+  // memcpy/memset would not be able to preserve the nontemporal hint.
+  // In theory we could teach how to propagate the !nontemporal metadata to
+  // memset calls. However, that change would force the backend to
+  // conservatively expand !nontemporal memset calls back to sequences of
+  // store instructions (effectively undoing the merging).
+  if (SI->getMetadata(LLVMContext::MD_nontemporal))
+    return false;
+
   const DataLayout &DL = SI->getModule()->getDataLayout();
 
   // Detect cases where we're performing call slot forwarding, but
@@ -502,10 +514,10 @@ bool MemCpyOpt::processStore(StoreInst *SI, BasicBlock::iterator &BBI) {
       if (C) {
         // Check that nothing touches the dest of the "copy" between
         // the call and the store.
-        AliasAnalysis &AA = getAnalysis<AliasAnalysis>();
+        AliasAnalysis &AA = getAnalysis<AAResultsWrapperPass>().getAAResults();
         MemoryLocation StoreLoc = MemoryLocation::get(SI);
-        for (BasicBlock::iterator I = --BasicBlock::iterator(SI),
-                                  E = C; I != E; --I) {
+        for (BasicBlock::iterator I = --SI->getIterator(), E = C->getIterator();
+             I != E; --I) {
           if (AA.getModRefInfo(&*I, StoreLoc) != MRI_NoModRef) {
             C = nullptr;
             break;
@@ -547,7 +559,7 @@ bool MemCpyOpt::processStore(StoreInst *SI, BasicBlock::iterator &BBI) {
   if (Value *ByteVal = isBytewiseValue(SI->getOperand(0)))
     if (Instruction *I = tryMergingIntoMemset(SI, SI->getPointerOperand(),
                                               ByteVal)) {
-      BBI = I;  // Don't invalidate iterator.
+      BBI = I->getIterator(); // Don't invalidate iterator.
       return true;
     }
 
@@ -560,7 +572,7 @@ bool MemCpyOpt::processMemSet(MemSetInst *MSI, BasicBlock::iterator &BBI) {
   if (isa<ConstantInt>(MSI->getLength()) && !MSI->isVolatile())
     if (Instruction *I = tryMergingIntoMemset(MSI, MSI->getDest(),
                                               MSI->getValue())) {
-      BBI = I;  // Don't invalidate iterator.
+      BBI = I->getIterator(); // Don't invalidate iterator.
       return true;
     }
   return false;
@@ -703,7 +715,7 @@ bool MemCpyOpt::performCallSlotOptzn(Instruction *cpy,
   // unexpected manner, for example via a global, which we deduce from
   // the use analysis, we also need to know that it does not sneakily
   // access dest.  We rely on AA to figure this out for us.
-  AliasAnalysis &AA = getAnalysis<AliasAnalysis>();
+  AliasAnalysis &AA = getAnalysis<AAResultsWrapperPass>().getAAResults();
   ModRefInfo MR = AA.getModRefInfo(C, cpyDest, srcSize);
   // If necessary, perform additional analysis.
   if (MR != MRI_NoModRef)
@@ -742,11 +754,9 @@ bool MemCpyOpt::performCallSlotOptzn(Instruction *cpy,
   // Update AA metadata
   // FIXME: MD_tbaa_struct and MD_mem_parallel_loop_access should also be
   // handled here, but combineMetadata doesn't support them yet
-  unsigned KnownIDs[] = {
-    LLVMContext::MD_tbaa,
-    LLVMContext::MD_alias_scope,
-    LLVMContext::MD_noalias,
-  };
+  unsigned KnownIDs[] = {LLVMContext::MD_tbaa, LLVMContext::MD_alias_scope,
+                         LLVMContext::MD_noalias,
+                         LLVMContext::MD_invariant_group};
   combineMetadata(C, cpy, KnownIDs);
 
   // Remove the memcpy.
@@ -779,7 +789,7 @@ bool MemCpyOpt::processMemCpyMemCpyDependence(MemCpyInst *M, MemCpyInst *MDep) {
   if (!MDepLen || !MLen || MDepLen->getZExtValue() < MLen->getZExtValue())
     return false;
 
-  AliasAnalysis &AA = getAnalysis<AliasAnalysis>();
+  AliasAnalysis &AA = getAnalysis<AAResultsWrapperPass>().getAAResults();
 
   // Verify that the copied-from memory doesn't change in between the two
   // transfers.  For example, in:
@@ -793,8 +803,9 @@ bool MemCpyOpt::processMemCpyMemCpyDependence(MemCpyInst *M, MemCpyInst *MDep) {
   //
   // NOTE: This is conservative, it will stop on any read from the source loc,
   // not just the defining memcpy.
-  MemDepResult SourceDep = MD->getPointerDependencyFrom(
-      MemoryLocation::getForSource(MDep), false, M, M->getParent());
+  MemDepResult SourceDep =
+      MD->getPointerDependencyFrom(MemoryLocation::getForSource(MDep), false,
+                                   M->getIterator(), M->getParent());
   if (!SourceDep.isClobber() || SourceDep.getInst() != MDep)
     return false;
 
@@ -851,8 +862,9 @@ bool MemCpyOpt::processMemSetMemCpyDependence(MemCpyInst *MemCpy,
     return false;
 
   // Check that there are no other dependencies on the memset destination.
-  MemDepResult DstDepInfo = MD->getPointerDependencyFrom(
-      MemoryLocation::getForDest(MemSet), false, MemCpy, MemCpy->getParent());
+  MemDepResult DstDepInfo =
+      MD->getPointerDependencyFrom(MemoryLocation::getForDest(MemSet), false,
+                                   MemCpy->getIterator(), MemCpy->getParent());
   if (DstDepInfo.getInst() != MemSet)
     return false;
 
@@ -989,8 +1001,8 @@ bool MemCpyOpt::processMemCpy(MemCpyInst *M) {
   }
 
   MemoryLocation SrcLoc = MemoryLocation::getForSource(M);
-  MemDepResult SrcDepInfo = MD->getPointerDependencyFrom(SrcLoc, true,
-                                                         M, M->getParent());
+  MemDepResult SrcDepInfo = MD->getPointerDependencyFrom(
+      SrcLoc, true, M->getIterator(), M->getParent());
 
   if (SrcDepInfo.isClobber()) {
     if (MemCpyInst *MDep = dyn_cast<MemCpyInst>(SrcDepInfo.getInst()))
@@ -1031,7 +1043,7 @@ bool MemCpyOpt::processMemCpy(MemCpyInst *M) {
 /// Transforms memmove calls to memcpy calls when the src/dst are guaranteed
 /// not to alias.
 bool MemCpyOpt::processMemMove(MemMoveInst *M) {
-  AliasAnalysis &AA = getAnalysis<AliasAnalysis>();
+  AliasAnalysis &AA = getAnalysis<AAResultsWrapperPass>().getAAResults();
 
   if (!TLI->has(LibFunc::memmove))
     return false;
@@ -1067,8 +1079,8 @@ bool MemCpyOpt::processByValArgument(CallSite CS, unsigned ArgNo) {
   Type *ByValTy = cast<PointerType>(ByValArg->getType())->getElementType();
   uint64_t ByValSize = DL.getTypeAllocSize(ByValTy);
   MemDepResult DepInfo = MD->getPointerDependencyFrom(
-      MemoryLocation(ByValArg, ByValSize), true, CS.getInstruction(),
-      CS.getInstruction()->getParent());
+      MemoryLocation(ByValArg, ByValSize), true,
+      CS.getInstruction()->getIterator(), CS.getInstruction()->getParent());
   if (!DepInfo.isClobber())
     return false;
 
@@ -1110,9 +1122,9 @@ bool MemCpyOpt::processByValArgument(CallSite CS, unsigned ArgNo) {
   //
   // NOTE: This is conservative, it will stop on any read from the source loc,
   // not just the defining memcpy.
-  MemDepResult SourceDep =
-      MD->getPointerDependencyFrom(MemoryLocation::getForSource(MDep), false,
-                                   CS.getInstruction(), MDep->getParent());
+  MemDepResult SourceDep = MD->getPointerDependencyFrom(
+      MemoryLocation::getForSource(MDep), false,
+      CS.getInstruction()->getIterator(), MDep->getParent());
   if (!SourceDep.isClobber() || SourceDep.getInst() != MDep)
     return false;
 
@@ -1139,7 +1151,7 @@ bool MemCpyOpt::iterateOnFunction(Function &F) {
   for (Function::iterator BB = F.begin(), BBE = F.end(); BB != BBE; ++BB) {
     for (BasicBlock::iterator BI = BB->begin(), BE = BB->end(); BI != BE;) {
       // Avoid invalidating the iterator.
-      Instruction *I = BI++;
+      Instruction *I = &*BI++;
 
       bool RepeatInstruction = false;
 

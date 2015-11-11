@@ -825,10 +825,14 @@ StringRef ELFObjectFile<ELFT>::getFileFormatName() const {
     switch (EF.getHeader()->e_machine) {
     case ELF::EM_386:
       return "ELF32-i386";
+    case ELF::EM_IAMCU:
+      return "ELF32-iamcu";
     case ELF::EM_X86_64:
       return "ELF32-x86-64";
     case ELF::EM_ARM:
       return (IsLittleEndian ? "ELF32-arm-little" : "ELF32-arm-big");
+    case ELF::EM_AVR:
+      return "ELF32-avr";
     case ELF::EM_HEXAGON:
       return "ELF32-hexagon";
     case ELF::EM_MIPS:
@@ -871,6 +875,7 @@ unsigned ELFObjectFile<ELFT>::getArch() const {
   bool IsLittleEndian = ELFT::TargetEndianness == support::little;
   switch (EF.getHeader()->e_machine) {
   case ELF::EM_386:
+  case ELF::EM_IAMCU:
     return Triple::x86;
   case ELF::EM_X86_64:
     return Triple::x86_64;
@@ -878,6 +883,8 @@ unsigned ELFObjectFile<ELFT>::getArch() const {
     return Triple::aarch64;
   case ELF::EM_ARM:
     return Triple::arm;
+  case ELF::EM_AVR:
+    return Triple::avr;
   case ELF::EM_HEXAGON:
     return Triple::hexagon;
   case ELF::EM_MIPS:

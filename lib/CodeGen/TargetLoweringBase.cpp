@@ -765,8 +765,6 @@ TargetLoweringBase::TargetLoweringBase(const TargetMachine &tm) : TM(tm) {
   EnableExtLdPromotion = false;
   HasFloatingPointExceptions = true;
   StackPointerRegisterToSaveRestore = 0;
-  ExceptionPointerRegister = 0;
-  ExceptionSelectorRegister = 0;
   BooleanContents = UndefinedBooleanContent;
   BooleanFloatContents = UndefinedBooleanContent;
   BooleanVectorContents = UndefinedBooleanContent;
@@ -1279,20 +1277,14 @@ void TargetLoweringBase::computeRegisterProperties(
     ValueTypeActions.setTypeAction(MVT::f32, TypeSoftenFloat);
   }
 
+  // Decide how to handle f16. If the target does not have native f16 support,
+  // promote it to f32, because there are no f16 library calls (except for
+  // conversions).
   if (!isTypeLegal(MVT::f16)) {
-    // If the target has native f32 support, promote f16 operations to f32.  If
-    // f32 is not supported, generate soft float library calls.
-    if (isTypeLegal(MVT::f32)) {
-      NumRegistersForVT[MVT::f16] = NumRegistersForVT[MVT::f32];
-      RegisterTypeForVT[MVT::f16] = RegisterTypeForVT[MVT::f32];
-      TransformToType[MVT::f16] = MVT::f32;
-      ValueTypeActions.setTypeAction(MVT::f16, TypePromoteFloat);
-    } else {
-      NumRegistersForVT[MVT::f16] = NumRegistersForVT[MVT::i16];
-      RegisterTypeForVT[MVT::f16] = RegisterTypeForVT[MVT::i16];
-      TransformToType[MVT::f16] = MVT::i16;
-      ValueTypeActions.setTypeAction(MVT::f16, TypeSoftenFloat);
-    }
+    NumRegistersForVT[MVT::f16] = NumRegistersForVT[MVT::f32];
+    RegisterTypeForVT[MVT::f16] = RegisterTypeForVT[MVT::f32];
+    TransformToType[MVT::f16] = MVT::f32;
+    ValueTypeActions.setTypeAction(MVT::f16, TypePromoteFloat);
   }
 
   // Loop over all of the vector value types to see which need transformations.
@@ -1575,6 +1567,7 @@ int TargetLoweringBase::InstructionOpcodeToISD(unsigned Opcode) const {
   case Invoke:         return 0;
   case Resume:         return 0;
   case Unreachable:    return 0;
+  case CleanupEndPad:  return 0;
   case CleanupRet:     return 0;
   case CatchEndPad:  return 0;
   case CatchRet:       return 0;
@@ -1660,6 +1653,19 @@ TargetLoweringBase::getTypeLegalizationCost(const DataLayout &DL,
     // Keep legalizing the type.
     MTy = LK.second;
   }
+}
+
+Value *TargetLoweringBase::getSafeStackPointerLocation(IRBuilder<> &IRB) const {
+  if (!TM.getTargetTriple().isAndroid())
+    return nullptr;
+
+  // Android provides a libc function to retrieve the address of the current
+  // thread's unsafe stack pointer.
+  Module *M = IRB.GetInsertBlock()->getParent()->getParent();
+  Type *StackPtrTy = Type::getInt8PtrTy(M->getContext());
+  Value *Fn = M->getOrInsertFunction("__safestack_pointer_address",
+                                     StackPtrTy->getPointerTo(0), nullptr);
+  return IRB.CreateCall(Fn);
 }
 
 //===----------------------------------------------------------------------===//

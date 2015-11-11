@@ -45,6 +45,7 @@ set(LLVM_TEST_DEPENDS
           llvm-mcmarkup
           llvm-nm
           llvm-objdump
+          llvm-pdbdump
           llvm-profdata
           llvm-ranlib
           llvm-readobj
@@ -53,7 +54,6 @@ set(LLVM_TEST_DEPENDS
           llvm-split
           llvm-symbolizer
           llvm-tblgen
-          macho-dump
           opt
           FileCheck
           count

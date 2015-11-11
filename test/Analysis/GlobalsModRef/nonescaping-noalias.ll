@@ -1,4 +1,4 @@
-; RUN: opt < %s -globalsmodref-aa -gvn -S | FileCheck %s
+; RUN: opt < %s -globals-aa -gvn -S | FileCheck %s
 ;
 ; This tests the safe no-alias conclusions of GMR -- when there is
 ; a non-escaping global as one indentified underlying object and some pointer
@@ -94,6 +94,23 @@ loop:
   br i1 %test, label %loop, label %exit
 
 exit:
+  %v = load i32, i32* @g1
+  ret i32 %v
+}
+
+define i32 @test5(i32** %param) {
+; Ensure that we can fold a store to a load of a global across a store to
+; a parameter that has been dereferenced when the global is non-escaping.
+;
+; CHECK-LABEL: @test5(
+; CHECK: %p = load i32*
+; CHECK: store i32 42, i32* @g1
+; CHECK-NOT: load i32
+; CHECK: ret i32 42
+entry:
+  %p = load i32*, i32** %param
+  store i32 42, i32* @g1
+  store i32 7, i32* %p
   %v = load i32, i32* @g1
   ret i32 %v
 }

@@ -12,7 +12,6 @@
 //
 //===----------------------------------------------------------------------===//
 
-
 #include "SIRegisterInfo.h"
 #include "SIInstrInfo.h"
 #include "SIMachineFunctionInfo.h"
@@ -42,13 +41,22 @@ BitVector SIRegisterInfo::getReservedRegs(const MachineFunction &MF) const {
   reserveRegisterTuples(Reserved, AMDGPU::EXEC);
   reserveRegisterTuples(Reserved, AMDGPU::FLAT_SCR);
 
-  // Reserve some VGPRs to use as temp registers in case we have to spill VGPRs
-  reserveRegisterTuples(Reserved, AMDGPU::VGPR254);
-  reserveRegisterTuples(Reserved, AMDGPU::VGPR255);
+  // Reserve the last 2 registers so we will always have at least 2 more that
+  // will physically contain VCC.
+  reserveRegisterTuples(Reserved, AMDGPU::SGPR102_SGPR103);
+
+  const AMDGPUSubtarget &ST = MF.getSubtarget<AMDGPUSubtarget>();
+
+  if (ST.getGeneration() >= AMDGPUSubtarget::VOLCANIC_ISLANDS) {
+    // SI/CI have 104 SGPRs. VI has 102. We need to shift down the reservation
+    // for VCC/FLAT_SCR.
+    reserveRegisterTuples(Reserved, AMDGPU::SGPR98_SGPR99);
+    reserveRegisterTuples(Reserved, AMDGPU::SGPR100_SGPR101);
+  }
 
   // Tonga and Iceland can only allocate a fixed number of SGPRs due
   // to a hw bug.
-  if (MF.getSubtarget<AMDGPUSubtarget>().hasSGPRInitBug()) {
+  if (ST.hasSGPRInitBug()) {
     unsigned NumSGPRs = AMDGPU::SGPR_32RegClass.getNumRegs();
     // Reserve some SGPRs for FLAT_SCRATCH and VCC (4 SGPRs).
     // Assume XNACK_MASK is unused.
@@ -65,7 +73,6 @@ BitVector SIRegisterInfo::getReservedRegs(const MachineFunction &MF) const {
 
 unsigned SIRegisterInfo::getRegPressureSetLimit(const MachineFunction &MF,
                                                 unsigned Idx) const {
-
   const AMDGPUSubtarget &STI = MF.getSubtarget<AMDGPUSubtarget>();
   // FIXME: We should adjust the max number of waves based on LDS size.
   unsigned SGPRLimit = getNumSGPRsAllowed(STI.getGeneration(),
@@ -74,20 +81,21 @@ unsigned SIRegisterInfo::getRegPressureSetLimit(const MachineFunction &MF,
 
   for (regclass_iterator I = regclass_begin(), E = regclass_end();
        I != E; ++I) {
+    const TargetRegisterClass *RC = *I;
 
-    unsigned NumSubRegs = std::max((int)(*I)->getSize() / 4, 1);
+    unsigned NumSubRegs = std::max((int)RC->getSize() / 4, 1);
     unsigned Limit;
 
-    if (isSGPRClass(*I)) {
+    if (isSGPRClass(RC)) {
       Limit = SGPRLimit / NumSubRegs;
     } else {
       Limit = VGPRLimit / NumSubRegs;
     }
 
-    const int *Sets = getRegClassPressureSets(*I);
+    const int *Sets = getRegClassPressureSets(RC);
     assert(Sets);
     for (unsigned i = 0; Sets[i] != -1; ++i) {
-	    if (Sets[i] == (int)Idx)
+      if (Sets[i] == (int)Idx)
         return Limit;
     }
   }
@@ -323,22 +331,16 @@ void SIRegisterInfo::eliminateFrameIndex(MachineBasicBlock::iterator MI,
   }
 }
 
-const TargetRegisterClass * SIRegisterInfo::getCFGStructurizerRegClass(
-                                                                   MVT VT) const {
-  switch(VT.SimpleTy) {
-    default:
-    case MVT::i32: return &AMDGPU::VGPR_32RegClass;
-  }
-}
-
 unsigned SIRegisterInfo::getHWRegIndex(unsigned Reg) const {
   return getEncodingValue(Reg) & 0xff;
 }
 
+// FIXME: This is very slow. It might be worth creating a map from physreg to
+// register class.
 const TargetRegisterClass *SIRegisterInfo::getPhysRegClass(unsigned Reg) const {
   assert(!TargetRegisterInfo::isVirtualRegister(Reg));
 
-  static const TargetRegisterClass *BaseClasses[] = {
+  static const TargetRegisterClass *const BaseClasses[] = {
     &AMDGPU::VGPR_32RegClass,
     &AMDGPU::SReg_32RegClass,
     &AMDGPU::VReg_64RegClass,
@@ -360,31 +362,45 @@ const TargetRegisterClass *SIRegisterInfo::getPhysRegClass(unsigned Reg) const {
   return nullptr;
 }
 
+// TODO: It might be helpful to have some target specific flags in
+// TargetRegisterClass to mark which classes are VGPRs to make this trivial.
 bool SIRegisterInfo::hasVGPRs(const TargetRegisterClass *RC) const {
-  return getCommonSubClass(&AMDGPU::VGPR_32RegClass, RC) ||
-         getCommonSubClass(&AMDGPU::VReg_64RegClass, RC) ||
-         getCommonSubClass(&AMDGPU::VReg_96RegClass, RC) ||
-         getCommonSubClass(&AMDGPU::VReg_128RegClass, RC) ||
-         getCommonSubClass(&AMDGPU::VReg_256RegClass, RC) ||
-         getCommonSubClass(&AMDGPU::VReg_512RegClass, RC);
+  switch (RC->getSize()) {
+  case 4:
+    return getCommonSubClass(&AMDGPU::VGPR_32RegClass, RC) != nullptr;
+  case 8:
+    return getCommonSubClass(&AMDGPU::VReg_64RegClass, RC) != nullptr;
+  case 12:
+    return getCommonSubClass(&AMDGPU::VReg_96RegClass, RC) != nullptr;
+  case 16:
+    return getCommonSubClass(&AMDGPU::VReg_128RegClass, RC) != nullptr;
+  case 32:
+    return getCommonSubClass(&AMDGPU::VReg_256RegClass, RC) != nullptr;
+  case 64:
+    return getCommonSubClass(&AMDGPU::VReg_512RegClass, RC) != nullptr;
+  default:
+    llvm_unreachable("Invalid register class size");
+  }
 }
 
 const TargetRegisterClass *SIRegisterInfo::getEquivalentVGPRClass(
                                          const TargetRegisterClass *SRC) const {
-    if (hasVGPRs(SRC)) {
-      return SRC;
-    } else if (getCommonSubClass(SRC, &AMDGPU::SGPR_32RegClass)) {
-      return &AMDGPU::VGPR_32RegClass;
-    } else if (getCommonSubClass(SRC, &AMDGPU::SGPR_64RegClass)) {
-      return &AMDGPU::VReg_64RegClass;
-    } else if (getCommonSubClass(SRC, &AMDGPU::SReg_128RegClass)) {
-      return &AMDGPU::VReg_128RegClass;
-    } else if (getCommonSubClass(SRC, &AMDGPU::SReg_256RegClass)) {
-      return &AMDGPU::VReg_256RegClass;
-    } else if (getCommonSubClass(SRC, &AMDGPU::SReg_512RegClass)) {
-      return &AMDGPU::VReg_512RegClass;
-    }
-    return nullptr;
+  switch (SRC->getSize()) {
+  case 4:
+    return &AMDGPU::VGPR_32RegClass;
+  case 8:
+    return &AMDGPU::VReg_64RegClass;
+  case 12:
+    return &AMDGPU::VReg_96RegClass;
+  case 16:
+    return &AMDGPU::VReg_128RegClass;
+  case 32:
+    return &AMDGPU::VReg_256RegClass;
+  case 64:
+    return &AMDGPU::VReg_512RegClass;
+  default:
+    llvm_unreachable("Invalid register class size");
+  }
 }
 
 const TargetRegisterClass *SIRegisterInfo::getSubRegClass(
@@ -399,6 +415,30 @@ const TargetRegisterClass *SIRegisterInfo::getSubRegClass(
   } else {
     return &AMDGPU::VGPR_32RegClass;
   }
+}
+
+bool SIRegisterInfo::shouldRewriteCopySrc(
+  const TargetRegisterClass *DefRC,
+  unsigned DefSubReg,
+  const TargetRegisterClass *SrcRC,
+  unsigned SrcSubReg) const {
+  // We want to prefer the smallest register class possible, so we don't want to
+  // stop and rewrite on anything that looks like a subregister
+  // extract. Operations mostly don't care about the super register class, so we
+  // only want to stop on the most basic of copies between the smae register
+  // class.
+  //
+  // e.g. if we have something like
+  // vreg0 = ...
+  // vreg1 = ...
+  // vreg2 = REG_SEQUENCE vreg0, sub0, vreg1, sub1, vreg2, sub2
+  // vreg3 = COPY vreg2, sub0
+  //
+  // We want to look through the COPY to find:
+  //  => vreg3 = COPY vreg0
+
+  // Plain copy.
+  return getCommonSubClass(DefRC, SrcRC) != nullptr;
 }
 
 unsigned SIRegisterInfo::getPhysRegSubReg(unsigned Reg,

@@ -226,9 +226,10 @@ CallInst::~CallInst() {
 }
 
 void CallInst::init(FunctionType *FTy, Value *Func, ArrayRef<Value *> Args,
-                    const Twine &NameStr) {
+                    ArrayRef<OperandBundleDef> Bundles, const Twine &NameStr) {
   this->FTy = FTy;
-  assert(getNumOperands() == Args.size() + 1 && "NumOperands not set up?");
+  assert(getNumOperands() == Args.size() + CountBundleInputs(Bundles) + 1 &&
+         "NumOperands not set up?");
   Op<-1>() = Func;
 
 #ifndef NDEBUG
@@ -243,6 +244,11 @@ void CallInst::init(FunctionType *FTy, Value *Func, ArrayRef<Value *> Args,
 #endif
 
   std::copy(Args.begin(), Args.end(), op_begin());
+
+  auto It = populateBundleOperandInfos(Bundles, Args.size());
+  (void)It;
+  assert(It + 1 == op_end() && "Should add up!");
+
   setName(NameStr);
 }
 
@@ -284,8 +290,10 @@ CallInst::CallInst(const CallInst &CI)
       AttributeList(CI.AttributeList), FTy(CI.FTy) {
   setTailCallKind(CI.getTailCallKind());
   setCallingConv(CI.getCallingConv());
-    
+
   std::copy(CI.op_begin(), CI.op_end(), op_begin());
+  std::copy(CI.bundle_op_info_begin(), CI.bundle_op_info_end(),
+            bundle_op_info_begin());
   SubclassOptionalData = CI.SubclassOptionalData;
 }
 
@@ -323,11 +331,32 @@ void CallInst::addDereferenceableOrNullAttr(unsigned i, uint64_t Bytes) {
 }
 
 bool CallInst::paramHasAttr(unsigned i, Attribute::AttrKind A) const {
+  assert(i < (getNumArgOperands() + 1) && "Param index out of bounds!");
+
   if (AttributeList.hasAttribute(i, A))
     return true;
   if (const Function *F = getCalledFunction())
     return F->getAttributes().hasAttribute(i, A);
   return false;
+}
+
+bool CallInst::dataOperandHasImpliedAttr(unsigned i,
+                                         Attribute::AttrKind A) const {
+
+  // There are getNumOperands() - 1 data operands.  The last operand is the
+  // callee.
+  assert(i < getNumOperands() && "Data operand index out of bounds!");
+
+  // The attribute A can either be directly specified, if the operand in
+  // question is a call argument; or be indirectly implied by the kind of its
+  // containing operand bundle, if the operand is a bundle operand.
+
+  if (i < (getNumArgOperands() + 1))
+    return paramHasAttr(i, A);
+
+  assert(hasOperandBundles() && i >= (getBundleOperandsStartIndex() + 1) &&
+         "Must be either a call argument or an operand bundle!");
+  return getOperandBundleForOperand(i - 1).operandsHaveAttr(A);
 }
 
 /// IsConstantOne - Return true only if val is constant int 1
@@ -499,10 +528,12 @@ Instruction* CallInst::CreateFree(Value* Source, BasicBlock *InsertAtEnd) {
 
 void InvokeInst::init(FunctionType *FTy, Value *Fn, BasicBlock *IfNormal,
                       BasicBlock *IfException, ArrayRef<Value *> Args,
+                      ArrayRef<OperandBundleDef> Bundles,
                       const Twine &NameStr) {
   this->FTy = FTy;
 
-  assert(getNumOperands() == 3 + Args.size() && "NumOperands not set up?");
+  assert(getNumOperands() == 3 + Args.size() + CountBundleInputs(Bundles) &&
+         "NumOperands not set up?");
   Op<-3>() = Fn;
   Op<-2>() = IfNormal;
   Op<-1>() = IfException;
@@ -519,6 +550,11 @@ void InvokeInst::init(FunctionType *FTy, Value *Fn, BasicBlock *IfNormal,
 #endif
 
   std::copy(Args.begin(), Args.end(), op_begin());
+
+  auto It = populateBundleOperandInfos(Bundles, Args.size());
+  (void)It;
+  assert(It + 3 == op_end() && "Should add up!");
+
   setName(NameStr);
 }
 
@@ -530,6 +566,8 @@ InvokeInst::InvokeInst(const InvokeInst &II)
       AttributeList(II.AttributeList), FTy(II.FTy) {
   setCallingConv(II.getCallingConv());
   std::copy(II.op_begin(), II.op_end(), op_begin());
+  std::copy(II.bundle_op_info_begin(), II.bundle_op_info_end(),
+            bundle_op_info_begin());
   SubclassOptionalData = II.SubclassOptionalData;
 }
 
@@ -546,17 +584,43 @@ void InvokeInst::setSuccessorV(unsigned idx, BasicBlock *B) {
 bool InvokeInst::hasFnAttrImpl(Attribute::AttrKind A) const {
   if (AttributeList.hasAttribute(AttributeSet::FunctionIndex, A))
     return true;
+
+  // Operand bundles override attributes on the called function, but don't
+  // override attributes directly present on the invoke instruction.
+  if (isFnAttrDisallowedByOpBundle(A))
+    return false;
+
   if (const Function *F = getCalledFunction())
     return F->getAttributes().hasAttribute(AttributeSet::FunctionIndex, A);
   return false;
 }
 
 bool InvokeInst::paramHasAttr(unsigned i, Attribute::AttrKind A) const {
+  assert(i < (getNumArgOperands() + 1) && "Param index out of bounds!");
+
   if (AttributeList.hasAttribute(i, A))
     return true;
   if (const Function *F = getCalledFunction())
     return F->getAttributes().hasAttribute(i, A);
   return false;
+}
+
+bool InvokeInst::dataOperandHasImpliedAttr(unsigned i,
+                                           Attribute::AttrKind A) const {
+  // There are getNumOperands() - 3 data operands.  The last three operands are
+  // the callee and the two successor basic blocks.
+  assert(i < (getNumOperands() - 2) && "Data operand index out of bounds!");
+
+  // The attribute A can either be directly specified, if the operand in
+  // question is an invoke argument; or be indirectly implied by the kind of its
+  // containing operand bundle, if the operand is a bundle operand.
+
+  if (i < (getNumArgOperands() + 1))
+    return paramHasAttr(i, A);
+
+  assert(hasOperandBundles() && i >= (getBundleOperandsStartIndex() + 1) &&
+         "Must be either an invoke argument or an operand bundle!");
+  return getOperandBundleForOperand(i - 1).operandsHaveAttr(A);
 }
 
 void InvokeInst::addAttribute(unsigned i, Attribute::AttrKind attr) {
@@ -671,6 +735,61 @@ void ResumeInst::setSuccessorV(unsigned idx, BasicBlock *NewSucc) {
 
 BasicBlock *ResumeInst::getSuccessorV(unsigned idx) const {
   llvm_unreachable("ResumeInst has no successors!");
+}
+
+//===----------------------------------------------------------------------===//
+//                        CleanupEndPadInst Implementation
+//===----------------------------------------------------------------------===//
+
+CleanupEndPadInst::CleanupEndPadInst(const CleanupEndPadInst &CEPI)
+    : TerminatorInst(CEPI.getType(), Instruction::CleanupEndPad,
+                     OperandTraits<CleanupEndPadInst>::op_end(this) -
+                         CEPI.getNumOperands(),
+                     CEPI.getNumOperands()) {
+  setInstructionSubclassData(CEPI.getSubclassDataFromInstruction());
+  setCleanupPad(CEPI.getCleanupPad());
+  if (BasicBlock *UnwindDest = CEPI.getUnwindDest())
+    setUnwindDest(UnwindDest);
+}
+
+void CleanupEndPadInst::init(CleanupPadInst *CleanupPad, BasicBlock *UnwindBB) {
+  setCleanupPad(CleanupPad);
+  if (UnwindBB) {
+    setInstructionSubclassData(getSubclassDataFromInstruction() | 1);
+    setUnwindDest(UnwindBB);
+  }
+}
+
+CleanupEndPadInst::CleanupEndPadInst(CleanupPadInst *CleanupPad,
+                                     BasicBlock *UnwindBB, unsigned Values,
+                                     Instruction *InsertBefore)
+    : TerminatorInst(Type::getVoidTy(CleanupPad->getContext()),
+                     Instruction::CleanupEndPad,
+                     OperandTraits<CleanupEndPadInst>::op_end(this) - Values,
+                     Values, InsertBefore) {
+  init(CleanupPad, UnwindBB);
+}
+
+CleanupEndPadInst::CleanupEndPadInst(CleanupPadInst *CleanupPad,
+                                     BasicBlock *UnwindBB, unsigned Values,
+                                     BasicBlock *InsertAtEnd)
+    : TerminatorInst(Type::getVoidTy(CleanupPad->getContext()),
+                     Instruction::CleanupEndPad,
+                     OperandTraits<CleanupEndPadInst>::op_end(this) - Values,
+                     Values, InsertAtEnd) {
+  init(CleanupPad, UnwindBB);
+}
+
+BasicBlock *CleanupEndPadInst::getSuccessorV(unsigned Idx) const {
+  assert(Idx == 0);
+  return getUnwindDest();
+}
+unsigned CleanupEndPadInst::getNumSuccessorsV() const {
+  return getNumSuccessors();
+}
+void CleanupEndPadInst::setSuccessorV(unsigned Idx, BasicBlock *B) {
+  assert(Idx == 0);
+  setUnwindDest(B);
 }
 
 //===----------------------------------------------------------------------===//
@@ -3651,6 +3770,23 @@ CmpInst::Predicate CmpInst::getSwappedPredicate(Predicate pred) {
   }
 }
 
+CmpInst::Predicate CmpInst::getSignedPredicate(Predicate pred) {
+  assert(CmpInst::isUnsigned(pred) && "Call only with signed predicates!");
+
+  switch (pred) {
+  default:
+    llvm_unreachable("Unknown predicate!");
+  case CmpInst::ICMP_ULT:
+    return CmpInst::ICMP_SLT;
+  case CmpInst::ICMP_ULE:
+    return CmpInst::ICMP_SLE;
+  case CmpInst::ICMP_UGT:
+    return CmpInst::ICMP_SGT;
+  case CmpInst::ICMP_UGE:
+    return CmpInst::ICMP_SGE;
+  }
+}
+
 bool CmpInst::isUnsigned(unsigned short predicate) {
   switch (predicate) {
     default: return false;
@@ -4028,6 +4164,10 @@ AddrSpaceCastInst *AddrSpaceCastInst::cloneImpl() const {
 }
 
 CallInst *CallInst::cloneImpl() const {
+  if (hasOperandBundles()) {
+    unsigned DescriptorBytes = getNumOperandBundles() * sizeof(BundleOpInfo);
+    return new(getNumOperands(), DescriptorBytes) CallInst(*this);
+  }
   return  new(getNumOperands()) CallInst(*this);
 }
 
@@ -4072,10 +4212,18 @@ IndirectBrInst *IndirectBrInst::cloneImpl() const {
 }
 
 InvokeInst *InvokeInst::cloneImpl() const {
+  if (hasOperandBundles()) {
+    unsigned DescriptorBytes = getNumOperandBundles() * sizeof(BundleOpInfo);
+    return new(getNumOperands(), DescriptorBytes) InvokeInst(*this);
+  }
   return new(getNumOperands()) InvokeInst(*this);
 }
 
 ResumeInst *ResumeInst::cloneImpl() const { return new (1) ResumeInst(*this); }
+
+CleanupEndPadInst *CleanupEndPadInst::cloneImpl() const {
+  return new (getNumOperands()) CleanupEndPadInst(*this);
+}
 
 CleanupReturnInst *CleanupReturnInst::cloneImpl() const {
   return new (getNumOperands()) CleanupReturnInst(*this);

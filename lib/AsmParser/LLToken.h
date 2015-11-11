@@ -54,6 +54,7 @@ namespace lltok {
     kw_caller,
     kw_tail,
     kw_musttail,
+    kw_notail,
     kw_target,
     kw_triple,
     kw_unwind,
@@ -97,6 +98,7 @@ namespace lltok {
     kw_webkit_jscc, kw_anyregcc,
     kw_preserve_mostcc, kw_preserve_allcc,
     kw_ghccc,
+    kw_hhvmcc, kw_hhvm_ccc,
 
     // Attributes:
     kw_attributes,
@@ -122,6 +124,7 @@ namespace lltok {
     kw_noduplicate,
     kw_noimplicitfloat,
     kw_noinline,
+    kw_norecurse,
     kw_nonlazybind,
     kw_nonnull,
     kw_noredzone,
@@ -179,7 +182,7 @@ namespace lltok {
 
     kw_ret, kw_br, kw_switch, kw_indirectbr, kw_invoke, kw_resume,
     kw_unreachable, kw_cleanupret, kw_catchret, kw_catchpad,
-    kw_terminatepad, kw_cleanuppad, kw_catchendpad,
+    kw_terminatepad, kw_cleanuppad, kw_catchendpad, kw_cleanupendpad,
 
     kw_detach, kw_reattach, kw_sync,
 

@@ -966,8 +966,13 @@ static DecodeStatus DecodetcGPRRegisterClass(MCInst &Inst, unsigned RegNo,
 static DecodeStatus DecoderGPRRegisterClass(MCInst &Inst, unsigned RegNo,
                                    uint64_t Address, const void *Decoder) {
   DecodeStatus S = MCDisassembler::Success;
-  if (RegNo == 13 || RegNo == 15)
+
+  const FeatureBitset &featureBits =
+    ((const MCDisassembler*)Decoder)->getSubtargetInfo().getFeatureBits();
+
+  if ((RegNo == 13 && !featureBits[ARM::HasV8Ops]) || RegNo == 15)
     S = MCDisassembler::SoftFail;
+
   Check(S, DecodeGPRRegisterClass(Inst, RegNo, Address, Decoder));
   return S;
 }
@@ -1127,7 +1132,7 @@ static DecodeStatus DecodeSORegImmOperand(MCInst &Inst, unsigned Val,
   unsigned imm = fieldFromInstruction(Val, 7, 5);
 
   // Register-immediate
-  if (!Check(S, DecodeGPRRegisterClass(Inst, Rm, Address, Decoder)))
+  if (!Check(S, DecoderGPRRegisterClass(Inst, Rm, Address, Decoder)))
     return MCDisassembler::Fail;
 
   ARM_AM::ShiftOpc Shift = ARM_AM::lsl;
@@ -4111,7 +4116,7 @@ static DecodeStatus DecodeMSRMask(MCInst &Inst, unsigned Val,
         // indicates the move for the GE{3:0} bits, the mask{0} bit can be set
         // only if the processor includes the DSP extension.
         if (Mask == 0 || (Mask != 2 && ValLow > 3) ||
-            (!(FeatureBits[ARM::FeatureDSPThumb2]) && (Mask & 1)))
+            (!(FeatureBits[ARM::FeatureDSP]) && (Mask & 1)))
           S = MCDisassembler::SoftFail;
       }
     }

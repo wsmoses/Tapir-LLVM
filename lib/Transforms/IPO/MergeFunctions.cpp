@@ -113,6 +113,7 @@
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/raw_ostream.h"
 #include <vector>
+
 using namespace llvm;
 
 #define DEBUG_TYPE "mergefunc"
@@ -163,6 +164,9 @@ class GlobalNumberState {
       if (Inserted)
         NextNumber++;
       return MapIter->second;
+    }
+    void clear() {
+      GlobalNumbers.clear();
     }
 };
 
@@ -462,9 +466,9 @@ public:
     F = G;
   }
 
-  void release() { F = 0; }
+  void release() { F = nullptr; }
 };
-}
+} // end anonymous namespace
 
 int FunctionComparator::cmpNumbers(uint64_t L, uint64_t R) const {
   if (L < R) return -1;
@@ -532,6 +536,7 @@ int FunctionComparator::cmpAttrs(const AttributeSet L,
   }
   return 0;
 }
+
 int FunctionComparator::cmpRangeMetadata(const MDNode* L,
                                          const MDNode* R) const {
   if (L == R)
@@ -767,7 +772,6 @@ int FunctionComparator::cmpGlobalValues(GlobalValue *L, GlobalValue* R) {
 /// defines total ordering among the types set.
 /// See method declaration comments for more details.
 int FunctionComparator::cmpTypes(Type *TyL, Type *TyR) const {
-
   PointerType *PTyL = dyn_cast<PointerType>(TyL);
   PointerType *PTyR = dyn_cast<PointerType>(TyR);
 
@@ -1028,8 +1032,8 @@ int FunctionComparator::cmpGEPs(const GEPOperator *GEPL,
   if (GEPL->accumulateConstantOffset(DL, OffsetL) &&
       GEPR->accumulateConstantOffset(DL, OffsetR))
     return cmpAPInts(OffsetL, OffsetR);
-  if (int Res = cmpTypes(GEPL->getPointerOperand()->getType(),
-                         GEPR->getPointerOperand()->getType()))
+  if (int Res = cmpTypes(GEPL->getSourceElementType(),
+                         GEPR->getSourceElementType()))
     return Res;
 
   if (int Res = cmpNumbers(GEPL->getNumOperands(), GEPR->getNumOperands()))
@@ -1117,7 +1121,7 @@ int FunctionComparator::cmpBasicBlocks(const BasicBlock *BBL,
   BasicBlock::const_iterator InstR = BBR->begin(), InstRE = BBR->end();
 
   do {
-    if (int Res = cmpValues(InstL, InstR))
+    if (int Res = cmpValues(&*InstL, &*InstR))
       return Res;
 
     const GetElementPtrInst *GEPL = dyn_cast<GetElementPtrInst>(InstL);
@@ -1135,7 +1139,7 @@ int FunctionComparator::cmpBasicBlocks(const BasicBlock *BBL,
       if (int Res = cmpGEPs(GEPL, GEPR))
         return Res;
     } else {
-      if (int Res = cmpOperations(InstL, InstR))
+      if (int Res = cmpOperations(&*InstL, &*InstR))
         return Res;
       assert(InstL->getNumOperands() == InstR->getNumOperands());
 
@@ -1161,7 +1165,6 @@ int FunctionComparator::cmpBasicBlocks(const BasicBlock *BBL,
 
 // Test whether the two functions have equivalent behaviour.
 int FunctionComparator::compare() {
-
   sn_mapL.clear();
   sn_mapR.clear();
 
@@ -1204,7 +1207,7 @@ int FunctionComparator::compare() {
                                     ArgRI = FnR->arg_begin(),
                                     ArgLE = FnL->arg_end();
        ArgLI != ArgLE; ++ArgLI, ++ArgRI) {
-    if (cmpValues(ArgLI, ArgRI) != 0)
+    if (cmpValues(&*ArgLI, &*ArgRI) != 0)
       llvm_unreachable("Arguments repeat!");
   }
 
@@ -1315,7 +1318,7 @@ class MergeFunctions : public ModulePass {
 public:
   static char ID;
   MergeFunctions()
-    : ModulePass(ID), FnTree(FunctionNodeCmp(&GlobalNumbers)),
+    : ModulePass(ID), FnTree(FunctionNodeCmp(&GlobalNumbers)), FNodesInTree(),
       HasGlobalAliases(false) {
     initializeMergeFunctionsPass(*PassRegistry::getPassRegistry());
   }
@@ -1381,17 +1384,23 @@ private:
   void writeAlias(Function *F, Function *G);
 
   /// Replace function F with function G in the function tree.
-  void replaceFunctionInTree(FnTreeType::iterator &IterToF, Function *G);
+  void replaceFunctionInTree(const FunctionNode &FN, Function *G);
 
   /// The set of all distinct functions. Use the insert() and remove() methods
-  /// to modify it.
+  /// to modify it. The map allows efficient lookup and deferring of Functions.
   FnTreeType FnTree;
+  // Map functions to the iterators of the FunctionNode which contains them
+  // in the FnTree. This must be updated carefully whenever the FnTree is
+  // modified, i.e. in insert(), remove(), and replaceFunctionInTree(), to avoid
+  // dangling iterators into FnTree. The invariant that preserves this is that
+  // there is exactly one mapping F -> FN for each FunctionNode FN in FnTree.
+  ValueMap<Function*, FnTreeType::iterator> FNodesInTree;
 
   /// Whether or not the target supports global aliases.
   bool HasGlobalAliases;
 };
 
-}  // end anonymous namespace
+} // end anonymous namespace
 
 char MergeFunctions::ID = 0;
 INITIALIZE_PASS(MergeFunctions, "mergefunc", "Merge Functions", false, false)
@@ -1540,6 +1549,7 @@ bool MergeFunctions::runOnModule(Module &M) {
   } while (!Deferred.empty());
 
   FnTree.clear();
+  GlobalNumbers.clear();
 
   return Changed;
 }
@@ -1553,9 +1563,16 @@ void MergeFunctions::replaceDirectCallers(Function *Old, Function *New) {
     CallSite CS(U->getUser());
     if (CS && CS.isCallee(U)) {
       // Transfer the called function's attributes to the call site. Due to the
-      // bitcast we will 'loose' ABI changing attributes because the 'called
+      // bitcast we will 'lose' ABI changing attributes because the 'called
       // function' is no longer a Function* but the bitcast. Code that looks up
       // the attributes from the called function will fail.
+
+      // FIXME: This is not actually true, at least not anymore. The callsite
+      // will always have the same ABI affecting attributes as the callee,
+      // because otherwise the original input has UB. Note that Old and New
+      // always have matching ABI, so no attributes need to be changed.
+      // Transferring other attributes may help other optimizations, but that
+      // should be done uniformly and not in this ad-hoc way.
       auto &Context = New->getContext();
       auto NewFuncAttrs = New->getAttributes();
       auto CallSiteAttrs = CS.getAttributes();
@@ -1641,15 +1658,15 @@ void MergeFunctions::writeThunk(Function *F, Function *G) {
   SmallVector<Value *, 16> Args;
   unsigned i = 0;
   FunctionType *FFTy = F->getFunctionType();
-  for (Function::arg_iterator AI = NewG->arg_begin(), AE = NewG->arg_end();
-       AI != AE; ++AI) {
-    Args.push_back(createCast(Builder, (Value*)AI, FFTy->getParamType(i)));
+  for (Argument & AI : NewG->args()) {
+    Args.push_back(createCast(Builder, &AI, FFTy->getParamType(i)));
     ++i;
   }
 
   CallInst *CI = Builder.CreateCall(F, Args);
   CI->setTailCall();
   CI->setCallingConv(F->getCallingConv());
+  CI->setAttributes(F->getAttributes());
   if (NewG->getReturnType()->isVoidTy()) {
     Builder.CreateRetVoid();
   } else {
@@ -1668,8 +1685,7 @@ void MergeFunctions::writeThunk(Function *F, Function *G) {
 
 // Replace G with an alias to F and delete G.
 void MergeFunctions::writeAlias(Function *F, Function *G) {
-  PointerType *PTy = G->getType();
-  auto *GA = GlobalAlias::create(PTy, G->getLinkage(), "", F);
+  auto *GA = GlobalAlias::create(G->getLinkage(), "", F);
   F->setAlignment(std::max(F->getAlignment(), G->getAlignment()));
   GA->takeName(G);
   GA->setVisibility(G->getVisibility());
@@ -1714,21 +1730,24 @@ void MergeFunctions::mergeTwoFunctions(Function *F, Function *G) {
   ++NumFunctionsMerged;
 }
 
-/// Replace function F for function G in the map.
-void MergeFunctions::replaceFunctionInTree(FnTreeType::iterator &IterToF,
+/// Replace function F by function G.
+void MergeFunctions::replaceFunctionInTree(const FunctionNode &FN,
                                            Function *G) {
-  Function *F = IterToF->getFunc();
-
-  // A total order is already guaranteed otherwise because we process strong
-  // functions before weak functions.
-  assert(((F->mayBeOverridden() && G->mayBeOverridden()) ||
-          (!F->mayBeOverridden() && !G->mayBeOverridden())) &&
-         "Only change functions if both are strong or both are weak");
-  (void)F;
+  Function *F = FN.getFunc();
   assert(FunctionComparator(F, G, &GlobalNumbers).compare() == 0 &&
          "The two functions must be equal");
-
-  IterToF->replaceBy(G);
+  
+  auto I = FNodesInTree.find(F);
+  assert(I != FNodesInTree.end() && "F should be in FNodesInTree");
+  assert(FNodesInTree.count(G) == 0 && "FNodesInTree should not contain G");
+  
+  FnTreeType::iterator IterToFNInFnTree = I->second;
+  assert(&(*IterToFNInFnTree) == &FN && "F should map to FN in FNodesInTree.");
+  // Remove F -> FN and insert G -> FN
+  FNodesInTree.erase(I);
+  FNodesInTree.insert({G, IterToFNInFnTree});
+  // Replace F with G in FN, which is stored inside the FnTree.
+  FN.replaceBy(G);
 }
 
 // Insert a ComparableFunction into the FnTree, or merge it away if equal to one
@@ -1738,6 +1757,8 @@ bool MergeFunctions::insert(Function *NewFunction) {
       FnTree.insert(FunctionNode(NewFunction));
 
   if (Result.second) {
+    assert(FNodesInTree.count(NewFunction) == 0);
+    FNodesInTree.insert({NewFunction, Result.first});
     DEBUG(dbgs() << "Inserting as unique: " << NewFunction->getName() << '\n');
     return false;
   }
@@ -1767,7 +1788,7 @@ bool MergeFunctions::insert(Function *NewFunction) {
     if (OldF.getFunc()->getName() > NewFunction->getName()) {
       // Swap the two functions.
       Function *F = OldF.getFunc();
-      replaceFunctionInTree(Result.first, NewFunction);
+      replaceFunctionInTree(*Result.first, NewFunction);
       NewFunction = F;
       assert(OldF.getFunc() != F && "Must have swapped the functions.");
     }
@@ -1786,18 +1807,13 @@ bool MergeFunctions::insert(Function *NewFunction) {
 // Remove a function from FnTree. If it was already in FnTree, add
 // it to Deferred so that we'll look at it in the next round.
 void MergeFunctions::remove(Function *F) {
-  // We need to make sure we remove F, not a function "equal" to F per the
-  // function equality comparator.
-  FnTreeType::iterator found = FnTree.find(FunctionNode(F));
-  size_t Erased = 0;
-  if (found != FnTree.end() && found->getFunc() == F) {
-    Erased = 1;
-    FnTree.erase(found);
-  }
-
-  if (Erased) {
-    DEBUG(dbgs() << "Removed " << F->getName()
-                 << " from set and deferred it.\n");
+  auto I = FNodesInTree.find(F);
+  if (I != FNodesInTree.end()) {
+    DEBUG(dbgs() << "Deferred " << F->getName()<< ".\n");
+    FnTree.erase(I->second);
+    // I->second has been invalidated, remove it from the FNodesInTree map to
+    // preserve the invariant.
+    FNodesInTree.erase(I);
     Deferred.emplace_back(F);
   }
 }

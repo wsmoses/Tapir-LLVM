@@ -47,11 +47,17 @@ public:
 
   unsigned StackPtr;
 
-  /// Emit a call to the target's stack probe function. This is required for all
+  /// Emit target stack probe code. This is required for all
   /// large stack allocations on Windows. The caller is required to materialize
-  /// the number of bytes to probe in RAX/EAX.
-  void emitStackProbeCall(MachineFunction &MF, MachineBasicBlock &MBB,
-                          MachineBasicBlock::iterator MBBI, DebugLoc DL) const;
+  /// the number of bytes to probe in RAX/EAX. Returns instruction just
+  /// after the expansion.
+  MachineInstr *emitStackProbe(MachineFunction &MF, MachineBasicBlock &MBB,
+                               MachineBasicBlock::iterator MBBI, DebugLoc DL,
+                               bool InProlog) const;
+
+  /// Replace a StackProbe inline-stub with the actual probe code inline.
+  void inlineStackProbe(MachineFunction &MF,
+                        MachineBasicBlock &PrologMBB) const override;
 
   void emitCalleeSavedFrameMoves(MachineBasicBlock &MBB,
                                  MachineBasicBlock::iterator MBBI,
@@ -101,6 +107,8 @@ public:
                                  MachineBasicBlock &MBB,
                                  MachineBasicBlock::iterator MI) const override;
 
+  unsigned getWinEHParentFrameOffset(const MachineFunction &MF) const override;
+
   /// Check the instruction before/after the passed instruction. If
   /// it is an ADD/SUB/LEA instruction it is deleted argument and the
   /// stack adjustment is returned as a positive value for ADD/LEA and
@@ -123,7 +131,6 @@ public:
   /// \p MBB will be correctly handled by the target.
   bool canUseAsEpilogue(const MachineBasicBlock &MBB) const override;
 
-private:
   /// convertArgMovsToPushes - This method tries to convert a call sequence
   /// that uses sub and mov instructions to put the argument onto the stack
   /// into a series of pushes.
@@ -133,16 +140,41 @@ private:
                               MachineBasicBlock::iterator I, 
                               uint64_t Amount) const;
 
-  uint64_t calculateMaxStackAlign(const MachineFunction &MF) const;
-
   /// Wraps up getting a CFI index and building a MachineInstr for it.
   void BuildCFI(MachineBasicBlock &MBB, MachineBasicBlock::iterator MBBI,
                 DebugLoc DL, MCCFIInstruction CFIInst) const;
 
+  /// Sets up EBP and optionally ESI based on the incoming EBP value.  Only
+  /// needed for 32-bit. Used in funclet prologues and at catchret destinations.
+  MachineBasicBlock::iterator
+  restoreWin32EHStackPointers(MachineBasicBlock &MBB,
+                              MachineBasicBlock::iterator MBBI, DebugLoc DL,
+                              bool RestoreSP = false) const;
+
+private:
+  uint64_t calculateMaxStackAlign(const MachineFunction &MF) const;
+
+  /// Emit target stack probe as a call to a helper function
+  MachineInstr *emitStackProbeCall(MachineFunction &MF, MachineBasicBlock &MBB,
+                                   MachineBasicBlock::iterator MBBI,
+                                   DebugLoc DL, bool InProlog) const;
+
+  /// Emit target stack probe as an inline sequence.
+  MachineInstr *emitStackProbeInline(MachineFunction &MF,
+                                     MachineBasicBlock &MBB,
+                                     MachineBasicBlock::iterator MBBI,
+                                     DebugLoc DL, bool InProlog) const;
+
+  /// Emit a stub to later inline the target stack probe.
+  MachineInstr *emitStackProbeInlineStub(MachineFunction &MF,
+                                         MachineBasicBlock &MBB,
+                                         MachineBasicBlock::iterator MBBI,
+                                         DebugLoc DL, bool InProlog) const;
+
   /// Aligns the stack pointer by ANDing it with -MaxAlign.
   void BuildStackAlignAND(MachineBasicBlock &MBB,
                           MachineBasicBlock::iterator MBBI, DebugLoc DL,
-                          uint64_t MaxAlign) const;
+                          unsigned Reg, uint64_t MaxAlign) const;
 
   /// Make small positive stack adjustments using POPs.
   bool adjustStackWithPops(MachineBasicBlock &MBB,
@@ -154,6 +186,8 @@ private:
                                            MachineBasicBlock::iterator MBBI,
                                            DebugLoc DL, int64_t Offset,
                                            bool InEpilogue) const;
+
+  unsigned getWinEHFuncletFrameSize(const MachineFunction &MF) const;
 };
 
 } // End llvm namespace

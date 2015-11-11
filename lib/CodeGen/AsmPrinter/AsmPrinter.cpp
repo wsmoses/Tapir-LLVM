@@ -196,10 +196,18 @@ bool AsmPrinter::doInitialization(Module &M) {
     unsigned Major, Minor, Update;
     TT.getOSVersion(Major, Minor, Update);
     // If there is a version specified, Major will be non-zero.
-    if (Major)
-      OutStreamer->EmitVersionMin((TT.isMacOSX() ?
-                                   MCVM_OSXVersionMin : MCVM_IOSVersionMin),
-                                  Major, Minor, Update);
+    if (Major) {
+      MCVersionMinType VersionType;
+      if (TT.isWatchOS())
+        VersionType = MCVM_WatchOSVersionMin;
+      else if (TT.isTvOS())
+        VersionType = MCVM_TvOSVersionMin;
+      else if (TT.isMacOSX())
+        VersionType = MCVM_OSXVersionMin;
+      else
+        VersionType = MCVM_IOSVersionMin;
+      OutStreamer->EmitVersionMin(VersionType, Major, Minor, Update);
+    }
   }
 
   // Allow the target to emit any magic that it wants at the start of the file.
@@ -965,7 +973,7 @@ void AsmPrinter::EmitFunctionBody() {
   EmitFunctionBodyEnd();
 
   if (!MMI->getLandingPads().empty() || MMI->hasDebugInfo() ||
-      MAI->hasDotTypeDotSizeDirective()) {
+      MMI->hasEHFunclets() || MAI->hasDotTypeDotSizeDirective()) {
     // Create a symbol for the end of function.
     CurrentFnEnd = createTempSymbol("func_end");
     OutStreamer->EmitLabel(CurrentFnEnd);
@@ -1135,9 +1143,6 @@ bool AsmPrinter::doFinalization(Module &M) {
     }
   }
 
-  // Make sure we wrote out everything we need.
-  OutStreamer->Flush();
-
   // Finalize debug and EH information.
   for (const HandlerInfo &HI : Handlers) {
     NamedRegionTimer T(HI.TimerName, HI.TimerGroupName,
@@ -1260,7 +1265,7 @@ void AsmPrinter::SetupMachineFunction(MachineFunction &MF) {
   CurExceptionSym = nullptr;
   bool NeedsLocalForSize = MAI->needsLocalForSize();
   if (!MMI->getLandingPads().empty() || MMI->hasDebugInfo() ||
-      NeedsLocalForSize) {
+      MMI->hasEHFunclets() || NeedsLocalForSize) {
     CurrentFnBegin = createTempSymbol("func_begin");
     if (NeedsLocalForSize)
       CurrentFnSymForSize = CurrentFnBegin;
@@ -2459,6 +2464,14 @@ static void emitBasicBlockLoopComments(const MachineBasicBlock &MBB,
 /// MachineBasicBlock, an alignment (if present) and a comment describing
 /// it if appropriate.
 void AsmPrinter::EmitBasicBlockStart(const MachineBasicBlock &MBB) const {
+  // End the previous funclet and start a new one.
+  if (MBB.isEHFuncletEntry()) {
+    for (const HandlerInfo &HI : Handlers) {
+      HI.Handler->endFunclet();
+      HI.Handler->beginFunclet(MBB);
+    }
+  }
+
   // Emit an alignment directive for this block, if needed.
   if (unsigned Align = MBB.getAlignment())
     EmitAlignment(Align);
@@ -2472,8 +2485,11 @@ void AsmPrinter::EmitBasicBlockStart(const MachineBasicBlock &MBB) const {
     if (isVerbose())
       OutStreamer->AddComment("Block address taken");
 
-    for (MCSymbol *Sym : MMI->getAddrLabelSymbolToEmit(BB))
-      OutStreamer->EmitLabel(Sym);
+    // MBBs can have their address taken as part of CodeGen without having
+    // their corresponding BB's address taken in IR
+    if (BB->hasAddressTaken())
+      for (MCSymbol *Sym : MMI->getAddrLabelSymbolToEmit(BB))
+        OutStreamer->EmitLabel(Sym);
   }
 
   // Print some verbose block comments.

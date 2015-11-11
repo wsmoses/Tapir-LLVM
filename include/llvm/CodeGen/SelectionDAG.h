@@ -19,6 +19,7 @@
 #include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/ilist.h"
+#include "llvm/Analysis/AliasAnalysis.h"
 #include "llvm/CodeGen/DAGCombine.h"
 #include "llvm/CodeGen/MachineFunction.h"
 #include "llvm/CodeGen/SelectionDAGNodes.h"
@@ -31,7 +32,6 @@
 
 namespace llvm {
 
-class AliasAnalysis;
 class MachineConstantPoolValue;
 class MachineFunction;
 class MDNode;
@@ -214,6 +214,8 @@ class SelectionDAG {
 
   /// Tracks dbg_value information through SDISel.
   SDDbgInfo *DbgInfo;
+
+  uint16_t NextPersistentId;
 
 public:
   /// Clients of various APIs that cause global effects on
@@ -532,7 +534,7 @@ public:
     SDVTList VTs = getVTList(MVT::Other, MVT::Glue);
     SDValue Ops[] = { Chain, getRegister(Reg, N.getValueType()), N, Glue };
     return getNode(ISD::CopyToReg, dl, VTs,
-                   ArrayRef<SDValue>(Ops, Glue.getNode() ? 4 : 3));
+                   makeArrayRef(Ops, Glue.getNode() ? 4 : 3));
   }
 
   // Similar to last getCopyToReg() except parameter Reg is a SDValue
@@ -541,7 +543,7 @@ public:
     SDVTList VTs = getVTList(MVT::Other, MVT::Glue);
     SDValue Ops[] = { Chain, Reg, N, Glue };
     return getNode(ISD::CopyToReg, dl, VTs,
-                   ArrayRef<SDValue>(Ops, Glue.getNode() ? 4 : 3));
+                   makeArrayRef(Ops, Glue.getNode() ? 4 : 3));
   }
 
   SDValue getCopyFromReg(SDValue Chain, SDLoc dl, unsigned Reg, EVT VT) {
@@ -558,7 +560,7 @@ public:
     SDVTList VTs = getVTList(VT, MVT::Other, MVT::Glue);
     SDValue Ops[] = { Chain, getRegister(Reg, VT), Glue };
     return getNode(ISD::CopyFromReg, dl, VTs,
-                   ArrayRef<SDValue>(Ops, Glue.getNode() ? 3 : 2));
+                   makeArrayRef(Ops, Glue.getNode() ? 3 : 2));
   }
 
   SDValue getCondCode(ISD::CondCode Cond);
@@ -670,7 +672,7 @@ public:
   SDValue getNode(unsigned Opcode, SDLoc DL, EVT VT,
                   ArrayRef<SDUse> Ops);
   SDValue getNode(unsigned Opcode, SDLoc DL, EVT VT,
-                  ArrayRef<SDValue> Ops);
+                  ArrayRef<SDValue> Ops, const SDNodeFlags *Flags = nullptr);
   SDValue getNode(unsigned Opcode, SDLoc DL, ArrayRef<EVT> ResultTys,
                   ArrayRef<SDValue> Ops);
   SDValue getNode(unsigned Opcode, SDLoc DL, SDVTList VTs,
@@ -1162,6 +1164,10 @@ public:
                                  const ConstantSDNode *Cst1,
                                  const ConstantSDNode *Cst2);
 
+  SDValue FoldConstantVectorArithmetic(unsigned Opcode, SDLoc DL,
+                                       EVT VT, ArrayRef<SDValue> Ops,
+                                       const SDNodeFlags *Flags = nullptr);
+
   /// Constant fold a setcc to true or false.
   SDValue FoldSetCC(EVT VT, SDValue N1,
                     SDValue N2, ISD::CondCode Cond, SDLoc dl);
@@ -1210,6 +1216,10 @@ public:
   /// is true if they are the same value, or if one is negative zero and the
   /// other positive zero.
   bool isEqualTo(SDValue A, SDValue B) const;
+
+  /// Return true if A and B have no common bits set. As an example, this can
+  /// allow an 'add' to be transformed into an 'or'.
+  bool haveNoCommonBitsSet(SDValue A, SDValue B) const;
 
   /// Utility function used by legalize and lowering to
   /// "unroll" a vector operation by splitting out the scalars and operating

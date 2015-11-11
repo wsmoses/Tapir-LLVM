@@ -257,7 +257,7 @@ BasicBlock *llvm::SplitEdge(BasicBlock *BB, BasicBlock *Succ, DominatorTree *DT,
     // block.
     assert(SP == BB && "CFG broken");
     SP = nullptr;
-    return SplitBlock(Succ, Succ->begin(), DT, LI);
+    return SplitBlock(Succ, &Succ->front(), DT, LI);
   }
 
   // Otherwise, if BB has a single successor, split it at the bottom of the
@@ -288,7 +288,7 @@ llvm::SplitAllCriticalEdges(Function &F,
 ///
 BasicBlock *llvm::SplitBlock(BasicBlock *Old, Instruction *SplitPt,
                              DominatorTree *DT, LoopInfo *LI) {
-  BasicBlock::iterator SplitIt = SplitPt;
+  BasicBlock::iterator SplitIt = SplitPt->getIterator();
   while (isa<PHINode>(SplitIt) || SplitIt->isEHPad())
     ++SplitIt;
   BasicBlock *New = Old->splitBasicBlock(SplitIt, Old->getName()+".split");
@@ -668,7 +668,7 @@ ReturnInst *llvm::FoldReturnIntoUncondBranch(ReturnInst *RI, BasicBlock *BB,
       // return instruction.
       V = BCI->getOperand(0);
       NewBC = BCI->clone();
-      Pred->getInstList().insert(NewRet, NewBC);
+      Pred->getInstList().insert(NewRet->getIterator(), NewBC);
       *i = NewBC;
     }
     if (PHINode *PN = dyn_cast<PHINode>(V)) {
@@ -714,7 +714,7 @@ TerminatorInst *llvm::SplitBlockAndInsertIfThen(Value *Cond,
                                                 MDNode *BranchWeights,
                                                 DominatorTree *DT) {
   BasicBlock *Head = SplitBefore->getParent();
-  BasicBlock *Tail = Head->splitBasicBlock(SplitBefore);
+  BasicBlock *Tail = Head->splitBasicBlock(SplitBefore->getIterator());
   TerminatorInst *HeadOldTerm = Head->getTerminator();
   LLVMContext &C = Head->getContext();
   BasicBlock *ThenBlock = BasicBlock::Create(C, "", Head->getParent(), Tail);
@@ -764,7 +764,7 @@ void llvm::SplitBlockAndInsertIfThenElse(Value *Cond, Instruction *SplitBefore,
                                          TerminatorInst **ElseTerm,
                                          MDNode *BranchWeights) {
   BasicBlock *Head = SplitBefore->getParent();
-  BasicBlock *Tail = Head->splitBasicBlock(SplitBefore);
+  BasicBlock *Tail = Head->splitBasicBlock(SplitBefore->getIterator());
   TerminatorInst *HeadOldTerm = Head->getTerminator();
   LLVMContext &C = Head->getContext();
   BasicBlock *ThenBlock = BasicBlock::Create(C, "", Head->getParent(), Tail);

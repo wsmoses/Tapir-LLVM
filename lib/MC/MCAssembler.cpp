@@ -97,17 +97,17 @@ void MCAsmLayout::invalidateFragmentsFrom(MCFragment *F) {
 
 void MCAsmLayout::ensureValid(const MCFragment *F) const {
   MCSection *Sec = F->getParent();
-  MCFragment *Cur = LastValidFragment[Sec];
-  if (!Cur)
-    Cur = Sec->begin();
+  MCSection::iterator I;
+  if (MCFragment *Cur = LastValidFragment[Sec])
+    I = ++MCSection::iterator(Cur);
   else
-    Cur = Cur->getNextNode();
+    I = Sec->begin();
 
   // Advance the layout position until the fragment is valid.
   while (!isFragmentValid(F)) {
-    assert(Cur && "Layout bookkeeping error");
-    const_cast<MCAsmLayout*>(this)->layoutFragment(Cur);
-    Cur = Cur->getNextNode();
+    assert(I != Sec->end() && "Layout bookkeeping error");
+    const_cast<MCAsmLayout *>(this)->layoutFragment(&*I);
+    ++I;
   }
 }
 
@@ -277,7 +277,7 @@ MCFragment::MCFragment(FragmentType Kind, bool HasInstructions,
     : Kind(Kind), HasInstructions(HasInstructions), AlignToBundleEnd(false),
       BundlePadding(BundlePadding), Parent(Parent), Atom(nullptr),
       Offset(~UINT64_C(0)) {
-  if (Parent)
+  if (Parent && !isDummy())
     Parent->getFragmentList().push_back(this);
 }
 
@@ -319,17 +319,19 @@ void MCFragment::destroy() {
     case FT_SafeSEH:
       delete cast<MCSafeSEHFragment>(this);
       return;
+    case FT_Dummy:
+      delete cast<MCDummyFragment>(this);
+      return;
   }
 }
 
 /* *** */
 
 MCAssembler::MCAssembler(MCContext &Context_, MCAsmBackend &Backend_,
-                         MCCodeEmitter &Emitter_, MCObjectWriter &Writer_,
-                         raw_ostream &OS_)
+                         MCCodeEmitter &Emitter_, MCObjectWriter &Writer_)
     : Context(Context_), Backend(Backend_), Emitter(Emitter_), Writer(Writer_),
-      OS(OS_), BundleAlignSize(0), RelaxAll(false),
-      SubsectionsViaSymbols(false), ELFHeaderEFlags(0) {
+      BundleAlignSize(0), RelaxAll(false), SubsectionsViaSymbols(false),
+      ELFHeaderEFlags(0) {
   VersionMinInfo.Major = 0; // Major version == 0 for "none specified"
 }
 
@@ -356,6 +358,14 @@ void MCAssembler::reset() {
   getEmitter().reset();
   getWriter().reset();
   getLOHContainer().reset();
+}
+
+bool MCAssembler::registerSection(MCSection &Section) {
+  if (Section.isRegistered())
+    return false;
+  Sections.push_back(&Section);
+  Section.setIsRegistered(true);
+  return true;
 }
 
 bool MCAssembler::isThumbFunc(const MCSymbol *Symbol) const {
@@ -404,7 +414,7 @@ const MCSymbol *MCAssembler::getAtom(const MCSymbol &S) const {
     return &S;
 
   // Absolute and undefined symbols have no defining atom.
-  if (!S.getFragment())
+  if (!S.isInSection())
     return nullptr;
 
   // Non-linker visible symbols in sections which can't be atomized have no
@@ -523,12 +533,19 @@ uint64_t MCAssembler::computeFragmentSize(const MCAsmLayout &Layout,
 
   case MCFragment::FT_Org: {
     const MCOrgFragment &OF = cast<MCOrgFragment>(F);
-    int64_t TargetLocation;
-    if (!OF.getOffset().evaluateAsAbsolute(TargetLocation, Layout))
+    MCValue Value;
+    if (!OF.getOffset().evaluateAsValue(Value, Layout))
       report_fatal_error("expected assembly-time absolute expression");
 
     // FIXME: We need a way to communicate this error.
     uint64_t FragmentOffset = Layout.getFragmentOffset(&OF);
+    int64_t TargetLocation = Value.getConstant();
+    if (const MCSymbolRefExpr *A = Value.getSymA()) {
+      uint64_t Val;
+      if (!Layout.getSymbolOffset(A->getSymbol(), Val))
+        report_fatal_error("expected absolute expression");
+      TargetLocation += Val;
+    }
     int64_t Size = TargetLocation - FragmentOffset;
     if (Size < 0 || Size >= 0x40000000)
       report_fatal_error("invalid .org offset '" + Twine(TargetLocation) +
@@ -540,6 +557,8 @@ uint64_t MCAssembler::computeFragmentSize(const MCAsmLayout &Layout,
     return cast<MCDwarfLineAddrFragment>(F).getContents().size();
   case MCFragment::FT_DwarfFrame:
     return cast<MCDwarfCallFrameFragment>(F).getContents().size();
+  case MCFragment::FT_Dummy:
+    llvm_unreachable("Should not have been added");
   }
 
   llvm_unreachable("invalid fragment kind");
@@ -773,6 +792,8 @@ static void writeFragment(const MCAssembler &Asm, const MCAsmLayout &Layout,
     OW->writeBytes(CF.getContents());
     break;
   }
+  case MCFragment::FT_Dummy:
+    llvm_unreachable("Should not have been added");
   }
 
   assert(OW->getStream().tell() - Start == FragmentSize &&
@@ -933,6 +954,7 @@ void MCAssembler::Finish() {
   MCAsmLayout Layout(*this);
   layout(Layout);
 
+  raw_ostream &OS = getWriter().getStream();
   uint64_t StartOffset = OS.tell();
 
   // Write the object file.
@@ -1080,7 +1102,7 @@ bool MCAssembler::layoutSectionOnce(MCAsmLayout &Layout, MCSection &Sec) {
       break;
     }
     if (RelaxedFrag && !FirstRelaxedFragment)
-      FirstRelaxedFragment = I;
+      FirstRelaxedFragment = &*I;
   }
   if (FirstRelaxedFragment) {
     Layout.invalidateFragmentsFrom(FirstRelaxedFragment);
@@ -1139,6 +1161,9 @@ void MCFragment::dump() {
   case MCFragment::FT_DwarfFrame: OS << "MCDwarfCallFrameFragment"; break;
   case MCFragment::FT_LEB:   OS << "MCLEBFragment"; break;
   case MCFragment::FT_SafeSEH:    OS << "MCSafeSEHFragment"; break;
+  case MCFragment::FT_Dummy:
+    OS << "MCDummyFragment";
+    break;
   }
 
   OS << "<MCFragment " << (void*) this << " LayoutOrder:" << LayoutOrder
@@ -1237,6 +1262,8 @@ void MCFragment::dump() {
     OS << " Sym:" << F->getSymbol();
     break;
   }
+  case MCFragment::FT_Dummy:
+    break;
   }
   OS << ">";
 }

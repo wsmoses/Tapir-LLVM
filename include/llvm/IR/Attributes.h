@@ -68,12 +68,16 @@ public:
                            ///< stored as log2 of alignment with +1 bias
                            ///< 0 means unaligned (different from align(1))
     AlwaysInline,          ///< inline=always
+    ArgMemOnly,            ///< Funciton can access memory only using pointers
+                           ///< based on its arguments.
     Builtin,               ///< Callee is recognized as a builtin, despite
                            ///< nobuiltin attribute on its declaration.
     ByVal,                 ///< Pass structure by value
-    InAlloca,              ///< Pass structure in an alloca
     Cold,                  ///< Marks function as being in a cold path.
     Convergent,            ///< Can only be moved to control-equivalent blocks
+    Dereferenceable,       ///< Pointer is known to be dereferenceable
+    DereferenceableOrNull, ///< Pointer is either null or dereferenceable
+    InAlloca,              ///< Pass structure in an alloca
     InlineHint,            ///< Source said inlining was desirable
     InReg,                 ///< Force argument to be passed in register
     JumpTable,             ///< Build jump-instruction tables and replace refs.
@@ -89,8 +93,7 @@ public:
     NonLazyBind,           ///< Function is called early and/or
                            ///< often, so lazy binding isn't worthwhile
     NonNull,               ///< Pointer is known to be not null
-    Dereferenceable,       ///< Pointer is known to be dereferenceable
-    DereferenceableOrNull, ///< Pointer is either null or dereferenceable
+    NoRecurse,             ///< The function does not recurse
     NoRedZone,             ///< Disable redzone
     NoReturn,              ///< Mark the function as not returning
     NoUnwind,              ///< Function doesn't unwind stack
@@ -98,10 +101,12 @@ public:
     OptimizeNone,          ///< Function must not be optimized.
     ReadNone,              ///< Function does not access memory
     ReadOnly,              ///< Function only reads from memory
-    ArgMemOnly,            ///< Funciton can access memory only using pointers
-                           ///< based on its arguments.
     Returned,              ///< Return value is always equal to this argument
     ReturnsTwice,          ///< Function can return twice
+    SafeStack,             ///< Safe Stack protection.
+    SanitizeAddress,       ///< AddressSanitizer is on.
+    SanitizeMemory,        ///< MemorySanitizer is on.
+    SanitizeThread,        ///< ThreadSanitizer is on.
     SExt,                  ///< Sign extended before/after call
     StackAlignment,        ///< Alignment of stack for function (3 bits)
                            ///< stored as log2 of alignment with +1 bias 0
@@ -110,19 +115,17 @@ public:
     StackProtect,          ///< Stack protection.
     StackProtectReq,       ///< Stack protection required.
     StackProtectStrong,    ///< Strong Stack protection.
-    SafeStack,             ///< Safe Stack protection.
     StructRet,             ///< Hidden pointer to structure to return
-    SanitizeAddress,       ///< AddressSanitizer is on.
-    SanitizeThread,        ///< ThreadSanitizer is on.
-    SanitizeMemory,        ///< MemorySanitizer is on.
     UWTable,               ///< Function must be in a unwind table
     ZExt,                  ///< Zero extended before/after call
 
     EndAttrKinds           ///< Sentinal value useful for loops
   };
+
 private:
   AttributeImpl *pImpl;
   Attribute(AttributeImpl *A) : pImpl(A) {}
+
 public:
   Attribute() : pImpl(nullptr) {}
 
@@ -226,6 +229,7 @@ public:
     ReturnIndex = 0U,
     FunctionIndex = ~0U
   };
+
 private:
   friend class AttrBuilder;
   friend class AttributeSetImpl;
@@ -249,8 +253,8 @@ private:
                               ArrayRef<std::pair<unsigned,
                                                  AttributeSetNode*> > Attrs);
 
-
   explicit AttributeSet(AttributeSetImpl *LI) : pImpl(LI) {}
+
 public:
   AttributeSet() : pImpl(nullptr) {}
 
@@ -284,13 +288,13 @@ public:
   /// \brief Remove the specified attribute at the specified index from this
   /// attribute list. Because attribute lists are immutable, this returns the
   /// new list.
-  AttributeSet removeAttribute(LLVMContext &C, unsigned Index, 
+  AttributeSet removeAttribute(LLVMContext &C, unsigned Index,
                                Attribute::AttrKind Attr) const;
 
   /// \brief Remove the specified attributes at the specified index from this
   /// attribute list. Because attribute lists are immutable, this returns the
   /// new list.
-  AttributeSet removeAttributes(LLVMContext &C, unsigned Index, 
+  AttributeSet removeAttributes(LLVMContext &C, unsigned Index,
                                 AttributeSet Attrs) const;
 
   /// \brief Remove the specified attributes at the specified index from this
@@ -439,6 +443,7 @@ class AttrBuilder {
   uint64_t StackAlignment;
   uint64_t DerefBytes;
   uint64_t DerefOrNullBytes;
+
 public:
   AttrBuilder()
       : Attrs(0), Alignment(0), StackAlignment(0), DerefBytes(0),
@@ -511,8 +516,8 @@ public:
   /// \brief Retrieve the stack alignment attribute, if it exists.
   uint64_t getStackAlignment() const { return StackAlignment; }
 
-  /// \brief Retrieve the number of dereferenceable bytes, if the dereferenceable
-  /// attribute exists (zero is returned otherwise).
+  /// \brief Retrieve the number of dereferenceable bytes, if the
+  /// dereferenceable attribute exists (zero is returned otherwise).
   uint64_t getDereferenceableBytes() const { return DerefBytes; }
 
   /// \brief Retrieve the number of dereferenceable_or_null bytes, if the

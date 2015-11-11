@@ -189,7 +189,7 @@
 /// 3.4 supported this but is buggy in various cases and produces unimplemented
 /// errors, just use it in GCC 4.0 and later.
 #if __has_attribute(always_inline) || LLVM_GNUC_PREREQ(4, 0, 0)
-#define LLVM_ATTRIBUTE_ALWAYS_INLINE inline __attribute__((always_inline))
+#define LLVM_ATTRIBUTE_ALWAYS_INLINE __attribute__((always_inline))
 #elif defined(_MSC_VER)
 #define LLVM_ATTRIBUTE_ALWAYS_INLINE __forceinline
 #else
@@ -291,6 +291,34 @@
 # define LLVM_ALIGNAS(x) __attribute__((aligned(x)))
 #else
 # define LLVM_ALIGNAS(x) alignas(x)
+#endif
+
+/// \macro LLVM_PACKED
+/// \brief Used to specify a packed structure.
+/// LLVM_PACKED(
+///    struct A {
+///      int i;
+///      int j;
+///      int k;
+///      long long l;
+///   });
+///
+/// LLVM_PACKED_START
+/// struct B {
+///   int i;
+///   int j;
+///   int k;
+///   long long l;
+/// };
+/// LLVM_PACKED_END 
+#ifdef _MSC_VER
+# define LLVM_PACKED(d) __pragma(pack(push, 1)) d __pragma(pack(pop))
+# define LLVM_PACKED_START __pragma(pack(push, 1))
+# define LLVM_PACKED_END   __pragma(pack(pop))
+#else
+# define LLVM_PACKED(d) d __attribute__((packed))
+# define LLVM_PACKED_START _Pragma("pack(push, 1)")
+# define LLVM_PACKED_END   _Pragma("pack(pop)")
 #endif
 
 /// \macro LLVM_PTR_SIZE

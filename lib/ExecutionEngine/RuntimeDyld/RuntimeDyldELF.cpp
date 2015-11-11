@@ -66,7 +66,6 @@ public:
   static inline bool classof(const ELFObjectFile<ELFT> *v) {
     return v->isDyldType();
   }
-
 };
 
 
@@ -187,7 +186,7 @@ LoadedELFObjectInfo::getObjectForDebug(const ObjectFile &Obj) const {
   return createELFDebugObject(Obj, *this);
 }
 
-} // namespace
+} // anonymous namespace
 
 namespace llvm {
 
@@ -248,6 +247,14 @@ void RuntimeDyldELF::resolveX86_64Relocation(const SectionEntry &Section,
     support::ulittle32_t::ref(Section.Address + Offset) = TruncatedAddr;
     DEBUG(dbgs() << "Writing " << format("%p", TruncatedAddr) << " at "
                  << format("%p\n", Section.Address + Offset));
+    break;
+  }
+  case ELF::R_X86_64_PC8: {
+    uint64_t FinalAddress = Section.LoadAddress + Offset;
+    int64_t RealOffset = Value + Addend - FinalAddress;
+    assert(isInt<8>(RealOffset));
+    int8_t TruncOffset = (RealOffset & 0xFF);
+    Section.Address[Offset] = TruncOffset;
     break;
   }
   case ELF::R_X86_64_PC32: {
@@ -772,7 +779,7 @@ void RuntimeDyldELF::findPPC64TOCSection(const ELFObjectFileBase &Obj,
   // relocation) without a .toc directive.  In this case just use the
   // first section (which is usually the .odp) since the code won't
   // reference the .toc base directly.
-  Rel.SymbolName = NULL;
+  Rel.SymbolName = nullptr;
   Rel.SectionID = 0;
 
   // The TOC consists of sections .got, .toc, .tocbss, .plt in that
@@ -1737,7 +1744,7 @@ uint64_t RuntimeDyldELF::allocateGOTEntries(unsigned SectionID, unsigned no)
     GOTSectionID = Sections.size();
     // Reserve a section id. We'll allocate the section later
     // once we know the total size
-    Sections.push_back(SectionEntry(".got", 0, 0, 0));
+    Sections.push_back(SectionEntry(".got", nullptr, 0, 0));
   }
   uint64_t StartOffset = CurrentGOTIndex * getGOTEntrySize();
   CurrentGOTIndex += no;

@@ -21,6 +21,7 @@
 #include "llvm/ADT/Statistic.h"
 #include "llvm/Analysis/AliasAnalysis.h"
 #include "llvm/Analysis/CaptureTracking.h"
+#include "llvm/Analysis/GlobalsModRef.h"
 #include "llvm/Analysis/MemoryBuiltins.h"
 #include "llvm/Analysis/MemoryDependenceAnalysis.h"
 #include "llvm/Analysis/TargetLibraryInfo.h"
@@ -60,24 +61,24 @@ namespace {
       if (skipOptnoneFunction(F))
         return false;
 
-      AA = &getAnalysis<AliasAnalysis>();
+      AA = &getAnalysis<AAResultsWrapperPass>().getAAResults();
       MD = &getAnalysis<MemoryDependenceAnalysis>();
       DT = &getAnalysis<DominatorTreeWrapperPass>().getDomTree();
       TLI = &getAnalysis<TargetLibraryInfoWrapperPass>().getTLI();
 
       bool Changed = false;
-      for (Function::iterator I = F.begin(), E = F.end(); I != E; ++I)
+      for (BasicBlock &I : F)
         // Only check non-dead blocks.  Dead blocks may have strange pointer
         // cycles that will confuse alias analysis.
-        if (DT->isReachableFromEntry(I))
-          Changed |= runOnBasicBlock(*I);
+        if (DT->isReachableFromEntry(&I))
+          Changed |= runOnBasicBlock(I);
 
       AA = nullptr; MD = nullptr; DT = nullptr;
       return Changed;
     }
 
     bool runOnBasicBlock(BasicBlock &BB);
-    bool MemoryIsNotModifiedBetween(LoadInst *LI, StoreInst *SI);
+    bool MemoryIsNotModifiedBetween(Instruction *FirstI, Instruction *SecondI);
     bool HandleFree(CallInst *F);
     bool handleEndBlock(BasicBlock &BB);
     void RemoveAccessedObjects(const MemoryLocation &LoadedLoc,
@@ -87,11 +88,11 @@ namespace {
     void getAnalysisUsage(AnalysisUsage &AU) const override {
       AU.setPreservesCFG();
       AU.addRequired<DominatorTreeWrapperPass>();
-      AU.addRequired<AliasAnalysis>();
+      AU.addRequired<AAResultsWrapperPass>();
       AU.addRequired<MemoryDependenceAnalysis>();
       AU.addRequired<TargetLibraryInfoWrapperPass>();
-      AU.addPreserved<AliasAnalysis>();
       AU.addPreserved<DominatorTreeWrapperPass>();
+      AU.addPreserved<GlobalsAAWrapperPass>();
       AU.addPreserved<MemoryDependenceAnalysis>();
     }
   };
@@ -99,8 +100,9 @@ namespace {
 
 char DSE::ID = 0;
 INITIALIZE_PASS_BEGIN(DSE, "dse", "Dead Store Elimination", false, false)
-INITIALIZE_AG_DEPENDENCY(AliasAnalysis)
 INITIALIZE_PASS_DEPENDENCY(DominatorTreeWrapperPass)
+INITIALIZE_PASS_DEPENDENCY(AAResultsWrapperPass)
+INITIALIZE_PASS_DEPENDENCY(GlobalsAAWrapperPass)
 INITIALIZE_PASS_DEPENDENCY(MemoryDependenceAnalysis)
 INITIALIZE_PASS_DEPENDENCY(TargetLibraryInfoWrapperPass)
 INITIALIZE_PASS_END(DSE, "dse", "Dead Store Elimination", false, false)
@@ -481,11 +483,12 @@ static bool isPossibleSelfRead(Instruction *Inst,
 //===----------------------------------------------------------------------===//
 
 bool DSE::runOnBasicBlock(BasicBlock &BB) {
+  const DataLayout &DL = BB.getModule()->getDataLayout();
   bool MadeChange = false;
 
   // Do a top-down walk on the BB.
   for (BasicBlock::iterator BBI = BB.begin(), BBE = BB.end(); BBI != BBE; ) {
-    Instruction *Inst = BBI++;
+    Instruction *Inst = &*BBI++;
 
     // Handle 'free' calls specially.
     if (CallInst *F = isFreeCall(Inst, TLI)) {
@@ -500,6 +503,22 @@ bool DSE::runOnBasicBlock(BasicBlock &BB) {
     // If we're storing the same value back to a pointer that we just
     // loaded from, then the store can be removed.
     if (StoreInst *SI = dyn_cast<StoreInst>(Inst)) {
+
+      auto RemoveDeadInstAndUpdateBBI = [&](Instruction *DeadInst) {
+        // DeleteDeadInstruction can delete the current instruction.  Save BBI
+        // in case we need it.
+        WeakVH NextInst(&*BBI);
+
+        DeleteDeadInstruction(DeadInst, *MD, *TLI);
+
+        if (!NextInst) // Next instruction deleted.
+          BBI = BB.begin();
+        else if (BBI != BB.begin()) // Revisit this instruction if possible.
+          --BBI;
+        ++NumRedundantStores;
+        MadeChange = true;
+      };
+
       if (LoadInst *DepLoad = dyn_cast<LoadInst>(SI->getValueOperand())) {
         if (SI->getPointerOperand() == DepLoad->getPointerOperand() &&
             isRemovable(SI) &&
@@ -508,18 +527,26 @@ bool DSE::runOnBasicBlock(BasicBlock &BB) {
           DEBUG(dbgs() << "DSE: Remove Store Of Load from same pointer:\n  "
                        << "LOAD: " << *DepLoad << "\n  STORE: " << *SI << '\n');
 
-          // DeleteDeadInstruction can delete the current instruction.  Save BBI
-          // in case we need it.
-          WeakVH NextInst(BBI);
+          RemoveDeadInstAndUpdateBBI(SI);
+          continue;
+        }
+      }
 
-          DeleteDeadInstruction(SI, *MD, *TLI);
+      // Remove null stores into the calloc'ed objects
+      Constant *StoredConstant = dyn_cast<Constant>(SI->getValueOperand());
 
-          if (!NextInst)  // Next instruction deleted.
-            BBI = BB.begin();
-          else if (BBI != BB.begin())  // Revisit this instruction if possible.
-            --BBI;
-          ++NumRedundantStores;
-          MadeChange = true;
+      if (StoredConstant && StoredConstant->isNullValue() &&
+          isRemovable(SI)) {
+        Instruction *UnderlyingPointer = dyn_cast<Instruction>(
+            GetUnderlyingObject(SI->getPointerOperand(), DL));
+
+        if (UnderlyingPointer && isCallocLikeFn(UnderlyingPointer, TLI) &&
+            MemoryIsNotModifiedBetween(UnderlyingPointer, SI)) {
+          DEBUG(dbgs()
+                << "DSE: Remove null store to the calloc'ed object:\n  DEAD: "
+                << *Inst << "\n  OBJECT: " << *UnderlyingPointer << '\n');
+
+          RemoveDeadInstAndUpdateBBI(SI);
           continue;
         }
       }
@@ -559,7 +586,6 @@ bool DSE::runOnBasicBlock(BasicBlock &BB) {
       if (isRemovable(DepWrite) &&
           !isPossibleSelfRead(Inst, Loc, DepWrite, *TLI, *AA)) {
         int64_t InstWriteOffset, DepWriteOffset;
-        const DataLayout &DL = BB.getModule()->getDataLayout();
         OverwriteResult OR =
             isOverwrite(Loc, DepLoc, DL, *TLI, DepWriteOffset, InstWriteOffset);
         if (OR == OverwriteComplete) {
@@ -573,7 +599,7 @@ bool DSE::runOnBasicBlock(BasicBlock &BB) {
 
           // DeleteDeadInstruction can delete the current instruction in loop
           // cases, reset BBI.
-          BBI = Inst;
+          BBI = Inst->getIterator();
           if (BBI != BB.begin())
             --BBI;
           break;
@@ -619,7 +645,8 @@ bool DSE::runOnBasicBlock(BasicBlock &BB) {
       if (AA->getModRefInfo(DepWrite, Loc) & MRI_Ref)
         break;
 
-      InstDep = MD->getPointerDependencyFrom(Loc, false, DepWrite, &BB);
+      InstDep = MD->getPointerDependencyFrom(Loc, false,
+                                             DepWrite->getIterator(), &BB);
     }
   }
 
@@ -631,52 +658,53 @@ bool DSE::runOnBasicBlock(BasicBlock &BB) {
   return MadeChange;
 }
 
-/// Returns true if the memory which is accessed by the store instruction is not
-/// modified between the load and the store instruction.
-/// Precondition: The store instruction must be dominated by the load
+/// Returns true if the memory which is accessed by the second instruction is not
+/// modified between the first and the second instruction.
+/// Precondition: Second instruction must be dominated by the first
 /// instruction.
-bool DSE::MemoryIsNotModifiedBetween(LoadInst *LI, StoreInst *SI) {
+bool DSE::MemoryIsNotModifiedBetween(Instruction *FirstI,
+                                     Instruction *SecondI) {
   SmallVector<BasicBlock *, 16> WorkList;
   SmallPtrSet<BasicBlock *, 8> Visited;
-  BasicBlock::iterator LoadBBI(LI);
-  ++LoadBBI;
-  BasicBlock::iterator StoreBBI(SI);
-  BasicBlock *LoadBB = LI->getParent();
-  BasicBlock *StoreBB = SI->getParent();
-  MemoryLocation StoreLoc = MemoryLocation::get(SI);
+  BasicBlock::iterator FirstBBI(FirstI);
+  ++FirstBBI;
+  BasicBlock::iterator SecondBBI(SecondI);
+  BasicBlock *FirstBB = FirstI->getParent();
+  BasicBlock *SecondBB = SecondI->getParent();
+  MemoryLocation MemLoc = MemoryLocation::get(SecondI);
 
   // Start checking the store-block.
-  WorkList.push_back(StoreBB);
+  WorkList.push_back(SecondBB);
   bool isFirstBlock = true;
 
   // Check all blocks going backward until we reach the load-block.
   while (!WorkList.empty()) {
     BasicBlock *B = WorkList.pop_back_val();
 
-    // Ignore instructions before LI if this is the LoadBB.
-    BasicBlock::iterator BI = (B == LoadBB ? LoadBBI : B->begin());
+    // Ignore instructions before LI if this is the FirstBB.
+    BasicBlock::iterator BI = (B == FirstBB ? FirstBBI : B->begin());
 
     BasicBlock::iterator EI;
     if (isFirstBlock) {
-      // Ignore instructions after SI if this is the first visit of StoreBB.
-      assert(B == StoreBB && "first block is not the store block");
-      EI = StoreBBI;
+      // Ignore instructions after SI if this is the first visit of SecondBB.
+      assert(B == SecondBB && "first block is not the store block");
+      EI = SecondBBI;
       isFirstBlock = false;
     } else {
-      // It's not StoreBB or (in case of a loop) the second visit of StoreBB.
+      // It's not SecondBB or (in case of a loop) the second visit of SecondBB.
       // In this case we also have to look at instructions after SI.
       EI = B->end();
     }
     for (; BI != EI; ++BI) {
-      Instruction *I = BI;
-      if (I->mayWriteToMemory() && I != SI) {
-        auto Res = AA->getModRefInfo(I, StoreLoc);
+      Instruction *I = &*BI;
+      if (I->mayWriteToMemory() && I != SecondI) {
+        auto Res = AA->getModRefInfo(I, MemLoc);
         if (Res != MRI_NoModRef)
           return false;
       }
     }
-    if (B != LoadBB) {
-      assert(B != &LoadBB->getParent()->getEntryBlock() &&
+    if (B != FirstBB) {
+      assert(B != &FirstBB->getParent()->getEntryBlock() &&
           "Should not hit the entry block because SI must be dominated by LI");
       for (auto PredI = pred_begin(B), PE = pred_end(B); PredI != PE; ++PredI) {
         if (!Visited.insert(*PredI).second)
@@ -719,7 +747,8 @@ bool DSE::HandleFree(CallInst *F) {
     Instruction *InstPt = BB->getTerminator();
     if (BB == F->getParent()) InstPt = F;
 
-    MemDepResult Dep = MD->getPointerDependencyFrom(Loc, false, InstPt, BB);
+    MemDepResult Dep =
+        MD->getPointerDependencyFrom(Loc, false, InstPt->getIterator(), BB);
     while (Dep.isDef() || Dep.isClobber()) {
       Instruction *Dependency = Dep.getInst();
       if (!hasMemoryWrite(Dependency, *TLI) || !isRemovable(Dependency))
@@ -732,7 +761,7 @@ bool DSE::HandleFree(CallInst *F) {
       if (!AA->isMustAlias(F->getArgOperand(0), DepPointer))
         break;
 
-      Instruction *Next = std::next(BasicBlock::iterator(Dependency));
+      auto Next = ++Dependency->getIterator();
 
       // DCE instructions only used to calculate that store
       DeleteDeadInstruction(Dependency, *MD, *TLI);
@@ -768,23 +797,22 @@ bool DSE::handleEndBlock(BasicBlock &BB) {
   SmallSetVector<Value*, 16> DeadStackObjects;
 
   // Find all of the alloca'd pointers in the entry block.
-  BasicBlock *Entry = BB.getParent()->begin();
-  for (BasicBlock::iterator I = Entry->begin(), E = Entry->end(); I != E; ++I) {
-    if (isa<AllocaInst>(I))
-      DeadStackObjects.insert(I);
+  BasicBlock &Entry = BB.getParent()->front();
+  for (Instruction &I : Entry) {
+    if (isa<AllocaInst>(&I))
+      DeadStackObjects.insert(&I);
 
     // Okay, so these are dead heap objects, but if the pointer never escapes
     // then it's leaked by this function anyways.
-    else if (isAllocLikeFn(I, TLI) && !PointerMayBeCaptured(I, true, true))
-      DeadStackObjects.insert(I);
+    else if (isAllocLikeFn(&I, TLI) && !PointerMayBeCaptured(&I, true, true))
+      DeadStackObjects.insert(&I);
   }
 
   // Treat byval or inalloca arguments the same, stores to them are dead at the
   // end of the function.
-  for (Function::arg_iterator AI = BB.getParent()->arg_begin(),
-       AE = BB.getParent()->arg_end(); AI != AE; ++AI)
-    if (AI->hasByValOrInAllocaAttr())
-      DeadStackObjects.insert(AI);
+  for (Argument &AI : BB.getParent()->args())
+    if (AI.hasByValOrInAllocaAttr())
+      DeadStackObjects.insert(&AI);
 
   const DataLayout &DL = BB.getModule()->getDataLayout();
 
@@ -793,10 +821,10 @@ bool DSE::handleEndBlock(BasicBlock &BB) {
     --BBI;
 
     // If we find a store, check to see if it points into a dead stack value.
-    if (hasMemoryWrite(BBI, *TLI) && isRemovable(BBI)) {
+    if (hasMemoryWrite(&*BBI, *TLI) && isRemovable(&*BBI)) {
       // See through pointer-to-pointer bitcasts
       SmallVector<Value *, 4> Pointers;
-      GetUnderlyingObjects(getStoredPointerOperand(BBI), Pointers, DL);
+      GetUnderlyingObjects(getStoredPointerOperand(&*BBI), Pointers, DL);
 
       // Stores to stack values are valid candidates for removal.
       bool AllDead = true;
@@ -808,7 +836,7 @@ bool DSE::handleEndBlock(BasicBlock &BB) {
         }
 
       if (AllDead) {
-        Instruction *Dead = BBI++;
+        Instruction *Dead = &*BBI++;
 
         DEBUG(dbgs() << "DSE: Dead Store at End of Block:\n  DEAD: "
                      << *Dead << "\n  Objects: ";
@@ -829,8 +857,8 @@ bool DSE::handleEndBlock(BasicBlock &BB) {
     }
 
     // Remove any dead non-memory-mutating instructions.
-    if (isInstructionTriviallyDead(BBI, TLI)) {
-      Instruction *Inst = BBI++;
+    if (isInstructionTriviallyDead(&*BBI, TLI)) {
+      Instruction *Inst = &*BBI++;
       DeleteDeadInstruction(Inst, *MD, *TLI, &DeadStackObjects);
       ++NumFastOther;
       MadeChange = true;
@@ -840,15 +868,15 @@ bool DSE::handleEndBlock(BasicBlock &BB) {
     if (isa<AllocaInst>(BBI)) {
       // Remove allocas from the list of dead stack objects; there can't be
       // any references before the definition.
-      DeadStackObjects.remove(BBI);
+      DeadStackObjects.remove(&*BBI);
       continue;
     }
 
-    if (auto CS = CallSite(BBI)) {
+    if (auto CS = CallSite(&*BBI)) {
       // Remove allocation function calls from the list of dead stack objects; 
       // there can't be any references before the definition.
-      if (isAllocLikeFn(BBI, TLI))
-        DeadStackObjects.remove(BBI);
+      if (isAllocLikeFn(&*BBI, TLI))
+        DeadStackObjects.remove(&*BBI);
 
       // If this call does not access memory, it can't be loading any of our
       // pointers.

@@ -151,8 +151,6 @@ XCoreTargetLowering::XCoreTargetLowering(const TargetMachine &TM,
 
   // Exception handling
   setOperationAction(ISD::EH_RETURN, MVT::Other, Custom);
-  setExceptionPointerRegister(XCore::R0);
-  setExceptionSelectorRegister(XCore::R1);
   setOperationAction(ISD::FRAME_TO_ARGS_OFFSET, MVT::i32, Custom);
 
   // Atomic operations
@@ -1565,8 +1563,7 @@ XCoreTargetLowering::EmitInstrWithCustomInserter(MachineInstr *MI,
   // to set, the condition code register to branch on, the true/false values to
   // select between, and a branch opcode to use.
   const BasicBlock *LLVM_BB = BB->getBasicBlock();
-  MachineFunction::iterator It = BB;
-  ++It;
+  MachineFunction::iterator It = ++BB->getIterator();
 
   //  thisMBB:
   //  ...

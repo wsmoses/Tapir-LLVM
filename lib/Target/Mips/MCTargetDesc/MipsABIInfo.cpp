@@ -23,7 +23,7 @@ static const MCPhysReg Mips64IntRegs[8] = {
     Mips::T0_64, Mips::T1_64, Mips::T2_64, Mips::T3_64};
 }
 
-const ArrayRef<MCPhysReg> MipsABIInfo::GetByValArgRegs() const {
+ArrayRef<MCPhysReg> MipsABIInfo::GetByValArgRegs() const {
   if (IsO32())
     return makeArrayRef(O32IntRegs);
   if (IsN32() || IsN64())
@@ -31,7 +31,7 @@ const ArrayRef<MCPhysReg> MipsABIInfo::GetByValArgRegs() const {
   llvm_unreachable("Unhandled ABI");
 }
 
-const ArrayRef<MCPhysReg> MipsABIInfo::GetVarArgRegs() const {
+ArrayRef<MCPhysReg> MipsABIInfo::GetVarArgRegs() const {
   if (IsO32())
     return makeArrayRef(O32IntRegs);
   if (IsN32() || IsN64())
@@ -78,7 +78,6 @@ MipsABIInfo MipsABIInfo::computeTargetABI(const Triple &TT, StringRef CPU,
       .Case("mips32r3", MipsABIInfo::O32())
       .Case("mips32r5", MipsABIInfo::O32())
       .Case("mips32r6", MipsABIInfo::O32())
-      .Case("mips16", MipsABIInfo::O32())
       .Case("mips3", MipsABIInfo::N64())
       .Case("mips4", MipsABIInfo::N64())
       .Case("mips5", MipsABIInfo::N64())

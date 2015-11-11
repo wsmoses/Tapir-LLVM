@@ -87,6 +87,7 @@ public:
     Legal,      // The target natively supports this operation.
     Promote,    // This operation should be executed in a larger type.
     Expand,     // Try to expand this to other ops, otherwise use a libcall.
+    LibCall,    // Don't try to expand this to other ops, always use a libcall.
     Custom      // Use the LowerOperation hook to implement custom lowering.
   };
 
@@ -124,15 +125,14 @@ public:
                           // mask (ex: x86 blends).
   };
 
-  /// Enum that specifies what a AtomicRMWInst is expanded to, if at all. Exists
-  /// because different targets have different levels of support for these
-  /// atomic RMW instructions, and also have different options w.r.t. what they
-  /// should expand to.
-  enum class AtomicRMWExpansionKind {
+  /// Enum that specifies what an atomic load/AtomicRMWInst is expanded
+  /// to, if at all. Exists because different targets have different levels of
+  /// support for these atomic instructions, and also have different options
+  /// w.r.t. what they should expand to.
+  enum class AtomicExpansionKind {
     None,      // Don't expand the instruction.
     LLSC,      // Expand the instruction into loadlinked/storeconditional; used
-               // by ARM/AArch64. Implies `hasLoadLinkedStoreConditional`
-               // returns true.
+               // by ARM/AArch64.
     CmpXChg,   // Expand the instruction into cmpxchg; used by at least X86.
   };
 
@@ -673,9 +673,9 @@ public:
            ((unsigned)VT.SimpleTy >> 4) < array_lengthof(CondCodeActions[0]) &&
            "Table isn't big enough!");
     // See setCondCodeAction for how this is encoded.
-    uint32_t Shift = 2 * (VT.SimpleTy & 0xF);
-    uint32_t Value = CondCodeActions[CC][VT.SimpleTy >> 4];
-    LegalizeAction Action = (LegalizeAction) ((Value >> Shift) & 0x3);
+    uint32_t Shift = 4 * (VT.SimpleTy & 0x7);
+    uint32_t Value = CondCodeActions[CC][VT.SimpleTy >> 3];
+    LegalizeAction Action = (LegalizeAction) ((Value >> Shift) & 0xF);
     assert(Action != Promote && "Can't promote condition code!");
     return Action;
   }
@@ -886,7 +886,7 @@ public:
   bool allowsMemoryAccess(LLVMContext &Context, const DataLayout &DL, EVT VT,
                           unsigned AddrSpace = 0, unsigned Alignment = 1,
                           bool *Fast = nullptr) const;
-  
+
   /// Returns the target specific optimal type for load and store operations as
   /// a result of memset, memcpy, and memmove lowering.
   ///
@@ -939,15 +939,19 @@ public:
   }
 
   /// If a physical register, this returns the register that receives the
-  /// exception address on entry to a landing pad.
-  unsigned getExceptionPointerRegister() const {
-    return ExceptionPointerRegister;
+  /// exception address on entry to an EH pad.
+  virtual unsigned
+  getExceptionPointerRegister(const Constant *PersonalityFn) const {
+    // 0 is guaranteed to be the NoRegister value on all targets
+    return 0;
   }
 
   /// If a physical register, this returns the register that receives the
   /// exception typeid on entry to a landing pad.
-  unsigned getExceptionSelectorRegister() const {
-    return ExceptionSelectorRegister;
+  virtual unsigned
+  getExceptionSelectorRegister(const Constant *PersonalityFn) const {
+    // 0 is guaranteed to be the NoRegister value on all targets
+    return 0;
   }
 
   /// Returns the target's jmp_buf size in bytes (if never set, the default is
@@ -996,6 +1000,10 @@ public:
     return false;
   }
 
+  /// If the target has a standard location for the unsafe stack pointer,
+  /// returns the address of that location. Otherwise, returns nullptr.
+  virtual Value *getSafeStackPointerLocation(IRBuilder<> &IRB) const;
+
   /// Returns true if a cast between SrcAS and DestAS is a noop.
   virtual bool isNoopAddrSpaceCast(unsigned SrcAS, unsigned DestAS) const {
     return false;
@@ -1026,10 +1034,6 @@ public:
   //===--------------------------------------------------------------------===//
   /// \name Helpers for atomic expansion.
   /// @{
-
-  /// True if AtomicExpandPass should use emitLoadLinked/emitStoreConditional
-  /// and expand AtomicCmpXchgInst.
-  virtual bool hasLoadLinkedStoreConditional() const { return false; }
 
   /// Perform a load-linked operation on Addr, returning a "Value *" with the
   /// corresponding pointee type. This may entail some non-trivial operations to
@@ -1102,6 +1106,14 @@ public:
   }
   /// @}
 
+  // Emits code that executes when the comparison result in the ll/sc
+  // expansion of a cmpxchg instruction is such that the store-conditional will
+  // not execute.  This makes it possible to balance out the load-linked with
+  // a dedicated instruction, if desired.
+  // E.g., on ARM, if ldrex isn't followed by strex, the exclusive monitor would
+  // be unnecessarily held, except if clrex, inserted by this hook, is executed.
+  virtual void emitAtomicCmpXchgNoStoreLLBalance(IRBuilder<> &Builder) const {}
+
   /// Returns true if the given (atomic) store should be expanded by the
   /// IR-level AtomicExpand pass into an "atomic xchg" which ignores its input.
   virtual bool shouldExpandAtomicStoreInIR(StoreInst *SI) const {
@@ -1111,18 +1123,25 @@ public:
   /// Returns true if arguments should be sign-extended in lib calls.
   virtual bool shouldSignExtendTypeInLibCall(EVT Type, bool IsSigned) const {
     return IsSigned;
- }
+  }
 
-  /// Returns true if the given (atomic) load should be expanded by the
-  /// IR-level AtomicExpand pass into a load-linked instruction
-  /// (through emitLoadLinked()).
-  virtual bool shouldExpandAtomicLoadInIR(LoadInst *LI) const { return false; }
+  /// Returns how the given (atomic) load should be expanded by the
+  /// IR-level AtomicExpand pass.
+  virtual AtomicExpansionKind shouldExpandAtomicLoadInIR(LoadInst *LI) const {
+    return AtomicExpansionKind::None;
+  }
+
+  /// Returns true if the given atomic cmpxchg should be expanded by the
+  /// IR-level AtomicExpand pass into a load-linked/store-conditional sequence
+  /// (through emitLoadLinked() and emitStoreConditional()).
+  virtual bool shouldExpandAtomicCmpXchgInIR(AtomicCmpXchgInst *AI) const {
+    return false;
+  }
 
   /// Returns how the IR-level AtomicExpand pass should expand the given
   /// AtomicRMW, if at all. Default is to never expand.
-  virtual AtomicRMWExpansionKind
-  shouldExpandAtomicRMWInIR(AtomicRMWInst *) const {
-    return AtomicRMWExpansionKind::None;
+  virtual AtomicExpansionKind shouldExpandAtomicRMWInIR(AtomicRMWInst *) const {
+    return AtomicExpansionKind::None;
   }
 
   /// On some platforms, an AtomicRMW that never actually modifies the value
@@ -1211,18 +1230,6 @@ protected:
   /// llvm.savestack/llvm.restorestack should save and restore.
   void setStackPointerRegisterToSaveRestore(unsigned R) {
     StackPointerRegisterToSaveRestore = R;
-  }
-
-  /// If set to a physical register, this sets the register that receives the
-  /// exception address on entry to a landing pad.
-  void setExceptionPointerRegister(unsigned R) {
-    ExceptionPointerRegister = R;
-  }
-
-  /// If set to a physical register, this sets the register that receives the
-  /// exception typeid on entry to a landing pad.
-  void setExceptionSelectorRegister(unsigned R) {
-    ExceptionSelectorRegister = R;
   }
 
   /// Tells the code generator not to expand operations into sequences that use
@@ -1356,12 +1363,13 @@ protected:
                          LegalizeAction Action) {
     assert(VT.isValid() && (unsigned)CC < array_lengthof(CondCodeActions) &&
            "Table isn't big enough!");
-    /// The lower 5 bits of the SimpleTy index into Nth 2bit set from the 32-bit
-    /// value and the upper 27 bits index into the second dimension of the array
+    assert((unsigned)Action < 0x10 && "too many bits for bitfield array");
+    /// The lower 3 bits of the SimpleTy index into Nth 4bit set from the 32-bit
+    /// value and the upper 29 bits index into the second dimension of the array
     /// to select what 32-bit value to use.
-    uint32_t Shift = 2 * (VT.SimpleTy & 0xF);
-    CondCodeActions[CC][VT.SimpleTy >> 4] &= ~((uint32_t)0x3 << Shift);
-    CondCodeActions[CC][VT.SimpleTy >> 4] |= (uint32_t)Action << Shift;
+    uint32_t Shift = 4 * (VT.SimpleTy & 0x7);
+    CondCodeActions[CC][VT.SimpleTy >> 3] &= ~((uint32_t)0xF << Shift);
+    CondCodeActions[CC][VT.SimpleTy >> 3] |= (uint32_t)Action << Shift;
   }
 
   /// If Opc/OrigVT is specified as being promoted, the promotion code defaults
@@ -1702,6 +1710,12 @@ public:
     return false;
   }
 
+  // Return true if it is profitable to use a scalar input to a BUILD_VECTOR
+  // even if the vector itself has multiple uses.
+  virtual bool aggressivelyPreferBuildVectorSources(EVT VecVT) const {
+    return false;
+  }
+
   //===--------------------------------------------------------------------===//
   // Runtime Library hooks
   //
@@ -1834,14 +1848,6 @@ private:
   /// llvm.savestack/llvm.restorestack should save and restore.
   unsigned StackPointerRegisterToSaveRestore;
 
-  /// If set to a physical register, this specifies the register that receives
-  /// the exception address on entry to a landing pad.
-  unsigned ExceptionPointerRegister;
-
-  /// If set to a physical register, this specifies the register that receives
-  /// the exception typeid on entry to a landing pad.
-  unsigned ExceptionSelectorRegister;
-
   /// This indicates the default register class to use for each ValueType the
   /// target supports natively.
   const TargetRegisterClass *RegClassForVT[MVT::LAST_VALUETYPE];
@@ -1896,10 +1902,10 @@ private:
   /// For each condition code (ISD::CondCode) keep a LegalizeAction that
   /// indicates how instruction selection should deal with the condition code.
   ///
-  /// Because each CC action takes up 2 bits, we need to have the array size be
+  /// Because each CC action takes up 4 bits, we need to have the array size be
   /// large enough to fit all of the value types. This can be done by rounding
-  /// up the MVT::LAST_VALUETYPE value to the next multiple of 16.
-  uint32_t CondCodeActions[ISD::SETCC_INVALID][(MVT::LAST_VALUETYPE + 15) / 16];
+  /// up the MVT::LAST_VALUETYPE value to the next multiple of 8.
+  uint32_t CondCodeActions[ISD::SETCC_INVALID][(MVT::LAST_VALUETYPE + 7) / 8];
 
   ValueTypeActionImpl ValueTypeActions;
 
@@ -2080,9 +2086,9 @@ public:
   /// Returns a pair of (return value, chain).
   /// It is an error to pass RTLIB::UNKNOWN_LIBCALL as \p LC.
   std::pair<SDValue, SDValue> makeLibCall(SelectionDAG &DAG, RTLIB::Libcall LC,
-                                          EVT RetVT, const SDValue *Ops,
-                                          unsigned NumOps, bool isSigned,
-                                          SDLoc dl, bool doesNotReturn = false,
+                                          EVT RetVT, ArrayRef<SDValue> Ops,
+                                          bool isSigned, SDLoc dl,
+                                          bool doesNotReturn = false,
                                           bool isReturnValueUsed = true) const;
 
   //===--------------------------------------------------------------------===//
@@ -2410,6 +2416,13 @@ public:
     }
 
   };
+
+  // Mark inreg arguments for lib-calls. For normal calls this is done by
+  // the frontend ABI code.
+  virtual void markInRegArguments(SelectionDAG &DAG, 
+                 TargetLowering::ArgListTy &Args) const {
+    return;
+  }
 
   /// This function lowers an abstract call to a function into an actual call.
   /// This returns a pair of operands.  The first element is the return value

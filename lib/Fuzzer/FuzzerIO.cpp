@@ -21,10 +21,8 @@ namespace fuzzer {
 
 static long GetEpoch(const std::string &Path) {
   struct stat St;
-  if (stat(Path.c_str(), &St)) {
-    Printf("Can not stat: %s; exiting\n", Path.c_str());
-    exit(1);
-  }
+  if (stat(Path.c_str(), &St))
+    return 0;  // Can't stat, be conservative.
   return St.st_mtime;
 }
 
@@ -51,6 +49,10 @@ static std::vector<std::string> ListFilesInDir(const std::string &Dir,
 
 Unit FileToVector(const std::string &Path) {
   std::ifstream T(Path);
+  if (!T) {
+    Printf("No such directory: %s; exiting\n", Path.c_str());
+    exit(1);
+  }
   return Unit((std::istreambuf_iterator<char>(T)),
               std::istreambuf_iterator<char>());
 }

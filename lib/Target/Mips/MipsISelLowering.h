@@ -67,6 +67,10 @@ namespace llvm {
       // Return
       Ret,
 
+      // Interrupt, exception, error trap Return
+      ERet,
+
+      // Software Exception Return.
       EH_RETURN,
 
       // Node used to extract integer from accumulator.
@@ -258,16 +262,32 @@ namespace llvm {
     EmitInstrWithCustomInserter(MachineInstr *MI,
                                 MachineBasicBlock *MBB) const override;
 
-    struct LTStr {
-      bool operator()(const char *S1, const char *S2) const {
-        return strcmp(S1, S2) < 0;
-      }
-    };
-
     void HandleByVal(CCState *, unsigned &, unsigned) const override;
 
     unsigned getRegisterByName(const char* RegName, EVT VT,
                                SelectionDAG &DAG) const override;
+
+    /// If a physical register, this returns the register that receives the
+    /// exception address on entry to an EH pad.
+    unsigned
+    getExceptionPointerRegister(const Constant *PersonalityFn) const override {
+      return ABI.IsN64() ? Mips::A0_64 : Mips::A0;
+    }
+
+    /// If a physical register, this returns the register that receives the
+    /// exception typeid on entry to a landing pad.
+    unsigned
+    getExceptionSelectorRegister(const Constant *PersonalityFn) const override {
+      return ABI.IsN64() ? Mips::A1_64 : Mips::A1;
+    }
+
+    /// Returns true if a cast between SrcAS and DestAS is a noop.
+    bool isNoopAddrSpaceCast(unsigned SrcAS, unsigned DestAS) const override {
+      // Mips doesn't have any special address spaces so we just reserve
+      // the first 256 for software use (e.g. OpenCL) and treat casts
+      // between them as noops.
+      return SrcAS < 256 && DestAS < 256;
+    }
 
   protected:
     SDValue getGlobalReg(SelectionDAG &DAG, EVT Ty) const;
@@ -479,6 +499,9 @@ namespace llvm {
                         const SmallVectorImpl<ISD::OutputArg> &Outs,
                         const SmallVectorImpl<SDValue> &OutVals,
                         SDLoc dl, SelectionDAG &DAG) const override;
+
+    SDValue LowerInterruptReturn(SmallVectorImpl<SDValue> &RetOps, SDLoc DL,
+                                 SelectionDAG &DAG) const;
 
     bool shouldSignExtendTypeInLibCall(EVT Type, bool IsSigned) const override;
 

@@ -441,13 +441,13 @@ bool GlobalMerge::doMerge(const SmallVectorImpl<GlobalVariable *> &Globals,
         M, MergedTy, isConst, GlobalValue::PrivateLinkage, MergedInit,
         "_MergedGlobals", nullptr, GlobalVariable::NotThreadLocal, AddrSpace);
 
-    for (ssize_t k = i, idx = 0; k != j; k = GlobalSet.find_next(k)) {
+    for (ssize_t k = i, idx = 0; k != j; k = GlobalSet.find_next(k), ++idx) {
       GlobalValue::LinkageTypes Linkage = Globals[k]->getLinkage();
       std::string Name = Globals[k]->getName();
 
       Constant *Idx[2] = {
         ConstantInt::get(Int32Ty, 0),
-        ConstantInt::get(Int32Ty, idx++)
+        ConstantInt::get(Int32Ty, idx),
       };
       Constant *GEP =
           ConstantExpr::getInBoundsGetElementPtr(MergedTy, MergedGV, Idx);
@@ -461,8 +461,7 @@ bool GlobalMerge::doMerge(const SmallVectorImpl<GlobalVariable *> &Globals,
       // MergedGlobals variable) may be dead stripped at link time.
       if (Linkage != GlobalValue::InternalLinkage ||
           !TM->getTargetTriple().isOSBinFormatMachO()) {
-        auto *PTy = cast<PointerType>(GEP->getType());
-        GlobalAlias::create(PTy, Linkage, Name, GEP, &M);
+        GlobalAlias::create(Tys[idx], AddrSpace, Linkage, Name, GEP, &M);
       }
 
       NumMerged++;
@@ -521,43 +520,42 @@ bool GlobalMerge::doInitialization(Module &M) {
   setMustKeepGlobalVariables(M);
 
   // Grab all non-const globals.
-  for (Module::global_iterator I = M.global_begin(),
-         E = M.global_end(); I != E; ++I) {
+  for (auto &GV : M.globals()) {
     // Merge is safe for "normal" internal or external globals only
-    if (I->isDeclaration() || I->isThreadLocal() || I->hasSection())
+    if (GV.isDeclaration() || GV.isThreadLocal() || GV.hasSection())
       continue;
 
-    if (!(MergeExternalGlobals && I->hasExternalLinkage()) &&
-        !I->hasInternalLinkage())
+    if (!(MergeExternalGlobals && GV.hasExternalLinkage()) &&
+        !GV.hasInternalLinkage())
       continue;
 
-    PointerType *PT = dyn_cast<PointerType>(I->getType());
+    PointerType *PT = dyn_cast<PointerType>(GV.getType());
     assert(PT && "Global variable is not a pointer!");
 
     unsigned AddressSpace = PT->getAddressSpace();
 
     // Ignore fancy-aligned globals for now.
-    unsigned Alignment = DL.getPreferredAlignment(I);
-    Type *Ty = I->getValueType();
+    unsigned Alignment = DL.getPreferredAlignment(&GV);
+    Type *Ty = GV.getValueType();
     if (Alignment > DL.getABITypeAlignment(Ty))
       continue;
 
     // Ignore all 'special' globals.
-    if (I->getName().startswith("llvm.") ||
-        I->getName().startswith(".llvm."))
+    if (GV.getName().startswith("llvm.") ||
+        GV.getName().startswith(".llvm."))
       continue;
 
     // Ignore all "required" globals:
-    if (isMustKeepGlobalVariable(I))
+    if (isMustKeepGlobalVariable(&GV))
       continue;
 
     if (DL.getTypeAllocSize(Ty) < MaxOffset) {
-      if (TargetLoweringObjectFile::getKindForGlobal(I, *TM).isBSSLocal())
-        BSSGlobals[AddressSpace].push_back(I);
-      else if (I->isConstant())
-        ConstGlobals[AddressSpace].push_back(I);
+      if (TargetLoweringObjectFile::getKindForGlobal(&GV, *TM).isBSSLocal())
+        BSSGlobals[AddressSpace].push_back(&GV);
+      else if (GV.isConstant())
+        ConstGlobals[AddressSpace].push_back(&GV);
       else
-        Globals[AddressSpace].push_back(I);
+        Globals[AddressSpace].push_back(&GV);
     }
   }
 

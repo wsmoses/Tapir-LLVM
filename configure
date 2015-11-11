@@ -2033,7 +2033,7 @@ echo "$as_me: error: Already configured in ${srcdir}" >&2;}
   fi
 fi
 
-if test ${srcdir} == "." ; then
+if test ${srcdir} = "." ; then
   { { echo "$as_me:$LINENO: error: In-source builds are not allowed. Please configure from a separate build directory!" >&5
 echo "$as_me: error: In-source builds are not allowed. Please configure from a separate build directory!" >&2;}
    { (exit 1); exit 1; }; }
@@ -19378,4 +19378,16 @@ echo "$as_me: error: $ac_sub_configure failed for $ac_dir" >&2;}
     cd "$ac_popdir"
   done
 fi
+
+echo ""
+echo ""
+echo "################################################################################"
+echo "################################################################################"
+echo "The LLVM project has deprecated building with configure & make."
+echo "The autoconf-based makefile build system will be removed in the 3.9 release."
+echo ""
+echo "Please migrate to the CMake-based build system."
+echo "For more information see: http://llvm.org/docs/CMake.html"
+echo "################################################################################"
+echo "################################################################################"
 

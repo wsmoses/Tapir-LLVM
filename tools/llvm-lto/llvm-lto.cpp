@@ -13,9 +13,12 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/ADT/StringSet.h"
+#include "llvm/Bitcode/ReaderWriter.h"
 #include "llvm/CodeGen/CommandFlags.h"
+#include "llvm/IR/LLVMContext.h"
 #include "llvm/LTO/LTOCodeGenerator.h"
 #include "llvm/LTO/LTOModule.h"
+#include "llvm/Object/FunctionIndexObjectFile.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/ManagedStatic.h"
@@ -36,6 +39,10 @@ OptLevel("O",
          cl::ZeroOrMore,
          cl::init('2'));
 
+static cl::opt<bool> DisableVerify(
+    "disable-verify", cl::init(false),
+    cl::desc("Do not run the verifier during the optimization pipeline"));
+
 static cl::opt<bool>
 DisableInline("disable-inlining", cl::init(false),
   cl::desc("Do not run the inliner pass"));
@@ -51,6 +58,10 @@ DisableLTOVectorization("disable-lto-vectorization", cl::init(false),
 static cl::opt<bool>
 UseDiagnosticHandler("use-diagnostic-handler", cl::init(false),
   cl::desc("Use a diagnostic handler to test the handler interface"));
+
+static cl::opt<bool>
+    ThinLTO("thinlto", cl::init(false),
+            cl::desc("Only write combined global index for ThinLTO backends"));
 
 static cl::list<std::string>
 InputFilenames(cl::Positional, cl::OneOrMore,
@@ -90,6 +101,7 @@ struct ModuleInfo {
 
 static void handleDiagnostics(lto_codegen_diagnostic_severity_t Severity,
                               const char *Msg, void *) {
+  errs() << "llvm-lto: ";
   switch (Severity) {
   case LTO_DS_NOTE:
     errs() << "note: ";
@@ -147,6 +159,62 @@ static int listSymbols(StringRef Command, const TargetOptions &Options) {
   return 0;
 }
 
+/// Parse the function index out of an IR file and return the function
+/// index object if found, or nullptr if not.
+static std::unique_ptr<FunctionInfoIndex>
+getFunctionIndexForFile(StringRef Path, std::string &Error,
+                        LLVMContext &Context) {
+  std::unique_ptr<MemoryBuffer> Buffer;
+  ErrorOr<std::unique_ptr<MemoryBuffer>> BufferOrErr =
+      MemoryBuffer::getFile(Path);
+  if (std::error_code EC = BufferOrErr.getError()) {
+    Error = EC.message();
+    return nullptr;
+  }
+  Buffer = std::move(BufferOrErr.get());
+  ErrorOr<std::unique_ptr<object::FunctionIndexObjectFile>> ObjOrErr =
+      object::FunctionIndexObjectFile::create(Buffer->getMemBufferRef(),
+                                              Context);
+  if (std::error_code EC = ObjOrErr.getError()) {
+    Error = EC.message();
+    return nullptr;
+  }
+  return (*ObjOrErr)->takeIndex();
+}
+
+/// Create a combined index file from the input IR files and write it.
+///
+/// This is meant to enable testing of ThinLTO combined index generation,
+/// currently available via the gold plugin via -thinlto.
+static int createCombinedFunctionIndex(StringRef Command) {
+  LLVMContext Context;
+  FunctionInfoIndex CombinedIndex;
+  uint64_t NextModuleId = 0;
+  for (auto &Filename : InputFilenames) {
+    std::string Error;
+    std::unique_ptr<FunctionInfoIndex> Index =
+        getFunctionIndexForFile(Filename, Error, Context);
+    if (!Index) {
+      errs() << Command << ": error loading file '" << Filename
+             << "': " << Error << "\n";
+      return 1;
+    }
+    CombinedIndex.mergeFrom(std::move(Index), ++NextModuleId);
+  }
+  std::error_code EC;
+  assert(!OutputFilename.empty());
+  raw_fd_ostream OS(OutputFilename + ".thinlto.bc", EC,
+                    sys::fs::OpenFlags::F_None);
+  if (EC) {
+    errs() << Command << ": error opening the file '" << OutputFilename
+           << ".thinlto.bc': " << EC.message() << "\n";
+    return 1;
+  }
+  WriteFunctionSummaryToFile(CombinedIndex, OS);
+  OS.close();
+  return 0;
+}
+
 int main(int argc, char **argv) {
   // Print a stack trace if we signal out.
   sys::PrintStackTraceOnErrorSignal();
@@ -171,6 +239,9 @@ int main(int argc, char **argv) {
 
   if (ListSymbolsOnly)
     return listSymbols(argv[0], Options);
+
+  if (ThinLTO)
+    return createCombinedFunctionIndex(argv[0]);
 
   unsigned BaseArg = 0;
 
@@ -216,8 +287,11 @@ int main(int argc, char **argv) {
     if (SetMergedModule && i == BaseArg) {
       // Transfer ownership to the code generator.
       CodeGen.setModule(std::move(Module));
-    } else if (!CodeGen.addModule(Module.get()))
+    } else if (!CodeGen.addModule(Module.get())) {
+      // Print a message here so that we know addModule() did not abort.
+      errs() << argv[0] << ": error adding file '" << InputFilenames[i] << "'\n";
       return 1;
+    }
   }
 
   // Add all the exported symbols to the table of symbols to preserve.
@@ -245,7 +319,7 @@ int main(int argc, char **argv) {
 
   if (!OutputFilename.empty()) {
     std::string ErrorInfo;
-    if (!CodeGen.optimize(DisableInline, DisableGVNLoadPRE,
+    if (!CodeGen.optimize(DisableVerify, DisableInline, DisableGVNLoadPRE,
                           DisableLTOVectorization, ErrorInfo)) {
       errs() << argv[0] << ": error optimizing the code: " << ErrorInfo << "\n";
       return 1;
@@ -282,7 +356,7 @@ int main(int argc, char **argv) {
 
     std::string ErrorInfo;
     const char *OutputName = nullptr;
-    if (!CodeGen.compile_to_file(&OutputName, DisableInline,
+    if (!CodeGen.compile_to_file(&OutputName, DisableVerify, DisableInline,
                                  DisableGVNLoadPRE, DisableLTOVectorization,
                                  ErrorInfo)) {
       errs() << argv[0]
