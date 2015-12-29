@@ -124,6 +124,51 @@ static bool mergeEmptyReturnBlocks(Function &F) {
   return Changed;
 }
 
+static bool removeUselessSyncs(Function &F) {
+  bool Changed = false;
+  // Scan all the blocks in the function
+  for (Function::iterator BBI = F.begin(), E = F.end(); BBI != E; ) {
+    BasicBlock *BB = &*BBI++;
+    if (SyncInst *Sync = dyn_cast<SyncInst>(BB->getTerminator())) {
+      bool ReachingDetach = false;
+      SmallPtrSet<BasicBlock *, 32> Visited;
+      SmallVector<BasicBlock *, 32> WorkList;
+      WorkList.push_back(BB);
+      while (!WorkList.empty()) {
+	BasicBlock *PBB = WorkList.pop_back_val();
+	if (!Visited.insert(PBB).second)
+	  continue;
+
+	for (pred_iterator PI = pred_begin(PBB), PE = pred_end(PBB);
+	     PI != PE; ++PI) {
+	  BasicBlock *Pred = *PI;
+	  TerminatorInst *PT = Pred->getTerminator();
+	  if (isa<DetachInst>(PT)) {
+	    if (PT->getSuccessor(0) == Pred)
+	      continue;
+	    else // PT->getSuccessor(1) == Pred
+	      ReachingDetach = true;
+	  }
+	  if (ReachingDetach)
+	    break;
+
+	  if (isa<ReattachInst>(PT) || isa<SyncInst>(PT))
+	    continue;
+
+	  WorkList.push_back(Pred);
+	}
+      }
+      if (!ReachingDetach) {
+	IRBuilder<> Builder(Sync);
+	Builder.CreateBr(Sync->getSuccessor(0));
+	Sync->eraseFromParent();
+	Changed = true;
+      }
+    }
+  }
+  return Changed;
+}
+
 /// Call SimplifyCFG on all the blocks in the function,
 /// iterating until no more changes are made.
 static bool iterativelySimplifyCFG(Function &F, const TargetTransformInfo &TTI,
@@ -151,6 +196,7 @@ static bool simplifyFunctionCFG(Function &F, const TargetTransformInfo &TTI,
   bool EverChanged = removeUnreachableBlocks(F);
   EverChanged |= mergeEmptyReturnBlocks(F);
   EverChanged |= iterativelySimplifyCFG(F, TTI, AC, BonusInstThreshold);
+  EverChanged |= removeUselessSyncs(F);
 
   // If neither pass changed anything, we're done.
   if (!EverChanged) return false;
@@ -166,6 +212,7 @@ static bool simplifyFunctionCFG(Function &F, const TargetTransformInfo &TTI,
   do {
     EverChanged = iterativelySimplifyCFG(F, TTI, AC, BonusInstThreshold);
     EverChanged |= removeUnreachableBlocks(F);
+    EverChanged |= removeUselessSyncs(F);
   } while (EverChanged);
 
   return true;
