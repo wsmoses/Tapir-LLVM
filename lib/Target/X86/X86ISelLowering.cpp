@@ -25,6 +25,7 @@
 #include "llvm/ADT/Statistic.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/StringSwitch.h"
+#include "llvm/Analysis/LibCallSemantics.h"
 #include "llvm/CodeGen/IntrinsicLowering.h"
 #include "llvm/CodeGen/MachineFrameInfo.h"
 #include "llvm/CodeGen/MachineFunction.h"
@@ -198,23 +199,29 @@ X86TargetLowering::X86TargetLowering(const X86TargetMachine &TM,
     setOperationAction(ISD::SINT_TO_FP     , MVT::i32  , Promote);
   }
 
-  // In 32-bit mode these are custom lowered.  In 64-bit mode F32 and F64
-  // are Legal, f80 is custom lowered.
-  setOperationAction(ISD::FP_TO_SINT     , MVT::i64  , Custom);
-  setOperationAction(ISD::SINT_TO_FP     , MVT::i64  , Custom);
-
   // Promote i1/i8 FP_TO_SINT to larger FP_TO_SINTS's, as X86 doesn't have
   // this operation.
   setOperationAction(ISD::FP_TO_SINT       , MVT::i1   , Promote);
   setOperationAction(ISD::FP_TO_SINT       , MVT::i8   , Promote);
 
-  if (X86ScalarSSEf32) {
-    setOperationAction(ISD::FP_TO_SINT     , MVT::i16  , Promote);
-    // f32 and f64 cases are Legal, f80 case is not
-    setOperationAction(ISD::FP_TO_SINT     , MVT::i32  , Custom);
+  if (!Subtarget->useSoftFloat()) {
+    // In 32-bit mode these are custom lowered.  In 64-bit mode F32 and F64
+    // are Legal, f80 is custom lowered.
+    setOperationAction(ISD::FP_TO_SINT     , MVT::i64  , Custom);
+    setOperationAction(ISD::SINT_TO_FP     , MVT::i64  , Custom);
+
+    if (X86ScalarSSEf32) {
+      setOperationAction(ISD::FP_TO_SINT     , MVT::i16  , Promote);
+      // f32 and f64 cases are Legal, f80 case is not
+      setOperationAction(ISD::FP_TO_SINT     , MVT::i32  , Custom);
+    } else {
+      setOperationAction(ISD::FP_TO_SINT     , MVT::i16  , Custom);
+      setOperationAction(ISD::FP_TO_SINT     , MVT::i32  , Custom);
+    }
   } else {
-    setOperationAction(ISD::FP_TO_SINT     , MVT::i16  , Custom);
-    setOperationAction(ISD::FP_TO_SINT     , MVT::i32  , Custom);
+    setOperationAction(ISD::FP_TO_SINT     , MVT::i16  , Promote);
+    setOperationAction(ISD::FP_TO_SINT     , MVT::i32  , Expand);
+    setOperationAction(ISD::FP_TO_SINT     , MVT::i64  , Expand);
   }
 
   // Handle FP_TO_UINT by promoting the destination to a larger signed
@@ -476,13 +483,6 @@ X86TargetLowering::X86TargetLowering(const X86TargetMachine &TM,
     setOperationAction(ISD::EH_LABEL, MVT::Other, Expand);
   }
 
-  if (Subtarget->isTarget64BitLP64()) {
-    setExceptionPointerRegister(X86::RAX);
-    setExceptionSelectorRegister(X86::RDX);
-  } else {
-    setExceptionPointerRegister(X86::EAX);
-    setExceptionSelectorRegister(X86::EDX);
-  }
   setOperationAction(ISD::FRAME_TO_ARGS_OFFSET, MVT::i32, Custom);
   setOperationAction(ISD::FRAME_TO_ARGS_OFFSET, MVT::i64, Custom);
 
@@ -7861,6 +7861,59 @@ static SDValue lowerVectorShuffleAsElementInsertion(
   return V2;
 }
 
+/// \brief Try to lower broadcast of a single - truncated - integer element,
+/// coming from a scalar_to_vector/build_vector node \p V0 with larger elements.
+///
+/// This assumes we have AVX2.
+static SDValue lowerVectorShuffleAsTruncBroadcast(SDLoc DL, MVT VT, SDValue V0,
+                                                  int BroadcastIdx,
+                                                  const X86Subtarget *Subtarget,
+                                                  SelectionDAG &DAG) {
+  assert(Subtarget->hasAVX2() &&
+         "We can only lower integer broadcasts with AVX2!");
+
+  EVT EltVT = VT.getVectorElementType();
+  EVT V0VT = V0.getValueType();
+
+  assert(VT.isInteger() && "Unexpected non-integer trunc broadcast!");
+  assert(V0VT.isVector() && "Unexpected non-vector vector-sized value!");
+
+  EVT V0EltVT = V0VT.getVectorElementType();
+  if (!V0EltVT.isInteger())
+    return SDValue();
+
+  const unsigned EltSize = EltVT.getSizeInBits();
+  const unsigned V0EltSize = V0EltVT.getSizeInBits();
+
+  // This is only a truncation if the original element type is larger.
+  if (V0EltSize <= EltSize)
+    return SDValue();
+
+  assert(((V0EltSize % EltSize) == 0) &&
+         "Scalar type sizes must all be powers of 2 on x86!");
+
+  const unsigned V0Opc = V0.getOpcode();
+  const unsigned Scale = V0EltSize / EltSize;
+  const unsigned V0BroadcastIdx = BroadcastIdx / Scale;
+
+  if ((V0Opc != ISD::SCALAR_TO_VECTOR || V0BroadcastIdx != 0) &&
+      V0Opc != ISD::BUILD_VECTOR)
+    return SDValue();
+
+  SDValue Scalar = V0.getOperand(V0BroadcastIdx);
+
+  // If we're extracting non-least-significant bits, shift so we can truncate.
+  // Hopefully, we can fold away the trunc/srl/load into the broadcast.
+  // Even if we can't (and !isShuffleFoldableLoad(Scalar)), prefer
+  // vpbroadcast+vmovd+shr to vpshufb(m)+vmovd.
+  if (const int OffsetIdx = BroadcastIdx % Scale)
+    Scalar = DAG.getNode(ISD::SRL, DL, Scalar.getValueType(), Scalar,
+            DAG.getConstant(OffsetIdx * EltSize, DL, Scalar.getValueType()));
+
+  return DAG.getNode(X86ISD::VBROADCAST, DL, VT,
+                     DAG.getNode(ISD::TRUNCATE, DL, EltVT, Scalar));
+}
+
 /// \brief Try to lower broadcast of a single element.
 ///
 /// For convenience, this code also bundles all of the subtarget feature set
@@ -7924,18 +7977,10 @@ static SDValue lowerVectorShuffleAsBroadcast(SDLoc DL, MVT VT, SDValue V,
   // First, look through bitcast: if the original value has a larger element
   // type than the shuffle, the broadcast element is in essence truncated.
   // Make that explicit to ease folding.
-  if (V.getOpcode() == ISD::BITCAST && VT.isInteger()) {
-    MVT EltVT = VT.getVectorElementType();
-    SDValue V0 = V.getOperand(0);
-    MVT V0VT = V0.getSimpleValueType();
-
-    if (V0VT.isInteger() && V0VT.getVectorElementType().bitsGT(EltVT) &&
-        ((V0.getOpcode() == ISD::BUILD_VECTOR ||
-         (V0.getOpcode() == ISD::SCALAR_TO_VECTOR && BroadcastIdx == 0)))) {
-      V = DAG.getNode(ISD::TRUNCATE, DL, EltVT, V0.getOperand(BroadcastIdx));
-      BroadcastIdx = 0;
-    }
-  }
+  if (V.getOpcode() == ISD::BITCAST && VT.isInteger())
+    if (SDValue TruncBroadcast = lowerVectorShuffleAsTruncBroadcast(
+            DL, VT, V.getOperand(0), BroadcastIdx, Subtarget, DAG))
+      return TruncBroadcast;
 
   // Also check the simpler case, where we can directly reuse the scalar.
   if (V.getOpcode() == ISD::BUILD_VECTOR ||
@@ -17201,6 +17246,21 @@ SDValue X86TargetLowering::LowerFRAME_TO_ARGS_OFFSET(SDValue Op,
   return DAG.getIntPtrConstant(2 * RegInfo->getSlotSize(), SDLoc(Op));
 }
 
+unsigned X86TargetLowering::getExceptionPointerRegister(
+    const Constant *PersonalityFn) const {
+  if (classifyEHPersonality(PersonalityFn) == EHPersonality::CoreCLR)
+    return Subtarget->isTarget64BitLP64() ? X86::RDX : X86::EDX;
+
+  return Subtarget->isTarget64BitLP64() ? X86::RAX : X86::EAX;
+}
+
+unsigned X86TargetLowering::getExceptionSelectorRegister(
+    const Constant *PersonalityFn) const {
+  // Funclet personalities don't use selectors (the runtime does the selection).
+  assert(!isFuncletEHPersonality(classifyEHPersonality(PersonalityFn)));
+  return Subtarget->isTarget64BitLP64() ? X86::RDX : X86::EDX;
+}
+
 SDValue X86TargetLowering::LowerEH_RETURN(SDValue Op, SelectionDAG &DAG) const {
   SDValue Chain     = Op.getOperand(0);
   SDValue Offset    = Op.getOperand(1);
@@ -21326,36 +21386,26 @@ X86TargetLowering::EmitLoweredSegAlloca(MachineInstr *MI,
 MachineBasicBlock *
 X86TargetLowering::EmitLoweredWinAlloca(MachineInstr *MI,
                                         MachineBasicBlock *BB) const {
-  DebugLoc DL = MI->getDebugLoc();
-
   assert(!Subtarget->isTargetMachO());
-
-  Subtarget->getFrameLowering()->emitStackProbeCall(*BB->getParent(), *BB, MI,
-                                                    DL);
-
-  MI->eraseFromParent();   // The pseudo instruction is gone now.
-  return BB;
+  DebugLoc DL = MI->getDebugLoc();
+  MachineInstr *ResumeMI = Subtarget->getFrameLowering()->emitStackProbe(
+      *BB->getParent(), *BB, MI, DL, false);
+  MachineBasicBlock *ResumeBB = ResumeMI->getParent();
+  MI->eraseFromParent(); // The pseudo instruction is gone now.
+  return ResumeBB;
 }
 
 MachineBasicBlock *
 X86TargetLowering::EmitLoweredCatchRet(MachineInstr *MI,
                                        MachineBasicBlock *BB) const {
   MachineFunction *MF = BB->getParent();
-  const Constant *PerFn = MF->getFunction()->getPersonalityFn();
-  bool IsSEH = isAsynchronousEHPersonality(classifyEHPersonality(PerFn));
   const TargetInstrInfo &TII = *Subtarget->getInstrInfo();
   MachineBasicBlock *TargetMBB = MI->getOperand(0).getMBB();
   DebugLoc DL = MI->getDebugLoc();
 
-  // SEH does not outline catch bodies into funclets. Turn CATCHRETs into
-  // JMP_4s, possibly with some extra restoration code for 32-bit EH.
-  if (IsSEH) {
-    if (Subtarget->is32Bit())
-      BuildMI(*BB, MI, DL, TII.get(X86::EH_RESTORE));
-    BuildMI(*BB, MI, DL, TII.get(X86::JMP_4)).addMBB(TargetMBB);
-    MI->eraseFromParent();
-    return BB;
-  }
+  assert(!isAsynchronousEHPersonality(
+             classifyEHPersonality(MF->getFunction()->getPersonalityFn())) &&
+         "SEH does not use catchret!");
 
   // Only 32-bit EH needs to worry about manually restoring stack pointers.
   if (!Subtarget->is32Bit())
@@ -21365,15 +21415,31 @@ X86TargetLowering::EmitLoweredCatchRet(MachineInstr *MI,
   // the new block to the return destination with a normal JMP_4.
   MachineBasicBlock *RestoreMBB =
       MF->CreateMachineBasicBlock(BB->getBasicBlock());
-  MF->insert(TargetMBB->getIterator(), RestoreMBB);
-  BB->removeSuccessor(TargetMBB);
+  assert(BB->succ_size() == 1);
+  MF->insert(std::next(BB->getIterator()), RestoreMBB);
+  RestoreMBB->transferSuccessorsAndUpdatePHIs(BB);
   BB->addSuccessor(RestoreMBB);
-  RestoreMBB->addSuccessor(TargetMBB);
   MI->getOperand(0).setMBB(RestoreMBB);
 
   auto RestoreMBBI = RestoreMBB->begin();
   BuildMI(*RestoreMBB, RestoreMBBI, DL, TII.get(X86::EH_RESTORE));
   BuildMI(*RestoreMBB, RestoreMBBI, DL, TII.get(X86::JMP_4)).addMBB(TargetMBB);
+  return BB;
+}
+
+MachineBasicBlock *
+X86TargetLowering::EmitLoweredCatchPad(MachineInstr *MI,
+                                       MachineBasicBlock *BB) const {
+  MachineFunction *MF = BB->getParent();
+  const Constant *PerFn = MF->getFunction()->getPersonalityFn();
+  bool IsSEH = isAsynchronousEHPersonality(classifyEHPersonality(PerFn));
+  // Only 32-bit SEH requires special handling for catchpad.
+  if (IsSEH && Subtarget->is32Bit()) {
+    const TargetInstrInfo &TII = *Subtarget->getInstrInfo();
+    DebugLoc DL = MI->getDebugLoc();
+    BuildMI(*BB, MI, DL, TII.get(X86::EH_RESTORE));
+  }
+  MI->eraseFromParent();
   return BB;
 }
 
@@ -21759,6 +21825,8 @@ X86TargetLowering::EmitInstrWithCustomInserter(MachineInstr *MI,
     return EmitLoweredWinAlloca(MI, BB);
   case X86::CATCHRET:
     return EmitLoweredCatchRet(MI, BB);
+  case X86::CATCHPAD:
+    return EmitLoweredCatchPad(MI, BB);
   case X86::SEG_ALLOCA_32:
   case X86::SEG_ALLOCA_64:
     return EmitLoweredSegAlloca(MI, BB);

@@ -335,6 +335,15 @@ enum { BITCODE_CURRENT_EPOCH = 0 };
     SYNCHSCOPE_CROSSTHREAD = 1
   };
 
+  /// Markers and flags for call instruction.
+  enum CallMarkersFlags {
+    CALL_TAIL = 0,
+    CALL_CCONV = 1,
+    CALL_MUSTTAIL = 14,
+    CALL_EXPLICIT_TYPE = 15,
+    CALL_NOTAIL = 16
+  };
+
   // The function body block (FUNCTION_BLOCK_ID) describes function bodies.  It
   // can contain a constant block (CONSTANTS_BLOCK_ID).
   enum FunctionCodes {
@@ -410,6 +419,7 @@ enum { BITCODE_CURRENT_EPOCH = 0 };
     FUNC_CODE_INST_CATCHENDPAD = 53, // CATCHENDPAD: [] or [bb#]
     FUNC_CODE_INST_CLEANUPENDPAD = 54, // CLEANUPENDPAD: [val] or [val,bb#]
     FUNC_CODE_OPERAND_BUNDLE = 55, // OPERAND_BUNDLE: [tag#, value...]
+
     FUNC_CODE_INST_DETACH      = 56, // DETACH: [bb#, bb#]
     FUNC_CODE_INST_REATTACH    = 57, // REATTACH
     FUNC_CODE_INST_SYNC        = 58, // SYNC: [bb#]

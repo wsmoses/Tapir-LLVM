@@ -391,10 +391,10 @@ MipsTargetLowering::MipsTargetLowering(const MipsTargetMachine &TM,
   setOperationAction(ISD::STACKSAVE,         MVT::Other, Expand);
   setOperationAction(ISD::STACKRESTORE,      MVT::Other, Expand);
 
-  setOperationAction(ISD::ATOMIC_LOAD,       MVT::i32,    Expand);
-  setOperationAction(ISD::ATOMIC_LOAD,       MVT::i64,    Expand);
-  setOperationAction(ISD::ATOMIC_STORE,      MVT::i32,    Expand);
-  setOperationAction(ISD::ATOMIC_STORE,      MVT::i64,    Expand);
+  if (!Subtarget.isGP64bit()) {
+    setOperationAction(ISD::ATOMIC_LOAD,     MVT::i64,   Expand);
+    setOperationAction(ISD::ATOMIC_STORE,    MVT::i64,   Expand);
+  }
 
   setInsertFencesForAtomic(true);
 
@@ -437,9 +437,6 @@ MipsTargetLowering::MipsTargetLowering(const MipsTargetMachine &TM,
   setMinStackArgumentAlignment((ABI.IsN32() || ABI.IsN64()) ? 8 : 4);
 
   setStackPointerRegisterToSaveRestore(ABI.IsN64() ? Mips::SP_64 : Mips::SP);
-
-  setExceptionPointerRegister(ABI.IsN64() ? Mips::A0_64 : Mips::A0);
-  setExceptionSelectorRegister(ABI.IsN64() ? Mips::A1_64 : Mips::A1);
 
   MaxStoresPerMemcpy = 16;
 

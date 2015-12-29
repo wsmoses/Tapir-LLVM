@@ -1743,22 +1743,9 @@ SDValue DAGCombiner::visitADD(SDNode *N) {
     return SDValue(N, 0);
 
   // fold (a+b) -> (a|b) iff a and b share no bits.
-  if (VT.isInteger() && !VT.isVector()) {
-    APInt LHSZero, LHSOne;
-    APInt RHSZero, RHSOne;
-    DAG.computeKnownBits(N0, LHSZero, LHSOne);
-
-    if (LHSZero.getBoolValue()) {
-      DAG.computeKnownBits(N1, RHSZero, RHSOne);
-
-      // If all possibly-set bits on the LHS are clear on the RHS, return an OR.
-      // If all possibly-set bits on the RHS are clear on the LHS, return an OR.
-      if ((RHSZero & ~LHSZero) == ~LHSZero || (LHSZero & ~RHSZero) == ~RHSZero){
-        if (!LegalOperations || TLI.isOperationLegal(ISD::OR, VT))
-          return DAG.getNode(ISD::OR, SDLoc(N), VT, N0, N1);
-      }
-    }
-  }
+  if ((!LegalOperations || TLI.isOperationLegal(ISD::OR, VT)) &&
+      VT.isInteger() && !VT.isVector() && DAG.haveNoCommonBitsSet(N0, N1))
+    return DAG.getNode(ISD::OR, SDLoc(N), VT, N0, N1);
 
   // fold (add x, shl(0 - y, n)) -> sub(x, shl(y, n))
   if (N1.getOpcode() == ISD::SHL && N1.getOperand(0).getOpcode() == ISD::SUB &&
@@ -3206,7 +3193,8 @@ SDValue DAGCombiner::visitAND(SDNode *N) {
         // be expensive (and would be wrong if the type is not byte sized).
         if (!LN0->isVolatile() && LoadedVT.bitsGT(ExtVT) && ExtVT.isRound() &&
             (!LegalOperations || TLI.isLoadExtLegal(ISD::ZEXTLOAD, LoadResultTy,
-                                                    ExtVT))) {
+                                                    ExtVT)) &&
+            TLI.shouldReduceLoadWidth(LN0, ISD::ZEXTLOAD, ExtVT)) {
           EVT PtrType = LN0->getOperand(1).getValueType();
 
           unsigned Alignment = LN0->getAlignment();

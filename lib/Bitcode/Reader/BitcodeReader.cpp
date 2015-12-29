@@ -271,6 +271,9 @@ public:
   /// \returns true if an error occurred.
   ErrorOr<std::string> parseTriple();
 
+  /// Cheap mechanism to just extract the identification block out of bitcode.
+  ErrorOr<std::string> parseIdentificationBlock();
+
   static uint64_t decodeSignRotatedValue(uint64_t V);
 
   /// Materialize any deferred Metadata block.
@@ -3729,6 +3732,41 @@ ErrorOr<std::string> BitcodeReader::parseTriple() {
   }
 }
 
+ErrorOr<std::string> BitcodeReader::parseIdentificationBlock() {
+  if (std::error_code EC = initStream(nullptr))
+    return EC;
+
+  // Sniff for the signature.
+  if (!hasValidBitcodeHeader(Stream))
+    return error("Invalid bitcode signature");
+
+  // We expect a number of well-defined blocks, though we don't necessarily
+  // need to understand them all.
+  while (1) {
+    BitstreamEntry Entry = Stream.advance();
+    switch (Entry.Kind) {
+    case BitstreamEntry::Error:
+      return error("Malformed block");
+    case BitstreamEntry::EndBlock:
+      return std::error_code();
+
+    case BitstreamEntry::SubBlock:
+      if (Entry.ID == bitc::IDENTIFICATION_BLOCK_ID) {
+        if (std::error_code EC = parseBitcodeVersion())
+          return EC;
+        return ProducerIdentification;
+      }
+      // Ignore other sub-blocks.
+      if (Stream.SkipBlock())
+        return error("Malformed block");
+      continue;
+    case BitstreamEntry::Record:
+      Stream.skipRecord(Entry.ID);
+      continue;
+    }
+  }
+}
+
 /// Parse metadata attachments.
 std::error_code BitcodeReader::parseMetadataAttachment(Function &F) {
   if (Stream.EnterSubBlock(bitc::METADATA_ATTACHMENT_ID))
@@ -4980,7 +5018,7 @@ std::error_code BitcodeReader::parseFunctionBody(Function *F) {
       unsigned CCInfo = Record[OpNum++];
 
       FunctionType *FTy = nullptr;
-      if (CCInfo >> 15 & 1 &&
+      if (CCInfo >> bitc::CALL_EXPLICIT_TYPE & 1 &&
           !(FTy = dyn_cast<FunctionType>(getTypeByID(Record[OpNum++]))))
         return error("Explicit call type is not a function type");
 
@@ -5030,12 +5068,14 @@ std::error_code BitcodeReader::parseFunctionBody(Function *F) {
       OperandBundles.clear();
       InstructionList.push_back(I);
       cast<CallInst>(I)->setCallingConv(
-          static_cast<CallingConv::ID>((0x7ff & CCInfo) >> 1));
+          static_cast<CallingConv::ID>((0x7ff & CCInfo) >> bitc::CALL_CCONV));
       CallInst::TailCallKind TCK = CallInst::TCK_None;
-      if (CCInfo & 1)
+      if (CCInfo & 1 << bitc::CALL_TAIL)
         TCK = CallInst::TCK_Tail;
-      if (CCInfo & (1 << 14))
+      if (CCInfo & (1 << bitc::CALL_MUSTTAIL))
         TCK = CallInst::TCK_MustTail;
+      if (CCInfo & (1 << bitc::CALL_NOTAIL))
+        TCK = CallInst::TCK_NoTail;
       cast<CallInst>(I)->setTailCallKind(TCK);
       cast<CallInst>(I)->setAttributes(PAL);
       break;
@@ -5865,6 +5905,17 @@ llvm::getBitcodeTargetTriple(MemoryBufferRef Buffer, LLVMContext &Context,
   if (Triple.getError())
     return "";
   return Triple.get();
+}
+
+std::string
+llvm::getBitcodeProducerString(MemoryBufferRef Buffer, LLVMContext &Context,
+                               DiagnosticHandlerFunction DiagnosticHandler) {
+  std::unique_ptr<MemoryBuffer> Buf = MemoryBuffer::getMemBuffer(Buffer, false);
+  BitcodeReader R(Buf.release(), Context, DiagnosticHandler);
+  ErrorOr<std::string> ProducerString = R.parseIdentificationBlock();
+  if (ProducerString.getError())
+    return "";
+  return ProducerString.get();
 }
 
 // Parse the specified bitcode buffer, returning the function info index.

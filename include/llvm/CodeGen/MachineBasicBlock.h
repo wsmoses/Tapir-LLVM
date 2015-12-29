@@ -65,7 +65,8 @@ private:
   void createNode(const MachineInstr &);
 };
 
-class MachineBasicBlock : public ilist_node<MachineBasicBlock> {
+class MachineBasicBlock
+    : public ilist_node_with_parent<MachineBasicBlock, MachineFunction> {
 public:
   /// Pair of physical register and lane mask.
   /// This is not simply a std::pair typedef because the members should be named
@@ -272,6 +273,11 @@ public:
   reverse_iterator       rend  ()       { return instr_rend();   }
   const_reverse_iterator rend  () const { return instr_rend();   }
 
+  /// Support for MachineInstr::getNextNode().
+  static Instructions MachineBasicBlock::*getSublistAccess(MachineInstr *) {
+    return &MachineBasicBlock::Insts;
+  }
+
   inline iterator_range<iterator> terminators() {
     return iterator_range<iterator>(getFirstTerminator(), end());
   }
@@ -375,6 +381,14 @@ public:
   iterator_range<livein_iterator> liveins() const {
     return make_range(livein_begin(), livein_end());
   }
+
+  /// Get the clobber mask for the start of this basic block. Funclets use this
+  /// to prevent register allocation across funclet transitions.
+  const uint32_t *getBeginClobberMask(const TargetRegisterInfo *TRI) const;
+
+  /// Get the clobber mask for the end of the basic block.
+  /// \see getBeginClobberMask()
+  const uint32_t *getEndClobberMask(const TargetRegisterInfo *TRI) const;
 
   /// Return alignment of the basic block. The alignment is specified as
   /// log2(bytes).
@@ -548,8 +562,8 @@ public:
     return const_cast<MachineBasicBlock *>(this)->getLastNonDebugInstr();
   }
 
-  /// Convenience function that returns true if the block has no successors and
-  /// contains a return instruction.
+  /// Convenience function that returns true if the block ends in a return
+  /// instruction.
   bool isReturnBlock() const {
     return !empty() && back().isReturn();
   }

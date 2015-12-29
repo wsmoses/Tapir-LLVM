@@ -1144,6 +1144,13 @@ define void @instructions.call_musttail(i8* inalloca %val) {
   ret void
 }
 
+define void @instructions.call_notail() {
+  notail call void @f1()
+  ; CHECK: notail call void @f1()
+
+  ret void
+}
+
 define void @instructions.landingpad() personality i32 -2 {
   invoke void @llvm.donothing() to label %proceed unwind label %catch1
   invoke void @llvm.donothing() to label %proceed unwind label %catch2
@@ -1501,8 +1508,8 @@ normal:
 ; CHECK: attributes #31 = { "cpu"="cortex-a8" }
 ; CHECK: attributes #32 = { norecurse }
 ; CHECK: attributes #33 = { nounwind readnone }
-; CHECK: attributes #34 = { nounwind readonly argmemonly }
-; CHECK: attributes #35 = { nounwind argmemonly }
+; CHECK: attributes #34 = { argmemonly nounwind readonly }
+; CHECK: attributes #35 = { argmemonly nounwind }
 ; CHECK: attributes #36 = { nounwind readonly }
 ; CHECK: attributes #37 = { builtin }
 

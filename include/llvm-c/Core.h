@@ -261,6 +261,10 @@ typedef enum {
   LLVMDetach         = 68,
   LLVMReattach       = 69,
   LLVMSync           = 70,
+<<<<<<< HEAD
+
+=======
+>>>>>>> 8d00ea68834b61ce260b8111beb594cbdc8c78b9
 } LLVMOpcode;
 
 typedef enum {

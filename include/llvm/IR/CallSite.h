@@ -375,12 +375,16 @@ public:
     CALLSITE_DELEGATE_GETTER(getNumTotalBundleOperands());
   }
 
-  OperandBundleUse getOperandBundle(unsigned Index) const {
-    CALLSITE_DELEGATE_GETTER(getOperandBundle(Index));
+  OperandBundleUse getOperandBundleAt(unsigned Index) const {
+    CALLSITE_DELEGATE_GETTER(getOperandBundleAt(Index));
   }
 
   Optional<OperandBundleUse> getOperandBundle(StringRef Name) const {
     CALLSITE_DELEGATE_GETTER(getOperandBundle(Name));
+  }
+
+  Optional<OperandBundleUse> getOperandBundle(uint32_t ID) const {
+    CALLSITE_DELEGATE_GETTER(getOperandBundle(ID));
   }
 
 #undef CALLSITE_DELEGATE_GETTER

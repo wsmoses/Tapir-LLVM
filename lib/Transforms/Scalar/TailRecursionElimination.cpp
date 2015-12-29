@@ -305,7 +305,9 @@ bool TailCallElim::markTails(Function &F, bool &AllCallsAreTailCalls) {
       if (!CI || CI->isTailCall())
         continue;
 
-      if (CI->doesNotAccessMemory()) {
+      bool IsNoTail = CI->isNoTailCall();
+
+      if (!IsNoTail && CI->doesNotAccessMemory()) {
         // A call to a readnone function whose arguments are all things computed
         // outside this function can be marked tail. Even if you stored the
         // alloca address into a global, a readnone function can't load the
@@ -333,7 +335,7 @@ bool TailCallElim::markTails(Function &F, bool &AllCallsAreTailCalls) {
         }
       }
 
-      if (Escaped == UNESCAPED && !Tracker.AllocaUsers.count(CI)) {
+      if (!IsNoTail && Escaped == UNESCAPED && !Tracker.AllocaUsers.count(CI)) {
         DeferredTails.push_back(CI);
       } else {
         AllCallsAreTailCalls = false;
@@ -651,6 +653,13 @@ bool TailCallElim::EliminateRecursiveTailCall(CallInst *CI, ReturnInst *Ret,
     // is an associative and commutative operation that could be transformed
     // using accumulator recursion elimination.  Check to see if this is the
     // case, and if so, remember the initial accumulator value for later.
+<<<<<<< HEAD
+    if ((AccumulatorRecursionEliminationInitVal =
+             CanTransformAccumulatorRecursion(&*BBI, CI))) {
+      // Yes, this is accumulator recursion.  Remember which instruction
+      // accumulates.
+      AccumulatorRecursionInstr = &*BBI;
+=======
     // if ((AccumulatorRecursionEliminationInitVal =
     //          CanTransformAccumulatorRecursion(&*BBI, CI))) {
     if (CanTransformAccumulatorRecursion(&*BBI, CI)) {
@@ -667,6 +676,7 @@ bool TailCallElim::EliminateRecursiveTailCall(CallInst *CI, ReturnInst *Ret,
       } else {
         return false;   // Otherwise, we cannot eliminate the tail recursion!
       }
+>>>>>>> 8d00ea68834b61ce260b8111beb594cbdc8c78b9
     } else {
       return false;   // Otherwise, we cannot eliminate the tail recursion!
     }

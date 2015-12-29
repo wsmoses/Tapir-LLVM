@@ -73,7 +73,6 @@ BitVector SIRegisterInfo::getReservedRegs(const MachineFunction &MF) const {
 
 unsigned SIRegisterInfo::getRegPressureSetLimit(const MachineFunction &MF,
                                                 unsigned Idx) const {
-
   const AMDGPUSubtarget &STI = MF.getSubtarget<AMDGPUSubtarget>();
   // FIXME: We should adjust the max number of waves based on LDS size.
   unsigned SGPRLimit = getNumSGPRsAllowed(STI.getGeneration(),
@@ -82,17 +81,18 @@ unsigned SIRegisterInfo::getRegPressureSetLimit(const MachineFunction &MF,
 
   for (regclass_iterator I = regclass_begin(), E = regclass_end();
        I != E; ++I) {
+    const TargetRegisterClass *RC = *I;
 
-    unsigned NumSubRegs = std::max((int)(*I)->getSize() / 4, 1);
+    unsigned NumSubRegs = std::max((int)RC->getSize() / 4, 1);
     unsigned Limit;
 
-    if (isSGPRClass(*I)) {
+    if (isSGPRClass(RC)) {
       Limit = SGPRLimit / NumSubRegs;
     } else {
       Limit = VGPRLimit / NumSubRegs;
     }
 
-    const int *Sets = getRegClassPressureSets(*I);
+    const int *Sets = getRegClassPressureSets(RC);
     assert(Sets);
     for (unsigned i = 0; Sets[i] != -1; ++i) {
       if (Sets[i] == (int)Idx)

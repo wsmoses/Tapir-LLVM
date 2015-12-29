@@ -256,8 +256,10 @@ ARMTargetLowering::ARMTargetLowering(const TargetMachine &TM,
   setLibcallName(RTLIB::SRL_I128, nullptr);
   setLibcallName(RTLIB::SRA_I128, nullptr);
 
-  if (Subtarget->isAAPCS_ABI() && !Subtarget->isTargetMachO() &&
-      !Subtarget->isTargetWindows()) {
+  // RTLIB
+  if (Subtarget->isAAPCS_ABI() &&
+      (Subtarget->isTargetAEABI() || Subtarget->isTargetGNUAEABI() ||
+       Subtarget->isTargetAndroid())) {
     static const struct {
       const RTLIB::Libcall Op;
       const char * const Name;
@@ -345,12 +347,6 @@ ARMTargetLowering::ARMTargetLowering(const TargetMachine &TM,
       { RTLIB::UDIV_I16, "__aeabi_uidiv",    CallingConv::ARM_AAPCS, ISD::SETCC_INVALID },
       { RTLIB::UDIV_I32, "__aeabi_uidiv",    CallingConv::ARM_AAPCS, ISD::SETCC_INVALID },
       { RTLIB::UDIV_I64, "__aeabi_uldivmod", CallingConv::ARM_AAPCS, ISD::SETCC_INVALID },
-
-      // Memory operations
-      // RTABI chapter 4.3.4
-      { RTLIB::MEMCPY,  "__aeabi_memcpy",  CallingConv::ARM_AAPCS, ISD::SETCC_INVALID },
-      { RTLIB::MEMMOVE, "__aeabi_memmove", CallingConv::ARM_AAPCS, ISD::SETCC_INVALID },
-      { RTLIB::MEMSET,  "__aeabi_memset",  CallingConv::ARM_AAPCS, ISD::SETCC_INVALID },
     };
 
     for (const auto &LC : LibraryCalls) {
@@ -358,6 +354,30 @@ ARMTargetLowering::ARMTargetLowering(const TargetMachine &TM,
       setLibcallCallingConv(LC.Op, LC.CC);
       if (LC.Cond != ISD::SETCC_INVALID)
         setCmpLibcallCC(LC.Op, LC.Cond);
+    }
+
+    // EABI dependent RTLIB
+    if (TM.Options.EABIVersion == EABI::EABI4 ||
+        TM.Options.EABIVersion == EABI::EABI5) {
+      static const struct {
+        const RTLIB::Libcall Op;
+        const char *const Name;
+        const CallingConv::ID CC;
+        const ISD::CondCode Cond;
+      } MemOpsLibraryCalls[] = {
+        // Memory operations
+        // RTABI chapter 4.3.4
+        { RTLIB::MEMCPY,  "__aeabi_memcpy",  CallingConv::ARM_AAPCS, ISD::SETCC_INVALID },
+        { RTLIB::MEMMOVE, "__aeabi_memmove", CallingConv::ARM_AAPCS, ISD::SETCC_INVALID },
+        { RTLIB::MEMSET,  "__aeabi_memset",  CallingConv::ARM_AAPCS, ISD::SETCC_INVALID },
+      };
+
+      for (const auto &LC : MemOpsLibraryCalls) {
+        setLibcallName(LC.Op, LC.Name);
+        setLibcallCallingConv(LC.Op, LC.CC);
+        if (LC.Cond != ISD::SETCC_INVALID)
+          setCmpLibcallCC(LC.Op, LC.Cond);
+      }
     }
   }
 
@@ -812,13 +832,6 @@ ARMTargetLowering::ARMTargetLowering(const TargetMachine &TM,
   setOperationAction(ISD::VAEND,              MVT::Other, Expand);
   setOperationAction(ISD::STACKSAVE,          MVT::Other, Expand);
   setOperationAction(ISD::STACKRESTORE,       MVT::Other, Expand);
-
-  if (!Subtarget->useSjLjEH()) {
-    // Platforms which do not use SjLj EH may return values in these registers
-    // via the personality function.
-    setExceptionPointerRegister(ARM::R0);
-    setExceptionSelectorRegister(ARM::R1);
-  }
 
   if (Subtarget->getTargetTriple().isWindowsItaniumEnvironment())
     setOperationAction(ISD::DYNAMIC_STACKALLOC, MVT::i32, Custom);
@@ -10283,18 +10296,15 @@ SDValue ARMTargetLowering::PerformCMOVToBFICombine(SDNode *CMOV, SelectionDAG &D
     return SDValue();
   SDValue X = And->getOperand(0);
 
-  // Canonicalize so that the OR is on the left.
-  if (Op1->getOpcode() == ISD::OR)
-    std::swap(Op0, Op1);
-  if (Op0->getOpcode() != ISD::OR)
+  if (Op1->getOpcode() != ISD::OR)
     return SDValue();
 
-  ConstantSDNode *OrC = dyn_cast<ConstantSDNode>(Op0->getOperand(1));
+  ConstantSDNode *OrC = dyn_cast<ConstantSDNode>(Op1->getOperand(1));
   if (!OrC)
     return SDValue();
-  SDValue Y = Op0->getOperand(0);
+  SDValue Y = Op1->getOperand(0);
 
-  if (Op1 != Y)
+  if (Op0 != Y)
     return SDValue();
 
   // Now, is it profitable to continue?
@@ -11831,6 +11841,14 @@ bool ARMTargetLowering::canCombineStoreAndExtract(Type *VectorTy, Value *Idx,
   return false;
 }
 
+bool ARMTargetLowering::isCheapToSpeculateCttz() const {
+  return Subtarget->hasV6T2Ops();
+}
+
+bool ARMTargetLowering::isCheapToSpeculateCtlz() const {
+  return Subtarget->hasV6T2Ops();
+}
+
 Value *ARMTargetLowering::emitLoadLinked(IRBuilder<> &Builder, Value *Addr,
                                          AtomicOrdering Ord) const {
   Module *M = Builder.GetInsertBlock()->getParent()->getParent();
@@ -12146,4 +12164,18 @@ bool ARMTargetLowering::functionArgumentNeedsConsecutiveRegisters(
 
   bool IsIntArray = Ty->isArrayTy() && Ty->getArrayElementType()->isIntegerTy();
   return IsHA || IsIntArray;
+}
+
+unsigned ARMTargetLowering::getExceptionPointerRegister(
+    const Constant *PersonalityFn) const {
+  // Platforms which do not use SjLj EH may return values in these registers
+  // via the personality function.
+  return Subtarget->useSjLjEH() ? ARM::NoRegister : ARM::R0;
+}
+
+unsigned ARMTargetLowering::getExceptionSelectorRegister(
+    const Constant *PersonalityFn) const {
+  // Platforms which do not use SjLj EH may return values in these registers
+  // via the personality function.
+  return Subtarget->useSjLjEH() ? ARM::NoRegister : ARM::R1;
 }

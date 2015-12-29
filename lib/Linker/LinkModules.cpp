@@ -440,6 +440,11 @@ class ModuleLinker {
   /// as part of a different backend compilation process.
   bool HasExportedFunctions;
 
+  /// Set to true when all global value body linking is complete (including
+  /// lazy linking). Used to prevent metadata linking from creating new
+  /// references.
+  bool DoneLinkingBodies;
+
 public:
   ModuleLinker(Module *dstM, Linker::IdentifiedStructTypeSet &Set, Module *srcM,
                DiagnosticHandlerFunction DiagnosticHandler, unsigned Flags,
@@ -448,7 +453,8 @@ public:
       : DstM(dstM), SrcM(srcM), TypeMap(Set),
         ValMaterializer(TypeMap, DstM, LazilyLinkGlobalValues, this),
         DiagnosticHandler(DiagnosticHandler), Flags(Flags), ImportIndex(Index),
-        ImportFunction(FuncToImport), HasExportedFunctions(false) {
+        ImportFunction(FuncToImport), HasExportedFunctions(false),
+        DoneLinkingBodies(false) {
     assert((ImportIndex || !ImportFunction) &&
            "Expect a FunctionInfoIndex when importing");
     // If we have a FunctionInfoIndex but no function to import,
@@ -475,6 +481,9 @@ public:
   /// Check if we should promote the given local value to global scope.
   bool doPromoteLocalToGlobal(const GlobalValue *SGV);
 
+  /// Check if all global value body linking is complete.
+  bool doneLinkingBodies() { return DoneLinkingBodies; }
+
 private:
   bool shouldLinkFromSource(bool &LinkFromSrc, const GlobalValue &Dest,
                             const GlobalValue &Src);
@@ -500,6 +509,8 @@ private:
       ComdatsChosen;
   bool getComdatResult(const Comdat *SrcC, Comdat::SelectionKind &SK,
                        bool &LinkFromSrc);
+  // Keep track of the global value members of each comdat in source.
+  DenseMap<const Comdat *, std::vector<GlobalValue *>> ComdatMembers;
 
   /// Given a global in the source module, return the global in the
   /// destination module that is being linked to, if any.
@@ -617,9 +628,7 @@ void ModuleLinker::copyGVAttributes(GlobalValue *NewGV,
   // being imported as a declaration. In that case copy the attributes from the
   // base object.
   if (GA && !dyn_cast<GlobalAlias>(NewGV)) {
-    assert(isPerformingImport() &&
-           (GA->hasWeakAnyLinkage() ||
-            !doImportAsDefinition(GA->getBaseObject())));
+    assert(isPerformingImport() && !doImportAsDefinition(GA));
     NewGV->copyAttributesFrom(GA->getBaseObject());
   } else
     NewGV->copyAttributesFrom(SrcGV);
@@ -642,12 +651,21 @@ static bool isLessConstraining(GlobalValue::VisibilityTypes a,
 bool ModuleLinker::doImportAsDefinition(const GlobalValue *SGV) {
   if (!isPerformingImport())
     return false;
-  // Always import GlobalVariable definitions. The linkage changes
+  auto *GA = dyn_cast<GlobalAlias>(SGV);
+  if (GA) {
+    if (GA->hasWeakAnyLinkage())
+      return false;
+    return doImportAsDefinition(GA->getBaseObject());
+  }
+  // Always import GlobalVariable definitions, except for the special
+  // case of WeakAny which are imported as ExternalWeak declarations
+  // (see comments in ModuleLinker::getLinkage). The linkage changes
   // described in ModuleLinker::getLinkage ensure the correct behavior (e.g.
   // global variables with external linkage are transformed to
-  // available_externally defintions, which are ultimately turned into
-  // declaratios after the EliminateAvailableExternally pass).
-  if (dyn_cast<GlobalVariable>(SGV) && !SGV->isDeclaration())
+  // available_externally definitions, which are ultimately turned into
+  // declarations after the EliminateAvailableExternally pass).
+  if (dyn_cast<GlobalVariable>(SGV) && !SGV->isDeclaration() &&
+      !SGV->hasWeakAnyLinkage())
     return true;
   // Only import the function requested for importing.
   auto *SF = dyn_cast<Function>(SGV);
@@ -716,7 +734,7 @@ GlobalValue::LinkageTypes ModuleLinker::getLinkage(const GlobalValue *SGV) {
     // definitions upon import, so that they are available for inlining
     // and/or optimization, but are turned into declarations later
     // during the EliminateAvailableExternally pass.
-    if (doImportAsDefinition(SGV))
+    if (doImportAsDefinition(SGV) && !dyn_cast<GlobalAlias>(SGV))
       return GlobalValue::AvailableExternallyLinkage;
     // An imported external declaration stays external.
     return SGV->getLinkage();
@@ -749,7 +767,7 @@ GlobalValue::LinkageTypes ModuleLinker::getLinkage(const GlobalValue *SGV) {
     // equivalent, so the issue described above for weak_any does not exist,
     // and the definition can be imported. It can be treated similarly
     // to an imported externally visible global value.
-    if (doImportAsDefinition(SGV))
+    if (doImportAsDefinition(SGV) && !dyn_cast<GlobalAlias>(SGV))
       return GlobalValue::AvailableExternallyLinkage;
     else
       return GlobalValue::ExternalLinkage;
@@ -766,7 +784,7 @@ GlobalValue::LinkageTypes ModuleLinker::getLinkage(const GlobalValue *SGV) {
     // If we are promoting the local to global scope, it is handled
     // similarly to a normal externally visible global.
     if (doPromoteLocalToGlobal(SGV)) {
-      if (doImportAsDefinition(SGV))
+      if (doImportAsDefinition(SGV) && !dyn_cast<GlobalAlias>(SGV))
         return GlobalValue::AvailableExternallyLinkage;
       else
         return GlobalValue::ExternalLinkage;
@@ -825,8 +843,7 @@ GlobalValue *ModuleLinker::copyGlobalAliasProto(TypeMapTy &TypeMap,
   // as a declaration as well, which involves converting it to a non-alias.
   // See comments in ModuleLinker::getLinkage for why we cannot import
   // weak_any defintions.
-  if (isPerformingImport() && (SGA->hasWeakAnyLinkage() ||
-                               !doImportAsDefinition(SGA->getBaseObject()))) {
+  if (isPerformingImport() && !doImportAsDefinition(SGA)) {
     // Need to convert to declaration. All aliases must be definitions.
     const GlobalValue *GVal = SGA->getBaseObject();
     GlobalValue *NewGV;
@@ -843,8 +860,6 @@ GlobalValue *ModuleLinker::copyGlobalAliasProto(TypeMapTy &TypeMap,
       NewGV->setLinkage(GlobalValue::ExternalWeakLinkage);
     else
       NewGV->setLinkage(GlobalValue::ExternalLinkage);
-    // Don't attempt to link body, needs to be a declaration.
-    DoNotLinkFromSource.insert(SGA);
     return NewGV;
   }
   // If there is no linkage to be performed or we're linking from the source,
@@ -886,6 +901,12 @@ GlobalValue *ModuleLinker::copyGlobalValueProto(TypeMapTy &TypeMap,
 Value *ValueMaterializerTy::materializeValueFor(Value *V) {
   auto *SGV = dyn_cast<GlobalValue>(V);
   if (!SGV)
+    return nullptr;
+
+  // If we are done linking global value bodies (i.e. we are performing
+  // metadata linking), don't link in the global value due to this
+  // reference, simply map it to null.
+  if (ModLinker->doneLinkingBodies())
     return nullptr;
 
   GlobalValue *DGV = ModLinker->copyGlobalValueProto(TypeMap, SGV);
@@ -1367,6 +1388,7 @@ bool ModuleLinker::linkGlobalValueProto(GlobalValue *SGV) {
     std::tie(SK, LinkFromSrc) = ComdatsChosen[SC];
     C = DstM->getOrInsertComdat(SC->getName());
     C->setSelectionKind(SK);
+    ComdatMembers[SC].push_back(SGV);
   } else if (DGV) {
     if (shouldLinkFromSource(LinkFromSrc, *DGV, *SGV))
       return true;
@@ -1412,6 +1434,9 @@ bool ModuleLinker::linkGlobalValueProto(GlobalValue *SGV) {
     }
 
     NewGV = copyGlobalValueProto(TypeMap, SGV, DGV);
+
+    if (isPerformingImport() && !doImportAsDefinition(SGV))
+      DoNotLinkFromSource.insert(SGV);
   }
 
   NewGV->setUnnamedAddr(HasUnnamedAddr);
@@ -1567,6 +1592,19 @@ void ModuleLinker::linkAliasBody(GlobalAlias &Dst, GlobalAlias &Src) {
 bool ModuleLinker::linkGlobalValueBody(GlobalValue &Src) {
   Value *Dst = ValueMap[&Src];
   assert(Dst);
+  if (const Comdat *SC = Src.getComdat()) {
+    // To ensure that we don't generate an incomplete comdat group,
+    // we must materialize and map in any other members that are not
+    // yet materialized in Dst, which also ensures their definitions
+    // are linked in. Otherwise, linkonce and other lazy linked GVs will
+    // not be materialized if they aren't referenced.
+    for (auto *SGV : ComdatMembers[SC]) {
+      if (ValueMap[SGV])
+        continue;
+      Value *NewV = ValMaterializer.materializeValueFor(SGV);
+      ValueMap[SGV] = NewV;
+    }
+  }
   if (shouldInternalizeLinkedSymbols())
     if (auto *DGV = dyn_cast<GlobalValue>(Dst))
       DGV->setLinkage(GlobalValue::InternalLinkage);
@@ -1877,10 +1915,6 @@ bool ModuleLinker::run() {
     if (DoNotLinkFromSource.count(&SF))
       continue;
 
-    // When importing, only materialize the function requested for import.
-    if (isPerformingImport() && &SF != ImportFunction)
-      continue;
-
     if (linkGlobalValueBody(SF))
       return true;
   }
@@ -1891,15 +1925,6 @@ bool ModuleLinker::run() {
       continue;
     linkGlobalValueBody(Src);
   }
-
-  // Remap all of the named MDNodes in Src into the DstM module. We do this
-  // after linking GlobalValues so that MDNodes that reference GlobalValues
-  // are properly remapped.
-  linkNamedMDNodes();
-
-  // Merge the module flags into the DstM module.
-  if (linkModuleFlagsMetadata())
-    return true;
 
   // Update the initializers in the DstM module now that all globals that may
   // be referenced are in DstM.
@@ -1926,6 +1951,19 @@ bool ModuleLinker::run() {
     if (linkGlobalValueBody(*SGV))
       return true;
   }
+
+  // Note that we are done linking global value bodies. This prevents
+  // metadata linking from creating new references.
+  DoneLinkingBodies = true;
+
+  // Remap all of the named MDNodes in Src into the DstM module. We do this
+  // after linking GlobalValues so that MDNodes that reference GlobalValues
+  // are properly remapped.
+  linkNamedMDNodes();
+
+  // Merge the module flags into the DstM module.
+  if (linkModuleFlagsMetadata())
+    return true;
 
   return false;
 }

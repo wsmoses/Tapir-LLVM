@@ -78,13 +78,13 @@ typedef struct LdStPairFlags {
 
 struct AArch64LoadStoreOpt : public MachineFunctionPass {
   static char ID;
-  AArch64LoadStoreOpt() : MachineFunctionPass(ID), IsStrictAlign(false) {
+  AArch64LoadStoreOpt() : MachineFunctionPass(ID) {
     initializeAArch64LoadStoreOptPass(*PassRegistry::getPassRegistry());
   }
 
   const AArch64InstrInfo *TII;
   const TargetRegisterInfo *TRI;
-  bool IsStrictAlign;
+  const AArch64Subtarget *Subtarget;
 
   // Scan the instructions looking for a load/store that can be combined
   // with the current instruction into a load/store pair.
@@ -127,7 +127,11 @@ struct AArch64LoadStoreOpt : public MachineFunctionPass {
   // Find and merge foldable ldr/str instructions.
   bool tryToMergeLdStInst(MachineBasicBlock::iterator &MBBI);
 
-  bool optimizeBlock(MachineBasicBlock &MBB);
+  // Check if converting two narrow loads into a single wider load with
+  // bitfield extracts could be enabled.
+  bool enableNarrowLdMerge(MachineFunction &Fn);
+
+  bool optimizeBlock(MachineBasicBlock &MBB, bool enableNarrowLdOpt);
 
   bool runOnMachineFunction(MachineFunction &Fn) override;
 
@@ -534,6 +538,10 @@ AArch64LoadStoreOpt::mergePairedInsns(MachineBasicBlock::iterator I,
     if (!IsUnscaled)
       OffsetImm /= 2;
     MachineInstr *RtNewDest = MergeForward ? I : Paired;
+    // When merging small (< 32 bit) loads for big-endian targets, the order of
+    // the component parts gets swapped.
+    if (!Subtarget->isLittleEndian())
+      std::swap(RtMI, Rt2MI);
     // Construct the new load instruction.
     // FIXME: currently we support only halfword unsigned load. We need to
     // handle byte type, signed, and store instructions as well.
@@ -557,7 +565,7 @@ AArch64LoadStoreOpt::mergePairedInsns(MachineBasicBlock::iterator I,
     DEBUG((NewMemMI)->print(dbgs()));
 
     MachineInstr *ExtDestMI = MergeForward ? Paired : I;
-    if (ExtDestMI == Rt2MI) {
+    if ((ExtDestMI == Rt2MI) == Subtarget->isLittleEndian()) {
       // Create the bitfield extract for high half.
       BitExtMI1 = BuildMI(*I->getParent(), InsertionPoint, I->getDebugLoc(),
                           TII->get(AArch64::UBFMWri))
@@ -1161,7 +1169,8 @@ bool AArch64LoadStoreOpt::tryToMergeLdStInst(
   return false;
 }
 
-bool AArch64LoadStoreOpt::optimizeBlock(MachineBasicBlock &MBB) {
+bool AArch64LoadStoreOpt::optimizeBlock(MachineBasicBlock &MBB,
+                                        bool enableNarrowLdOpt) {
   bool Modified = false;
   // Three tranformations to do here:
   // 1) Find halfword loads that can be merged into a single 32-bit word load
@@ -1189,7 +1198,7 @@ bool AArch64LoadStoreOpt::optimizeBlock(MachineBasicBlock &MBB) {
   //        ldr x0, [x2], #4
 
   for (MachineBasicBlock::iterator MBBI = MBB.begin(), E = MBB.end();
-       !IsStrictAlign && MBBI != E;) {
+       enableNarrowLdOpt && MBBI != E;) {
     MachineInstr *MI = MBBI;
     switch (MI->getOpcode()) {
     default:
@@ -1372,15 +1381,26 @@ bool AArch64LoadStoreOpt::optimizeBlock(MachineBasicBlock &MBB) {
   return Modified;
 }
 
+bool AArch64LoadStoreOpt::enableNarrowLdMerge(MachineFunction &Fn) {
+  const AArch64Subtarget *SubTarget =
+      &static_cast<const AArch64Subtarget &>(Fn.getSubtarget());
+  bool ProfitableArch = SubTarget->isCortexA57();
+  // FIXME: The benefit from converting narrow loads into a wider load could be
+  // microarchitectural as it assumes that a single load with two bitfield
+  // extracts is cheaper than two narrow loads. Currently, this conversion is
+  // enabled only in cortex-a57 on which performance benefits were verified.
+  return ProfitableArch & (!SubTarget->requiresStrictAlign());
+}
+
 bool AArch64LoadStoreOpt::runOnMachineFunction(MachineFunction &Fn) {
-  TII = static_cast<const AArch64InstrInfo *>(Fn.getSubtarget().getInstrInfo());
-  TRI = Fn.getSubtarget().getRegisterInfo();
-  IsStrictAlign = (static_cast<const AArch64Subtarget &>(Fn.getSubtarget()))
-                      .requiresStrictAlign();
+  Subtarget = &static_cast<const AArch64Subtarget &>(Fn.getSubtarget());
+  TII = static_cast<const AArch64InstrInfo *>(Subtarget->getInstrInfo());
+  TRI = Subtarget->getRegisterInfo();
 
   bool Modified = false;
+  bool enableNarrowLdOpt = enableNarrowLdMerge(Fn);
   for (auto &MBB : Fn)
-    Modified |= optimizeBlock(MBB);
+    Modified |= optimizeBlock(MBB, enableNarrowLdOpt);
 
   return Modified;
 }

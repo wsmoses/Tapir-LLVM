@@ -102,9 +102,15 @@ HANDLE_TERM_INST  ( 6, Resume     , ResumeInst)
 HANDLE_TERM_INST  ( 7, Unreachable, UnreachableInst)
 HANDLE_TERM_INST  ( 8, CleanupRet    , CleanupReturnInst)
 HANDLE_TERM_INST  ( 9, CatchRet      , CatchReturnInst)
+<<<<<<< HEAD
+HANDLE_TERM_INST  (10, CatchPad      , CatchPadInst)
+HANDLE_TERM_INST  (11, TerminatePad  , TerminatePadInst)
+HANDLE_TERM_INST  (12, CatchEndPad   , CatchEndPadInst)
+=======
 HANDLE_TERM_INST  (10, CatchPad    , CatchPadInst)
 HANDLE_TERM_INST  (11, TerminatePad, TerminatePadInst)
 HANDLE_TERM_INST  (12, CatchEndPad , CatchEndPadInst)
+>>>>>>> 8d00ea68834b61ce260b8111beb594cbdc8c78b9
 HANDLE_TERM_INST  (13, CleanupEndPad , CleanupEndPadInst)
 HANDLE_TERM_INST  (14, Detach     , DetachInst)
 HANDLE_TERM_INST  (15, Reattach   , ReattachInst)
@@ -146,9 +152,12 @@ HANDLE_MEMORY_INST(40, AtomicCmpXchg , AtomicCmpXchgInst )
 HANDLE_MEMORY_INST(41, AtomicRMW , AtomicRMWInst )
   LAST_MEMORY_INST(41)
 
+<<<<<<< HEAD
+=======
 // Cast operators ...
 // NOTE: The order matters here because CastInst::isEliminableCastPair
 // NOTE: (see Instructions.cpp) encodes a table based on this ordering.
+>>>>>>> 8d00ea68834b61ce260b8111beb594cbdc8c78b9
  FIRST_CAST_INST(42)
 HANDLE_CAST_INST(42, Trunc   , TruncInst   )  // Truncate integers
 HANDLE_CAST_INST(43, ZExt    , ZExtInst    )  // Zero extend integers
