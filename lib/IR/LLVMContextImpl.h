@@ -792,6 +792,49 @@ template <> struct MDNodeKeyImpl<DIImportedEntity> {
   }
 };
 
+template <> struct MDNodeKeyImpl<DIMacro> {
+  unsigned MIType;
+  unsigned Line;
+  StringRef Name;
+  StringRef Value;
+
+  MDNodeKeyImpl(unsigned MIType, unsigned Line, StringRef Name, StringRef Value)
+      : MIType(MIType), Line(Line), Name(Name), Value(Value) {}
+  MDNodeKeyImpl(const DIMacro *N)
+      : MIType(N->getMacinfoType()), Line(N->getLine()), Name(N->getName()),
+        Value(N->getValue()) {}
+
+  bool isKeyOf(const DIMacro *RHS) const {
+    return MIType == RHS->getMacinfoType() && Line == RHS->getLine() &&
+           Name == RHS->getName() && Value == RHS->getValue();
+  }
+  unsigned getHashValue() const {
+    return hash_combine(MIType, Line, Name, Value);
+  }
+};
+
+template <> struct MDNodeKeyImpl<DIMacroFile> {
+  unsigned MIType;
+  unsigned Line;
+  Metadata *File;
+  Metadata *Elements;
+
+  MDNodeKeyImpl(unsigned MIType, unsigned Line, Metadata *File,
+                Metadata *Elements)
+      : MIType(MIType), Line(Line), File(File), Elements(Elements) {}
+  MDNodeKeyImpl(const DIMacroFile *N)
+      : MIType(N->getMacinfoType()), Line(N->getLine()), File(N->getRawFile()),
+        Elements(N->getRawElements()) {}
+
+  bool isKeyOf(const DIMacroFile *RHS) const {
+    return MIType == RHS->getMacinfoType() && Line == RHS->getLine() &&
+           File == RHS->getRawFile() && File == RHS->getRawElements();
+  }
+  unsigned getHashValue() const {
+    return hash_combine(MIType, Line, File, Elements);
+  }
+};
+
 /// \brief DenseMapInfo for MDNode subclasses.
 template <class NodeTy> struct MDNodeInfo {
   typedef MDNodeKeyImpl<NodeTy> KeyTy;
@@ -924,6 +967,8 @@ public:
   ConstantInt *TheTrueVal;
   ConstantInt *TheFalseVal;
 
+  std::unique_ptr<ConstantTokenNone> TheNoneToken;
+
   // Basic type instances.
   Type VoidTy, LabelTy, HalfTy, FloatTy, DoubleTy, MetadataTy, TokenTy;
   Type X86_FP80Ty, FP128Ty, PPC_FP128Ty, X86_MMXTy;
@@ -968,17 +1013,6 @@ public:
   /// integer representing the next DWARF path discriminator to assign to
   /// instructions in different blocks at the same location.
   DenseMap<std::pair<const char *, unsigned>, unsigned> DiscriminatorTable;
-
-  typedef DenseMap<const Function *, ReturnInst *> FunctionDataMapTy;
-
-  /// \brief Mapping from a function to its prefix data, which is stored as the
-  /// operand of an unparented ReturnInst so that the prefix data has a Use.
-  FunctionDataMapTy PrefixDataMap;
-
-  /// \brief Mapping from a function to its prologue data, which is stored as
-  /// the operand of an unparented ReturnInst so that the prologue data has a
-  /// Use.
-  FunctionDataMapTy PrologueDataMap;
 
   int getOrAddScopeRecordIdxEntry(MDNode *N, int ExistingIdx);
   int getOrAddScopeInlinedAtIdxEntry(MDNode *Scope, MDNode *IA,int ExistingIdx);

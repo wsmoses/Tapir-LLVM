@@ -834,6 +834,14 @@ SDValue  MipsTargetLowering::PerformDAGCombine(SDNode *N, DAGCombinerInfo &DCI)
   return SDValue();
 }
 
+bool MipsTargetLowering::isCheapToSpeculateCttz() const {
+  return Subtarget.hasMips32();
+}
+
+bool MipsTargetLowering::isCheapToSpeculateCtlz() const {
+  return Subtarget.hasMips32();
+}
+
 void
 MipsTargetLowering::LowerOperationWrapper(SDNode *N,
                                           SmallVectorImpl<SDValue> &Results,
@@ -3326,7 +3334,7 @@ static std::pair<bool, bool> parsePhysicalReg(StringRef C, StringRef &Prefix,
 
   // Search for the first numeric character.
   StringRef::const_iterator I, B = C.begin() + 1, E = C.end() - 1;
-  I = std::find_if(B, E, std::ptr_fun(isdigit));
+  I = std::find_if(B, E, isdigit);
 
   Prefix = StringRef(B, I - B);
 

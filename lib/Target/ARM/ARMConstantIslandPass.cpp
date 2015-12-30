@@ -589,6 +589,8 @@ void ARMConstantIslands::doInitialJumpTablePlacement(
   MachineBasicBlock *LastCorrectlyNumberedBB = nullptr;
   for (MachineBasicBlock &MBB : *MF) {
     auto MI = MBB.getLastNonDebugInstr();
+    if (MI == MBB.end())
+      continue;
 
     unsigned JTOpcode;
     switch (MI->getOpcode()) {
@@ -2272,8 +2274,7 @@ adjustJTTargetBlockForward(MachineBasicBlock *BB, MachineBasicBlock *JTBB) {
 
   // Update the CFG.
   NewBB->addSuccessor(BB);
-  JTBB->removeSuccessor(BB);
-  JTBB->addSuccessor(NewBB);
+  JTBB->replaceSuccessor(BB, NewBB);
 
   ++NumJTInserted;
   return NewBB;

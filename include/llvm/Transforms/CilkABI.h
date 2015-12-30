@@ -380,7 +380,8 @@ static Function *Get__cilkrts_pop_frame(Module &M) {
   // If we get here we need to add the function body
   LLVMContext &Ctx = M.getContext();
 
-  Value *SF = Fn->arg_begin();
+  Function::arg_iterator args = Fn->arg_begin();
+  Value *SF = &*args;
 
   BasicBlock *Entry = BasicBlock::Create(Ctx, "entry", Fn);
   IRBuilder<> B(Entry);
@@ -430,7 +431,8 @@ static Function *Get__cilkrts_detach(Module &M) {
   // If we get here we need to add the function body
   LLVMContext &Ctx = M.getContext();
 
-  Value *SF = Fn->arg_begin();
+  Function::arg_iterator args = Fn->arg_begin();
+  Value *SF = &*args;
 
   BasicBlock *Entry = BasicBlock::Create(Ctx, "entry", Fn);
   IRBuilder<> B(Entry);
@@ -516,8 +518,9 @@ static Function *GetCilkExceptingSyncFn(Module &M) {
 
   LLVMContext &Ctx = M.getContext();
   assert((Fn->arg_size() == 2) && "unexpected function type");
-  Value *SF = Fn->arg_begin();
-  Value *ExnSlot = ++Fn->arg_begin();
+  Function::arg_iterator args = Fn->arg_begin();
+  Value *SF = &*args++;
+  Value *ExnSlot = &*args;
 
   BasicBlock *Entry = BasicBlock::Create(Ctx, "entry", Fn),
              *JumpTest = BasicBlock::Create(Ctx, "setjmp.test", Fn),
@@ -638,7 +641,8 @@ static Function *GetCilkSyncFn(Module &M) {
 	// If we get here we need to add the function body
 	LLVMContext &Ctx = M.getContext();
 
-  Value *SF = Fn->arg_begin();
+  Function::arg_iterator args = Fn->arg_begin();
+  Value *SF = &*args;
 
   BasicBlock *Entry = BasicBlock::Create(Ctx, "cilk.sync.test", Fn),
              *SaveState = BasicBlock::Create(Ctx, "cilk.sync.savestate", Fn),
@@ -756,7 +760,8 @@ static Function *GetCilkResetWorkerFn(Module &M) {
     return Fn;
 
   LLVMContext &Ctx = M.getContext();
-  Value *SF = Fn->arg_begin();
+  Function::arg_iterator args = Fn->arg_begin();
+  Value *SF = &*args;
 
   BasicBlock *Entry = BasicBlock::Create(Ctx, "entry", Fn);
   IRBuilder<> B(Entry);
@@ -797,7 +802,8 @@ static Function *Get__cilkrts_enter_frame_1(Module &M) {
     return Fn;
 
   LLVMContext &Ctx = M.getContext();
-  Value *SF = Fn->arg_begin();
+  Function::arg_iterator args = Fn->arg_begin();
+  Value *SF = &*args;
 
   BasicBlock *Entry = BasicBlock::Create(Ctx, "", Fn);
   BasicBlock *SlowPath = BasicBlock::Create(Ctx, "", Fn);
@@ -877,7 +883,8 @@ static Function *Get__cilkrts_enter_frame_fast_1(Module &M) {
     return Fn;
 
   LLVMContext &Ctx = M.getContext();
-  Value *SF = Fn->arg_begin();
+  Function::arg_iterator args = Fn->arg_begin();
+  Value *SF = &*args;
 
   BasicBlock *Entry = BasicBlock::Create(Ctx, "", Fn);
 
@@ -917,7 +924,8 @@ static Function *GetCilkParentPrologue(Module &M) {
   // If we get here we need to add the function body
   LLVMContext &Ctx = M.getContext();
 
-  Value *SF = Fn->arg_begin();
+  Function::arg_iterator args = Fn->arg_begin();
+  Value *SF = &*args;
 
   BasicBlock *Entry = BasicBlock::Create(Ctx, "entry", Fn);
   IRBuilder<> B(Entry);
@@ -949,7 +957,8 @@ static Function *GetCilkParentEpilogue(Module &M) {
   // If we get here we need to add the function body
   LLVMContext &Ctx = M.getContext();
 
-  Value *SF = Fn->arg_begin();
+  Function::arg_iterator args = Fn->arg_begin();
+  Value *SF = &*args;
 
   BasicBlock *Entry = BasicBlock::Create(Ctx, "entry", Fn),
              *B1 = BasicBlock::Create(Ctx, "", Fn),
@@ -1005,7 +1014,8 @@ static llvm::Function *GetCilkHelperPrologue(Module &M) {
   // If we get here we need to add the function body
   LLVMContext &Ctx = M.getContext();
 
-  Value *SF = Fn->arg_begin();
+  Function::arg_iterator args = Fn->arg_begin();
+  Value *SF = &*args;
 
   BasicBlock *Entry = BasicBlock::Create(Ctx, "entry", Fn);
   IRBuilder<> B(Entry);
@@ -1041,7 +1051,8 @@ static llvm::Function *GetCilkHelperEpilogue(Module &M) {
   // If we get here we need to add the function body
   LLVMContext &Ctx = M.getContext();
 
-  Value *SF = Fn->arg_begin();
+  Function::arg_iterator args = Fn->arg_begin();
+  Value *SF = &*args;
 
   BasicBlock *Entry = BasicBlock::Create(Ctx, "entry", Fn);
   BasicBlock *Body = BasicBlock::Create(Ctx, "body", Fn);
@@ -1432,7 +1443,7 @@ static inline bool makeFunctionDetachable( Function& extracted ) {
 
 	ReturnInst* ret = nullptr;
 	for (Function::iterator i = extracted.begin(), e = extracted.end(); i != e; ++i) {
-		BasicBlock* bb = i;
+		BasicBlock* bb = &*i;
 		TerminatorInst* term = bb->getTerminator();
 		if( !term ) continue;
 		if( ReturnInst* inst = llvm::dyn_cast<ReturnInst>( term ) ) {

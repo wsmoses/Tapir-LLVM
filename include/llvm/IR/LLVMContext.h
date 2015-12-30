@@ -15,7 +15,6 @@
 #ifndef LLVM_IR_LLVMCONTEXT_H
 #define LLVM_IR_LLVMCONTEXT_H
 
-#include "llvm-c/Core.h"
 #include "llvm/Support/CBindingWrapping.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/Options.h"
@@ -65,6 +64,15 @@ public:
     MD_unpredictable = 15, // "unpredictable"
     MD_invariant_group = 16, // "invariant.group"
     MD_align = 17 // "align"
+  };
+
+  /// Known operand bundle tag IDs, which always have the same value.  All
+  /// operand bundle tags that LLVM has special knowledge of are listed here.
+  /// Additionally, this scheme allows LLVM to efficiently check for specific
+  /// operand bundle tags without comparing strings.
+  enum {
+    OB_deopt = 0,   // "deopt"
+    OB_funclet = 1, // "funclet"
   };
 
   /// getMDKindID - Return a unique non-zero ID for the specified metadata kind.

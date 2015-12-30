@@ -249,6 +249,32 @@ ModRefInfo AAResults::getModRefInfo(const VAArgInst *V,
   return MRI_ModRef;
 }
 
+ModRefInfo AAResults::getModRefInfo(const CatchPadInst *CatchPad,
+                                    const MemoryLocation &Loc) {
+  if (Loc.Ptr) {
+    // If the pointer is a pointer to constant memory,
+    // then it could not have been modified by this catchpad.
+    if (pointsToConstantMemory(Loc))
+      return MRI_NoModRef;
+  }
+
+  // Otherwise, a catchpad reads and writes.
+  return MRI_ModRef;
+}
+
+ModRefInfo AAResults::getModRefInfo(const CatchReturnInst *CatchRet,
+                                    const MemoryLocation &Loc) {
+  if (Loc.Ptr) {
+    // If the pointer is a pointer to constant memory,
+    // then it could not have been modified by this catchpad.
+    if (pointsToConstantMemory(Loc))
+      return MRI_NoModRef;
+  }
+
+  // Otherwise, a catchret reads and writes.
+  return MRI_ModRef;
+}
+
 ModRefInfo AAResults::getModRefInfo(const AtomicCmpXchgInst *CX,
                                     const MemoryLocation &Loc) {
   // Acquire/Release cmpxchg has properties that matter for arbitrary addresses.
@@ -286,15 +312,13 @@ ModRefInfo AAResults::getModRefInfo(const DetachInst *D,
     if (!Visited.insert(BB).second)
       continue;
 
-    BasicBlock::const_iterator I = BB->front();
-    BasicBlock::const_iterator E = BB->back();
-    ++E;
-    for (; I != E; ++I) {
+    // ++E;
+    for (BasicBlock::const_iterator I = BB->begin(), E = BB->end(); I != E; ++I) {
       // Ignore sync instructions in this analysis
       if (isa<SyncInst>(I))
 	continue;
 
-      Result = ModRefInfo(Result | getModRefInfo(I, Loc));
+      Result = ModRefInfo(Result | getModRefInfo(&*I, Loc));
 
       // Early-exit the moment we reach the top of the lattice.
       if (Result == MRI_ModRef)

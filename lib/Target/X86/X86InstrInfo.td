@@ -156,6 +156,8 @@ def X86cas16 : SDNode<"X86ISD::LCMPXCHG16_DAG", SDTX86caspair,
 
 def X86retflag : SDNode<"X86ISD::RET_FLAG", SDTX86Ret,
                         [SDNPHasChain, SDNPOptInGlue, SDNPVariadic]>;
+def X86iret : SDNode<"X86ISD::IRET", SDTX86Ret,
+                        [SDNPHasChain, SDNPOptInGlue]>;
 
 def X86vastart_save_xmm_regs :
                  SDNode<"X86ISD::VASTART_SAVE_XMM_REGS",
@@ -770,6 +772,8 @@ def HasVLX       : Predicate<"Subtarget->hasVLX()">,
                      AssemblerPredicate<"FeatureVLX", "AVX-512 VL ISA">;
 def NoVLX        : Predicate<"!Subtarget->hasVLX()">;
 def NoVLX_Or_NoBWI : Predicate<"!Subtarget->hasVLX() || !Subtarget->hasBWI()">;
+def NoVLX_Or_NoDQI : Predicate<"!Subtarget->hasVLX() || !Subtarget->hasDQI()">;
+def PKU        : Predicate<"!Subtarget->hasPKU()">;
 
 def HasPOPCNT    : Predicate<"Subtarget->hasPOPCNT()">;
 def HasAES       : Predicate<"Subtarget->hasAES()">;
@@ -799,6 +803,7 @@ def HasSHA       : Predicate<"Subtarget->hasSHA()">;
 def HasPRFCHW    : Predicate<"Subtarget->hasPRFCHW()">;
 def HasRDSEED    : Predicate<"Subtarget->hasRDSEED()">;
 def HasPrefetchW : Predicate<"Subtarget->hasPRFCHW()">;
+def HasLAHFSAHF  : Predicate<"Subtarget->hasLAHFSAHF()">;
 def FPStackf32   : Predicate<"!Subtarget->hasSSE1()">;
 def FPStackf64   : Predicate<"!Subtarget->hasSSE2()">;
 def HasMPX       : Predicate<"Subtarget->hasMPX()">;
@@ -817,6 +822,8 @@ def In32BitMode  : Predicate<"Subtarget->is32Bit()">,
                              AssemblerPredicate<"Mode32Bit", "32-bit mode">;
 def IsWin64      : Predicate<"Subtarget->isTargetWin64()">;
 def NotWin64     : Predicate<"!Subtarget->isTargetWin64()">;
+def NotWin64WithoutFP : Predicate<"!Subtarget->isTargetWin64() ||"
+                                  "Subtarget->getFrameLowering()->hasFP(*MF)">;
 def IsPS4        : Predicate<"Subtarget->isTargetPS4()">;
 def NotPS4       : Predicate<"!Subtarget->isTargetPS4()">;
 def IsNaCl       : Predicate<"Subtarget->isTargetNaCl()">;
@@ -830,6 +837,7 @@ def NearData     : Predicate<"TM.getCodeModel() == CodeModel::Small ||"
 def IsStatic     : Predicate<"TM.getRelocationModel() == Reloc::Static">;
 def IsNotPIC     : Predicate<"TM.getRelocationModel() != Reloc::PIC_">;
 def OptForSize   : Predicate<"OptForSize">;
+def OptForMinSize : Predicate<"OptForMinSize">;
 def OptForSpeed  : Predicate<"!OptForSize">;
 def FastBTMem    : Predicate<"!Subtarget->isBTMemSlow()">;
 def CallImmAddr  : Predicate<"Subtarget->IsLegalToCallImmediateAddr(TM)">;
@@ -953,11 +961,12 @@ def loadi32 : PatFrag<(ops node:$ptr), (i32 (unindexedload node:$ptr)), [{
   return false;
 }]>;
 
-def loadi8  : PatFrag<(ops node:$ptr), (i8  (load node:$ptr))>;
-def loadi64 : PatFrag<(ops node:$ptr), (i64 (load node:$ptr))>;
-def loadf32 : PatFrag<(ops node:$ptr), (f32 (load node:$ptr))>;
-def loadf64 : PatFrag<(ops node:$ptr), (f64 (load node:$ptr))>;
-def loadf80 : PatFrag<(ops node:$ptr), (f80 (load node:$ptr))>;
+def loadi8   : PatFrag<(ops node:$ptr), (i8  (load node:$ptr))>;
+def loadi64  : PatFrag<(ops node:$ptr), (i64 (load node:$ptr))>;
+def loadf32  : PatFrag<(ops node:$ptr), (f32 (load node:$ptr))>;
+def loadf64  : PatFrag<(ops node:$ptr), (f64 (load node:$ptr))>;
+def loadf80  : PatFrag<(ops node:$ptr), (f80 (load node:$ptr))>;
+def loadf128 : PatFrag<(ops node:$ptr), (f128 (load node:$ptr))>;
 
 def sextloadi16i8  : PatFrag<(ops node:$ptr), (i16 (sextloadi8 node:$ptr))>;
 def sextloadi32i8  : PatFrag<(ops node:$ptr), (i32 (sextloadi8 node:$ptr))>;
@@ -1502,10 +1511,12 @@ def MOV8rm_NOREX : I<0x8A, MRMSrcMem,
 let SchedRW = [WriteALU] in {
 let Defs = [EFLAGS], Uses = [AH] in
 def SAHF     : I<0x9E, RawFrm, (outs),  (ins), "sahf",
-                 [(set EFLAGS, (X86sahf AH))], IIC_AHF>;
+                 [(set EFLAGS, (X86sahf AH))], IIC_AHF>,
+               Requires<[HasLAHFSAHF]>;
 let Defs = [AH], Uses = [EFLAGS], hasSideEffects = 0 in
 def LAHF     : I<0x9F, RawFrm, (outs),  (ins), "lahf", [],
-                IIC_AHF>;  // AH = flags
+                IIC_AHF>,  // AH = flags
+               Requires<[HasLAHFSAHF]>;
 } // SchedRW
 
 //===----------------------------------------------------------------------===//
@@ -1939,37 +1950,38 @@ def CLTS : I<0x06, RawFrm, (outs), (ins), "clts", [], IIC_CLTS>, TB;
 }
 
 // Table lookup instructions
+let Uses = [AL,EBX], Defs = [AL], hasSideEffects = 0, mayLoad = 1 in
 def XLAT : I<0xD7, RawFrm, (outs), (ins), "xlatb", [], IIC_XLAT>,
            Sched<[WriteLoad]>;
 
 let SchedRW = [WriteMicrocoded] in {
 // ASCII Adjust After Addition
-// sets AL, AH and CF and AF of EFLAGS and uses AL and AF of EFLAGS
+let Uses = [AL,EFLAGS], Defs = [AX,EFLAGS], hasSideEffects = 0 in
 def AAA : I<0x37, RawFrm, (outs), (ins), "aaa", [], IIC_AAA>,
             Requires<[Not64BitMode]>;
 
 // ASCII Adjust AX Before Division
-// sets AL, AH and EFLAGS and uses AL and AH
+let Uses = [AX], Defs = [AX,EFLAGS], hasSideEffects = 0 in
 def AAD8i8 : Ii8<0xD5, RawFrm, (outs), (ins i8imm:$src),
                  "aad\t$src", [], IIC_AAD>, Requires<[Not64BitMode]>;
 
 // ASCII Adjust AX After Multiply
-// sets AL, AH and EFLAGS and uses AL
+let Uses = [AL], Defs = [AX,EFLAGS], hasSideEffects = 0 in
 def AAM8i8 : Ii8<0xD4, RawFrm, (outs), (ins i8imm:$src),
                  "aam\t$src", [], IIC_AAM>, Requires<[Not64BitMode]>;
 
 // ASCII Adjust AL After Subtraction - sets
-// sets AL, AH and CF and AF of EFLAGS and uses AL and AF of EFLAGS
+let Uses = [AL,EFLAGS], Defs = [AX,EFLAGS], hasSideEffects = 0 in
 def AAS : I<0x3F, RawFrm, (outs), (ins), "aas", [], IIC_AAS>,
             Requires<[Not64BitMode]>;
 
 // Decimal Adjust AL after Addition
-// sets AL, CF and AF of EFLAGS and uses AL, CF and AF of EFLAGS
+let Uses = [AL,EFLAGS], Defs = [AL,EFLAGS], hasSideEffects = 0 in
 def DAA : I<0x27, RawFrm, (outs), (ins), "daa", [], IIC_DAA>,
             Requires<[Not64BitMode]>;
 
 // Decimal Adjust AL after Subtraction
-// sets AL, CF and AF of EFLAGS and uses AL, CF and AF of EFLAGS
+let Uses = [AL,EFLAGS], Defs = [AL,EFLAGS], hasSideEffects = 0 in
 def DAS : I<0x2F, RawFrm, (outs), (ins), "das", [], IIC_DAS>,
             Requires<[Not64BitMode]>;
 } // SchedRW
@@ -2569,8 +2581,8 @@ def : MnemonicAlias<"lret", "lretl", "att">, Requires<[Not16BitMode]>;
 def : MnemonicAlias<"leavel", "leave", "att">, Requires<[Not64BitMode]>;
 def : MnemonicAlias<"leaveq", "leave", "att">, Requires<[In64BitMode]>;
 
-def : MnemonicAlias<"loopz",  "loope",  "att">;
-def : MnemonicAlias<"loopnz", "loopne", "att">;
+def : MnemonicAlias<"loopz",  "loope">;
+def : MnemonicAlias<"loopnz", "loopne">;
 
 def : MnemonicAlias<"pop",   "popw",  "att">, Requires<[In16BitMode]>;
 def : MnemonicAlias<"pop",   "popl",  "att">, Requires<[In32BitMode]>;
@@ -2651,14 +2663,14 @@ def : MnemonicAlias<"fcmova",   "fcmovnbe", "att">;
 def : MnemonicAlias<"fcmovnae", "fcmovb",   "att">;
 def : MnemonicAlias<"fcmovna",  "fcmovbe",  "att">;
 def : MnemonicAlias<"fcmovae",  "fcmovnb",  "att">;
-def : MnemonicAlias<"fcomip",   "fcompi",   "att">;
+def : MnemonicAlias<"fcomip",   "fcompi">;
 def : MnemonicAlias<"fildq",    "fildll",   "att">;
 def : MnemonicAlias<"fistpq",   "fistpll",  "att">;
 def : MnemonicAlias<"fisttpq",  "fisttpll", "att">;
 def : MnemonicAlias<"fldcww",   "fldcw",    "att">;
 def : MnemonicAlias<"fnstcww",  "fnstcw",   "att">;
 def : MnemonicAlias<"fnstsww",  "fnstsw",   "att">;
-def : MnemonicAlias<"fucomip",  "fucompi",  "att">;
+def : MnemonicAlias<"fucomip",  "fucompi">;
 def : MnemonicAlias<"fwait",    "wait">;
 
 def : MnemonicAlias<"fxsaveq",   "fxsave64",   "att">;
@@ -2793,8 +2805,10 @@ def : InstAlias<"idiv{q}\t{$src, %rax|rax, $src}", (IDIV64m i64mem:$src)>;
 // Various unary fpstack operations default to operating on on ST1.
 // For example, "fxch" -> "fxch %st(1)"
 def : InstAlias<"faddp",        (ADD_FPrST0  ST1), 0>;
+def:  InstAlias<"fadd",         (ADD_FPrST0  ST1), 0>;
 def : InstAlias<"fsub{|r}p",    (SUBR_FPrST0 ST1), 0>;
 def : InstAlias<"fsub{r|}p",    (SUB_FPrST0  ST1), 0>;
+def : InstAlias<"fmul",         (MUL_FPrST0  ST1), 0>;
 def : InstAlias<"fmulp",        (MUL_FPrST0  ST1), 0>;
 def : InstAlias<"fdiv{|r}p",    (DIVR_FPrST0 ST1), 0>;
 def : InstAlias<"fdiv{r|}p",    (DIV_FPrST0  ST1), 0>;

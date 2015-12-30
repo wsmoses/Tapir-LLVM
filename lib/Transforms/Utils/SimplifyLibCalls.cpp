@@ -18,6 +18,7 @@
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/Triple.h"
+#include "llvm/Analysis/TargetLibraryInfo.h"
 #include "llvm/Analysis/ValueTracking.h"
 #include "llvm/IR/DataLayout.h"
 #include "llvm/IR/DiagnosticInfo.h"
@@ -30,7 +31,6 @@
 #include "llvm/IR/PatternMatch.h"
 #include "llvm/Support/Allocator.h"
 #include "llvm/Support/CommandLine.h"
-#include "llvm/Analysis/TargetLibraryInfo.h"
 #include "llvm/Transforms/Utils/BuildLibCalls.h"
 #include "llvm/Transforms/Utils/Local.h"
 
@@ -53,16 +53,8 @@ static cl::opt<bool>
 //===----------------------------------------------------------------------===//
 
 static bool ignoreCallingConv(LibFunc::Func Func) {
-  switch (Func) {
-  case LibFunc::abs:
-  case LibFunc::labs:
-  case LibFunc::llabs:
-  case LibFunc::strlen:
-    return true;
-  default:
-    return false;
-  }
-  llvm_unreachable("All cases should be covered in the switch.");
+  return Func == LibFunc::abs || Func == LibFunc::labs ||
+         Func == LibFunc::llabs || Func == LibFunc::strlen;
 }
 
 /// isOnlyUsedInZeroEqualityComparison - Return true if it only matters that the
@@ -94,12 +86,9 @@ static bool isOnlyUsedInEqualityComparison(Value *V, Value *With) {
 }
 
 static bool callHasFloatingPointArgument(const CallInst *CI) {
-  for (CallInst::const_op_iterator it = CI->op_begin(), e = CI->op_end();
-       it != e; ++it) {
-    if ((*it)->getType()->isFloatingPointTy())
-      return true;
-  }
-  return false;
+  return std::any_of(CI->op_begin(), CI->op_end(), [](const Use &OI) {
+    return OI->getType()->isFloatingPointTy();
+  });
 }
 
 /// \brief Check whether the overloaded unary floating point function
@@ -124,8 +113,8 @@ static bool canUseUnsafeFPMath(Function *F) {
   // FIXME: For finer-grain optimization, we need intrinsics to have the same
   // fast-math flag decorations that are applied to FP instructions. For now,
   // we have to rely on the function-level unsafe-fp-math attribute to do this
-  // optimization because there's no other way to express that the sqrt can be
-  // reassociated.
+  // optimization because there's no other way to express that the call can be
+  // relaxed.
   if (F->hasFnAttribute("unsafe-fp-math")) {
     Attribute Attr = F->getFnAttribute("unsafe-fp-math");
     if (Attr.getValueAsString() == "true")
@@ -1006,7 +995,7 @@ Value *LibCallSimplifier::optimizeUnaryDoubleFP(CallInst *CI, IRBuilder<> &B,
 
   // floor((double)floatval) -> (double)floorf(floatval)
   if (Callee->isIntrinsic()) {
-    Module *M = CI->getParent()->getParent()->getParent();
+    Module *M = CI->getModule();
     Intrinsic::ID IID = Callee->getIntrinsicID();
     Function *F = Intrinsic::getDeclaration(M, IID, B.getFloatTy());
     V = B.CreateCall(F, V);
@@ -1069,6 +1058,31 @@ Value *LibCallSimplifier::optimizeCos(CallInst *CI, IRBuilder<> &B) {
   return Ret;
 }
 
+static Value *getPow(Value *InnerChain[33], unsigned Exp, IRBuilder<> &B) {
+  // Multiplications calculated using Addition Chains.
+  // Refer: http://wwwhomes.uni-bielefeld.de/achim/addition_chain.html
+
+  assert(Exp != 0 && "Incorrect exponent 0 not handled");
+
+  if (InnerChain[Exp])
+    return InnerChain[Exp];
+
+  static const unsigned AddChain[33][2] = {
+      {0, 0}, // Unused.
+      {0, 0}, // Unused (base case = pow1).
+      {1, 1}, // Unused (pre-computed).
+      {1, 2},  {2, 2},   {2, 3},  {3, 3},   {2, 5},  {4, 4},
+      {1, 8},  {5, 5},   {1, 10}, {6, 6},   {4, 9},  {7, 7},
+      {3, 12}, {8, 8},   {8, 9},  {2, 16},  {1, 18}, {10, 10},
+      {6, 15}, {11, 11}, {3, 20}, {12, 12}, {8, 17}, {13, 13},
+      {3, 24}, {14, 14}, {4, 25}, {15, 15}, {3, 28}, {16, 16},
+  };
+
+  InnerChain[Exp] = B.CreateFMul(getPow(InnerChain, AddChain[Exp][0], B),
+                                 getPow(InnerChain, AddChain[Exp][1], B));
+  return InnerChain[Exp];
+}
+
 Value *LibCallSimplifier::optimizePow(CallInst *CI, IRBuilder<> &B) {
   Function *Callee = CI->getCalledFunction();
   Value *Ret = nullptr;
@@ -1103,6 +1117,8 @@ Value *LibCallSimplifier::optimizePow(CallInst *CI, IRBuilder<> &B) {
                                   Callee->getAttributes());
   }
 
+  bool unsafeFPMath = canUseUnsafeFPMath(CI->getParent()->getParent());
+
   // pow(exp(x), y) -> exp(x*y)
   // pow(exp2(x), y) -> exp2(x * y)
   // We enable these only under fast-math. Besides rounding
@@ -1110,7 +1126,7 @@ Value *LibCallSimplifier::optimizePow(CallInst *CI, IRBuilder<> &B) {
   // underflow behavior quite dramatically.
   // Example: x = 1000, y = 0.001.
   // pow(exp(x), y) = pow(inf, 0.001) = inf, whereas exp(x*y) = exp(1).
-  if (canUseUnsafeFPMath(CI->getParent()->getParent())) {
+  if (unsafeFPMath) {
     if (auto *OpC = dyn_cast<CallInst>(Op1)) {
       IRBuilder<>::FastMathFlagGuard Guard(B);
       FastMathFlags FMF;
@@ -1118,14 +1134,12 @@ Value *LibCallSimplifier::optimizePow(CallInst *CI, IRBuilder<> &B) {
       B.SetFastMathFlags(FMF);
 
       LibFunc::Func Func;
-      Function *Callee = OpC->getCalledFunction();
-      StringRef FuncName = Callee->getName();
-
-      if (TLI->getLibFunc(FuncName, Func) && TLI->has(Func) &&
-          (Func == LibFunc::exp || Func == LibFunc::exp2))
+      Function *OpCCallee = OpC->getCalledFunction();
+      if (OpCCallee && TLI->getLibFunc(OpCCallee->getName(), Func) &&
+          TLI->has(Func) && (Func == LibFunc::exp || Func == LibFunc::exp2))
         return EmitUnaryFloatFnCall(
-            B.CreateFMul(OpC->getArgOperand(0), Op2, "mul"), FuncName, B,
-            Callee->getAttributes());
+            B.CreateFMul(OpC->getArgOperand(0), Op2, "mul"),
+            OpCCallee->getName(), B, OpCCallee->getAttributes());
     }
   }
 
@@ -1141,10 +1155,15 @@ Value *LibCallSimplifier::optimizePow(CallInst *CI, IRBuilder<> &B) {
                       LibFunc::sqrtl) &&
       hasUnaryFloatFn(TLI, Op2->getType(), LibFunc::fabs, LibFunc::fabsf,
                       LibFunc::fabsl)) {
+
+    // In -ffast-math, pow(x, 0.5) -> sqrt(x).
+    if (unsafeFPMath)
+      return EmitUnaryFloatFnCall(Op1, TLI->getName(LibFunc::sqrt), B,
+                                  Callee->getAttributes());
+
     // Expand pow(x, 0.5) to (x == -infinity ? +infinity : fabs(sqrt(x))).
     // This is faster than calling pow, and still handles negative zero
     // and negative infinity correctly.
-    // TODO: In fast-math mode, this could be just sqrt(x).
     // TODO: In finite-only mode, this could be just fabs(sqrt(x)).
     Value *Inf = ConstantFP::getInfinity(CI->getType());
     Value *NegInf = ConstantFP::getInfinity(CI->getType(), true);
@@ -1162,6 +1181,32 @@ Value *LibCallSimplifier::optimizePow(CallInst *CI, IRBuilder<> &B) {
     return B.CreateFMul(Op1, Op1, "pow2");
   if (Op2C->isExactlyValue(-1.0)) // pow(x, -1.0) -> 1.0/x
     return B.CreateFDiv(ConstantFP::get(CI->getType(), 1.0), Op1, "powrecip");
+
+  // In -ffast-math, generate repeated fmul instead of generating pow(x, n).
+  if (unsafeFPMath) {
+    APFloat V = abs(Op2C->getValueAPF());
+    // We limit to a max of 7 fmul(s). Thus max exponent is 32.
+    // This transformation applies to integer exponents only.
+    if (V.compare(APFloat(V.getSemantics(), 32.0)) == APFloat::cmpGreaterThan ||
+        !V.isInteger())
+      return nullptr;
+
+    // We will memoize intermediate products of the Addition Chain.
+    Value *InnerChain[33] = {nullptr};
+    InnerChain[1] = Op1;
+    InnerChain[2] = B.CreateFMul(Op1, Op1);
+
+    // We cannot readily convert a non-double type (like float) to a double.
+    // So we first convert V to something which could be converted to double.
+    bool ignored;
+    V.convert(APFloat::IEEEdouble, APFloat::rmTowardZero, &ignored);
+    Value *FMul = getPow(InnerChain, V.convertToDouble(), B);
+    // For negative exponents simply compute the reciprocal.
+    if (Op2C->isNegative())
+      FMul = B.CreateFDiv(ConstantFP::get(CI->getType(), 1.0), FMul);
+    return FMul;
+  }
+
   return nullptr;
 }
 
@@ -1290,6 +1335,56 @@ Value *LibCallSimplifier::optimizeFMinFMax(CallInst *CI, IRBuilder<> &B) {
   return B.CreateSelect(Cmp, Op0, Op1);
 }
 
+Value *LibCallSimplifier::optimizeLog(CallInst *CI, IRBuilder<> &B) {
+  Function *Callee = CI->getCalledFunction();
+  Value *Ret = nullptr;
+  StringRef Name = Callee->getName();
+  if (UnsafeFPShrink && hasFloatVersion(Name))
+    Ret = optimizeUnaryDoubleFP(CI, B, true);
+  FunctionType *FT = Callee->getFunctionType();
+
+  // Just make sure this has 1 argument of FP type, which matches the
+  // result type.
+  if (FT->getNumParams() != 1 || FT->getReturnType() != FT->getParamType(0) ||
+      !FT->getParamType(0)->isFloatingPointTy())
+    return Ret;
+
+  if (!canUseUnsafeFPMath(CI->getParent()->getParent()))
+    return Ret;
+  Value *Op1 = CI->getArgOperand(0);
+  auto *OpC = dyn_cast<CallInst>(Op1);
+  if (!OpC)
+    return Ret;
+
+  // log(pow(x,y)) -> y*log(x)
+  // This is only applicable to log, log2, log10.
+  if (Name != "log" && Name != "log2" && Name != "log10")
+    return Ret;
+
+  IRBuilder<>::FastMathFlagGuard Guard(B);
+  FastMathFlags FMF;
+  FMF.setUnsafeAlgebra();
+  B.SetFastMathFlags(FMF);
+
+  LibFunc::Func Func;
+  Function *F = OpC->getCalledFunction();
+  if (F && ((TLI->getLibFunc(F->getName(), Func) && TLI->has(Func) &&
+      Func == LibFunc::pow) || F->getIntrinsicID() == Intrinsic::pow))
+    return B.CreateFMul(OpC->getArgOperand(1),
+      EmitUnaryFloatFnCall(OpC->getOperand(0), Callee->getName(), B,
+                           Callee->getAttributes()), "mul");
+
+  // log(exp2(y)) -> y*log(2)
+  if (F && Name == "log" && TLI->getLibFunc(F->getName(), Func) &&
+      TLI->has(Func) && Func == LibFunc::exp2)
+    return B.CreateFMul(
+        OpC->getArgOperand(0),
+        EmitUnaryFloatFnCall(ConstantFP::get(CI->getType(), 2.0),
+                             Callee->getName(), B, Callee->getAttributes()),
+        "logmul");
+  return Ret;
+}
+
 Value *LibCallSimplifier::optimizeSqrt(CallInst *CI, IRBuilder<> &B) {
   Function *Callee = CI->getCalledFunction();
   
@@ -1383,8 +1478,7 @@ Value *LibCallSimplifier::optimizeTan(CallInst *CI, IRBuilder<> &B) {
   // tanl(atanl(x)) -> x
   LibFunc::Func Func;
   Function *F = OpC->getCalledFunction();
-  StringRef FuncName = F->getName();
-  if (TLI->getLibFunc(FuncName, Func) && TLI->has(Func) &&
+  if (F && TLI->getLibFunc(F->getName(), Func) && TLI->has(Func) &&
       ((Func == LibFunc::atan && Callee->getName() == "tan") ||
        (Func == LibFunc::atanf && Callee->getName() == "tanf") ||
        (Func == LibFunc::atanl && Callee->getName() == "tanl")))
@@ -1459,9 +1553,9 @@ LibCallSimplifier::classifyArgUse(Value *Val, BasicBlock *BB, bool IsFloat,
     return;
 
   Function *Callee = CI->getCalledFunction();
-  StringRef FuncName = Callee->getName();
   LibFunc::Func Func;
-  if (!TLI->getLibFunc(FuncName, Func) || !TLI->has(Func) || !isTrigLibCall(CI))
+  if (!Callee || !TLI->getLibFunc(Callee->getName(), Func) || !TLI->has(Func) ||
+      !isTrigLibCall(CI))
     return;
 
   if (IsFloat) {
@@ -2095,6 +2189,8 @@ Value *LibCallSimplifier::optimizeCall(CallInst *CI) {
       return optimizeExp2(CI, Builder);
     case Intrinsic::fabs:
       return optimizeFabs(CI, Builder);
+    case Intrinsic::log:
+      return optimizeLog(CI, Builder);
     case Intrinsic::sqrt:
       return optimizeSqrt(CI, Builder);
     default:
@@ -2177,6 +2273,12 @@ Value *LibCallSimplifier::optimizeCall(CallInst *CI) {
       return optimizeFWrite(CI, Builder);
     case LibFunc::fputs:
       return optimizeFPuts(CI, Builder);
+    case LibFunc::log:
+    case LibFunc::log10:
+    case LibFunc::log1p:
+    case LibFunc::log2:
+    case LibFunc::logb:
+      return optimizeLog(CI, Builder);
     case LibFunc::puts:
       return optimizePuts(CI, Builder);
     case LibFunc::tan:
@@ -2210,11 +2312,6 @@ Value *LibCallSimplifier::optimizeCall(CallInst *CI) {
     case LibFunc::exp:
     case LibFunc::exp10:
     case LibFunc::expm1:
-    case LibFunc::log:
-    case LibFunc::log10:
-    case LibFunc::log1p:
-    case LibFunc::log2:
-    case LibFunc::logb:
     case LibFunc::sin:
     case LibFunc::sinh:
     case LibFunc::tanh:
@@ -2263,18 +2360,14 @@ void LibCallSimplifier::replaceAllUsesWith(Instruction *I, Value *With) {
 //
 // log, logf, logl:
 //   * log(exp(x))   -> x
-//   * log(x**y)     -> y*log(x)
 //   * log(exp(y))   -> y*log(e)
-//   * log(exp2(y))  -> y*log(2)
 //   * log(exp10(y)) -> y*log(10)
 //   * log(sqrt(x))  -> 0.5*log(x)
-//   * log(pow(x,y)) -> y*log(x)
 //
 // lround, lroundf, lroundl:
 //   * lround(cnst) -> cnst'
 //
 // pow, powf, powl:
-//   * pow(exp(x),y)  -> exp(x*y)
 //   * pow(sqrt(x),y) -> pow(x,y*0.5)
 //   * pow(pow(x,y),z)-> pow(x,y*z)
 //
@@ -2289,9 +2382,6 @@ void LibCallSimplifier::replaceAllUsesWith(Instruction *I, Value *With) {
 //   * sqrt(expN(x))  -> expN(x*0.5)
 //   * sqrt(Nroot(x)) -> pow(x,1/(2*N))
 //   * sqrt(pow(x,y)) -> pow(|x|,y*0.5)
-//
-// tan, tanf, tanl:
-//   * tan(atan(x)) -> x
 //
 // trunc, truncf, truncl:
 //   * trunc(cnst) -> cnst'

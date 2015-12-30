@@ -198,8 +198,8 @@ struct AllocaDerivedValueTracker {
       case Instruction::Call:
       case Instruction::Invoke: {
         CallSite CS(I);
-        bool IsNocapture = !CS.isCallee(U) &&
-                           CS.doesNotCapture(CS.getArgumentNo(U));
+        bool IsNocapture =
+            CS.isDataOperand(U) && CS.doesNotCapture(CS.getDataOperandNo(U));
         callUsesLocalStack(CS, IsNocapture);
         if (IsNocapture) {
           // If the alloca-derived argument is passed in as nocapture, then it
@@ -653,13 +653,6 @@ bool TailCallElim::EliminateRecursiveTailCall(CallInst *CI, ReturnInst *Ret,
     // is an associative and commutative operation that could be transformed
     // using accumulator recursion elimination.  Check to see if this is the
     // case, and if so, remember the initial accumulator value for later.
-<<<<<<< HEAD
-    if ((AccumulatorRecursionEliminationInitVal =
-             CanTransformAccumulatorRecursion(&*BBI, CI))) {
-      // Yes, this is accumulator recursion.  Remember which instruction
-      // accumulates.
-      AccumulatorRecursionInstr = &*BBI;
-=======
     // if ((AccumulatorRecursionEliminationInitVal =
     //          CanTransformAccumulatorRecursion(&*BBI, CI))) {
     if (CanTransformAccumulatorRecursion(&*BBI, CI)) {
@@ -676,7 +669,6 @@ bool TailCallElim::EliminateRecursiveTailCall(CallInst *CI, ReturnInst *Ret,
       } else {
         return false;   // Otherwise, we cannot eliminate the tail recursion!
       }
->>>>>>> 8d00ea68834b61ce260b8111beb594cbdc8c78b9
     } else {
       return false;   // Otherwise, we cannot eliminate the tail recursion!
     }
@@ -809,7 +801,8 @@ bool TailCallElim::EliminateRecursiveTailCall(CallInst *CI, ReturnInst *Ret,
           Instruction *FinalAccRecInstr = AccRecInstr->clone();
           FinalAccRecInstr->setOperand(FinalAccRecInstr->getOperand(0) ==
                                        AccPN, RI->getOperand(0));
-          BBI->getInstList().insert(RI, FinalAccRecInstr);
+          // BBI->getInstList().insert(RI, FinalAccRecInstr);
+	  FinalAccRecInstr->insertBefore(RI);
           RI->setOperand(0, FinalAccRecInstr);
         } else {
           RI->setOperand(0, AccPN);

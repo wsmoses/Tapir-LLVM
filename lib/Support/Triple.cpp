@@ -487,9 +487,7 @@ static Triple::SubArchType parseSubArch(StringRef SubArchName) {
     return Triple::NoSubArch;
   case ARM::AK_ARMV4T:
     return Triple::ARMSubArch_v4t;
-  case ARM::AK_ARMV5:
   case ARM::AK_ARMV5T:
-  case ARM::AK_ARMV5E:
     return Triple::ARMSubArch_v5;
   case ARM::AK_ARMV5TE:
   case ARM::AK_IWMMXT:
@@ -498,23 +496,16 @@ static Triple::SubArchType parseSubArch(StringRef SubArchName) {
   case ARM::AK_ARMV5TEJ:
     return Triple::ARMSubArch_v5te;
   case ARM::AK_ARMV6:
-  case ARM::AK_ARMV6J:
-  case ARM::AK_ARMV6Z:
     return Triple::ARMSubArch_v6;
   case ARM::AK_ARMV6K:
-  case ARM::AK_ARMV6ZK:
-  case ARM::AK_ARMV6HL:
+  case ARM::AK_ARMV6KZ:
     return Triple::ARMSubArch_v6k;
   case ARM::AK_ARMV6T2:
     return Triple::ARMSubArch_v6t2;
   case ARM::AK_ARMV6M:
-  case ARM::AK_ARMV6SM:
     return Triple::ARMSubArch_v6m;
-  case ARM::AK_ARMV7:
   case ARM::AK_ARMV7A:
   case ARM::AK_ARMV7R:
-  case ARM::AK_ARMV7L:
-  case ARM::AK_ARMV7HL:
     return Triple::ARMSubArch_v7;
   case ARM::AK_ARMV7K:
     return Triple::ARMSubArch_v7k;
@@ -528,6 +519,8 @@ static Triple::SubArchType parseSubArch(StringRef SubArchName) {
     return Triple::ARMSubArch_v8;
   case ARM::AK_ARMV8_1A:
     return Triple::ARMSubArch_v8_1a;
+  case ARM::AK_ARMV8_2A:
+    return Triple::ARMSubArch_v8_2a;
   default:
     return Triple::NoSubArch;
   }
@@ -545,20 +538,53 @@ static const char *getObjectFormatTypeName(Triple::ObjectFormatType Kind) {
 
 static Triple::ObjectFormatType getDefaultFormat(const Triple &T) {
   switch (T.getArch()) {
-  default:
-    break;
+  case Triple::UnknownArch:
+  case Triple::aarch64:
+  case Triple::arm:
+  case Triple::thumb:
+  case Triple::x86:
+  case Triple::x86_64:
+    if (T.isOSDarwin())
+      return Triple::MachO;
+    else if (T.isOSWindows())
+      return Triple::COFF;
+    return Triple::ELF;
+
+  case Triple::aarch64_be:
+  case Triple::amdgcn:
+  case Triple::amdil:
+  case Triple::amdil64:
+  case Triple::armeb:
+  case Triple::avr:
+  case Triple::bpfeb:
+  case Triple::bpfel:
   case Triple::hexagon:
+  case Triple::hsail:
+  case Triple::hsail64:
+  case Triple::kalimba:
+  case Triple::le32:
+  case Triple::le64:
   case Triple::mips:
-  case Triple::mipsel:
   case Triple::mips64:
   case Triple::mips64el:
-  case Triple::r600:
-  case Triple::amdgcn:
-  case Triple::sparc:
-  case Triple::sparcv9:
-  case Triple::systemz:
-  case Triple::xcore:
+  case Triple::mipsel:
+  case Triple::msp430:
+  case Triple::nvptx:
+  case Triple::nvptx64:
   case Triple::ppc64le:
+  case Triple::r600:
+  case Triple::shave:
+  case Triple::sparc:
+  case Triple::sparcel:
+  case Triple::sparcv9:
+  case Triple::spir:
+  case Triple::spir64:
+  case Triple::systemz:
+  case Triple::tce:
+  case Triple::thumbeb:
+  case Triple::wasm32:
+  case Triple::wasm64:
+  case Triple::xcore:
     return Triple::ELF;
 
   case Triple::ppc:
@@ -566,18 +592,8 @@ static Triple::ObjectFormatType getDefaultFormat(const Triple &T) {
     if (T.isOSDarwin())
       return Triple::MachO;
     return Triple::ELF;
-
-  case Triple::wasm32:
-  case Triple::wasm64:
-    // Unknown for now, until an object format is specified.
-    return Triple::UnknownObjectFormat;
   }
-
-  if (T.isOSDarwin())
-    return Triple::MachO;
-  else if (T.isOSWindows())
-    return Triple::COFF;
-  return Triple::ELF;
+  llvm_unreachable("unknown architecture");
 }
 
 /// \brief Construct a triple from the string representation provided.
@@ -1379,6 +1395,12 @@ StringRef Triple::getARMCPUForArch(StringRef MArch) const {
   case llvm::Triple::Win32:
     // FIXME: this is invalid for WindowsCE
     return "cortex-a9";
+  case llvm::Triple::MacOSX:
+  case llvm::Triple::IOS:
+  case llvm::Triple::WatchOS:
+    if (MArch == "v7k")
+      return "cortex-a7";
+    break;
   default:
     break;
   }

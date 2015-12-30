@@ -22,6 +22,7 @@
 namespace llvm {
 class AllocaInst;
 class BasicBlock;
+class CatchReturnInst;
 class Constant;
 class Function;
 class GlobalVariable;
@@ -60,8 +61,8 @@ struct SEHUnwindMapEntry {
 
 struct WinEHHandlerType {
   int Adjectives;
-  /// The CatchObj starts out life as an LLVM alloca, is turned into a frame
-  /// index, and after PEI, becomes a raw offset.
+  /// The CatchObj starts out life as an LLVM alloca and is eventually turned
+  /// frame index.
   union {
     const AllocaInst *Alloca;
     int FrameIndex;
@@ -88,28 +89,28 @@ struct ClrEHUnwindMapEntry {
 
 struct WinEHFuncInfo {
   DenseMap<const Instruction *, int> EHPadStateMap;
+  DenseMap<const FuncletPadInst *, int> FuncletBaseStateMap;
+  DenseMap<const InvokeInst *, int> InvokeStateMap;
   DenseMap<const CatchReturnInst *, const BasicBlock *>
       CatchRetSuccessorColorMap;
-  DenseMap<MCSymbol *, std::pair<int, MCSymbol *>> InvokeToStateMap;
+  DenseMap<MCSymbol *, std::pair<int, MCSymbol *>> LabelToStateMap;
   SmallVector<CxxUnwindMapEntry, 4> CxxUnwindMap;
   SmallVector<WinEHTryBlockMapEntry, 4> TryBlockMap;
   SmallVector<SEHUnwindMapEntry, 4> SEHUnwindMap;
   SmallVector<ClrEHUnwindMapEntry, 4> ClrEHUnwindMap;
   int UnwindHelpFrameIdx = INT_MAX;
+  int PSPSymFrameIdx = INT_MAX;
 
   int getLastStateNumber() const { return CxxUnwindMap.size() - 1; }
 
-  void addIPToStateRange(const BasicBlock *PadBB, MCSymbol *InvokeBegin,
+  void addIPToStateRange(const InvokeInst *II, MCSymbol *InvokeBegin,
                          MCSymbol *InvokeEnd);
 
-  /// localescape index of the 32-bit EH registration node. Set by
-  /// WinEHStatePass and used indirectly by SEH filter functions of the parent.
-  int EHRegNodeEscapeIndex = INT_MAX;
-  const AllocaInst *EHRegNode = nullptr;
   int EHRegNodeFrameIndex = INT_MAX;
   int EHRegNodeEndOffset = INT_MAX;
+  int SEHSetFrameOffset = INT_MAX;
 
-  WinEHFuncInfo() {}
+  WinEHFuncInfo();
 };
 
 /// Analyze the IR in ParentFn and it's handlers to build WinEHFuncInfo, which

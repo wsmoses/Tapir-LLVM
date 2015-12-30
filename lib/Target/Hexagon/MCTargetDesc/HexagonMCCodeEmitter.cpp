@@ -334,7 +334,7 @@ static Hexagon::Fixups getFixupNoBits(MCInstrInfo const &MCII, const MCInst &MI,
   // The only relocs left should be GP relative:
   default:
     if (MCID.mayStore() || MCID.mayLoad()) {
-      for (const uint16_t *ImpUses = MCID.getImplicitUses(); *ImpUses;
+      for (const MCPhysReg *ImpUses = MCID.getImplicitUses(); *ImpUses;
            ++ImpUses) {
         if (*ImpUses == Hexagon::GP) {
           switch (HexagonMCInstrInfo::getAccessSize(MCII, MI)) {
@@ -405,10 +405,8 @@ unsigned HexagonMCCodeEmitter::getExprOpValue(const MCInst &MI,
     return cast<MCConstantExpr>(ME)->getValue();
   }
   if (MK == MCExpr::Binary) {
-    unsigned Res;
-    Res = getExprOpValue(MI, MO, cast<MCBinaryExpr>(ME)->getLHS(), Fixups, STI);
-    Res +=
-        getExprOpValue(MI, MO, cast<MCBinaryExpr>(ME)->getRHS(), Fixups, STI);
+    getExprOpValue(MI, MO, cast<MCBinaryExpr>(ME)->getLHS(), Fixups, STI);
+    getExprOpValue(MI, MO, cast<MCBinaryExpr>(ME)->getRHS(), Fixups, STI);
     return 0;
   }
 

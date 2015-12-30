@@ -116,6 +116,10 @@ protected:
   MCSection *DwarfStrOffDWOSection;
   MCSection *DwarfAddrSection;
 
+  // These are for Fission DWP files.
+  MCSection *DwarfCUIndexSection;
+  MCSection *DwarfTUIndexSection;
+
   /// Section for newer gnu pubnames.
   MCSection *DwarfGnuPubNamesSection;
   /// Section for newer gnu pubtypes.
@@ -149,10 +153,7 @@ protected:
   MCSection *EHFrameSection;
 
   // ELF specific sections.
-  MCSection *DataRelSection;
-  const MCSection *DataRelLocalSection;
   MCSection *DataRelROSection;
-  MCSection *DataRelROLocalSection;
   MCSection *MergeableConst4Section;
   MCSection *MergeableConst8Section;
   MCSection *MergeableConst16Section;
@@ -265,6 +266,8 @@ public:
   MCSection *getDwarfLocDWOSection() const { return DwarfLocDWOSection; }
   MCSection *getDwarfStrOffDWOSection() const { return DwarfStrOffDWOSection; }
   MCSection *getDwarfAddrSection() const { return DwarfAddrSection; }
+  MCSection *getDwarfCUIndexSection() const { return DwarfCUIndexSection; }
+  MCSection *getDwarfTUIndexSection() const { return DwarfTUIndexSection; }
 
   MCSection *getCOFFDebugSymbolsSection() const {
     return COFFDebugSymbolsSection;
@@ -278,12 +281,7 @@ public:
   MCSection *getFaultMapSection() const { return FaultMapSection; }
 
   // ELF specific sections.
-  MCSection *getDataRelSection() const { return DataRelSection; }
-  const MCSection *getDataRelLocalSection() const {
-    return DataRelLocalSection;
-  }
   MCSection *getDataRelROSection() const { return DataRelROSection; }
-  MCSection *getDataRelROLocalSection() const { return DataRelROLocalSection; }
   const MCSection *getMergeableConst4Section() const {
     return MergeableConst4Section;
   }

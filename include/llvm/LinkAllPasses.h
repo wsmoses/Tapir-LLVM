@@ -85,7 +85,10 @@ namespace {
       (void) llvm::createDomOnlyViewerPass();
       (void) llvm::createDomViewerPass();
       (void) llvm::createGCOVProfilerPass();
+      (void) llvm::createPGOInstrumentationGenPass();
+      (void) llvm::createPGOInstrumentationUsePass();
       (void) llvm::createInstrProfilingPass();
+      (void) llvm::createFunctionImportPass();
       (void) llvm::createFunctionInliningPass();
       (void) llvm::createAlwaysInlinerPass();
       (void) llvm::createGlobalDCEPass();
@@ -121,7 +124,7 @@ namespace {
       (void) llvm::createObjCARCOptPass();
       (void) llvm::createPAEvalPass();
       (void) llvm::createPromoteDetachToCilkPass();
-      (void) llvm::createPromoteDetachToCilksanPass();
+      // (void) llvm::createPromoteDetachToCilksanPass();
       (void) llvm::createPromoteMemoryToRegisterPass();
       (void) llvm::createDemoteRegisterToMemoryPass();
       (void) llvm::createPruneEHPass();

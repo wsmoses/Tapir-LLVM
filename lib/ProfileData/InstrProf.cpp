@@ -32,30 +32,32 @@ class InstrProfErrorCategoryType : public std::error_category {
       return "Success";
     case instrprof_error::eof:
       return "End of File";
+    case instrprof_error::unrecognized_format:
+      return "Unrecognized instrumentation profile encoding format";
     case instrprof_error::bad_magic:
-      return "Invalid profile data (bad magic)";
+      return "Invalid instrumentation profile data (bad magic)";
     case instrprof_error::bad_header:
-      return "Invalid profile data (file header is corrupt)";
+      return "Invalid instrumentation profile data (file header is corrupt)";
     case instrprof_error::unsupported_version:
-      return "Unsupported profiling format version";
+      return "Unsupported instrumentation profile format version";
     case instrprof_error::unsupported_hash_type:
-      return "Unsupported profiling hash";
+      return "Unsupported instrumentation profile hash type";
     case instrprof_error::too_large:
       return "Too much profile data";
     case instrprof_error::truncated:
       return "Truncated profile data";
     case instrprof_error::malformed:
-      return "Malformed profile data";
+      return "Malformed instrumentation profile data";
     case instrprof_error::unknown_function:
       return "No profile data available for function";
     case instrprof_error::hash_mismatch:
-      return "Function hash mismatch";
+      return "Function control flow change detected (hash mismatch)";
     case instrprof_error::count_mismatch:
-      return "Function count mismatch";
+      return "Function basic block count change detected (counter mismatch)";
     case instrprof_error::counter_overflow:
       return "Counter overflow";
     case instrprof_error::value_site_count_mismatch:
-      return "Function's value site counts mismatch";
+      return "Function value site count change detected (counter mismatch)";
     }
     llvm_unreachable("A value of instrprof_error has no message.");
   }
@@ -72,7 +74,8 @@ namespace llvm {
 
 std::string getPGOFuncName(StringRef RawFuncName,
                            GlobalValue::LinkageTypes Linkage,
-                           StringRef FileName) {
+                           StringRef FileName,
+                           uint64_t Version LLVM_ATTRIBUTE_UNUSED) {
 
   // Function names may be prefixed with a binary '1' to indicate
   // that the backend should not modify the symbols due to any platform
@@ -94,8 +97,38 @@ std::string getPGOFuncName(StringRef RawFuncName,
   return FuncName;
 }
 
-std::string getPGOFuncName(const Function &F) {
-  return getPGOFuncName(F.getName(), F.getLinkage(), F.getParent()->getName());
+std::string getPGOFuncName(const Function &F, uint64_t Version) {
+  return getPGOFuncName(F.getName(), F.getLinkage(), F.getParent()->getName(),
+                        Version);
+}
+
+StringRef getFuncNameWithoutPrefix(StringRef PGOFuncName, StringRef FileName) {
+  if (FileName.empty())
+    return PGOFuncName;
+  // Drop the file name including ':'. See also getPGOFuncName.
+  if (PGOFuncName.startswith(FileName))
+    PGOFuncName = PGOFuncName.drop_front(FileName.size() + 1);
+  return PGOFuncName;
+}
+
+// \p FuncName is the string used as profile lookup key for the function. A
+// symbol is created to hold the name. Return the legalized symbol name.
+static std::string getPGOFuncNameVarName(StringRef FuncName,
+                                         GlobalValue::LinkageTypes Linkage) {
+  std::string VarName = getInstrProfNameVarPrefix();
+  VarName += FuncName;
+
+  if (!GlobalValue::isLocalLinkage(Linkage))
+    return VarName;
+
+  // Now fix up illegal chars in local VarName that may upset the assembler.
+  const char *InvalidChars = "-:<>\"'";
+  size_t found = VarName.find_first_of(InvalidChars);
+  while (found != std::string::npos) {
+    VarName[found] = '_';
+    found = VarName.find_first_of(InvalidChars, found + 1);
+  }
+  return VarName;
 }
 
 GlobalVariable *createPGOFuncNameVar(Module &M,
@@ -116,7 +149,7 @@ GlobalVariable *createPGOFuncNameVar(Module &M,
   auto *Value = ConstantDataArray::getString(M.getContext(), FuncName, false);
   auto FuncNameVar =
       new GlobalVariable(M, Value->getType(), true, Linkage, Value,
-                         Twine(getInstrProfNameVarPrefix()) + FuncName);
+                         getPGOFuncNameVarName(FuncName, Linkage));
 
   // Hide the symbol so that we correctly get a copy for each executable.
   if (!GlobalValue::isLocalLinkage(FuncNameVar->getLinkage()))
@@ -129,64 +162,196 @@ GlobalVariable *createPGOFuncNameVar(Function &F, StringRef FuncName) {
   return createPGOFuncNameVar(*F.getParent(), F.getLinkage(), FuncName);
 }
 
-namespace IndexedInstrProf {
-
-uint32_t ValueProfRecord::getHeaderSize(uint32_t NumValueSites) {
-  uint32_t Size = offsetof(ValueProfRecord, SiteCountArray) +
-                  sizeof(uint8_t) * NumValueSites;
-  // Round the size to multiple of 8 bytes.
-  Size = (Size + 7) & ~7;
-  return Size;
+instrprof_error
+InstrProfValueSiteRecord::mergeValueData(InstrProfValueSiteRecord &Input,
+                                         uint64_t Weight) {
+  this->sortByTargetValues();
+  Input.sortByTargetValues();
+  auto I = ValueData.begin();
+  auto IE = ValueData.end();
+  instrprof_error Result = instrprof_error::success;
+  for (auto J = Input.ValueData.begin(), JE = Input.ValueData.end(); J != JE;
+       ++J) {
+    while (I != IE && I->Value < J->Value)
+      ++I;
+    if (I != IE && I->Value == J->Value) {
+      uint64_t JCount = J->Count;
+      bool Overflowed;
+      if (Weight > 1) {
+        JCount = SaturatingMultiply(JCount, Weight, &Overflowed);
+        if (Overflowed)
+          Result = instrprof_error::counter_overflow;
+      }
+      I->Count = SaturatingAdd(I->Count, JCount, &Overflowed);
+      if (Overflowed)
+        Result = instrprof_error::counter_overflow;
+      ++I;
+      continue;
+    }
+    ValueData.insert(I, *J);
+  }
+  return Result;
 }
 
-uint32_t ValueProfRecord::getSize(uint32_t NumValueSites,
-                                  uint32_t NumValueData) {
-  return getHeaderSize(NumValueSites) +
-         sizeof(InstrProfValueData) * NumValueData;
+// Merge Value Profile data from Src record to this record for ValueKind.
+// Scale merged value counts by \p Weight.
+instrprof_error InstrProfRecord::mergeValueProfData(uint32_t ValueKind,
+                                                    InstrProfRecord &Src,
+                                                    uint64_t Weight) {
+  uint32_t ThisNumValueSites = getNumValueSites(ValueKind);
+  uint32_t OtherNumValueSites = Src.getNumValueSites(ValueKind);
+  if (ThisNumValueSites != OtherNumValueSites)
+    return instrprof_error::value_site_count_mismatch;
+  std::vector<InstrProfValueSiteRecord> &ThisSiteRecords =
+      getValueSitesForKind(ValueKind);
+  std::vector<InstrProfValueSiteRecord> &OtherSiteRecords =
+      Src.getValueSitesForKind(ValueKind);
+  instrprof_error Result = instrprof_error::success;
+  for (uint32_t I = 0; I < ThisNumValueSites; I++)
+    MergeResult(Result,
+                ThisSiteRecords[I].mergeValueData(OtherSiteRecords[I], Weight));
+  return Result;
+}
+
+instrprof_error InstrProfRecord::merge(InstrProfRecord &Other,
+                                       uint64_t Weight) {
+  // If the number of counters doesn't match we either have bad data
+  // or a hash collision.
+  if (Counts.size() != Other.Counts.size())
+    return instrprof_error::count_mismatch;
+
+  instrprof_error Result = instrprof_error::success;
+
+  for (size_t I = 0, E = Other.Counts.size(); I < E; ++I) {
+    bool Overflowed;
+    uint64_t OtherCount = Other.Counts[I];
+    if (Weight > 1) {
+      OtherCount = SaturatingMultiply(OtherCount, Weight, &Overflowed);
+      if (Overflowed)
+        Result = instrprof_error::counter_overflow;
+    }
+    Counts[I] = SaturatingAdd(Counts[I], OtherCount, &Overflowed);
+    if (Overflowed)
+      Result = instrprof_error::counter_overflow;
+  }
+
+  for (uint32_t Kind = IPVK_First; Kind <= IPVK_Last; ++Kind)
+    MergeResult(Result, mergeValueProfData(Kind, Other, Weight));
+
+  return Result;
+}
+
+// Map indirect call target name hash to name string.
+uint64_t InstrProfRecord::remapValue(uint64_t Value, uint32_t ValueKind,
+                                     ValueMapType *ValueMap) {
+  if (!ValueMap)
+    return Value;
+  switch (ValueKind) {
+  case IPVK_IndirectCallTarget: {
+    auto Result =
+        std::lower_bound(ValueMap->begin(), ValueMap->end(), Value,
+                         [](const std::pair<uint64_t, uint64_t> &LHS,
+                            uint64_t RHS) { return LHS.first < RHS; });
+    if (Result != ValueMap->end())
+      Value = (uint64_t)Result->second;
+    break;
+  }
+  }
+  return Value;
+}
+
+void InstrProfRecord::addValueData(uint32_t ValueKind, uint32_t Site,
+                                   InstrProfValueData *VData, uint32_t N,
+                                   ValueMapType *ValueMap) {
+  for (uint32_t I = 0; I < N; I++) {
+    VData[I].Value = remapValue(VData[I].Value, ValueKind, ValueMap);
+  }
+  std::vector<InstrProfValueSiteRecord> &ValueSites =
+      getValueSitesForKind(ValueKind);
+  if (N == 0)
+    ValueSites.push_back(InstrProfValueSiteRecord());
+  else
+    ValueSites.emplace_back(VData, VData + N);
+}
+
+#define INSTR_PROF_COMMON_API_IMPL
+#include "llvm/ProfileData/InstrProfData.inc"
+
+/*!
+ * \brief ValueProfRecordClosure Interface implementation for  InstrProfRecord
+ *  class. These C wrappers are used as adaptors so that C++ code can be
+ *  invoked as callbacks.
+ */
+uint32_t getNumValueKindsInstrProf(const void *Record) {
+  return reinterpret_cast<const InstrProfRecord *>(Record)->getNumValueKinds();
+}
+
+uint32_t getNumValueSitesInstrProf(const void *Record, uint32_t VKind) {
+  return reinterpret_cast<const InstrProfRecord *>(Record)
+      ->getNumValueSites(VKind);
+}
+
+uint32_t getNumValueDataInstrProf(const void *Record, uint32_t VKind) {
+  return reinterpret_cast<const InstrProfRecord *>(Record)
+      ->getNumValueData(VKind);
+}
+
+uint32_t getNumValueDataForSiteInstrProf(const void *R, uint32_t VK,
+                                         uint32_t S) {
+  return reinterpret_cast<const InstrProfRecord *>(R)
+      ->getNumValueDataForSite(VK, S);
+}
+
+void getValueForSiteInstrProf(const void *R, InstrProfValueData *Dst,
+                              uint32_t K, uint32_t S,
+                              uint64_t (*Mapper)(uint32_t, uint64_t)) {
+  return reinterpret_cast<const InstrProfRecord *>(R)->getValueForSite(
+      Dst, K, S, Mapper);
+}
+
+ValueProfData *allocValueProfDataInstrProf(size_t TotalSizeInBytes) {
+  ValueProfData *VD =
+      (ValueProfData *)(new (::operator new(TotalSizeInBytes)) ValueProfData());
+  memset(VD, 0, TotalSizeInBytes);
+  return VD;
+}
+
+static ValueProfRecordClosure InstrProfRecordClosure = {
+    0,
+    getNumValueKindsInstrProf,
+    getNumValueSitesInstrProf,
+    getNumValueDataInstrProf,
+    getNumValueDataForSiteInstrProf,
+    0,
+    getValueForSiteInstrProf,
+    allocValueProfDataInstrProf};
+
+// Wrapper implementation using the closure mechanism.
+uint32_t ValueProfData::getSize(const InstrProfRecord &Record) {
+  InstrProfRecordClosure.Record = &Record;
+  return getValueProfDataSize(&InstrProfRecordClosure);
+}
+
+// Wrapper implementation using the closure mechanism.
+std::unique_ptr<ValueProfData>
+ValueProfData::serializeFrom(const InstrProfRecord &Record) {
+  InstrProfRecordClosure.Record = &Record;
+
+  std::unique_ptr<ValueProfData> VPD(
+      serializeValueProfDataFrom(&InstrProfRecordClosure, nullptr));
+  return VPD;
 }
 
 void ValueProfRecord::deserializeTo(InstrProfRecord &Record,
                                     InstrProfRecord::ValueMapType *VMap) {
   Record.reserveSites(Kind, NumValueSites);
 
-  InstrProfValueData *ValueData = this->getValueData();
+  InstrProfValueData *ValueData = getValueProfRecordValueData(this);
   for (uint64_t VSite = 0; VSite < NumValueSites; ++VSite) {
     uint8_t ValueDataCount = this->SiteCountArray[VSite];
     Record.addValueData(Kind, VSite, ValueData, ValueDataCount, VMap);
     ValueData += ValueDataCount;
   }
-}
-
-void ValueProfRecord::serializeFrom(const InstrProfRecord &Record,
-                                    uint32_t ValueKind,
-                                    uint32_t NumValueSites) {
-  Kind = ValueKind;
-  this->NumValueSites = NumValueSites;
-  InstrProfValueData *DstVD = getValueData();
-  for (uint32_t S = 0; S < NumValueSites; S++) {
-    uint32_t ND = Record.getNumValueDataForSite(ValueKind, S);
-    SiteCountArray[S] = ND;
-    std::unique_ptr<InstrProfValueData[]> SrcVD =
-        Record.getValueForSite(ValueKind, S);
-    for (uint32_t I = 0; I < ND; I++) {
-      DstVD[I] = SrcVD[I];
-      switch (ValueKind) {
-      case IPVK_IndirectCallTarget:
-        DstVD[I].Value = ComputeHash(HashType, (const char *)DstVD[I].Value);
-        break;
-      default:
-        llvm_unreachable("value kind not handled !");
-      }
-    }
-    DstVD += ND;
-  }
-}
-
-template <class T> static T swapToHostOrder(T v, support::endianness Orig) {
-  if (Orig == getHostEndianness())
-    return v;
-  sys::swapByteOrder<T>(v);
-  return v;
 }
 
 // For writing/serializing,  Old is the host endianness, and  New is
@@ -202,8 +367,8 @@ void ValueProfRecord::swapBytes(support::endianness Old,
     sys::swapByteOrder<uint32_t>(NumValueSites);
     sys::swapByteOrder<uint32_t>(Kind);
   }
-  uint32_t ND = getNumValueData();
-  InstrProfValueData *VD = getValueData();
+  uint32_t ND = getValueProfRecordNumValueData(this);
+  InstrProfValueData *VD = getValueProfRecordValueData(this);
 
   // No need to swap byte array: SiteCountArrray.
   for (uint32_t I = 0; I < ND; I++) {
@@ -216,52 +381,48 @@ void ValueProfRecord::swapBytes(support::endianness Old,
   }
 }
 
-uint32_t ValueProfData::getSize(const InstrProfRecord &Record) {
-  uint32_t TotalSize = sizeof(ValueProfData);
-  uint32_t NumValueKinds = Record.getNumValueKinds();
-  if (NumValueKinds == 0)
-    return TotalSize;
-
-  for (uint32_t Kind = IPVK_First; Kind <= IPVK_Last; Kind++) {
-    uint32_t NumValueSites = Record.getNumValueSites(Kind);
-    if (!NumValueSites)
-      continue;
-    TotalSize +=
-        ValueProfRecord::getSize(NumValueSites, Record.getNumValueData(Kind));
-  }
-  return TotalSize;
-}
-
 void ValueProfData::deserializeTo(InstrProfRecord &Record,
                                   InstrProfRecord::ValueMapType *VMap) {
   if (NumValueKinds == 0)
     return;
 
-  ValueProfRecord *VR = getFirstValueProfRecord();
+  ValueProfRecord *VR = getFirstValueProfRecord(this);
   for (uint32_t K = 0; K < NumValueKinds; K++) {
     VR->deserializeTo(Record, VMap);
-    VR = VR->getNext();
+    VR = getValueProfRecordNext(VR);
   }
 }
 
-std::unique_ptr<ValueProfData>
-ValueProfData::serializeFrom(const InstrProfRecord &Record) {
-  uint32_t TotalSize = getSize(Record);
-  void *RawMem = ::operator new(TotalSize);
-  ValueProfData *VPDMem = new (RawMem) ValueProfData();
-  std::unique_ptr<ValueProfData> VPD(VPDMem);
+template <class T>
+static T swapToHostOrder(const unsigned char *&D, support::endianness Orig) {
+  using namespace support;
+  if (Orig == little)
+    return endian::readNext<T, little, unaligned>(D);
+  else
+    return endian::readNext<T, big, unaligned>(D);
+}
 
-  VPD->TotalSize = TotalSize;
-  VPD->NumValueKinds = Record.getNumValueKinds();
-  ValueProfRecord *VR = VPD->getFirstValueProfRecord();
-  for (uint32_t Kind = IPVK_First; Kind <= IPVK_Last; Kind++) {
-    uint32_t NumValueSites = Record.getNumValueSites(Kind);
-    if (!NumValueSites)
-      continue;
-    VR->serializeFrom(Record, Kind, NumValueSites);
-    VR = VR->getNext();
+static std::unique_ptr<ValueProfData> allocValueProfData(uint32_t TotalSize) {
+  return std::unique_ptr<ValueProfData>(new (::operator new(TotalSize))
+                                            ValueProfData());
+}
+
+instrprof_error ValueProfData::checkIntegrity() {
+  if (NumValueKinds > IPVK_Last + 1)
+    return instrprof_error::malformed;
+  // Total size needs to be mulltiple of quadword size.
+  if (TotalSize % sizeof(uint64_t))
+    return instrprof_error::malformed;
+
+  ValueProfRecord *VR = getFirstValueProfRecord(this);
+  for (uint32_t K = 0; K < this->NumValueKinds; K++) {
+    if (VR->Kind > IPVK_Last)
+      return instrprof_error::malformed;
+    VR = getValueProfRecordNext(VR);
+    if ((char *)VR - (char *)this > (ptrdiff_t)TotalSize)
+      return instrprof_error::malformed;
   }
-  return VPD;
+  return instrprof_error::success;
 }
 
 ErrorOr<std::unique_ptr<ValueProfData>>
@@ -272,36 +433,20 @@ ValueProfData::getValueProfData(const unsigned char *D,
   if (D + sizeof(ValueProfData) > BufferEnd)
     return instrprof_error::truncated;
 
-  uint32_t TotalSize = swapToHostOrder<uint32_t>(
-      reinterpret_cast<const uint32_t *>(D)[0], Endianness);
-  uint32_t NumValueKinds = swapToHostOrder<uint32_t>(
-      reinterpret_cast<const uint32_t *>(D)[1], Endianness);
-
+  const unsigned char *Header = D;
+  uint32_t TotalSize = swapToHostOrder<uint32_t>(Header, Endianness);
   if (D + TotalSize > BufferEnd)
     return instrprof_error::too_large;
-  if (NumValueKinds > IPVK_Last + 1)
-    return instrprof_error::malformed;
-  // Total size needs to be mulltiple of quadword size.
-  if (TotalSize % sizeof(uint64_t))
-    return instrprof_error::malformed;
 
-  std::unique_ptr<ValueProfData> VPD(
-      reinterpret_cast<ValueProfData *>(new char[TotalSize]));
+  std::unique_ptr<ValueProfData> VPD = allocValueProfData(TotalSize);
   memcpy(VPD.get(), D, TotalSize);
   // Byte swap.
   VPD->swapBytesToHost(Endianness);
 
-  // Data integrety check:
-  ValueProfRecord *VR = VPD->getFirstValueProfRecord();
-  for (uint32_t K = 0; K < VPD->NumValueKinds; K++) {
-    if (VR->Kind > IPVK_Last)
-      return instrprof_error::malformed;
-    VR = VR->getNext();
-    if ((char *)VR - (char *)VPD.get() > (ptrdiff_t)TotalSize)
-      return instrprof_error::malformed;
-  }
+  instrprof_error EC = VPD->checkIntegrity();
+  if (EC != instrprof_error::success)
+    return EC;
 
-  D += TotalSize;
   return std::move(VPD);
 }
 
@@ -313,10 +458,10 @@ void ValueProfData::swapBytesToHost(support::endianness Endianness) {
   sys::swapByteOrder<uint32_t>(TotalSize);
   sys::swapByteOrder<uint32_t>(NumValueKinds);
 
-  ValueProfRecord *VR = getFirstValueProfRecord();
+  ValueProfRecord *VR = getFirstValueProfRecord(this);
   for (uint32_t K = 0; K < NumValueKinds; K++) {
     VR->swapBytes(Endianness, getHostEndianness());
-    VR = VR->getNext();
+    VR = getValueProfRecordNext(VR);
   }
 }
 
@@ -325,9 +470,9 @@ void ValueProfData::swapBytesFromHost(support::endianness Endianness) {
   if (Endianness == getHostEndianness())
     return;
 
-  ValueProfRecord *VR = getFirstValueProfRecord();
+  ValueProfRecord *VR = getFirstValueProfRecord(this);
   for (uint32_t K = 0; K < NumValueKinds; K++) {
-    ValueProfRecord *NVR = VR->getNext();
+    ValueProfRecord *NVR = getValueProfRecordNext(VR);
     VR->swapBytes(getHostEndianness(), Endianness);
     VR = NVR;
   }
@@ -335,26 +480,4 @@ void ValueProfData::swapBytesFromHost(support::endianness Endianness) {
   sys::swapByteOrder<uint32_t>(NumValueKinds);
 }
 
-ValueProfRecord *ValueProfData::getFirstValueProfRecord() {
-  return reinterpret_cast<ValueProfRecord *>((char *)this +
-                                             sizeof(ValueProfData));
-}
-
-uint32_t ValueProfRecord::getNumValueData() const {
-  uint32_t NumValueData = 0;
-  for (uint32_t I = 0; I < NumValueSites; I++)
-    NumValueData += SiteCountArray[I];
-  return NumValueData;
-}
-
-ValueProfRecord *ValueProfRecord::getNext() {
-  return reinterpret_cast<ValueProfRecord *>((char *)this + getSize());
-}
-
-InstrProfValueData *ValueProfRecord::getValueData() {
-  return reinterpret_cast<InstrProfValueData *>((char *)this +
-                                                getHeaderSize(NumValueSites));
-}
-
-} // End of IndexedInstrProf namespace.
 }

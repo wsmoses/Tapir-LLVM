@@ -394,6 +394,16 @@ AMDGPUTargetLowering::AMDGPUTargetLowering(TargetMachine &TM,
 
   setFsqrtIsCheap(true);
 
+  // We want to find all load dependencies for long chains of stores to enable
+  // merging into very wide vectors. The problem is with vectors with > 4
+  // elements. MergeConsecutiveStores will attempt to merge these because x8/x16
+  // vectors are a legal type, even though we have to split the loads
+  // usually. When we can more precisely specify load legality per address
+  // space, we should be able to make FindBetterChain/MergeConsecutiveStores
+  // smarter so that they can figure out what to do in 2 iterations without all
+  // N > 4 stores on the same chain.
+  GatherAllAliasesMaxDepth = 16;
+
   // FIXME: Need to really handle these.
   MaxStoresPerMemcpy  = 4096;
   MaxStoresPerMemmove = 4096;
@@ -1026,9 +1036,6 @@ SDValue AMDGPUTargetLowering::LowerINTRINSIC_WO_CHAIN(SDValue Op,
                          Op.getOperand(1),
                          Op.getOperand(2));
 
-    case AMDGPUIntrinsic::AMDGPU_brev:
-      return DAG.getNode(AMDGPUISD::BREV, DL, VT, Op.getOperand(1));
-
   case Intrinsic::AMDGPU_class:
     return DAG.getNode(AMDGPUISD::FP_CLASS, DL, VT,
                        Op.getOperand(1), Op.getOperand(2));
@@ -1040,6 +1047,8 @@ SDValue AMDGPUTargetLowering::LowerINTRINSIC_WO_CHAIN(SDValue Op,
       return DAG.getNode(ISD::FRINT, DL, VT, Op.getOperand(1));
     case AMDGPUIntrinsic::AMDGPU_trunc: // Legacy name.
       return DAG.getNode(ISD::FTRUNC, DL, VT, Op.getOperand(1));
+    case AMDGPUIntrinsic::AMDGPU_brev: // Legacy name
+      return DAG.getNode(ISD::BITREVERSE, DL, VT, Op.getOperand(1));
   }
 }
 
@@ -1205,7 +1214,8 @@ SDValue AMDGPUTargetLowering::SplitVectorLoad(const SDValue Op,
   EVT PtrVT = BasePtr.getValueType();
   EVT MemVT = Load->getMemoryVT();
   SDLoc SL(Op);
-  MachinePointerInfo SrcValue(Load->getMemOperand()->getValue());
+
+  const MachinePointerInfo &SrcValue = Load->getMemOperand()->getPointerInfo();
 
   EVT LoVT, HiVT;
   EVT LoMemVT, HiMemVT;
@@ -1214,23 +1224,27 @@ SDValue AMDGPUTargetLowering::SplitVectorLoad(const SDValue Op,
   std::tie(LoVT, HiVT) = DAG.GetSplitDestVTs(VT);
   std::tie(LoMemVT, HiMemVT) = DAG.GetSplitDestVTs(MemVT);
   std::tie(Lo, Hi) = DAG.SplitVector(Op, SL, LoVT, HiVT);
+
+  unsigned Size = LoMemVT.getStoreSize();
+  unsigned BaseAlign = Load->getAlignment();
+  unsigned HiAlign = MinAlign(BaseAlign, Size);
+
   SDValue LoLoad
     = DAG.getExtLoad(Load->getExtensionType(), SL, LoVT,
                      Load->getChain(), BasePtr,
                      SrcValue,
                      LoMemVT, Load->isVolatile(), Load->isNonTemporal(),
-                     Load->isInvariant(), Load->getAlignment());
+                     Load->isInvariant(), BaseAlign);
 
   SDValue HiPtr = DAG.getNode(ISD::ADD, SL, PtrVT, BasePtr,
-                              DAG.getConstant(LoMemVT.getStoreSize(), SL,
-                                              PtrVT));
+                              DAG.getConstant(Size, SL, PtrVT));
 
   SDValue HiLoad
     = DAG.getExtLoad(Load->getExtensionType(), SL, HiVT,
                      Load->getChain(), HiPtr,
                      SrcValue.getWithOffset(LoMemVT.getStoreSize()),
                      HiMemVT, Load->isVolatile(), Load->isNonTemporal(),
-                     Load->isInvariant(), Load->getAlignment());
+                     Load->isInvariant(), HiAlign);
 
   SDValue Ops[] = {
     DAG.getNode(ISD::CONCAT_VECTORS, SL, VT, LoLoad, HiLoad),
@@ -1360,7 +1374,11 @@ SDValue AMDGPUTargetLowering::SplitVectorStore(SDValue Op,
                               DAG.getConstant(LoMemVT.getStoreSize(), SL,
                                               PtrVT));
 
-  MachinePointerInfo SrcValue(Store->getMemOperand()->getValue());
+  const MachinePointerInfo &SrcValue = Store->getMemOperand()->getPointerInfo();
+  unsigned BaseAlign = Store->getAlignment();
+  unsigned Size = LoMemVT.getStoreSize();
+  unsigned HiAlign = MinAlign(BaseAlign, Size);
+
   SDValue LoStore
     = DAG.getTruncStore(Chain, SL, Lo,
                         BasePtr,
@@ -1368,15 +1386,15 @@ SDValue AMDGPUTargetLowering::SplitVectorStore(SDValue Op,
                         LoMemVT,
                         Store->isNonTemporal(),
                         Store->isVolatile(),
-                        Store->getAlignment());
+                        BaseAlign);
   SDValue HiStore
     = DAG.getTruncStore(Chain, SL, Hi,
                         HiPtr,
-                        SrcValue.getWithOffset(LoMemVT.getStoreSize()),
+                        SrcValue.getWithOffset(Size),
                         HiMemVT,
                         Store->isNonTemporal(),
                         Store->isVolatile(),
-                        Store->getAlignment());
+                        HiAlign);
 
   return DAG.getNode(ISD::TokenFactor, SL, MVT::Other, LoStore, HiStore);
 }
@@ -1474,7 +1492,7 @@ SDValue AMDGPUTargetLowering::LowerSTORE(SDValue Op, SelectionDAG &DAG) const {
   if ((Store->getAddressSpace() == AMDGPUAS::LOCAL_ADDRESS ||
        Store->getAddressSpace() == AMDGPUAS::PRIVATE_ADDRESS) &&
       Store->getValue().getValueType().isVector()) {
-    return ScalarizeVectorStore(Op, DAG);
+    return SplitVectorStore(Op, DAG);
   }
 
   EVT MemVT = Store->getMemoryVT();
@@ -2601,20 +2619,14 @@ bool AMDGPUTargetLowering::isHWTrueValue(SDValue Op) const {
   if (ConstantFPSDNode * CFP = dyn_cast<ConstantFPSDNode>(Op)) {
     return CFP->isExactlyValue(1.0);
   }
-  if (ConstantSDNode *C = dyn_cast<ConstantSDNode>(Op)) {
-    return C->isAllOnesValue();
-  }
-  return false;
+  return isAllOnesConstant(Op);
 }
 
 bool AMDGPUTargetLowering::isHWFalseValue(SDValue Op) const {
   if (ConstantFPSDNode * CFP = dyn_cast<ConstantFPSDNode>(Op)) {
     return CFP->getValueAPF().isZero();
   }
-  if (ConstantSDNode *C = dyn_cast<ConstantSDNode>(Op)) {
-    return C->isNullValue();
-  }
-  return false;
+  return isNullConstant(Op);
 }
 
 SDValue AMDGPUTargetLowering::CreateLiveInRegister(SelectionDAG &DAG,
@@ -2687,7 +2699,6 @@ const char* AMDGPUTargetLowering::getTargetNodeName(unsigned Opcode) const {
   NODE_NAME_CASE(BFE_I32)
   NODE_NAME_CASE(BFI)
   NODE_NAME_CASE(BFM)
-  NODE_NAME_CASE(BREV)
   NODE_NAME_CASE(MUL_U24)
   NODE_NAME_CASE(MUL_I24)
   NODE_NAME_CASE(MAD_U24)
@@ -2842,8 +2853,7 @@ unsigned AMDGPUTargetLowering::ComputeNumSignBitsForTargetNode(
       return 1;
 
     unsigned SignBits = 32 - Width->getZExtValue() + 1;
-    ConstantSDNode *Offset = dyn_cast<ConstantSDNode>(Op.getOperand(1));
-    if (!Offset || !Offset->isNullValue())
+    if (!isNullConstant(Op.getOperand(1)))
       return SignBits;
 
     // TODO: Could probably figure something out with non-0 offsets.

@@ -124,7 +124,7 @@ Value* addOne( Value* V ) {
   return nullptr;
 }
 
-bool Loop2Cilk::runOnLoop(Loop *L, LPPassManager &LPM) {
+bool Loop2Cilk::runOnLoop(Loop *L, LPPassManager &) {
   if (skipOptnoneFunction(L))
     return false;
 
@@ -177,7 +177,7 @@ bool Loop2Cilk::runOnLoop(Loop *L, LPPassManager &LPM) {
   auto H = L->getHeader();
   Value* cmp = 0;
   for (BasicBlock::iterator I = H->begin(); I != H->end(); ++I) {
-    Instruction* M = I;
+    Instruction* M = &*I;
     if( M == oldvar ) continue;
     if( BranchInst* b = dyn_cast<BranchInst>(M) ) {
       if( b->getNumSuccessors() != 2 ) return false;
@@ -280,6 +280,8 @@ bool Loop2Cilk::runOnLoop(Loop *L, LPPassManager &LPM) {
   
   syncer->eraseFromParent();
 
-  LPM.deleteLoopFromQueue(L);
+  LoopInfo &loopInfo = getAnalysis<LoopInfoWrapperPass>().getLoopInfo();
+  loopInfo.updateUnloop(L);
+
   return true;
 }
