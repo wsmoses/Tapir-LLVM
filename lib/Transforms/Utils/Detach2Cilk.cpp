@@ -42,6 +42,10 @@ struct CilkPass : public FunctionPass {
 };
 }  // end of anonymous namespace
 
+static cl::opt<bool>  ClInstrumentCilk(
+    "instrument-cilk", cl::init(false),
+    cl::desc("Instrument Cilk events"), cl::Hidden);
+
 char CilkPass::ID = 0;
 static RegisterPass<CilkPass> X("detach2cilk", "Promote Detach to Cilk Runtime", false, false);
 //INITIALIZE_PASS_BEGIN(CilkPass, "detach2cilk", "Promote Detach to Cilk Runtime",
@@ -58,8 +62,8 @@ bool CilkPass::runOnFunction(Function &F) {
 		TerminatorInst* term = i->getTerminator();
 		if( term == nullptr ) continue;
 		if( DetachInst* inst = llvm::dyn_cast<DetachInst>(term) ) {
-			llvm::cilk::createDetach(*inst);
-			Changed = true;
+		  llvm::cilk::createDetach(*inst, ClInstrumentCilk);
+		  Changed = true;
 		} else continue;
 	}
 
@@ -67,7 +71,7 @@ bool CilkPass::runOnFunction(Function &F) {
 		TerminatorInst* term = i->getTerminator();
 		if( term == nullptr ) continue;
     		if( SyncInst* inst = llvm::dyn_cast<SyncInst>(term) ) {
-			llvm::cilk::createSync(*inst);
+		  llvm::cilk::createSync(*inst, ClInstrumentCilk);
 		}
 	}
 

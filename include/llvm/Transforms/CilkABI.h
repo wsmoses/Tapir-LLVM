@@ -104,6 +104,18 @@ const bool EXCEPTIONS = false;
 
 	typedef void (cilk_func)(__cilkrts_stack_frame *);
 
+	typedef void (cilk_enter_begin)(uint32_t, __cilkrts_stack_frame *, void *, void *);
+	typedef void (cilk_enter_helper_begin)(__cilkrts_stack_frame *, void *, void *);
+	typedef void (cilk_enter_end)(__cilkrts_stack_frame *, void *);
+	typedef void (cilk_detach_begin)(__cilkrts_stack_frame *);
+	typedef void (cilk_detach_end)();
+	typedef void (cilk_spawn_prepare)(__cilkrts_stack_frame *);
+	typedef void (cilk_spawn_or_continue)(int);
+	typedef void (cilk_sync_begin)(__cilkrts_stack_frame *);
+	typedef void (cilk_sync_end)(__cilkrts_stack_frame *);
+	typedef void (cilk_leave_begin)(__cilkrts_stack_frame *);
+	typedef void (cilk_leave_end)();
+
 #define CILKRTS_FUNC(name, CGF) Get__cilkrts_##name(CGF)
 
 #define DEFAULT_GET_CILKRTS_FUNC(name) \
@@ -121,6 +133,36 @@ DEFAULT_GET_CILKRTS_FUNC(get_tls_worker)
 DEFAULT_GET_CILKRTS_FUNC(bind_thread_1)
 DEFAULT_GET_CILKRTS_FUNC(cilk_for_32)
 DEFAULT_GET_CILKRTS_FUNC(cilk_for_64)
+
+#define CILK_CSI_FUNC(name, CGF) Get_cilk_##name(CGF)
+
+#define GET_CILK_CSI_FUNC(name) \
+static llvm::Function *Get_cilk_##name(llvm::Module& M) { \
+   return llvm::cast<llvm::Function>(M.getOrInsertFunction( \
+							   "cilk_"#name, \
+							   llvm::TypeBuilder<cilk_##name, false>::get(M.getContext()) \
+							    ));		\
+}
+
+#define GET_CILK_CSI_FUNC2(name) \
+static llvm::Function *Get_cilk_##name(llvm::Module& M) { \
+   return llvm::cast<llvm::Function>(M.getOrInsertFunction( \
+							   "cilk_"#name, \
+							   llvm::TypeBuilder<cilk_##name, false>::get(M.getContext()) \
+							    ));		\
+}
+
+GET_CILK_CSI_FUNC(enter_begin)
+GET_CILK_CSI_FUNC(enter_helper_begin)
+GET_CILK_CSI_FUNC(enter_end)
+GET_CILK_CSI_FUNC(detach_begin)
+GET_CILK_CSI_FUNC(detach_end)
+GET_CILK_CSI_FUNC2(spawn_prepare)
+GET_CILK_CSI_FUNC2(spawn_or_continue)
+GET_CILK_CSI_FUNC(sync_begin)
+GET_CILK_CSI_FUNC(sync_end)
+GET_CILK_CSI_FUNC(leave_begin)
+GET_CILK_CSI_FUNC(leave_end)
 
 	typedef std::map<llvm::LLVMContext*, llvm::StructType*> TypeBuilderCache;
 }
@@ -632,7 +674,7 @@ static Function *GetCilkExceptingSyncFn(Module &M) {
 ///
 /// With exceptions disabled in the compiler, the function
 /// does not call __cilkrts_rethrow()
-static Function *GetCilkSyncFn(Module &M) {
+ static Function *GetCilkSyncFn(Module &M, bool instrument = false) {
   Function *Fn = 0;
 
   if (GetOrCreateFunction<cilk_func>("__cilk_sync", M, Fn, Function::InternalLinkage, /*doesNotThrow*/false))
@@ -655,6 +697,10 @@ static Function *GetCilkSyncFn(Module &M) {
   // Entry
   {
     IRBuilder<> B(Entry);
+
+    if (instrument)
+      // cilk_sync_begin
+      B.CreateCall(CILK_CSI_FUNC(sync_begin, M), SF);
 
     // if (sf->flags & CILK_FRAME_UNSYNCHED)
     Value *Flags = LoadField(B, SF, StackFrameBuilder::flags);
@@ -726,6 +772,10 @@ static Function *GetCilkSyncFn(Module &M) {
                   ConstantInt::get(Rank->getType()->getPointerElementType(),
                                    1)),
                   Rank);
+    if (instrument)
+      // cilk_sync_end
+      B.CreateCall(CILK_CSI_FUNC(sync_end, M), SF);
+
     B.CreateRetVoid();
   }
 
@@ -948,7 +998,7 @@ static Function *GetCilkParentPrologue(Module &M) {
 ///   if (sf->flags != CILK_FRAME_VERSION)
 ///     __cilkrts_leave_frame(sf);
 /// }
-static Function *GetCilkParentEpilogue(Module &M) {
+ static Function *GetCilkParentEpilogue(Module &M, bool instrument = false) {
   Function *Fn = 0;
 
   if (GetOrCreateFunction<cilk_func>("__cilk_parent_epilogue", M, Fn))
@@ -967,6 +1017,10 @@ static Function *GetCilkParentEpilogue(Module &M) {
   // Entry
   {
     IRBuilder<> B(Entry);
+
+    if (instrument)
+      // cilk_leave_begin
+      B.CreateCall(CILK_CSI_FUNC(leave_begin, M), SF);
 
     // __cilkrts_pop_frame(sf)
     B.CreateCall(CILKRTS_FUNC(pop_frame, M), SF);
@@ -990,6 +1044,9 @@ static Function *GetCilkParentEpilogue(Module &M) {
   // Exit
   {
     IRBuilder<> B(Exit);
+    if (instrument)
+      // cilk_leave_end
+      B.CreateCall(CILK_CSI_FUNC(leave_end, M));
     B.CreateRetVoid();
   }
 
@@ -1114,20 +1171,52 @@ static llvm::AllocaInst *CreateStackFrame(Function &F) {
   return SF;
 }
 
-static inline llvm::Value* GetOrInitStackFrame(Function& F, bool fast = true) {
+ static inline llvm::Value* GetOrInitStackFrame(Function& F, bool fast = true, bool instrument = false) {
   llvm::Value* V = LookupStackFrame(F);
   if( V ) return V;
   
   llvm::AllocaInst* alloc = CreateStackFrame(F);
-  llvm::Value* args[1] = { alloc };
-  llvm::Instruction* inst;
-  if( fast ) {
-    inst = CallInst::Create(CILKRTS_FUNC(enter_frame_fast_1, *F.getParent()), args, "" );
-  } else {
-    inst = CallInst::Create(CILKRTS_FUNC(enter_frame_1, *F.getParent()), args, "" );
+  llvm::BasicBlock::iterator II = F.getEntryBlock().getFirstInsertionPt();
+  llvm::AllocaInst* curinst;
+  do {
+    curinst = dyn_cast<llvm::AllocaInst>(II);
+    II++;
+  } while (curinst != alloc);
+  llvm::Value *StackSave;
+  IRBuilder<> IRB( &(F.getEntryBlock()), II );
+  if (instrument) {
+    llvm::Type *Int8PtrTy = IRB.getInt8PtrTy();
+    llvm::Value *ThisFn =
+      llvm::ConstantExpr::getBitCast(&F, Int8PtrTy);
+    llvm::Value *ReturnAddress =
+      IRB.CreateCall(Intrinsic::getDeclaration(F.getParent(), Intrinsic::returnaddress),
+		     IRB.getInt32(0));
+    StackSave =
+      IRB.CreateCall(Intrinsic::getDeclaration(F.getParent(), Intrinsic::stacksave));
+    if (fast) {
+      llvm::Value* begin_args[3] = { alloc, ThisFn, ReturnAddress };
+      IRB.CreateCall(CILK_CSI_FUNC(enter_helper_begin, *F.getParent()), begin_args);
+    } else {
+      llvm::Value* begin_args[4] = { IRB.getInt32(0), alloc, ThisFn, ReturnAddress };
+      IRB.CreateCall(CILK_CSI_FUNC(enter_begin, *F.getParent()), begin_args);
+    }
   }
-  inst->insertAfter(alloc);
-  
+  llvm::Value* args[1] = { alloc };
+  /* llvm::Instruction* inst; */
+  if( fast ) {
+    IRB.CreateCall(CILKRTS_FUNC(enter_frame_fast_1, *F.getParent()), args);
+    /* inst = CallInst::Create(CILKRTS_FUNC(enter_frame_fast_1, *F.getParent()), args, "" ); */
+  } else {
+    IRB.CreateCall(CILKRTS_FUNC(enter_frame_1, *F.getParent()), args);
+    /* inst = CallInst::Create(CILKRTS_FUNC(enter_frame_1, *F.getParent()), args, "" ); */
+  }
+  /* inst->insertAfter(alloc); */
+
+  if (instrument) {
+    llvm::Value* end_args[2] = { alloc, StackSave };
+    IRB.CreateCall(CILK_CSI_FUNC(enter_end, *F.getParent()), end_args);
+  }
+
   std::vector<ReturnInst*> rets;
     
 	for (Function::iterator i = F.begin(), e = F.end(); i != e; ++i) {
@@ -1158,7 +1247,7 @@ static inline llvm::Value* GetOrInitStackFrame(Function& F, bool fast = true) {
 	}
 	
 	assert( retInst );
-  CallInst::Create( GetCilkParentEpilogue( *F.getParent() ), args, "", retInst );
+	CallInst::Create( GetCilkParentEpilogue( *F.getParent(), instrument ), args, "", retInst );
   return alloc;
 }
 
@@ -1207,13 +1296,14 @@ Value* saveStack( Instruction& insertBefore ) {
 //#####################################################################################################3333
 
 
-static inline void createSync(SyncInst& inst){
+ static inline void createSync(SyncInst& inst,
+			       bool instrument = false) {
 	Function& F = *(inst.getParent()->getParent());
 	Module* M = F.getParent();
 
 	llvm::Value* args[1] = { LookupStackFrame( F ) };
 	assert( args[0] && "sync used in function without frame!" );
-	CallInst::Create( GetCilkSyncFn( *M ), args, "", /*insert before*/&inst );
+	CallInst::Create( GetCilkSyncFn( *M, instrument ), args, "", /*insert before*/&inst );
 
 	BranchInst* toReplace = BranchInst::Create( inst.getSuccessor(0) );
 
@@ -1417,7 +1507,7 @@ static inline Function* extractDetachBodyToFunction(DetachInst& detach, llvm::Ca
   	return extracted;
 }
 
-static inline bool makeFunctionDetachable( Function& extracted ) {
+ static inline bool makeFunctionDetachable( Function& extracted, bool instrument = false ) {
 	Module* M = extracted.getParent();
 	LLVMContext& Context = extracted.getContext();
 	const DataLayout& DL = M->getDataLayout();
@@ -1432,14 +1522,48 @@ static inline bool makeFunctionDetachable( Function& extracted ) {
 	assert(sf);
 	Value* args[1] = { sf };
 
+	llvm::BasicBlock::iterator II = extracted.getEntryBlock().getFirstInsertionPt();
+	llvm::AllocaInst* curinst;
+	do {
+	  curinst = dyn_cast<llvm::AllocaInst>(II);
+	  II++;
+	} while (curinst != sf);
+	llvm::Value *StackSave;
+	IRBuilder<> IRB( &(extracted.getEntryBlock()), II );
+	if (instrument) {
+	  llvm::Type *Int8PtrTy = IRB.getInt8PtrTy();
+	  llvm::Value *ThisFn =
+	    llvm::ConstantExpr::getBitCast(&extracted, Int8PtrTy);
+	  llvm::Value *ReturnAddress =
+	    IRB.CreateCall(Intrinsic::getDeclaration(M, Intrinsic::returnaddress),
+			   IRB.getInt32(0));
+	  StackSave =
+	    IRB.CreateCall(Intrinsic::getDeclaration(M, Intrinsic::stacksave));
+	  llvm::Value* begin_args[3] = { sf, ThisFn, ReturnAddress };
+	  IRB.CreateCall(CILK_CSI_FUNC(enter_helper_begin, *M), begin_args);
+	}
+
 	//TODO check difference between frame fast and frame fast 1
-	Instruction* call = CallInst::Create(CILKRTS_FUNC(enter_frame_fast_1, *M), args, "", extracted.getEntryBlock().getTerminator() );
+	IRB.CreateCall(CILKRTS_FUNC(enter_frame_fast_1, *M), args);
+	/* Instruction* call = CallInst::Create(CILKRTS_FUNC(enter_frame_fast_1, *M), args, "", extracted.getEntryBlock().getTerminator() ); */
 	// IRBuilder<> B(call);
 	// // sf->worker = 0;
 	// StoreField(B,
 	// 	   Constant::getNullValue(TypeBuilder<__cilkrts_worker*, false>::get(M->getContext())),
 	// 	   sf, StackFrameBuilder::worker);
-	Instruction* call2 = CallInst::Create(CILKRTS_FUNC(detach, *M), args, "", extracted.getEntryBlock().getTerminator() );
+
+	if (instrument) {
+	  llvm::Value* end_args[2] = { sf, StackSave };
+	  IRB.CreateCall(CILK_CSI_FUNC(enter_end, *M), end_args);
+
+	  IRB.CreateCall(CILK_CSI_FUNC(detach_begin, *M), args);
+	}
+
+	IRB.CreateCall(CILKRTS_FUNC(detach, *M), args);
+	/* Instruction* call2 = CallInst::Create(CILKRTS_FUNC(detach, *M), args, "", extracted.getEntryBlock().getTerminator() ); */
+
+	if (instrument)
+	  IRB.CreateCall(CILK_CSI_FUNC(detach_end, *M));
 
 	ReturnInst* ret = nullptr;
 	for (Function::iterator i = extracted.begin(), e = extracted.end(); i != e; ++i) {
@@ -1460,13 +1584,14 @@ static inline bool makeFunctionDetachable( Function& extracted ) {
 	   __cilkrts_leave_frame(&sf);
 	*/
   //TODO WHY I
-  auto PE = GetCilkParentEpilogue(*M);
+  auto PE = GetCilkParentEpilogue(*M, instrument);
 
   CallInst::Create(PE, args,"",ret);
   return true;
 }
 
-static inline bool createDetach(DetachInst& detach) {
+ static inline bool createDetach(DetachInst& detach,
+				 bool instrument = false) {
   BasicBlock* detB = detach.getParent();
 	Function& F = *(detB->getParent());
         
@@ -1479,7 +1604,7 @@ static inline bool createDetach(DetachInst& detach) {
 
 	//replace with branch to succesor
 	//entry / cilk.spawn.savestate
-    	Value *SF = GetOrInitStackFrame( F, /*isFast*/ false );
+    	Value *SF = GetOrInitStackFrame( F, /*isFast*/ false, instrument );
     	assert(SF && "null stack frame unexpected");
 
 	Function* extracted = extractDetachBodyToFunction( detach );
@@ -1492,15 +1617,23 @@ static inline bool createDetach(DetachInst& detach) {
 
 
 	IRBuilder<> B(bi);
-	  
-    	// Need to save state before spawning
+
+        if (instrument)
+	  // cilk_spawn_prepare
+	  B.CreateCall(CILK_CSI_FUNC(spawn_prepare, *M), SF);
+
+	// Need to save state before spawning
     	Value *C = EmitCilkSetJmp(B, SF, *M);
+
+	if (instrument)
+	  B.CreateCall(CILK_CSI_FUNC(spawn_or_continue, *M), C);
+
     	C = B.CreateICmpEQ(C, ConstantInt::get(C->getType(), 0));
     	B.CreateCondBr(C, Spawned, Continue);
     
     	detach.eraseFromParent();
  
-        makeFunctionDetachable( *extracted );
+        makeFunctionDetachable( *extracted, instrument );
 
 
 	return true;
