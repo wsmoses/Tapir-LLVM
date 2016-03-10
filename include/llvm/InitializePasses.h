@@ -59,6 +59,9 @@ void initializeCodeGen(PassRegistry&);
 /// initializeCodeGen - Initialize all passes linked into the CodeGen library.
 void initializeTarget(PassRegistry&);
 
+void initializeLoop2CilkPass(PassRegistry&);
+void initializeDetach2CilkPass(PassRegistry&);
+
 void initializeAAEvalPass(PassRegistry&);
 void initializeAddDiscriminatorsPass(PassRegistry&);
 void initializeADCELegacyPassPass(PassRegistry&);

@@ -50,6 +50,8 @@
 #include "llvm/Transforms/Utils/Local.h"
 #include "llvm/Transforms/Utils/SimplifyIndVar.h"
 #include "llvm/Transforms/CilkABI.h"
+#include "llvm/Transforms/Utils/PromoteMemToReg.h"
+
 using namespace llvm;
 
 #define DEBUG_TYPE "loop2cilk"
@@ -62,7 +64,7 @@ namespace {
     static char ID; // Pass identification, replacement for typeid
     Loop2Cilk()
         : LoopPass(ID)
-//, LI(nullptr), SE(nullptr), DT(nullptr), Changed(false) 
+//, LI(nullptr), SE(nullptr), DT(nullptr), Changed(false)
 {
       //initializeIndVarSimplifyPass(*PassRegistry::getPassRegistry());
     }
@@ -73,6 +75,7 @@ namespace {
       AU.addRequired<DominatorTreeWrapperPass>();
       AU.addRequired<LoopInfoWrapperPass>();
       AU.addRequired<ScalarEvolutionWrapperPass>();
+//      AU.addRequired<PromotePass>();
       AU.addRequiredID(LoopSimplifyID);
       AU.addRequiredID(LCSSAID);
 //      AU.addPreserved<ScalarEvolutionWrapperPass>();
@@ -90,17 +93,17 @@ namespace {
 
 char Loop2Cilk::ID = 0;
 static RegisterPass<Loop2Cilk> X("loop2cilk", "Find cilk for loops and use more efficient runtime", false, false);
-/*
+
 INITIALIZE_PASS_BEGIN(Loop2Cilk, "loop2cilk",
                 "Find cilk for loops and use more efficient runtime", false, false)
 INITIALIZE_PASS_DEPENDENCY(DominatorTreeWrapperPass)
 INITIALIZE_PASS_DEPENDENCY(LoopInfoWrapperPass)
 INITIALIZE_PASS_DEPENDENCY(ScalarEvolutionWrapperPass)
 INITIALIZE_PASS_DEPENDENCY(LoopSimplify)
+//INITIALIZE_PASS_DEPENDENCY(PromotePass)
 INITIALIZE_PASS_DEPENDENCY(LCSSA)
 INITIALIZE_PASS_END(Loop2Cilk, "loop2cilk",
                 "Find cilk for loops and use more efficient runtime", false, false)
-*/
 
 Pass *llvm::createLoop2CilkPass() {
   return new Loop2Cilk();
@@ -119,7 +122,7 @@ Value* addOne( Value* V ) {
   if( Instruction* I = dyn_cast<Instruction>(V) ) {
     IRBuilder<> builder(I);
     return builder.CreateAdd( V, ConstantInt::get(V->getType(), 1) );
-  }  
+  }
   assert( 0 );
   return nullptr;
 }
@@ -144,12 +147,12 @@ bool Loop2Cilk::runOnLoop(Loop *L, LPPassManager &) {
     syncer = temp;
   } else if( !isa<SyncInst>(syncer->getTerminator()) )
     return false;
-    
+
   DetachInst* det = dyn_cast<DetachInst>(detacher->getTerminator() );
   if( det == nullptr ) return false;
   if( detacher->size() != 1 ) return false;
   if( syncer->size() != 1 ) return false;
-  
+
   //errs() << "Found candidate for cilk for!\n";
 
   // If LoopSimplify form is not available, stay out of trouble. Some notes:
@@ -166,14 +169,14 @@ bool Loop2Cilk::runOnLoop(Loop *L, LPPassManager &) {
   BasicBlock* body = det->getSuccessor(0);
   PHINode* oldvar = L->getCanonicalInductionVariable();
   if( !oldvar ) return false;
- 
+
   BasicBlock* done = L->getUniqueExitBlock();
   if( !done ) return false;
   if( done != syncer ) return false;
 
   //PHINode* var = PHINode::Create( oldvar->getType(), 1, "", &body->front() );
   //ReplaceInstWithInst( var, oldvar );
- 
+
   auto H = L->getHeader();
   Value* cmp = 0;
   for (BasicBlock::iterator I = H->begin(); I != H->end(); ++I) {
@@ -223,18 +226,18 @@ bool Loop2Cilk::runOnLoop(Loop *L, LPPassManager &) {
         return false;
     }
     //TODO actually check is correct
-    
-  }
-  
 
-  llvm::CallInst* call = 0; 
+  }
+
+
+  llvm::CallInst* call = 0;
   llvm::Value*    closure = 0;
   Function* extracted = llvm::cilk::extractDetachBodyToFunction( *det, &call, /*closure*/ oldvar, &closure );
   if( !extracted ) return false;
 
 
 	Module* M = extracted->getParent();
- 
+
   oldvar->removeIncomingValue( 1U );
   oldvar->removeIncomingValue( 0U );
 
@@ -254,7 +257,7 @@ bool Loop2Cilk::runOnLoop(Loop *L, LPPassManager &) {
     Instruction* m = & H->back();
     m->eraseFromParent();
   }
-  
+
   IRBuilder<> b1(H);
   b1.CreateBr( detacher );
   MergeBlockIntoPredecessor( detacher );
@@ -271,13 +274,13 @@ bool Loop2Cilk::runOnLoop(Loop *L, LPPassManager &) {
     assert( ((llvm::IntegerType*)cmp->getType())->getBitWidth() == 64 );
     F = CILKRTS_FUNC(cilk_for_64, *M);
   }
-  
+
   llvm::Value* args[] = { b.CreatePointerCast(extracted, F->getFunctionType()->getParamType(0) ), b.CreatePointerCast( closure, F->getFunctionType()->getParamType(1) ), cmp, ConstantInt::get( llvm::Type::getIntNTy( cmp->getContext(), 8*sizeof(int) ), 0 ) };
   b.CreateCall(F, args );
-  
+
   assert( syncer->size() == 1 );
   b.CreateBr( syncer->getTerminator()->getSuccessor(0) );
-  
+
   syncer->eraseFromParent();
 
   LoopInfo &loopInfo = getAnalysis<LoopInfoWrapperPass>().getLoopInfo();
