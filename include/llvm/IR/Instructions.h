@@ -4458,6 +4458,11 @@ public:
     return cast_or_null<BasicBlock>((&Op<-1>())->get());
   }
 
+  void setSuccessor(unsigned idx, BasicBlock *NewSucc) {
+    assert(idx < 1 && "Successor # out of range for reattach!");
+    *(&Op<-1>() - idx) = (Value*)NewSucc;
+  }
+
   // Methods for support type inquiry through isa, cast, and dyn_cast:
   static inline bool classof(const Instruction *I) {
     return I->getOpcode() == Instruction::Reattach;
