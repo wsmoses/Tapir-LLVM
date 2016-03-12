@@ -49,8 +49,10 @@
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include "llvm/Transforms/Utils/Local.h"
 #include "llvm/Transforms/Utils/SimplifyIndVar.h"
+#include "llvm/Transforms/Scalar/SimplifyCFG.h"
 #include "llvm/Transforms/CilkABI.h"
 #include "llvm/Transforms/Utils/PromoteMemToReg.h"
+#include "llvm/Transforms/Utils/LoopUtils.h"
 
 using namespace llvm;
 
@@ -75,6 +77,7 @@ namespace {
       AU.addRequired<DominatorTreeWrapperPass>();
       AU.addRequired<LoopInfoWrapperPass>();
       AU.addRequired<ScalarEvolutionWrapperPass>();
+//      AU.addRequired<SimplifyCFGPass>();
 //      AU.addRequired<PromotePass>();
       AU.addRequiredID(LoopSimplifyID);
       AU.addRequiredID(LCSSAID);
@@ -109,9 +112,13 @@ Pass *llvm::createLoop2CilkPass() {
   return new Loop2Cilk();
 }
 
-//===----------------------------------------------------------------------===//
-//  Loop2Cilk driver. Manage several subpasses of IV simplification.
-//===----------------------------------------------------------------------===//
+size_t countPredecessors(BasicBlock* syncer) {
+  size_t count = 0;
+  for (auto it = pred_begin(syncer), et = pred_end(syncer); it != et; ++it) {
+    count++;
+  }
+  return count;
+}
 
 Value* addOne( Value* V ) {
   if( Constant* C = dyn_cast<Constant>(V) ) {
@@ -127,86 +134,291 @@ Value* addOne( Value* V ) {
   return nullptr;
 }
 
+Value* uncast( Value* V ){
+  if( auto* in = dyn_cast<TruncInst>(V) ) {
+    return uncast(in->getOperand(0));
+  }
+  if( auto* in = dyn_cast<SExtInst>(V) ) {
+    return uncast(in->getOperand(0));
+  }
+  if( auto* in = dyn_cast<ZExtInst>(V) ) {
+    return uncast(in->getOperand(0));
+  }
+  return V;
+}
+
+size_t getNonPhiSize(BasicBlock* b){
+    int bad = 0;
+    BasicBlock::iterator i = b->begin();
+    while (isa<PHINode>(i) || isa<DbgInfoIntrinsic>(i)) { ++i; bad++; }
+    return b->size() - bad;
+}
 bool Loop2Cilk::runOnLoop(Loop *L, LPPassManager &) {
   if (skipOptnoneFunction(L))
     return false;
 
-  //errs() << "Loop: \n";
-  //L->dump();
-  //errs() << "</Loop>\n";
+  errs() << "<Loop>:\n--------------------------------------------------------------------------------------------------------------------------------";
+  L->dump();
+  errs() << "</Loop>\n<------------------------------------------------------------------------------------------------>\n";
+
+  if (!L->isLoopSimplifyForm()) {
+    errs() << "not simplify form\n";
+    simplifyLoop(L, nullptr, nullptr, nullptr, nullptr, false);
+    //return false;
+  }
+
   BasicBlock* Header = L->getHeader();
   assert(Header);
+
+  errs() << "<F>:\n******************************************************************************************************************************************";
+  Header->getParent()->dump();
+  errs() << "</F>:\n******************************************************************************************************************************************";
+
   TerminatorInst* T = Header->getTerminator();
-  if( !isa<BranchInst>(T) ) return false;
-  BranchInst* B = (BranchInst*)T;
-  if( B->getNumSuccessors() != 2 ) return false;
-  BasicBlock *detacher = B->getSuccessor(0), *syncer = B->getSuccessor(1);
-  if( isa<SyncInst>(detacher->getTerminator()) ){
-    BasicBlock* temp = detacher;
-    detacher = syncer;
-    syncer = temp;
-  } else if( !isa<SyncInst>(syncer->getTerminator()) )
+  if( !isa<BranchInst>(T) ) {
+    BasicBlock *Preheader = L->getLoopPreheader();
+    if( isa<BranchInst>(Preheader->getTerminator()) ) { T = Preheader->getTerminator(); Header = Preheader; }
+    else { errs() << "not branch inst" << "\n";
+    T->dump();
     return false;
+  }
+  }
+  BranchInst* B = (BranchInst*)T;
+  BasicBlock *detacher, *syncer;
+  if( B->getNumSuccessors() != 2 ) {
+    BasicBlock* endL = L->getExitBlock();
+    while( endL && !isa<SyncInst>( endL->getTerminator() ) ) {
+      errs() << "THING: " << endL->size() << " " << isa<BranchInst>(endL->getTerminator()) << " " << (endL->getTerminator()->getNumSuccessors() ) << "\n";
+      endL->dump();
+      if( getNonPhiSize(endL) == 1 && isa<BranchInst>(endL->getTerminator()) && endL->getTerminator()->getNumSuccessors() == 1 ) {
+        //TODO merging
+        endL->dump();
+        endL->getTerminator()->getSuccessor(0)->dump();
+        auto temp = endL->getTerminator()->getSuccessor(0);
+        //bool success = TryToSimplifyUncondBranchFromEmptyBlock(endL);
+//        bool success = MergeBlockIntoPredecessor(endL->getTerminator()->getSuccessor(0));
+        //if( !success ) {
+        //  endL = nullptr;
+        //  errs() << "no success :(\n";
+        //} else {
+          endL = temp;
+        //}
+      }
+      else
+        endL = nullptr;
+    }
+
+    if( endL ) {
+      syncer = endL;
+      detacher = B->getSuccessor(0);
+    } else {
+      errs() << "L\n";
+      Header->getParent()->dump();
+      errs() << "nsucc != 2" << "\n";
+      if( endL ) endL->dump();
+      else errs() << "no endl" << "\n";
+      T->dump();
+      return false;
+    }
+
+
+  } else {
+    detacher = B->getSuccessor(0);
+    syncer = B->getSuccessor(1);
+
+
+    if( isa<SyncInst>(detacher->getTerminator()) ){
+      BasicBlock* temp = detacher;
+      detacher = syncer;
+      syncer = temp;
+    } else if( !isa<SyncInst>(syncer->getTerminator()) ) {
+      errs() << "none sync" << "\n";
+      syncer->dump();
+      detacher->dump();
+      return false;
+    }
+
+    BasicBlock* done = L->getExitingBlock();
+    if( !done ) {
+      errs() << "no unique exit block\n";
+      return false;
+    }
+    if( done != syncer ) {
+      errs() << "exit != sync\n";
+      done->dump();
+      syncer->dump();
+      syncer->getParent()->dump();
+      return false;
+    }
+
+  }
 
   DetachInst* det = dyn_cast<DetachInst>(detacher->getTerminator() );
-  if( det == nullptr ) return false;
-  if( detacher->size() != 1 ) return false;
-  if( syncer->size() != 1 ) return false;
-
-  //errs() << "Found candidate for cilk for!\n";
-
-  // If LoopSimplify form is not available, stay out of trouble. Some notes:
-  //  - LSR currently only supports LoopSimplify-form loops. Indvars'
-  //    canonicalization can be a pessimization without LSR to "clean up"
-  //    afterwards.
-  //  - We depend on having a preheader; in particular,
-  //    Loop::getCanonicalInductionVariable only supports loops with preheaders,
-  //    and we're in trouble if we can't find the induction variable even when
-  //    we've manually inserted one.
-  if (!L->isLoopSimplifyForm())
+  if( det == nullptr ) {
+    errs() << "other not detach" << "\n";
+    detacher->dump();
     return false;
+  }
+  if( getNonPhiSize(detacher)!=1 ) {
+    errs() << "invalid detach size of " << getNonPhiSize(detacher) << "|" << detacher->size() << "\n";
+    return false;
+  }
+  if( getNonPhiSize(syncer)!=1 ) {
+    errs() << "invalid sync size" << "\n";
+    return false;
+  }
+  errs() << "Found candidate for cilk for!\n";
 
   BasicBlock* body = det->getSuccessor(0);
   PHINode* oldvar = L->getCanonicalInductionVariable();
-  if( !oldvar ) return false;
-
-  BasicBlock* done = L->getUniqueExitBlock();
-  if( !done ) return false;
-  if( done != syncer ) return false;
-
+  if( !oldvar ) {
+      errs() << "no induction var\n";
+      return false;
+  }
   //PHINode* var = PHINode::Create( oldvar->getType(), 1, "", &body->front() );
   //ReplaceInstWithInst( var, oldvar );
+  Value* adder = 0;
+  for( unsigned i=0; i<oldvar->getNumIncomingValues(); i++){
+    if( oldvar->getIncomingBlock(i) == Header ){
+      if( ConstantInt* ci = dyn_cast<ConstantInt>(oldvar->getIncomingValue(i))) {
+        if( !ci->isZero() ) {
+          errs() << "nonzero start";
+          return false;
+        }
+      } else {
+        errs() << "non-constant start\n";
+        return false;
+      }
+    } else {
+      if( BinaryOperator* bo = dyn_cast<BinaryOperator>(oldvar->getIncomingValue(i))) {
+        if( bo->getOpcode() != Instruction::Add ) {
+          errs() << "non-adding phi node";
+          return false;
+        }
+        if( oldvar != bo->getOperand(0) ) bo->swapOperands();
+        if( oldvar != bo->getOperand(0) ) {
+          errs() << "old indvar not part of loop inc?\n";
+        }
+        if( ConstantInt* ci = dyn_cast<ConstantInt>(bo->getOperand(1))) {
+          if( !ci->isOne() ) {
+            errs() << "non one inc";
+            return false;
+          }
+        } else {
+          errs() << "non-constant inc\n";
+          oldvar->getIncomingValue(i)->dump();
+          return false;
+        }
+        adder = bo;
+      } else {
+        errs() << "non-constant start\n";
+        return false;
+      }
+    }
+  }
 
-  auto H = L->getHeader();
+  if( adder == 0 ) {
+    errs() << "couldn't check for increment\n";
+    return false;
+  }
   Value* cmp = 0;
-  for (BasicBlock::iterator I = H->begin(); I != H->end(); ++I) {
-    Instruction* M = &*I;
-    if( M == oldvar ) continue;
-    if( BranchInst* b = dyn_cast<BranchInst>(M) ) {
-      if( b->getNumSuccessors() != 2 ) return false;
-      if( b->getSuccessor(0) == detacher ) {
-        if( b->getSuccessor(1) != syncer ) return false;
-        else continue;
+
+  bool simplified = false;
+  while( !simplified ){
+    simplified = true;
+    for (auto it = pred_begin(syncer), et = pred_end(syncer); it != et; ++it) {
+      BasicBlock* endL = *it;
+      if( getNonPhiSize(endL) == 1 && isa<BranchInst>(endL->getTerminator()) && endL->getTerminator()->getNumSuccessors() == 1 ) {
+        bool success = TryToSimplifyUncondBranchFromEmptyBlock(endL);
+        if(success) {
+          simplified = false;
+          break;
+        }
       }
-      if( b->getSuccessor(1) == detacher ) {
-        if( b->getSuccessor(0) != syncer ) return false;
-        else continue;
-      }
+    }
+  }
+
+  for (auto it = pred_begin(syncer), et = pred_end(syncer); it != et; ++it) {
+    BasicBlock* pred = *it;
+    if( pred == Header ) break;
+    if( cmp != 0 ){
+      errs() << "comparisoin already set\n";
       return false;
     }
-    llvm::CmpInst* is = dyn_cast<CmpInst>(M);
-    if( !is ) return false;
-    if( !is->isIntPredicate() ) return false;
-    auto P = is->getPredicate();
-    if( is->getOperand(0) != oldvar ) {
-      if( is->getOperand(1) == oldvar )
-        P = is->getSwappedPredicate();
-      else
-        return false;
+    BranchInst* b = dyn_cast<BranchInst>(pred->getTerminator());
+    if( b == nullptr ) {
+      errs() << "loop term not branch\n";
+      return false;
     }
-    if( cmp ) return false;
+
+    if( b->getNumSuccessors() != 2 ) {
+      errs() << "branch != 2 succ \n";
+      return false;
+    }
+    if( !(b->getSuccessor(0) == detacher && b->getSuccessor(1) == syncer || b->getSuccessor(1) == detacher && b->getSuccessor(0) == syncer) ) {
+      errs() << "invalid branching\n";
+      return false;
+    }
+    llvm::CmpInst* is = dyn_cast<CmpInst>(b->getCondition());
+    if( !is ) {
+      errs() << "condition was not in block\n";
+      return false;
+    }
+    if( !is->isIntPredicate() ) {
+      errs() << "non-integral condition\n";
+      return false;
+    }
+    auto P = is->getPredicate();
+
+    {
+      if( uncast(is->getOperand(0)) != adder ) {
+        if( uncast(is->getOperand(1)) == adder )
+          P = is->getSwappedPredicate();
+        else {
+          errs() << "none are \n";
+          is->dump();
+          goto oldvarB;
+        }
+      }
+
+      cmp = is->getOperand(1);
+      //assums non infinite detach loop
+      //TODO check!
+      switch( P ) {
+        case llvm::CmpInst::ICMP_EQ:
+        case llvm::CmpInst::ICMP_NE:
+          break;
+        case llvm::CmpInst::ICMP_UGT:
+        case llvm::CmpInst::ICMP_ULT:
+        case llvm::CmpInst::ICMP_SGT:
+        case llvm::CmpInst::ICMP_SLT:
+          break;
+        case llvm::CmpInst::ICMP_UGE:
+        case llvm::CmpInst::ICMP_ULE:
+        case llvm::CmpInst::ICMP_SGE:
+        case llvm::CmpInst::ICMP_SLE:
+          cmp = addOne(cmp);
+          break;
+        default:
+          errs() << "weird opcode2\n";
+          return false;
+      }
+      goto endT;
+    }
+
+    oldvarB:
+    if( uncast(is->getOperand(0)) != oldvar ) {
+      if( uncast(is->getOperand(1)) == oldvar )
+        P = is->getSwappedPredicate();
+      else {
+        errs() << "none are \n";
+        is->dump();
+        return false;
+      }
+    }
     cmp = is->getOperand(1);
     //assums non infinite detach loop
+    //TODO check!
     switch( P ) {
       case llvm::CmpInst::ICMP_EQ:
       case llvm::CmpInst::ICMP_NE:
@@ -223,19 +435,22 @@ bool Loop2Cilk::runOnLoop(Loop *L, LPPassManager &) {
         cmp = addOne(cmp);
         break;
       default:
+        errs() << "weird opcode\n";
         return false;
     }
-    //TODO actually check is correct
 
   }
 
-
+  endT:
   llvm::CallInst* call = 0;
   llvm::Value*    closure = 0;
+
   Function* extracted = llvm::cilk::extractDetachBodyToFunction( *det, &call, /*closure*/ oldvar, &closure );
-  if( !extracted ) return false;
 
-
+  if( !extracted ) {
+    errs() << "not extracted\n";
+    return false;
+  }
 	Module* M = extracted->getParent();
 
   oldvar->removeIncomingValue( 1U );
@@ -253,19 +468,14 @@ bool Loop2Cilk::runOnLoop(Loop *L, LPPassManager &) {
     m->eraseFromParent();
   }
 
-  while(H->size() > 0 ){
-    Instruction* m = & H->back();
-    m->eraseFromParent();
-  }
-
-  IRBuilder<> b1(H);
-  b1.CreateBr( detacher );
-  MergeBlockIntoPredecessor( detacher );
-
   det->eraseFromParent();
   a1->eraseFromParent();
   a2->eraseFromParent();
-  IRBuilder<> b(H);
+
+  Header->getTerminator()->eraseFromParent();
+  IRBuilder<> b2(Header);
+  b2.CreateBr( detacher );
+  IRBuilder<> b(detacher);
 
   llvm::Function* F;
   if( ((llvm::IntegerType*)cmp->getType())->getBitWidth() == 32 )
@@ -281,10 +491,19 @@ bool Loop2Cilk::runOnLoop(Loop *L, LPPassManager &) {
   assert( syncer->size() == 1 );
   b.CreateBr( syncer->getTerminator()->getSuccessor(0) );
 
+  errs() << "<M>:\n*##########################################3*****************************************************************************************************************************************";
+  Header->getParent()->dump();
+  errs() << "</M>:\n*############################################################33*****************************************************************************************************************************************";
+  M->dump();
+
+  syncer->replaceAllUsesWith( syncer->getTerminator()->getSuccessor(0) );
+
+  //TODO assumes no other detaches were sync'd by this
   syncer->eraseFromParent();
+  Header->getParent()->dump();
 
   LoopInfo &loopInfo = getAnalysis<LoopInfoWrapperPass>().getLoopInfo();
   loopInfo.updateUnloop(L);
-
+  errs() << "TRANSFORMED LOOP!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n";
   return true;
 }
