@@ -13,7 +13,6 @@ add_llvm_library(LLVMScalarOpts
   GVN.cpp
   InductiveRangeCheckElimination.cpp
   IndVarSimplify.cpp
-  Loop2Cilk.cpp
   JumpThreading.cpp
   LICM.cpp
   LoadCombine.cpp

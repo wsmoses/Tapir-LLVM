@@ -19,6 +19,7 @@ add_llvm_library(LLVMTransformUtils
   IntegerDivision.cpp
   LCSSA.cpp
   Local.cpp
+  Loop2Cilk.cpp
   LoopSimplify.cpp
   LoopUnroll.cpp
   LoopUnrollRuntime.cpp
