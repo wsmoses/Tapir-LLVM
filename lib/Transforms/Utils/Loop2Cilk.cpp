@@ -503,7 +503,7 @@ bool Loop2Cilk::runOnLoop(Loop *L, LPPassManager &) {
   Header->getParent()->dump();
 
   LoopInfo &loopInfo = getAnalysis<LoopInfoWrapperPass>().getLoopInfo();
-  loopInfo.updateUnloop(L);
+  loopInfo.markAsRemoved(L);
   errs() << "TRANSFORMED LOOP!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n";
   return true;
 }
