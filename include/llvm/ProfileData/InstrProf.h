@@ -30,7 +30,6 @@
 #include <system_error>
 #include <vector>
 
-#define INSTR_PROF_INDEX_VERSION 3
 namespace llvm {
 
 class Function;
@@ -66,7 +65,8 @@ inline StringRef getInstrProfValueProfFuncName() {
 /// Return the name of the section containing function coverage mapping
 /// data.
 inline StringRef getInstrProfCoverageSectionName(bool AddSegment) {
-  return AddSegment ? "__DATA,__llvm_covmap" : "__llvm_covmap";
+  return AddSegment ? "__DATA," INSTR_PROF_COVMAP_SECT_NAME_STR
+                    : INSTR_PROF_COVMAP_SECT_NAME_STR;
 }
 
 /// Return the name prefix of variables containing instrumented function names.
@@ -88,6 +88,12 @@ inline StringRef getInstrProfComdatPrefix() { return "__profv_"; }
 inline StringRef getCoverageMappingVarName() {
   return "__llvm_coverage_mapping";
 }
+
+/// Return the name of the internal variable recording the array
+/// of PGO name vars referenced by the coverage mapping, The owning
+/// functions of those names are not emitted by FE (e.g, unused inline
+/// functions.)
+inline StringRef getCoverageNamesVarName() { return "__llvm_coverage_names"; }
 
 /// Return the name of function that registers all the per-function control
 /// data at program startup time by calling __llvm_register_function. This
@@ -155,10 +161,35 @@ GlobalVariable *createPGOFuncNameVar(Function &F, StringRef FuncName);
 GlobalVariable *createPGOFuncNameVar(Module &M,
                                      GlobalValue::LinkageTypes Linkage,
                                      StringRef FuncName);
+/// Return the initializer in string of the PGO name var \c NameVar.
+StringRef getPGOFuncNameVarInitializer(GlobalVariable *NameVar);
 
 /// Given a PGO function name, remove the filename prefix and return
 /// the original (static) function name.
 StringRef getFuncNameWithoutPrefix(StringRef PGOFuncName, StringRef FileName);
+
+/// Given a vector of strings (function PGO names) \c NameStrs, the
+/// method generates a combined string \c Result thatis ready to be
+/// serialized.  The \c Result string is comprised of three fields:
+/// The first field is the legnth of the uncompressed strings, and the
+/// the second field is the length of the zlib-compressed string.
+/// Both fields are encoded in ULEB128.  If \c doCompress is false, the
+///  third field is the uncompressed strings; otherwise it is the 
+/// compressed string. When the string compression is off, the 
+/// second field will have value zero.
+int collectPGOFuncNameStrings(const std::vector<std::string> &NameStrs,
+                              bool doCompression, std::string &Result);
+/// Produce \c Result string with the same format described above. The input
+/// is vector of PGO function name variables that are referenced.
+int collectPGOFuncNameStrings(const std::vector<GlobalVariable *> &NameVars,
+                              std::string &Result);
+class InstrProfSymtab;
+/// \c NameStrings is a string composed of one of more sub-strings encoded in
+/// the
+/// format described above. The substrings are seperated by 0 or more zero
+/// bytes.
+/// This method decodes the string and populates the \c Symtab.
+int readPGOFuncNameStrings(StringRef NameStrings, InstrProfSymtab &Symtab);
 
 const std::error_category &instrprof_category();
 
@@ -235,6 +266,11 @@ public:
   /// This interface is used by reader of CoverageMapping test
   /// format.
   inline std::error_code create(StringRef D, uint64_t BaseAddr);
+  /// \c NameStrings is a string composed of one of more sub-strings
+  ///  encoded in the format described above. The substrings are
+  /// seperated by 0 or more zero bytes. This method decodes the
+  /// string and populates the \c Symtab.
+  inline std::error_code create(StringRef NameStrings);
   /// Create InstrProfSymtab from a set of names iteratable from
   /// \p IterRange. This interface is used by IndexedProfReader.
   template <typename NameIterRange> void create(const NameIterRange &IterRange);
@@ -255,8 +291,8 @@ public:
     AddrToMD5Map.push_back(std::make_pair(Addr, MD5Val));
   }
   AddrHashMap &getAddrHashMap() { return AddrToMD5Map; }
-  /// Return function's PGO name from the function name's symabol
-  /// address in the object file. If an error occurs, Return
+  /// Return function's PGO name from the function name's symbol
+  /// address in the object file. If an error occurs, return
   /// an empty string.
   StringRef getFuncName(uint64_t FuncNameAddress, size_t NameSize);
   /// Return function's PGO name from the name's md5 hash value.
@@ -267,6 +303,12 @@ public:
 std::error_code InstrProfSymtab::create(StringRef D, uint64_t BaseAddr) {
   Data = D;
   Address = BaseAddr;
+  return std::error_code();
+}
+
+std::error_code InstrProfSymtab::create(StringRef NameStrings) {
+  if (readPGOFuncNameStrings(NameStrings, *this))
+    return make_error_code(instrprof_error::malformed);
   return std::error_code();
 }
 
@@ -313,11 +355,14 @@ struct InstrProfValueSiteRecord {
           return left.Value < right.Value;
         });
   }
+  /// Sort ValueData Descending by Count
+  inline void sortByCount();
 
   /// Merge data from another InstrProfValueSiteRecord
   /// Optionally scale merged counts by \p Weight.
-  instrprof_error mergeValueData(InstrProfValueSiteRecord &Input,
-                                 uint64_t Weight = 1);
+  instrprof_error merge(InstrProfValueSiteRecord &Input, uint64_t Weight = 1);
+  /// Scale up value profile data counts.
+  instrprof_error scale(uint64_t Weight);
 };
 
 /// Profiling information for a single function.
@@ -360,6 +405,19 @@ struct InstrProfRecord {
   /// Optionally scale merged counts by \p Weight.
   instrprof_error merge(InstrProfRecord &Other, uint64_t Weight = 1);
 
+  /// Scale up profile counts (including value profile data) by
+  /// \p Weight.
+  instrprof_error scale(uint64_t Weight);
+
+  /// Sort value profile data (per site) by count.
+  void sortValueData() {
+    for (uint32_t Kind = IPVK_First; Kind <= IPVK_Last; ++Kind) {
+      std::vector<InstrProfValueSiteRecord> &SiteRecords =
+          getValueSitesForKind(Kind);
+      for (auto &SR : SiteRecords)
+        SR.sortByCount();
+    }
+  }
   /// Clear value data entries
   void clearValueData() {
     for (uint32_t Kind = IPVK_First; Kind <= IPVK_Last; ++Kind)
@@ -394,6 +452,8 @@ private:
   // Scale merged value counts by \p Weight.
   instrprof_error mergeValueProfData(uint32_t ValueKind, InstrProfRecord &Src,
                                      uint64_t Weight);
+  // Scale up value profile data count.
+  instrprof_error scaleValueProfData(uint32_t ValueKind, uint64_t Weight);
 };
 
 uint32_t InstrProfRecord::getNumValueKinds() const {
@@ -461,11 +521,22 @@ inline support::endianness getHostEndianness() {
 #define INSTR_PROF_VALUE_PROF_DATA
 #include "llvm/ProfileData/InstrProfData.inc"
 
- /*
- * Initialize the record for runtime value profile data.
- * Return 0 if the initialization is successful, otherwise
- * return 1.
- */
+void InstrProfValueSiteRecord::sortByCount() {
+  ValueData.sort(
+      [](const InstrProfValueData &left, const InstrProfValueData &right) {
+        return left.Count > right.Count;
+      });
+  // Now truncate
+  size_t max_s = INSTR_PROF_MAX_NUM_VAL_PER_SITE;
+  if (ValueData.size() > max_s)
+    ValueData.resize(max_s);
+}
+
+/*
+* Initialize the record for runtime value profile data.
+* Return 0 if the initialization is successful, otherwise
+* return 1.
+*/
 int initializeValueProfRuntimeRecord(ValueProfRuntimeRecord *RuntimeRecord,
                                      const uint16_t *NumValueSites,
                                      ValueProfNode **Nodes);
@@ -560,25 +631,6 @@ struct Header {
 };
 
 }  // end namespace RawInstrProf
-
-namespace coverage {
-
-// Profile coverage map has the following layout:
-// [CoverageMapFileHeader]
-// [ArrayStart]
-//  [CovMapFunctionRecord]
-//  [CovMapFunctionRecord]
-//  ...
-// [ArrayEnd]
-// [Encoded Region Mapping Data]
-LLVM_PACKED_START
-template <class IntPtrT> struct CovMapFunctionRecord {
-  #define COVMAP_FUNC_RECORD(Type, LLVMType, Name, Init) Type Name;
-  #include "llvm/ProfileData/InstrProfData.inc"
-};
-LLVM_PACKED_END
-
-}
 
 } // end namespace llvm
 

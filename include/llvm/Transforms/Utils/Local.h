@@ -42,6 +42,7 @@ class TargetLibraryInfo;
 class TargetTransformInfo;
 class DIBuilder;
 class DominatorTree;
+class LazyValueInfo;
 
 template<typename T> class SmallVectorImpl;
 
@@ -303,7 +304,7 @@ void removeUnwindEdge(BasicBlock *BB);
 /// \brief Remove all blocks that can not be reached from the function's entry.
 ///
 /// Returns true if any basic block was removed.
-bool removeUnreachableBlocks(Function &F);
+bool removeUnreachableBlocks(Function &F, LazyValueInfo *LVI = nullptr);
 
 /// \brief Combine the metadata of two instructions so that K can replace J
 ///
@@ -329,6 +330,25 @@ unsigned replaceDominatedUsesWith(Value *From, Value *To, DominatorTree &DT,
 /// Most passes can and should ignore this information, and it is only used
 /// during lowering by the GC infrastructure.
 bool callsGCLeafFunction(ImmutableCallSite CS);
+
+//===----------------------------------------------------------------------===//
+//  Intrinsic pattern matching
+//
+
+/// Try and match a bitreverse or bswap idiom.
+///
+/// If an idiom is matched, an intrinsic call is inserted before \c I. Any added
+/// instructions are returned in \c InsertedInsts. They will all have been added
+/// to a basic block.
+///
+/// A bitreverse idiom normally requires around 2*BW nodes to be searched (where
+/// BW is the bitwidth of the integer type). A bswap idiom requires anywhere up
+/// to BW / 4 nodes to be searched, so is significantly faster.
+///
+/// This function returns true on a successful match or false otherwise.
+bool recognizeBitReverseOrBSwapIdiom(
+    Instruction *I, bool MatchBSwaps, bool MatchBitReversals,
+    SmallVectorImpl<Instruction *> &InsertedInsts);
 
 } // End llvm namespace
 

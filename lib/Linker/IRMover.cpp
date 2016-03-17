@@ -524,6 +524,23 @@ public:
       ValueMapperFlags = ValueMapperFlags | RF_HaveUnmaterializedMetadata;
   }
 
+  ~IRLinker() {
+    // In the case where we are not linking metadata, we unset the CanReplace
+    // flag on all temporary metadata in the MetadataToIDs map to ensure
+    // none was replaced while being a map key. Now that we are destructing
+    // the map, set the flag back to true, so that it is replaceable during
+    // metadata linking.
+    if (!shouldLinkMetadata()) {
+      for (auto MDI : MetadataToIDs) {
+        Metadata *MD = const_cast<Metadata *>(MDI.first);
+        MDNode *Node = dyn_cast<MDNode>(MD);
+        assert((Node && Node->isTemporary()) &&
+               "Found non-temp metadata in map when not linking metadata");
+        Node->setCanReplace(true);
+      }
+    }
+  }
+
   bool run();
   Value *materializeDeclFor(Value *V, bool ForAlias);
   void materializeInitFor(GlobalValue *New, GlobalValue *Old, bool ForAlias);
@@ -756,6 +773,16 @@ GlobalValue *IRLinker::copyGlobalValueProto(const GlobalValue *SGV,
     NewGV->setLinkage(GlobalValue::ExternalWeakLinkage);
 
   NewGV->copyAttributesFrom(SGV);
+
+  // Remove these copied constants in case this stays a declaration, since
+  // they point to the source module. If the def is linked the values will
+  // be mapped in during linkFunctionBody.
+  if (auto *NewF = dyn_cast<Function>(NewGV)) {
+    NewF->setPersonalityFn(nullptr);
+    NewF->setPrefixData(nullptr);
+    NewF->setPrologueData(nullptr);
+  }
+
   return NewGV;
 }
 
@@ -1111,7 +1138,8 @@ bool IRLinker::linkFunctionBody(Function &Dst, Function &Src) {
     // a function and before remapping metadata on instructions below
     // in RemapInstruction, as the saved mapping is used to handle
     // the temporary metadata hanging off instructions.
-    SrcM.getMaterializer()->saveMetadataList(MetadataToIDs, true);
+    SrcM.getMaterializer()->saveMetadataList(MetadataToIDs,
+                                             /* OnlyTempMD = */ true);
 
   // Link in the prefix data.
   if (Src.hasPrefixData())
@@ -1193,6 +1221,18 @@ void IRLinker::findNeededSubprograms(ValueToValueMapTy &ValueMap) {
   for (unsigned I = 0, E = CompileUnits->getNumOperands(); I != E; ++I) {
     auto *CU = cast<DICompileUnit>(CompileUnits->getOperand(I));
     assert(CU && "Expected valid compile unit");
+    // Ensure that we don't remove subprograms referenced by DIImportedEntity.
+    // It is not legal to have a DIImportedEntity with a null entity or scope.
+    // FIXME: The DISubprogram for functions not linked in but kept due to
+    // being referenced by a DIImportedEntity should also get their
+    // IsDefinition flag is unset.
+    SmallPtrSet<DISubprogram *, 8> ImportedEntitySPs;
+    for (auto *IE : CU->getImportedEntities()) {
+      if (auto *SP = dyn_cast<DISubprogram>(IE->getEntity()))
+        ImportedEntitySPs.insert(SP);
+      if (auto *SP = dyn_cast<DISubprogram>(IE->getScope()))
+        ImportedEntitySPs.insert(SP);
+    }
     for (auto *Op : CU->getSubprograms()) {
       // Unless we were doing function importing and deferred metadata linking,
       // any needed SPs should have been mapped as they would be reached
@@ -1200,7 +1240,7 @@ void IRLinker::findNeededSubprograms(ValueToValueMapTy &ValueMap) {
       // function bodies, or from DILocation on inlined instructions).
       assert(!(ValueMap.MD()[Op] && IsMetadataLinkingPostpass) &&
              "DISubprogram shouldn't be mapped yet");
-      if (!ValueMap.MD()[Op])
+      if (!ValueMap.MD()[Op] && !ImportedEntitySPs.count(Op))
         UnneededSubprograms.insert(Op);
     }
   }
@@ -1514,7 +1554,8 @@ bool IRLinker::run() {
       // Ensure metadata materialized
       if (SrcM.getMaterializer()->materializeMetadata())
         return true;
-      SrcM.getMaterializer()->saveMetadataList(MetadataToIDs, false);
+      SrcM.getMaterializer()->saveMetadataList(MetadataToIDs,
+                                               /* OnlyTempMD = */ false);
     }
 
     linkNamedMDNodes();

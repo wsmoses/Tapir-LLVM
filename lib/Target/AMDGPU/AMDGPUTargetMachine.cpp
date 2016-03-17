@@ -66,8 +66,12 @@ static ScheduleDAGInstrs *createR600MachineScheduler(MachineSchedContext *C) {
 }
 
 static MachineSchedRegistry
-SchedCustomRegistry("r600", "Run R600's custom scheduler",
-                    createR600MachineScheduler);
+R600SchedRegistry("r600", "Run R600's custom scheduler",
+                   createR600MachineScheduler);
+
+static MachineSchedRegistry
+SISchedRegistry("si", "Run SI's custom scheduler",
+                createSIMachineScheduler);
 
 static std::string computeDataLayout(const Triple &TT) {
   std::string Ret = "e-p:32:32";
@@ -143,6 +147,8 @@ public:
     const AMDGPUSubtarget &ST = *getAMDGPUTargetMachine().getSubtargetImpl();
     if (ST.getGeneration() <= AMDGPUSubtarget::NORTHERN_ISLANDS)
       return createR600MachineScheduler(C);
+    else if (ST.enableSIScheduler())
+      return createSIMachineScheduler(C);
     return nullptr;
   }
 

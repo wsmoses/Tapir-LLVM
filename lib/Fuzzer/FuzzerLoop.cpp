@@ -31,6 +31,8 @@ void __sanitizer_set_death_callback(void (*callback)(void));
 __attribute__((weak)) size_t __sanitizer_get_number_of_counters();
 __attribute__((weak))
 uintptr_t __sanitizer_update_counter_bitset_and_clear_counters(uint8_t *bitset);
+__attribute__((weak)) uintptr_t
+__sanitizer_get_coverage_pc_buffer(uintptr_t **data);
 }
 
 namespace fuzzer {
@@ -249,7 +251,21 @@ void Fuzzer::ExecuteCallback(const Unit &U) {
 
 size_t Fuzzer::RecordBlockCoverage() {
   CHECK_WEAK_API_FUNCTION(__sanitizer_get_total_unique_coverage);
-  return LastRecordedBlockCoverage = __sanitizer_get_total_unique_coverage();
+  uintptr_t PrevCoverage = LastRecordedBlockCoverage;
+  LastRecordedBlockCoverage = __sanitizer_get_total_unique_coverage();
+
+  if (PrevCoverage == LastRecordedBlockCoverage || !Options.PrintNewCovPcs)
+    return LastRecordedBlockCoverage;
+
+  uintptr_t PrevBufferLen = LastCoveragePcBufferLen;
+  uintptr_t *CoverageBuf;
+  LastCoveragePcBufferLen = __sanitizer_get_coverage_pc_buffer(&CoverageBuf);
+  assert(CoverageBuf);
+  for (size_t i = PrevBufferLen; i < LastCoveragePcBufferLen; ++i) {
+    Printf("0x%x\n", CoverageBuf[i]);
+  }
+
+  return LastRecordedBlockCoverage;
 }
 
 size_t Fuzzer::RecordCallerCalleeCoverage() {
@@ -374,7 +390,6 @@ void Fuzzer::MutateAndTestOne() {
   U = ChooseUnitToMutate();
 
   for (int i = 0; i < Options.MutateDepth; i++) {
-    StartTraceRecording();
     size_t Size = U.size();
     U.resize(Options.MaxLen);
     size_t NewSize = USF.Mutate(U.data(), Size, U.size());
@@ -382,21 +397,10 @@ void Fuzzer::MutateAndTestOne() {
     assert(NewSize <= (size_t)Options.MaxLen &&
            "Mutator return overisized unit");
     U.resize(NewSize);
+    if (i == 0)
+      StartTraceRecording();
     RunOneAndUpdateCorpus(U);
-    size_t NumTraceBasedMutations = StopTraceRecording();
-    size_t TBMWidth =
-        std::min((size_t)Options.TBMWidth, NumTraceBasedMutations);
-    size_t TBMDepth =
-        std::min((size_t)Options.TBMDepth, NumTraceBasedMutations);
-    Unit BackUp = U;
-    for (size_t w = 0; w < TBMWidth; w++) {
-      U = BackUp;
-      for (size_t d = 0; d < TBMDepth; d++) {
-        TotalNumberOfExecutedTraceBasedMutations++;
-        ApplyTraceBasedMutation(USF.GetRand()(NumTraceBasedMutations), &U);
-        RunOneAndUpdateCorpus(U);
-      }
-    }
+    StopTraceRecording();
   }
 }
 
@@ -451,12 +455,15 @@ void Fuzzer::Drill() {
 
   PrintStats("REINIT");
   SavedOutputCorpusPath.swap(Options.OutputCorpus);
-  for (auto &U : SavedCorpus)
+  for (auto &U : SavedCorpus) {
+    CurrentUnit = U;
     RunOne(U);
+  }
   PrintStats("MERGE ");
   Options.PrintNEW = true;
   size_t NumMerged = 0;
   for (auto &U : Corpus) {
+    CurrentUnit = U;
     if (RunOne(U)) {
       PrintStatusForNewUnit(U);
       NumMerged++;

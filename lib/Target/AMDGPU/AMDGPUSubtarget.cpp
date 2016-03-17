@@ -73,11 +73,12 @@ AMDGPUSubtarget::AMDGPUSubtarget(const Triple &TT, StringRef GPU, StringRef FS,
       CaymanISA(false), FlatAddressSpace(false), FlatForGlobal(false),
       EnableIRStructurizer(true), EnablePromoteAlloca(false), EnableIfCvt(true),
       EnableLoadStoreOpt(false), EnableUnsafeDSOffsetFolding(false),
+      EnableXNACK(false),
       WavefrontSize(0), CFALUBug(false), LocalMemorySize(0),
       EnableVGPRSpilling(false), SGPRInitBug(false), IsGCN(false),
       GCN1Encoding(false), GCN3Encoding(false), CIInsts(false), LDSBankCount(0),
       IsaVersion(ISAVersion0_0_0), EnableHugeScratchBuffer(false),
-      FrameLowering(nullptr),
+      EnableSIScheduler(false), FrameLowering(nullptr),
       InstrItins(getInstrItineraryForCPU(GPU)), TargetTriple(TT) {
 
   initializeSubtargetDependencies(TT, GPU, FS);

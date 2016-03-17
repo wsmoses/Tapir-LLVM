@@ -59,8 +59,6 @@ defm EXP : EXP_m;
 // SMRD Instructions
 //===----------------------------------------------------------------------===//
 
-let mayLoad = 1 in {
-
 // We are using the SGPR_32 and not the SReg_32 register class for 32-bit
 // SMRD instructions, because the SGPR_32 register class does not include M0
 // and writing to M0 from an SMRD instruction will hang the GPU.
@@ -89,8 +87,6 @@ defm S_BUFFER_LOAD_DWORDX8 : SMRD_Helper <
 defm S_BUFFER_LOAD_DWORDX16 : SMRD_Helper <
   smrd<0x0c>, "s_buffer_load_dwordx16", SReg_128, SReg_512
 >;
-
-} // mayLoad = 1
 
 //def S_MEMTIME : SMRD_ <0x0000001e, "s_memtime", []>;
 
@@ -148,7 +144,7 @@ defm S_FF1_I32_B32 : SOP1_32 <sop1<0x13, 0x10>, "s_ff1_i32_b32",
 defm S_FF1_I32_B64 : SOP1_32_64 <sop1<0x14, 0x11>, "s_ff1_i32_b64", []>;
 
 defm S_FLBIT_I32_B32 : SOP1_32 <sop1<0x15, 0x12>, "s_flbit_i32_b32",
-  [(set i32:$dst, (ctlz_zero_undef i32:$src0))]
+  [(set i32:$dst, (AMDGPUffbh_u32 i32:$src0))]
 >;
 
 defm S_FLBIT_I32_B64 : SOP1_32_64 <sop1<0x16, 0x13>, "s_flbit_i32_b64", []>;

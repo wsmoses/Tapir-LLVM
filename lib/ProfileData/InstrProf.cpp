@@ -12,12 +12,15 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "llvm/ProfileData/InstrProf.h"
+#include "llvm/ADT/StringExtras.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/Function.h"
-#include "llvm/IR/Module.h"
 #include "llvm/IR/GlobalVariable.h"
-#include "llvm/ProfileData/InstrProf.h"
+#include "llvm/IR/Module.h"
+#include "llvm/Support/Compression.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/LEB128.h"
 #include "llvm/Support/ManagedStatic.h"
 
 using namespace llvm;
@@ -162,9 +165,100 @@ GlobalVariable *createPGOFuncNameVar(Function &F, StringRef FuncName) {
   return createPGOFuncNameVar(*F.getParent(), F.getLinkage(), FuncName);
 }
 
-instrprof_error
-InstrProfValueSiteRecord::mergeValueData(InstrProfValueSiteRecord &Input,
-                                         uint64_t Weight) {
+int collectPGOFuncNameStrings(const std::vector<std::string> &NameStrs,
+                              bool doCompression, std::string &Result) {
+  uint8_t Header[16], *P = Header;
+  std::string UncompressedNameStrings =
+      join(NameStrs.begin(), NameStrs.end(), StringRef(" "));
+
+  unsigned EncLen = encodeULEB128(UncompressedNameStrings.length(), P);
+  P += EncLen;
+
+  auto WriteStringToResult = [&](size_t CompressedLen,
+                                 const std::string &InputStr) {
+    EncLen = encodeULEB128(CompressedLen, P);
+    P += EncLen;
+    char *HeaderStr = reinterpret_cast<char *>(&Header[0]);
+    unsigned HeaderLen = P - &Header[0];
+    Result.append(HeaderStr, HeaderLen);
+    Result += InputStr;
+    return 0;
+  };
+
+  if (!doCompression)
+    return WriteStringToResult(0, UncompressedNameStrings);
+
+  SmallVector<char, 128> CompressedNameStrings;
+  zlib::Status Success =
+      zlib::compress(StringRef(UncompressedNameStrings), CompressedNameStrings,
+                     zlib::BestSizeCompression);
+
+  if (Success != zlib::StatusOK)
+    return 1;
+
+  return WriteStringToResult(
+      CompressedNameStrings.size(),
+      std::string(CompressedNameStrings.data(), CompressedNameStrings.size()));
+}
+
+StringRef getPGOFuncNameInitializer(GlobalVariable *NameVar) {
+  auto *Arr = cast<ConstantDataArray>(NameVar->getInitializer());
+  StringRef NameStr =
+      Arr->isCString() ? Arr->getAsCString() : Arr->getAsString();
+  return NameStr;
+}
+
+int collectPGOFuncNameStrings(const std::vector<GlobalVariable *> &NameVars,
+                              std::string &Result) {
+  std::vector<std::string> NameStrs;
+  for (auto *NameVar : NameVars) {
+    NameStrs.push_back(getPGOFuncNameInitializer(NameVar));
+  }
+  return collectPGOFuncNameStrings(NameStrs, zlib::isAvailable(), Result);
+}
+
+int readPGOFuncNameStrings(StringRef NameStrings, InstrProfSymtab &Symtab) {
+  const uint8_t *P = reinterpret_cast<const uint8_t *>(NameStrings.data());
+  const uint8_t *EndP = reinterpret_cast<const uint8_t *>(NameStrings.data() +
+                                                          NameStrings.size());
+  while (P < EndP) {
+    uint32_t N;
+    uint64_t UncompressedSize = decodeULEB128(P, &N);
+    P += N;
+    uint64_t CompressedSize = decodeULEB128(P, &N);
+    P += N;
+    bool isCompressed = (CompressedSize != 0);
+    SmallString<128> UncompressedNameStrings;
+    StringRef NameStrings;
+    if (isCompressed) {
+      StringRef CompressedNameStrings(reinterpret_cast<const char *>(P),
+                                      CompressedSize);
+      if (zlib::uncompress(CompressedNameStrings, UncompressedNameStrings,
+                           UncompressedSize) != zlib::StatusOK)
+        return 1;
+      P += CompressedSize;
+      NameStrings = StringRef(UncompressedNameStrings.data(),
+                              UncompressedNameStrings.size());
+    } else {
+      NameStrings =
+          StringRef(reinterpret_cast<const char *>(P), UncompressedSize);
+      P += UncompressedSize;
+    }
+    // Now parse the name strings.
+    SmallVector<StringRef, 0> Names;
+    NameStrings.split(Names, ' ');
+    for (StringRef &Name : Names)
+      Symtab.addFuncName(Name);
+
+    while (P < EndP && *P == 0)
+      P++;
+  }
+  Symtab.finalizeSymtab();
+  return 0;
+}
+
+instrprof_error InstrProfValueSiteRecord::merge(InstrProfValueSiteRecord &Input,
+                                                uint64_t Weight) {
   this->sortByTargetValues();
   Input.sortByTargetValues();
   auto I = ValueData.begin();
@@ -175,20 +269,25 @@ InstrProfValueSiteRecord::mergeValueData(InstrProfValueSiteRecord &Input,
     while (I != IE && I->Value < J->Value)
       ++I;
     if (I != IE && I->Value == J->Value) {
-      uint64_t JCount = J->Count;
       bool Overflowed;
-      if (Weight > 1) {
-        JCount = SaturatingMultiply(JCount, Weight, &Overflowed);
-        if (Overflowed)
-          Result = instrprof_error::counter_overflow;
-      }
-      I->Count = SaturatingAdd(I->Count, JCount, &Overflowed);
+      I->Count = SaturatingMultiplyAdd(J->Count, Weight, I->Count, &Overflowed);
       if (Overflowed)
         Result = instrprof_error::counter_overflow;
       ++I;
       continue;
     }
     ValueData.insert(I, *J);
+  }
+  return Result;
+}
+
+instrprof_error InstrProfValueSiteRecord::scale(uint64_t Weight) {
+  instrprof_error Result = instrprof_error::success;
+  for (auto I = ValueData.begin(), IE = ValueData.end(); I != IE; ++I) {
+    bool Overflowed;
+    I->Count = SaturatingMultiply(I->Count, Weight, &Overflowed);
+    if (Overflowed)
+      Result = instrprof_error::counter_overflow;
   }
   return Result;
 }
@@ -208,8 +307,7 @@ instrprof_error InstrProfRecord::mergeValueProfData(uint32_t ValueKind,
       Src.getValueSitesForKind(ValueKind);
   instrprof_error Result = instrprof_error::success;
   for (uint32_t I = 0; I < ThisNumValueSites; I++)
-    MergeResult(Result,
-                ThisSiteRecords[I].mergeValueData(OtherSiteRecords[I], Weight));
+    MergeResult(Result, ThisSiteRecords[I].merge(OtherSiteRecords[I], Weight));
   return Result;
 }
 
@@ -224,19 +322,40 @@ instrprof_error InstrProfRecord::merge(InstrProfRecord &Other,
 
   for (size_t I = 0, E = Other.Counts.size(); I < E; ++I) {
     bool Overflowed;
-    uint64_t OtherCount = Other.Counts[I];
-    if (Weight > 1) {
-      OtherCount = SaturatingMultiply(OtherCount, Weight, &Overflowed);
-      if (Overflowed)
-        Result = instrprof_error::counter_overflow;
-    }
-    Counts[I] = SaturatingAdd(Counts[I], OtherCount, &Overflowed);
+    Counts[I] =
+        SaturatingMultiplyAdd(Other.Counts[I], Weight, Counts[I], &Overflowed);
     if (Overflowed)
       Result = instrprof_error::counter_overflow;
   }
 
   for (uint32_t Kind = IPVK_First; Kind <= IPVK_Last; ++Kind)
     MergeResult(Result, mergeValueProfData(Kind, Other, Weight));
+
+  return Result;
+}
+
+instrprof_error InstrProfRecord::scaleValueProfData(uint32_t ValueKind,
+                                                    uint64_t Weight) {
+  uint32_t ThisNumValueSites = getNumValueSites(ValueKind);
+  std::vector<InstrProfValueSiteRecord> &ThisSiteRecords =
+      getValueSitesForKind(ValueKind);
+  instrprof_error Result = instrprof_error::success;
+  for (uint32_t I = 0; I < ThisNumValueSites; I++)
+    MergeResult(Result, ThisSiteRecords[I].scale(Weight));
+  return Result;
+}
+
+instrprof_error InstrProfRecord::scale(uint64_t Weight) {
+  instrprof_error Result = instrprof_error::success;
+  for (auto &Count : this->Counts) {
+    bool Overflowed;
+    Count = SaturatingMultiply(Count, Weight, &Overflowed);
+    if (Overflowed && Result == instrprof_error::success) {
+      Result = instrprof_error::counter_overflow;
+    }
+  }
+  for (uint32_t Kind = IPVK_First; Kind <= IPVK_Last; ++Kind)
+    MergeResult(Result, scaleValueProfData(Kind, Weight));
 
   return Result;
 }

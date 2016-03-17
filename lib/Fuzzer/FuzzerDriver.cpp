@@ -259,8 +259,6 @@ int FuzzerDriver(const std::vector<std::string> &Args,
       Flags.prefer_small_during_initial_shuffle;
   Options.Reload = Flags.reload;
   Options.OnlyASCII = Flags.only_ascii;
-  Options.TBMDepth = Flags.tbm_depth;
-  Options.TBMWidth = Flags.tbm_width;
   Options.OutputCSV = Flags.output_csv;
   if (Flags.runs >= 0)
     Options.MaxNumberOfRuns = Flags.runs;
@@ -281,11 +279,12 @@ int FuzzerDriver(const std::vector<std::string> &Args,
   if (Flags.verbosity > 0 && !Dictionary.empty())
     Printf("Dictionary: %zd entries\n", Dictionary.size());
   Options.SaveArtifacts = !Flags.test_single_input;
+  Options.PrintNewCovPcs = Flags.print_new_cov_pcs;
 
   Fuzzer F(USF, Options);
 
   for (auto &U: Dictionary)
-    USF.GetMD().AddWordToDictionary(U.data(), U.size());
+    USF.GetMD().AddWordToManualDictionary(U);
 
   // Timer
   if (Flags.timeout > 0)

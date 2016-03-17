@@ -96,7 +96,7 @@ ARM_ARCH("iwmmxt", AK_IWMMXT, "iwmmxt", "", ARMBuildAttrs::CPUArch::v5TE,
           FK_NONE, AEK_NONE)
 ARM_ARCH("iwmmxt2", AK_IWMMXT2, "iwmmxt2", "", ARMBuildAttrs::CPUArch::v5TE,
           FK_NONE, AEK_NONE)
-ARM_ARCH("xscale", AK_XSCALE, "xscale", "", ARMBuildAttrs::CPUArch::v5TE,
+ARM_ARCH("xscale", AK_XSCALE, "xscale", "v5e", ARMBuildAttrs::CPUArch::v5TE,
           FK_NONE, AEK_NONE)
 ARM_ARCH("armv7s", AK_ARMV7S, "7-S", "v7s", ARMBuildAttrs::CPUArch::v7,
           FK_NEON_VFPV4, AEK_DSP)
@@ -213,6 +213,7 @@ ARM_CPU_NAME("cortex-a53", AK_ARMV8A, FK_CRYPTO_NEON_FP_ARMV8, true, AEK_CRC)
 ARM_CPU_NAME("cortex-a57", AK_ARMV8A, FK_CRYPTO_NEON_FP_ARMV8, false, AEK_CRC)
 ARM_CPU_NAME("cortex-a72", AK_ARMV8A, FK_CRYPTO_NEON_FP_ARMV8, false, AEK_CRC)
 ARM_CPU_NAME("cyclone", AK_ARMV8A, FK_CRYPTO_NEON_FP_ARMV8, false, AEK_CRC)
+ARM_CPU_NAME("exynos-m1", AK_ARMV8A, FK_CRYPTO_NEON_FP_ARMV8, false, AEK_CRC)
 // Non-standard Arch names.
 ARM_CPU_NAME("iwmmxt", AK_IWMMXT, FK_NONE, true, AEK_NONE)
 ARM_CPU_NAME("xscale", AK_XSCALE, FK_NONE, true, AEK_NONE)

@@ -57,11 +57,11 @@
 ; X86-NEXT: .long   3
 ; X86-NEXT: .long [[FILE_SEGMENT_END:.*]]-[[FILE_SEGMENT_START]]
 ; X86-NEXT: .long [[ASM_LINE]]-_f
-; X86-NEXT: .long   4
+; X86-NEXT: .long   -2147483644
 ; X86-NEXT: .long [[CALL_LINE]]-_f
-; X86-NEXT: .long   5
+; X86-NEXT: .long   -2147483643
 ; X86-NEXT: .long [[RETURN_STMT]]-_f
-; X86-NEXT: .long   6
+; X86-NEXT: .long   -2147483642
 ; X86-NEXT: .short  0
 ; X86-NEXT: .short  0
 ; X86-NEXT: .short  0
@@ -110,17 +110,28 @@
 ; OBJ32-NEXT:   Flags: 0x1
 ; OBJ32-NEXT:   CodeSize: 0x6
 ; OBJ32-NEXT:   FilenameSegment [
-; OBJ32-NEXT:     Filename: D:\asm.c
+; OBJ32-NEXT:   Filename: D:\asm.c
 ; FIXME: An empty __asm stmt creates an extra entry.
 ; We seem to know that these offsets are the same statically during the
 ; execution of endModule().  See PR18679 for the details.
-; OBJ32-NEXT:     +0x0: 4
-; OBJ32-NEXT:     +0x0: 5
-; OBJ32-NEXT:     +0x5: 6
+; OBJ32-NEXT:   +0x0 [
+; OBJ32-NEXT:     LineNumberStart: 4
+; OBJ32-NEXT:     LineNumberEndDelta: 0
+; OBJ32-NEXT:     IsStatement: Yes
 ; OBJ32-NEXT:     ColStart: 0
 ; OBJ32-NEXT:     ColEnd: 0
+; OBJ32-NEXT:   ]
+; OBJ32-NEXT:   +0x0 [
+; OBJ32-NEXT:     LineNumberStart: 5
+; OBJ32-NEXT:     LineNumberEndDelta: 0
+; OBJ32-NEXT:     IsStatement: Yes
 ; OBJ32-NEXT:     ColStart: 0
 ; OBJ32-NEXT:     ColEnd: 0
+; OBJ32-NEXT:   ]
+; OBJ32-NEXT:   +0x5 [
+; OBJ32-NEXT:     LineNumberStart: 6
+; OBJ32-NEXT:     LineNumberEndDelta: 0
+; OBJ32-NEXT:     IsStatement: Yes
 ; OBJ32-NEXT:     ColStart: 0
 ; OBJ32-NEXT:     ColEnd: 0
 ; OBJ32-NEXT:   ]
@@ -130,15 +141,12 @@
 ; X64-NEXT: .L{{.*}}:{{$}}
 ; X64-NEXT: [[START:.*]]:{{$}}
 ; X64:      # BB
-; X64:      pushq %rbp
-; X64-NEXT: subq    $32, %rsp
-; X64-NEXT: leaq    32(%rsp), %rbp
+; X64:      subq    $40, %rsp
 ; X64-NEXT: [[ASM_LINE:.*]]:{{$}}
 ; X64:      [[CALL_LINE:.*]]:{{$}}
 ; X64:      callq   g
 ; X64-NEXT: [[EPILOG_AND_RET:.*]]:
-; X64:      addq    $32, %rsp
-; X64-NEXT: popq %rbp
+; X64:      addq    $40, %rsp
 ; X64-NEXT: ret
 ; X64-NEXT: [[END_OF_F:.*]]:
 ;
@@ -178,13 +186,13 @@
 ; X64-NEXT: .long   4
 ; X64-NEXT: .long [[FILE_SEGMENT_END:.*]]-[[FILE_SEGMENT_START]]
 ; X64-NEXT: .long [[START]]-f
-; X64-NEXT: .long   3
+; X64-NEXT: .long   -2147483645
 ; X64-NEXT: .long [[ASM_LINE]]-f
-; X64-NEXT: .long   4
+; X64-NEXT: .long   -2147483644
 ; X64-NEXT: .long [[CALL_LINE]]-f
-; X64-NEXT: .long   5
+; X64-NEXT: .long   -2147483643
 ; X64-NEXT: .long [[EPILOG_AND_RET]]-f
-; X64-NEXT: .long   6
+; X64-NEXT: .long   -2147483642
 ; X64-NEXT: .short  0
 ; X64-NEXT: .short  0
 ; X64-NEXT: .short  0
@@ -225,30 +233,46 @@
 ; OBJ64:        ProcStart {
 ; OBJ64-NEXT:     DisplayName: f
 ; OBJ64-NEXT:     Section: f
-; OBJ64-NEXT:     CodeSize: 0x17
+; OBJ64-NEXT:     CodeSize: 0xE
 ; OBJ64-NEXT:   }
 ; OBJ64-NEXT:   ProcEnd
 ; OBJ64-NEXT: ]
 ; OBJ64:      FunctionLineTable [
 ; OBJ64-NEXT:   Name: f
 ; OBJ64-NEXT:   Flags: 0x1
-; OBJ64-NEXT:   CodeSize: 0x17
+; OBJ64-NEXT:   CodeSize: 0xE
 ; OBJ64-NEXT:   FilenameSegment [
 ; OBJ64-NEXT:     Filename: D:\asm.c
-; OBJ64-NEXT:     +0x0: 3
 ; FIXME: An empty __asm stmt creates an extra entry.
 ; See PR18679 for the details.
-; OBJ64-NEXT:     +0xA: 4
-; OBJ64-NEXT:     +0xC: 5
-; OBJ64-NEXT:     +0x11: 6
-; OBJ64-NEXT:     ColStart: 0
-; OBJ64-NEXT:     ColEnd: 0
-; OBJ64-NEXT:     ColStart: 0
-; OBJ64-NEXT:     ColEnd: 0
-; OBJ64-NEXT:     ColStart: 0
-; OBJ64-NEXT:     ColEnd: 0
-; OBJ64-NEXT:     ColStart: 0
-; OBJ64-NEXT:     ColEnd: 0
+; OBJ64-NEXT:     +0x0 [
+; OBJ64-NEXT:       LineNumberStart: 3
+; OBJ64-NEXT:       LineNumberEndDelta: 0
+; OBJ64-NEXT:       IsStatement: Yes
+; OBJ64-NEXT:       ColStart: 0
+; OBJ64-NEXT:       ColEnd: 0
+; OBJ64-NEXT:     ]
+; OBJ64-NEXT:     +0x4 [
+; OBJ64-NEXT:       LineNumberStart: 4
+; OBJ64-NEXT:       LineNumberEndDelta: 0
+; OBJ64-NEXT:       IsStatement: Yes
+; OBJ64-NEXT:       ColStart: 0
+; OBJ64-NEXT:       ColEnd: 0
+; OBJ64-NEXT:     ]
+; OBJ64-NEXT:     +0x4 [
+; OBJ64-NEXT:       LineNumberStart: 5
+; OBJ64-NEXT:       LineNumberEndDelta: 0
+; OBJ64-NEXT:       IsStatement: Yes
+; OBJ64-NEXT:       ColStart: 0
+; OBJ64-NEXT:       ColEnd: 0
+; OBJ64-NEXT:     ]
+; OBJ64-NEXT:     +0x9 [
+; OBJ64-NEXT:       LineNumberStart: 6
+; OBJ64-NEXT:       LineNumberEndDelta: 0
+; OBJ64-NEXT:       IsStatement: Yes
+; OBJ64-NEXT:       ColStart: 0
+; OBJ64-NEXT:       ColEnd: 0
+; OBJ64-NEXT:     ]
 ; OBJ64-NEXT:   ]
 ; OBJ64-NEXT: ]
 

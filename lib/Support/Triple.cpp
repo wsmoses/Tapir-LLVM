@@ -338,9 +338,9 @@ static Triple::ArchType parseArch(StringRef ArchName) {
     // FIXME: Do we need to support these?
     .Cases("i786", "i886", "i986", Triple::x86)
     .Cases("amd64", "x86_64", "x86_64h", Triple::x86_64)
-    .Case("powerpc", Triple::ppc)
-    .Cases("powerpc64", "ppu", Triple::ppc64)
-    .Case("powerpc64le", Triple::ppc64le)
+    .Cases("powerpc", "ppc32", Triple::ppc)
+    .Cases("powerpc64", "ppu", "ppc64", Triple::ppc64)
+    .Cases("powerpc64le", "ppc64le", Triple::ppc64le)
     .Case("xscale", Triple::arm)
     .Case("xscaleeb", Triple::armeb)
     .Case("aarch64", Triple::aarch64)
@@ -359,7 +359,7 @@ static Triple::ArchType parseArch(StringRef ArchName) {
     .Case("r600", Triple::r600)
     .Case("amdgcn", Triple::amdgcn)
     .Case("hexagon", Triple::hexagon)
-    .Case("s390x", Triple::systemz)
+    .Cases("s390x", "systemz", Triple::systemz)
     .Case("sparc", Triple::sparc)
     .Case("sparcel", Triple::sparcel)
     .Cases("sparcv9", "sparc64", Triple::sparcv9)
@@ -1154,8 +1154,6 @@ Triple Triple::get32BitArchVariant() const {
   Triple T(*this);
   switch (getArch()) {
   case Triple::UnknownArch:
-  case Triple::aarch64:
-  case Triple::aarch64_be:
   case Triple::amdgcn:
   case Triple::avr:
   case Triple::bpfel:
@@ -1191,17 +1189,19 @@ Triple Triple::get32BitArchVariant() const {
     // Already 32-bit.
     break;
 
-  case Triple::le64:      T.setArch(Triple::le32);    break;
-  case Triple::mips64:    T.setArch(Triple::mips);    break;
-  case Triple::mips64el:  T.setArch(Triple::mipsel);  break;
-  case Triple::nvptx64:   T.setArch(Triple::nvptx);   break;
-  case Triple::ppc64:     T.setArch(Triple::ppc);     break;
-  case Triple::sparcv9:   T.setArch(Triple::sparc);   break;
-  case Triple::x86_64:    T.setArch(Triple::x86);     break;
-  case Triple::amdil64:   T.setArch(Triple::amdil);   break;
-  case Triple::hsail64:   T.setArch(Triple::hsail);   break;
-  case Triple::spir64:    T.setArch(Triple::spir);    break;
-  case Triple::wasm64:    T.setArch(Triple::wasm32);  break;
+  case Triple::aarch64:    T.setArch(Triple::arm);     break;
+  case Triple::aarch64_be: T.setArch(Triple::armeb);   break;
+  case Triple::le64:       T.setArch(Triple::le32);    break;
+  case Triple::mips64:     T.setArch(Triple::mips);    break;
+  case Triple::mips64el:   T.setArch(Triple::mipsel);  break;
+  case Triple::nvptx64:    T.setArch(Triple::nvptx);   break;
+  case Triple::ppc64:      T.setArch(Triple::ppc);     break;
+  case Triple::sparcv9:    T.setArch(Triple::sparc);   break;
+  case Triple::x86_64:     T.setArch(Triple::x86);     break;
+  case Triple::amdil64:    T.setArch(Triple::amdil);   break;
+  case Triple::hsail64:    T.setArch(Triple::hsail);   break;
+  case Triple::spir64:     T.setArch(Triple::spir);    break;
+  case Triple::wasm64:     T.setArch(Triple::wasm32);  break;
   }
   return T;
 }
@@ -1210,16 +1210,12 @@ Triple Triple::get64BitArchVariant() const {
   Triple T(*this);
   switch (getArch()) {
   case Triple::UnknownArch:
-  case Triple::arm:
-  case Triple::armeb:
   case Triple::avr:
   case Triple::hexagon:
   case Triple::kalimba:
   case Triple::msp430:
   case Triple::r600:
   case Triple::tce:
-  case Triple::thumb:
-  case Triple::thumbeb:
   case Triple::xcore:
   case Triple::sparcel:
   case Triple::shave:
@@ -1247,17 +1243,21 @@ Triple Triple::get64BitArchVariant() const {
     // Already 64-bit.
     break;
 
-  case Triple::le32:    T.setArch(Triple::le64);      break;
-  case Triple::mips:    T.setArch(Triple::mips64);    break;
-  case Triple::mipsel:  T.setArch(Triple::mips64el);  break;
-  case Triple::nvptx:   T.setArch(Triple::nvptx64);   break;
-  case Triple::ppc:     T.setArch(Triple::ppc64);     break;
-  case Triple::sparc:   T.setArch(Triple::sparcv9);   break;
-  case Triple::x86:     T.setArch(Triple::x86_64);    break;
-  case Triple::amdil:   T.setArch(Triple::amdil64);   break;
-  case Triple::hsail:   T.setArch(Triple::hsail64);   break;
-  case Triple::spir:    T.setArch(Triple::spir64);    break;
-  case Triple::wasm32:  T.setArch(Triple::wasm64);    break;
+  case Triple::arm:     T.setArch(Triple::aarch64);    break;
+  case Triple::armeb:   T.setArch(Triple::aarch64_be); break;
+  case Triple::le32:    T.setArch(Triple::le64);       break;
+  case Triple::mips:    T.setArch(Triple::mips64);     break;
+  case Triple::mipsel:  T.setArch(Triple::mips64el);   break;
+  case Triple::nvptx:   T.setArch(Triple::nvptx64);    break;
+  case Triple::ppc:     T.setArch(Triple::ppc64);      break;
+  case Triple::sparc:   T.setArch(Triple::sparcv9);    break;
+  case Triple::x86:     T.setArch(Triple::x86_64);     break;
+  case Triple::amdil:   T.setArch(Triple::amdil64);    break;
+  case Triple::hsail:   T.setArch(Triple::hsail64);    break;
+  case Triple::spir:    T.setArch(Triple::spir64);     break;
+  case Triple::thumb:   T.setArch(Triple::aarch64);    break;
+  case Triple::thumbeb: T.setArch(Triple::aarch64_be); break;
+  case Triple::wasm32:  T.setArch(Triple::wasm64);     break;
   }
   return T;
 }
