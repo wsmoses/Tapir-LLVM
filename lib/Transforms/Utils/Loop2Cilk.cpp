@@ -153,6 +153,67 @@ size_t getNonPhiSize(BasicBlock* b){
     while (isa<PHINode>(i) || isa<DbgInfoIntrinsic>(i)) { ++i; bad++; }
     return b->size() - bad;
 }
+
+size_t countPHI(BasicBlock* b){
+    int phi = 0;
+    BasicBlock::iterator i = b->begin();
+    while (isa<PHINode>(i) ) { ++i; phi++; }
+    return bad;
+}
+
+int64_t getInt(Value* v, bool & failed){
+  if( ConstantInt* CI = dyn_cast<ConstantInt>(v) ) {
+    failed = false;
+    return CI->getSExtValue();
+  }
+  failed = true;
+  return -1;
+}
+
+PHINode* getIndVar(Loop *L, BasicBlock* detacher) {
+  BasicBlock *H = L->getHeader();
+  BasicBlock *Incoming = nullptr, *Backedge = nullptr;
+  pred_iterator PI = pred_begin(H);
+  assert(PI != pred_end(H) && "Loop must have at least one backedge!");
+  Backedge = *PI++;
+  if (PI == pred_end(H)) return nullptr;  // dead loop
+  Incoming = *PI++;
+  if (PI != pred_end(H)) return nullptr;  // multiple backedges?
+  if (contains(Incoming)) {
+    if (contains(Backedge)) return nullptr;
+    std::swap(Incoming, Backedge);
+  } else if (!contains(Backedge)) return nullptr;
+
+   // Loop over all of the PHI nodes, looking for a canonical indvar.
+   PHINode* RPN = nullptr;
+   Instruction* INCR = nullptr;
+   Value* amt = nullptr;
+   for (BasicBlock::iterator I = H->begin(); isa<PHINode>(I); ++I) {
+     PHINode *PN = cast<PHINode>(H->begin);
+     if( !PN->getType()->isIntegerType() ) continue;
+     if (auto Inc = dyn_cast<Instruction>(PN->getIncomingValueForBlock(Backedge)))
+       if (Inc->getOpcode() == Instruction::Add && ( Inc->getOperand(0) == PN || Inc->getOperand(1) == PN ) ) {
+         if( RPN != nullptr ) return nullptr;
+         if( Inc->getOperand(0) == PN ) amt = Inc->getOperand(1);
+         if( Inc->getOperand(1) == PN ) amt = Inc->getOperand(0);
+          RPN = PN;
+          INCR = Inc
+       }
+   }
+   IRBuilder<> builder(detacher->getFirstNonPHIOrDbgOrLifetime());
+   auto newV = builder.CreateAdd(builder.CreateMul(RPN, amt), PN->getIncomingValueForBlock(Incoming));
+   std::vector<Use*> uses( RPN->uses() );
+   for( auto U& : uses) {
+     Instruction *I = cast<Instruction>(U.getUser());
+     if( I == Inc ) U->set( ConstantInt::get( RPN->getType(), 1 ) );
+     else {
+       U->set( newV );
+     }
+   }
+   RPN->setIncomingValue( RPN->getBasicBlockIndex(Incoming),  ConstantInt::get( RPN->getType(), 0 ) );
+   return RPN;
+  }
+}
 bool Loop2Cilk::runOnLoop(Loop *L, LPPassManager &) {
   if (skipOptnoneFunction(L))
     return false;
@@ -272,8 +333,13 @@ bool Loop2Cilk::runOnLoop(Loop *L, LPPassManager &) {
   BasicBlock* body = det->getSuccessor(0);
   PHINode* oldvar = L->getCanonicalInductionVariable();
   if( !oldvar ) {
+      oldvar = getIndVar( L, detacher);
+      if( oldvar == nullptr ) {
       errs() << "no induction var\n";
       return false;
+      }
+      else
+        errs() << "MADE IND VAR FIX\n";
   }
   //PHINode* var = PHINode::Create( oldvar->getType(), 1, "", &body->front() );
   //ReplaceInstWithInst( var, oldvar );
