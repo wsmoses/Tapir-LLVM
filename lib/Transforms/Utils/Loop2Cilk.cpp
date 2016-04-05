@@ -452,26 +452,27 @@ bool Loop2Cilk::runOnLoop(Loop *L, LPPassManager &) {
     return false;
   }
 	Module* M = extracted->getParent();
-
+  auto a1 = det->getSuccessor(0);
+  auto a2 = det->getSuccessor(1);
+  errs() << "<PRE DEL\n";
+  det->getParent()->getParent()->dump();
+  a1->dump();
+  a2->dump();
+  errs() << "</PRE DEL\n";
   oldvar->removeIncomingValue( 1U );
   oldvar->removeIncomingValue( 0U );
 
-  auto a1 = det->getSuccessor(0);
-  while(a1->size() > 0 ){
-    Instruction* m = & a1->back();
-    m->eraseFromParent();
-  }
-
-  auto a2 = det->getSuccessor(1);
-  while(a2->size() > 0 ){
-    Instruction* m = & a2->back();
-    m->eraseFromParent();
-  }
-
+  assert( det->use_empty() );
   det->eraseFromParent();
-  a1->eraseFromParent();
-  a2->eraseFromParent();
+  if( countPredecessors(a2) == 0 ){
+    auto tmp = a1;
+    a1 = a2;
+    a2 = a1;
+  }
+  DeleteDeadBlock(a1);
+  if( a1 != a2 ) DeleteDeadBlock(a2);
 
+  assert( Header->getTerminator()->use_empty() );
   Header->getTerminator()->eraseFromParent();
   IRBuilder<> b2(Header);
   b2.CreateBr( detacher );
