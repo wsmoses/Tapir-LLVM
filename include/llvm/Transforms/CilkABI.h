@@ -1373,13 +1373,20 @@ static inline Function* extractDetachBodyToFunction(DetachInst& detach,
       for( unsigned idx = 0, max = inst->getNumSuccessors(); idx < max; idx++ )
         todo.emplace_back( inst->getSuccessor(idx) );
       continue;
+    } else if( auto inst = llvm::dyn_cast<UnreachableInst>(term) ) { 
+      continue;
     } else {
+      term->dump();
       assert( 0 && "Detached block did not absolutely terminate in reattach");
       return nullptr;
     }
   }
 
+  functionPieces.erase(Spawned);
   std::vector<BasicBlock*> blocks( functionPieces.begin(), functionPieces.end() );
+  blocks.insert( blocks.begin(), Spawned );
+  functionPieces.insert(Spawned);
+
   for( auto& a : blocks ){
     if( a == Spawned ) {
       //assert only came from the detach
@@ -1410,6 +1417,7 @@ static inline Function* extractDetachBodyToFunction(DetachInst& detach,
   Instruction* inst = 0;
   PHINode *fake;
   Instruction* add = 0;
+  std::vector<Instruction*> moveToFront;
   if( closure ) {
 
     IRBuilder<> inspawn(Spawned->getFirstNonPHI());
@@ -1433,7 +1441,10 @@ static inline Function* extractDetachBodyToFunction(DetachInst& detach,
       if( a == closure ) continue;
       auto V = builder.CreateConstGEP2_32(st, alloc, 0U, i);
       builder.CreateStore(a, V);
-      auto ld = inspawn.CreateLoad(inspawn.CreateConstGEP2_32(st, alloc, 0U, i));
+      auto gep = inspawn.CreateConstGEP2_32(st, alloc, 0U, i);
+      auto ld = inspawn.CreateLoad(gep);
+      if( Instruction* inst = dyn_cast<Instruction>(gep) ) moveToFront.push_back(inst);
+      if( Instruction* inst = dyn_cast<Instruction>(ld) ) moveToFront.push_back(inst);
       replaceInList( a, ld, functionPieces );
       i++;
     }
@@ -1473,7 +1484,9 @@ static inline Function* extractDetachBodyToFunction(DetachInst& detach,
 
     replaceInList( closure, idx, functionPieces );
   }
-
+  //detach.getParent()->getParent()->dump();
+  //for( auto & b : blocks)
+  //  b->dump();
   CodeExtractor extractor( ArrayRef<BasicBlock*>( blocks ), /*dominator tree -- todo? */ nullptr );
   assert( extractor.isEligible() && "Code not able to be extracted!" );
 
@@ -1490,6 +1503,11 @@ static inline Function* extractDetachBodyToFunction(DetachInst& detach,
   Function* extracted = extractor.extractCodeRegion();
   assert( extracted && "could not extract code" );
 
+  Instruction* last = extracted->getEntryBlock().getFirstNonPHI();
+  for( int i=moveToFront.size()-1; i>=0; i-- ){
+    moveToFront[i]->moveBefore( last );
+    last = moveToFront[i];
+  }
 
   TerminatorInst* bi = llvm::dyn_cast<TerminatorInst>(detB->getTerminator() );
   assert( bi );

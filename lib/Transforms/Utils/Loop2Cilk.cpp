@@ -134,6 +134,17 @@ Value* addOne( Value* V ) {
   return nullptr;
 }
 
+BasicBlock* getUniquePred(BasicBlock* syncer) {
+  BasicBlock* pred = 0;
+  size_t count = 0;
+  for (auto it = pred_begin(syncer), et = pred_end(syncer); it != et; ++it) {
+    count++;
+    pred = *it;
+  }
+  if( count != 1 ) pred = 0;
+  return pred;
+}
+
 Value* uncast( Value* V ){
   if( auto* in = dyn_cast<TruncInst>(V) ) {
     return uncast(in->getOperand(0));
@@ -158,7 +169,7 @@ size_t countPHI(BasicBlock* b){
     int phi = 0;
     BasicBlock::iterator i = b->begin();
     while (isa<PHINode>(i) ) { ++i; phi++; }
-    return bad;
+    return phi;
 }
 
 int64_t getInt(Value* v, bool & failed){
@@ -179,42 +190,84 @@ PHINode* getIndVar(Loop *L, BasicBlock* detacher) {
   if (PI == pred_end(H)) return nullptr;  // dead loop
   Incoming = *PI++;
   if (PI != pred_end(H)) return nullptr;  // multiple backedges?
-  if (contains(Incoming)) {
-    if (contains(Backedge)) return nullptr;
+  if (L->contains(Incoming)) {
+    if (L->contains(Backedge)) return nullptr;
     std::swap(Incoming, Backedge);
-  } else if (!contains(Backedge)) return nullptr;
+  } else if (!L->contains(Backedge)) return nullptr;
 
    // Loop over all of the PHI nodes, looking for a canonical indvar.
    PHINode* RPN = nullptr;
    Instruction* INCR = nullptr;
    Value* amt = nullptr;
    for (BasicBlock::iterator I = H->begin(); isa<PHINode>(I); ++I) {
-     PHINode *PN = cast<PHINode>(H->begin);
-     if( !PN->getType()->isIntegerType() ) continue;
+     PHINode *PN = cast<PHINode>(H->begin());
+     if( !PN->getType()->isIntegerTy() ) continue;
      if (auto Inc = dyn_cast<Instruction>(PN->getIncomingValueForBlock(Backedge)))
        if (Inc->getOpcode() == Instruction::Add && ( Inc->getOperand(0) == PN || Inc->getOperand(1) == PN ) ) {
          if( RPN != nullptr ) return nullptr;
+         if( Inc->getOperand(1) == PN ) ((BinaryOperator*)Inc)->swapOperands();
          if( Inc->getOperand(0) == PN ) amt = Inc->getOperand(1);
-         if( Inc->getOperand(1) == PN ) amt = Inc->getOperand(0);
           RPN = PN;
-          INCR = Inc
+          INCR = Inc;
        }
    }
-   IRBuilder<> builder(detacher->getFirstNonPHIOrDbgOrLifetime());
-   auto newV = builder.CreateAdd(builder.CreateMul(RPN, amt), PN->getIncomingValueForBlock(Incoming));
-   std::vector<Use*> uses( RPN->uses() );
-   for( auto U& : uses) {
+   IRBuilder<> builder(detacher->getTerminator()->getSuccessor(0)->getFirstNonPHIOrDbgOrLifetime());
+   auto mul  = builder.CreateMul(RPN, amt);
+   auto newV = builder.CreateAdd(mul, RPN->getIncomingValueForBlock(Incoming));
+/*   if( auto mI = dyn_cast<Instruction>(mul) )
+    if( auto aI = dyn_cast<Instruction>(newV) ) {
+      mI->moveBefore(aI);
+    }*/
+   std::vector<Use*> uses;
+   llvm::CmpInst* cmp = 0;
+   llvm::Value* opc = RPN;
+   for( auto& U : RPN->uses() ) uses.push_back(&U);
+   for( auto Up : uses ) {
+     auto&U = *Up;
      Instruction *I = cast<Instruction>(U.getUser());
-     if( I == Inc ) U->set( ConstantInt::get( RPN->getType(), 1 ) );
+     if( I == INCR ) INCR->setOperand(1, ConstantInt::get( RPN->getType(), 1 ) );
+     else if( I == mul ) continue;
+     else if( llvm::CmpInst* is = dyn_cast<CmpInst>(I) ) cmp = is;
      else {
-       U->set( newV );
+       U.set( newV );
      }
    }
+   if( cmp == 0 ){
+     for( auto& U : INCR->uses() ) {
+       Instruction *I = cast<Instruction>(U.getUser());
+       if( auto is = dyn_cast<CmpInst>(I) ) {
+         cmp = is;
+         opc = INCR;
+       }
+     }
+   }
+
+   if( auto is = cmp) {
+     unsigned idx = 0;
+     if( is->getOperand(idx) == opc) idx = 1-idx;
+     IRBuilder<> build(is);
+     auto nv = build.CreateSub( is->getOperand(idx), RPN->getIncomingValueForBlock(Incoming) );
+     auto nv2 = build.CreateSDiv( nv, amt );
+      is->setOperand(idx, nv2);
+   } else {
+     errs() << "CANT FIND CMP";
+     exit(1);
+   }
+
    RPN->setIncomingValue( RPN->getBasicBlockIndex(Incoming),  ConstantInt::get( RPN->getType(), 0 ) );
+
+//   RPN->getParent()->getParent()->dump();
+//   RPN->dump();
+//   mul->dump();
+//   newV->dump();
+//   INCR->dump();
+//   ((Instruction*)newV)->getParent()->dump();
+//   exit(1);
+
    return RPN;
-  }
 }
-bool Loop2Cilk::runOnLoop(Loop *L, LPPassManager &) {
+
+bool Loop2Cilk::runOnLoop(Loop *L, LPPassManager &LPM) {
   if (skipOptnoneFunction(L))
     return false;
 
@@ -223,7 +276,7 @@ bool Loop2Cilk::runOnLoop(Loop *L, LPPassManager &) {
   errs() << "</Loop>\n<------------------------------------------------------------------------------------------------>\n";
 
   if (!L->isLoopSimplifyForm()) {
-    errs() << "not simplify form\n";
+    //errs() << "not simplify form\n";
     simplifyLoop(L, nullptr, nullptr, nullptr, nullptr, false);
     //return false;
   }
@@ -231,30 +284,78 @@ bool Loop2Cilk::runOnLoop(Loop *L, LPPassManager &) {
   BasicBlock* Header = L->getHeader();
   assert(Header);
 
-  errs() << "<F>:\n******************************************************************************************************************************************";
-  Header->getParent()->dump();
-  errs() << "</F>:\n******************************************************************************************************************************************";
+  //errs() << "<F>:\n******************************************************************************************************************************************";
+  //Header->getParent()->dump();
+  //errs() << "</F>:\n******************************************************************************************************************************************";
 
   TerminatorInst* T = Header->getTerminator();
   if( !isa<BranchInst>(T) ) {
     BasicBlock *Preheader = L->getLoopPreheader();
     if( isa<BranchInst>(Preheader->getTerminator()) ) { T = Preheader->getTerminator(); Header = Preheader; }
-    else { errs() << "not branch inst" << "\n";
-    T->dump();
+    else {
+      errs() << "not branch inst" << "\n";
+      T->dump();
     return false;
   }
   }
   BranchInst* B = (BranchInst*)T;
   BasicBlock *detacher, *syncer;
   if( B->getNumSuccessors() != 2 ) {
-    BasicBlock* endL = L->getExitBlock();
+    SmallVector< BasicBlock *, 32> exitBlocks;
+    L->getExitBlocks(exitBlocks);
+    BasicBlock* endL = 0;
+    SmallPtrSet<BasicBlock *, 32> inLoop(exitBlocks.begin(), exitBlocks.end());
+    if( inLoop.size() >= 2) {
+      for( auto& a : exitBlocks ) {
+        SmallPtrSet<BasicBlock *, 32> reachable;
+        std::vector<BasicBlock*> Q;
+        Q.push_back(a);
+        bool valid = true;
+        while(!Q.empty() && valid){
+          auto m = Q.back();
+          Q.pop_back();
+          if( isa<UnreachableInst>(a->getTerminator()) ) {
+            //errs() << "re erasing: " << m->getName() << "\n";
+            reachable.insert(m);
+          }
+          else if( auto b = dyn_cast<BranchInst>(a->getTerminator()) ) {
+            bool bad = false;
+            for( int i=0; i<b->getNumSuccessors(); i++ ) {
+               if( L->contains( b->getSuccessor(i) ) || std::find(exitBlocks.begin(), exitBlocks.end(), b->getSuccessor(i) ) != exitBlocks.end() ) {
+
+               } else{
+                bad =  true;
+                break;
+              }
+            }
+            if( bad ) valid = false;
+            else {
+              reachable.insert(m);
+            }
+          }
+          else valid = false;
+
+        }
+        if( valid ) {
+          for( auto b : reachable){
+            //errs() << "erasing: " << b->getName() << "\n";
+            //inLoop.erase(b);
+          }
+        }
+      }
+    }
+    errs() << "<blocks>\n";
+    for(auto a : inLoop) a->dump();
+    errs() << "</blocks>\n";
+    if( inLoop.size() == 1 ) endL = * inLoop.begin();
+    auto oendL = endL;
     while( endL && !isa<SyncInst>( endL->getTerminator() ) ) {
-      errs() << "THING: " << endL->size() << " " << isa<BranchInst>(endL->getTerminator()) << " " << (endL->getTerminator()->getNumSuccessors() ) << "\n";
-      endL->dump();
+      //errs() << "THING: " << endL->size() << " " << isa<BranchInst>(endL->getTerminator()) << " " << (endL->getTerminator()->getNumSuccessors() ) << "\n";
+      //endL->dump();
       if( getNonPhiSize(endL) == 1 && isa<BranchInst>(endL->getTerminator()) && endL->getTerminator()->getNumSuccessors() == 1 ) {
         //TODO merging
-        endL->dump();
-        endL->getTerminator()->getSuccessor(0)->dump();
+        //endL->dump();
+        //endL->getTerminator()->getSuccessor(0)->dump();
         auto temp = endL->getTerminator()->getSuccessor(0);
         //bool success = TryToSimplifyUncondBranchFromEmptyBlock(endL);
 //        bool success = MergeBlockIntoPredecessor(endL->getTerminator()->getSuccessor(0));
@@ -273,12 +374,14 @@ bool Loop2Cilk::runOnLoop(Loop *L, LPPassManager &) {
       syncer = endL;
       detacher = B->getSuccessor(0);
     } else {
-      errs() << "L\n";
-      Header->getParent()->dump();
+      //errs() << "L\n";
+      //Header->getParent()->dump();
       errs() << "nsucc != 2" << "\n";
       if( endL ) endL->dump();
       else errs() << "no endl" << "\n";
+      if( oendL ) oendL->dump();
       T->dump();
+      T->getParent()->getParent()->dump();
       return false;
     }
 
@@ -294,8 +397,8 @@ bool Loop2Cilk::runOnLoop(Loop *L, LPPassManager &) {
       syncer = temp;
     } else if( !isa<SyncInst>(syncer->getTerminator()) ) {
       errs() << "none sync" << "\n";
-      syncer->dump();
-      detacher->dump();
+      //syncer->dump();
+      //detacher->dump();
       return false;
     }
 
@@ -304,11 +407,31 @@ bool Loop2Cilk::runOnLoop(Loop *L, LPPassManager &) {
       errs() << "no unique exit block\n";
       return false;
     }
+    if( auto BI = dyn_cast<BranchInst>(done->getTerminator()) ) {
+      if( BI->getNumSuccessors() == 2 ) {
+        if( BI->getSuccessor(0) == detacher && BI->getSuccessor(1) == syncer )
+          done = syncer;
+        if( BI->getSuccessor(1) == detacher && BI->getSuccessor(0) == syncer )
+          done = syncer;
+      }
+    }
+    if( getUniquePred(done) == syncer ){
+      //errs() << "has unique pred\n";
+      auto term = done->getTerminator();
+      bool good = true;
+      for(int i=0; i<term->getNumSuccessors(); i++)
+        if( L->contains( term->getSuccessor(i)) ){
+          //errs() << "loop contains succ " << term->getSuccessor(i)->getName() << "\n";
+          good = false;
+          break;
+        }
+      if( good ) done = syncer;
+    }
     if( done != syncer ) {
       errs() << "exit != sync\n";
-      done->dump();
-      syncer->dump();
-      syncer->getParent()->dump();
+      //done->dump();
+      //syncer->dump();
+      //syncer->getParent()->dump();
       return false;
     }
 
@@ -345,7 +468,7 @@ bool Loop2Cilk::runOnLoop(Loop *L, LPPassManager &) {
   //ReplaceInstWithInst( var, oldvar );
   Value* adder = 0;
   for( unsigned i=0; i<oldvar->getNumIncomingValues(); i++){
-    if( oldvar->getIncomingBlock(i) == Header ){
+    if( !L->contains(oldvar->getIncomingBlock(i) ) || oldvar->getIncomingBlock(i) == Header ){
       if( ConstantInt* ci = dyn_cast<ConstantInt>(oldvar->getIncomingValue(i))) {
         if( !ci->isZero() ) {
           errs() << "nonzero start";
@@ -372,7 +495,7 @@ bool Loop2Cilk::runOnLoop(Loop *L, LPPassManager &) {
           }
         } else {
           errs() << "non-constant inc\n";
-          oldvar->getIncomingValue(i)->dump();
+          //oldvar->getIncomingValue(i)->dump();
           return false;
         }
         adder = bo;
@@ -406,7 +529,9 @@ bool Loop2Cilk::runOnLoop(Loop *L, LPPassManager &) {
 
   for (auto it = pred_begin(syncer), et = pred_end(syncer); it != et; ++it) {
     BasicBlock* pred = *it;
-    if( pred == Header ) break;
+    //errs() << "checking " << pred->getName() << " for cmp\n";
+    if( pred->getTerminator()->getNumSuccessors() == 1 ) continue;
+
     if( cmp != 0 ){
       errs() << "comparisoin already set\n";
       return false;
@@ -442,7 +567,7 @@ bool Loop2Cilk::runOnLoop(Loop *L, LPPassManager &) {
           P = is->getSwappedPredicate();
         else {
           errs() << "none are \n";
-          is->dump();
+          //is->dump();
           goto oldvarB;
         }
       }
@@ -508,8 +633,41 @@ bool Loop2Cilk::runOnLoop(Loop *L, LPPassManager &) {
   }
 
   endT:
+  if( cmp == 0 ) {
+    errs() << "cannot find cmp\n";
+    return false;
+  }
   llvm::CallInst* call = 0;
   llvm::Value*    closure = 0;
+
+  std::vector<Value*> toMove;
+  toMove.push_back(cmp);
+  Instruction* pi = detacher->getTerminator();
+  {
+  DominatorTree &DT = getAnalysis<DominatorTreeWrapperPass>().getDomTree();
+  DT.recalculate(*L->getHeader()->getParent());
+
+  while( !toMove.empty() ) {
+    auto b = toMove.back();
+    toMove.pop_back();
+    b->dump();
+    if( Instruction* inst = dyn_cast<Instruction>(b) ) {
+      for (User::op_iterator i = inst->op_begin(), e = inst->op_end(); i != e; ++i) {
+        Value *v = *i;
+        toMove.push_back(v);
+      }
+      if( !DT.dominates(inst, detacher) ) {
+        inst->moveBefore(pi);
+        pi = inst;
+      }
+    }
+  }
+  }
+  //errs() << "<cmp>\n";
+  //cmp->dump();
+  //Header->getParent()->dump();
+  //detacher->dump();
+  //errs() << "</cmp>\n";
 
   Function* extracted = llvm::cilk::extractDetachBodyToFunction( *det, &call, /*closure*/ oldvar, &closure );
 
@@ -517,14 +675,12 @@ bool Loop2Cilk::runOnLoop(Loop *L, LPPassManager &) {
     errs() << "not extracted\n";
     return false;
   }
+  extracted->dump();
+
 	Module* M = extracted->getParent();
   auto a1 = det->getSuccessor(0);
   auto a2 = det->getSuccessor(1);
-  errs() << "<PRE DEL\n";
-  det->getParent()->getParent()->dump();
-  a1->dump();
-  a2->dump();
-  errs() << "</PRE DEL\n";
+
   oldvar->removeIncomingValue( 1U );
   oldvar->removeIncomingValue( 0U );
 
@@ -535,9 +691,18 @@ bool Loop2Cilk::runOnLoop(Loop *L, LPPassManager &) {
     a1 = a2;
     a2 = a1;
   }
-  DeleteDeadBlock(a1);
-  if( a1 != a2 ) DeleteDeadBlock(a2);
+  LoopInfo &LI = getAnalysis<LoopInfoWrapperPass>().getLoopInfo();
+  auto parentL = L->getParentLoop();
+  if( parentL ) parentL->removeChildLoop( std::find(parentL->getSubLoops().begin(), parentL->getSubLoops().end(), L) );
+  LI.removeBlock(a1);
+  if( parentL && parentL->contains(a1) ) parentL->removeBlockFromLoop(a1);
 
+  DeleteDeadBlock(a1);
+  if( a1 != a2 ) {
+    LI.removeBlock(a2);
+    if( parentL && parentL->contains(a2) ) parentL->removeBlockFromLoop(a2);
+    DeleteDeadBlock(a2);
+  }
   assert( Header->getTerminator()->use_empty() );
   Header->getTerminator()->eraseFromParent();
   IRBuilder<> b2(Header);
@@ -558,19 +723,36 @@ bool Loop2Cilk::runOnLoop(Loop *L, LPPassManager &) {
   assert( syncer->size() == 1 );
   b.CreateBr( syncer->getTerminator()->getSuccessor(0) );
 
-  errs() << "<M>:\n*##########################################3*****************************************************************************************************************************************";
-  Header->getParent()->dump();
-  errs() << "</M>:\n*############################################################33*****************************************************************************************************************************************";
-  M->dump();
+  L->invalidate();
+  //errs() << "<M>:\n*##########################################3*****************************************************************************************************************************************";
+  //Header->getParent()->dump();
+  //errs() << "</M>:\n*############################################################33*****************************************************************************************************************************************";
+  //M->dump();
 
   syncer->replaceAllUsesWith( syncer->getTerminator()->getSuccessor(0) );
 
   //TODO assumes no other detaches were sync'd by this
   syncer->eraseFromParent();
-  Header->getParent()->dump();
+  //Header->getParent()->dump();
 
-  LoopInfo &loopInfo = getAnalysis<LoopInfoWrapperPass>().getLoopInfo();
-  loopInfo.markAsRemoved(L);
   errs() << "TRANSFORMED LOOP!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n";
+
+  DominatorTree &DT = getAnalysis<DominatorTreeWrapperPass>().getDomTree();
+  DT.recalculate(*Header->getParent());
+  std::vector<BasicBlock*> blocks;
+  for(auto& b : L->blocks()) blocks.push_back(b);
+  for(auto& b : blocks) {
+    LI.removeBlock(b);
+  }
+  for(auto& b : blocks) {
+    if( parentL && parentL->contains(b) ) parentL->removeBlockFromLoop(b);
+    if( L->contains(b) ) L->removeBlockFromLoop(b);
+  }
+  //LI.markAsRemoved(L);
+  LI.analyze(DT);
+
+  //LI.verify();
+
+  //LPM.verifyAnalysis();
   return true;
 }
