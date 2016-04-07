@@ -721,21 +721,22 @@ bool Loop2Cilk::runOnLoop(Loop *L, LPPassManager &LPM) {
   b.CreateCall(F, args );
 
   assert( syncer->size() == 1 );
-  b.CreateBr( syncer->getTerminator()->getSuccessor(0) );
+  b.CreateBr( syncer );
 
   L->invalidate();
   //errs() << "<M>:\n*##########################################3*****************************************************************************************************************************************";
   //Header->getParent()->dump();
   //errs() << "</M>:\n*############################################################33*****************************************************************************************************************************************";
   //M->dump();
+  auto term = syncer->getTerminator()->getSuccessor(0);
+  syncer->getTerminator()->eraseFromParent();
+  IRBuilder<> sbuild(syncer);
+  sbuild.CreateBr( term );
 
-  syncer->replaceAllUsesWith( syncer->getTerminator()->getSuccessor(0) );
-
-  //TODO assumes no other detaches were sync'd by this
-  syncer->eraseFromParent();
   //Header->getParent()->dump();
 
   errs() << "TRANSFORMED LOOP!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n";
+  //M->dump();
 
   DominatorTree &DT = getAnalysis<DominatorTreeWrapperPass>().getDomTree();
   DT.recalculate(*Header->getParent());
