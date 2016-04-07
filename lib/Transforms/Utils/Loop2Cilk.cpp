@@ -134,17 +134,6 @@ Value* addOne( Value* V ) {
   return nullptr;
 }
 
-BasicBlock* getUniquePred(BasicBlock* syncer) {
-  BasicBlock* pred = 0;
-  size_t count = 0;
-  for (auto it = pred_begin(syncer), et = pred_end(syncer); it != et; ++it) {
-    count++;
-    pred = *it;
-  }
-  if( count != 1 ) pred = 0;
-  return pred;
-}
-
 Value* uncast( Value* V ){
   if( auto* in = dyn_cast<TruncInst>(V) ) {
     return uncast(in->getOperand(0));
@@ -156,13 +145,6 @@ Value* uncast( Value* V ){
     return uncast(in->getOperand(0));
   }
   return V;
-}
-
-size_t getNonPhiSize(BasicBlock* b){
-    int bad = 0;
-    BasicBlock::iterator i = b->begin();
-    while (isa<PHINode>(i) || isa<DbgInfoIntrinsic>(i)) { ++i; bad++; }
-    return b->size() - bad;
 }
 
 size_t countPHI(BasicBlock* b){

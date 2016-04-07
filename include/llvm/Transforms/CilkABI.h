@@ -38,6 +38,25 @@
 #include "llvm/Support/Debug.h"
 #include <iostream>
 
+
+
+static inline llvm::BasicBlock* getUniquePred(llvm::BasicBlock* syncer) {
+  llvm::BasicBlock* pred = 0;
+  size_t count = 0;
+  for (auto it = llvm::pred_begin(syncer), et = llvm::pred_end(syncer); it != et; ++it) {
+    count++;
+    pred = *it;
+  }
+  if( count != 1 ) pred = 0;
+  return pred;
+}
+static inline  size_t getNonPhiSize(llvm::BasicBlock* b){
+    int bad = 0;
+    llvm::BasicBlock::iterator i = b->begin();
+    while (llvm::isa<llvm::PHINode>(i) ) { ++i; bad++; }
+    return b->size() - bad;
+}
+
 namespace {
 
 typedef void *__CILK_JUMP_BUFFER[5];
@@ -1494,6 +1513,19 @@ static inline Function* extractDetachBodyToFunction(DetachInst& detach,
   if( closure ) {
     SetVector<Value*> Inputs, Outputs;
     extractor.findInputsOutputs(Inputs, Outputs);
+    if( Outputs.size() != 0 ){
+       for( auto& b : blocks ) b->dump();
+       for( auto& a : Outputs ) {
+        assert( dyn_cast<Instruction>(a) );
+        ((Instruction*)a)->getParent()->getParent()->dump();
+        errs() << "<BAD>\n";
+	a->dump();
+        for( auto& b : ((Instruction*)a)->uses() )
+          b.getUser()->dump();
+        
+        errs() << "</BAD>\n";
+       }
+    }
     assert( Outputs.size() == 0 );
     assert( Inputs.size() == 3 );
     assert( Inputs[1] == rstart );
