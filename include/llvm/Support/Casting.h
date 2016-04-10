@@ -295,6 +295,7 @@ dyn_cast(Y &Val) {
 template <class X, class Y>
 LLVM_ATTRIBUTE_UNUSED_RESULT inline typename cast_retty<X, Y *>::ret_type
 dyn_cast(Y *Val) {
+  assert( Val && "dyn_cast/isa on nullptr" );
   return isa<X>(Val) ? cast<X>(Val) : nullptr;
 }
 

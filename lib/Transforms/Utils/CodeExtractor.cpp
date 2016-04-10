@@ -56,7 +56,8 @@ static bool isBlockValidForExtraction(const BasicBlock &BB) {
 
   // Don't hoist code containing allocas, invokes, or vastarts.
   for (BasicBlock::const_iterator I = BB.begin(), E = BB.end(); I != E; ++I) {
-    if (isa<AllocaInst>(I) || isa<InvokeInst>(I))
+    if (isa<InvokeInst>(I))
+//    if (isa<AllocaInst>(I) || isa<InvokeInst>(I))
       return false;
     if (const CallInst *CI = dyn_cast<CallInst>(I))
       if (const Function *F = CI->getCalledFunction())
@@ -82,6 +83,8 @@ static SetVector<BasicBlock *> buildExtractionBlockSet(IteratorT BBBegin,
       llvm_unreachable("Repeated basic blocks in extraction input");
 
     if (!isBlockValidForExtraction(**I)) {
+      //errs() << "BAD BLOCK\n";
+      //(*I)->dump();
       Result.clear();
       return Result;
     }
@@ -274,7 +277,7 @@ void CodeExtractor::splitReturnBlocks() {
         DomTreeNode *OldNode = DT->getNode(*I);
         SmallVector<DomTreeNode*, 8> Children;
         for (DomTreeNode::iterator DI = OldNode->begin(), DE = OldNode->end();
-             DI != DE; ++DI) 
+             DI != DE; ++DI)
           Children.push_back(*DI);
 
         DomTreeNode *NewNode = DT->addNewBlock(New, *I);
@@ -350,7 +353,7 @@ Function *CodeExtractor::constructFunction(const ValueSet &inputs,
   // If the old function is no-throw, so is the new one.
   if (oldFunction->doesNotThrow())
     newFunction->setDoesNotThrow();
-  
+
   newFunction->getBasicBlockList().push_back(newRootNode);
 
   // Create an iterator to name all of the arguments we inserted.
@@ -425,7 +428,7 @@ emitCallAndSwitchStatement(Function *newFunction, BasicBlock *codeReplacer,
   // Emit a call to the new function, passing in: *pointer to struct (if
   // aggregating parameters), or plan inputs and allocated memory for outputs
   std::vector<Value*> params, StructValues, ReloadOutputs, Reloads;
-  
+
   LLVMContext &Context = newFunction->getContext();
 
   // Add inputs as params, or to be filled into the struct
@@ -592,12 +595,12 @@ emitCallAndSwitchStatement(Function *newFunction, BasicBlock *codeReplacer,
 
             if (DT) {
               DominatesDef = DT->dominates(DefBlock, OldTarget);
-              
+
               // If the output value is used by a phi in the target block,
               // then we need to test for dominance of the phi's predecessor
               // instead.  Unfortunately, this a little complicated since we
               // have already rewritten uses of the value to uses of the reload.
-              BasicBlock* pred = FindPhiPredForUseInBlock(Reloads[out], 
+              BasicBlock* pred = FindPhiPredForUseInBlock(Reloads[out],
                                                           OldTarget);
               if (pred && DT && DT->dominates(DefBlock, pred))
                 DominatesDef = true;
@@ -644,7 +647,7 @@ emitCallAndSwitchStatement(Function *newFunction, BasicBlock *codeReplacer,
     } else {
       // Otherwise we must have code extracted an unwind or something, just
       // return whatever we want.
-      ReturnInst::Create(Context, 
+      ReturnInst::Create(Context,
                          Constant::getNullValue(OldFnRetTy), TheSwitch);
     }
 
@@ -707,13 +710,13 @@ Function *CodeExtractor::extractCodeRegion() {
   Function *oldFunction = header->getParent();
 
   // This takes place of the original loop
-  BasicBlock *codeReplacer = BasicBlock::Create(header->getContext(), 
+  BasicBlock *codeReplacer = BasicBlock::Create(header->getContext(),
                                                 "codeRepl", oldFunction,
                                                 header);
 
   // The new function needs a root node because other nodes can branch to the
   // head of the region, but the entry node of a function cannot have preds.
-  BasicBlock *newFuncRoot = BasicBlock::Create(header->getContext(), 
+  BasicBlock *newFuncRoot = BasicBlock::Create(header->getContext(),
                                                "newFuncRoot");
   newFuncRoot->getInstList().push_back(BranchInst::Create(header));
 
@@ -775,7 +778,7 @@ Function *CodeExtractor::extractCodeRegion() {
   //  cerr << "OLD FUNCTION: " << *oldFunction;
   //  verifyFunction(*oldFunction);
 
-  DEBUG(if (verifyFunction(*newFunction)) 
+  DEBUG(if (verifyFunction(*newFunction))
         report_fatal_error("verifyFunction failed!"));
   return newFunction;
 }

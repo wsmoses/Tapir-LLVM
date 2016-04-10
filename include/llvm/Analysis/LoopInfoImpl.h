@@ -63,13 +63,14 @@ template<class BlockT, class LoopT>
 void LoopBase<BlockT, LoopT>::
 getExitBlocks(SmallVectorImpl<BlockT*> &ExitBlocks) const {
   typedef GraphTraits<BlockT*> BlockTraits;
-  for (block_iterator BI = block_begin(), BE = block_end(); BI != BE; ++BI)
+  for (block_iterator BI = block_begin(), BE = block_end(); BI != BE; ++BI) {
     for (typename BlockTraits::ChildIteratorType I =
            BlockTraits::child_begin(*BI), E = BlockTraits::child_end(*BI);
          I != E; ++I)
       if (!contains(*I))
         // Not in current loop? It must be an exit block.
         ExitBlocks.push_back(*I);
+  }
 }
 
 /// getExitBlock - If getExitBlocks would return exactly one block,
@@ -236,7 +237,7 @@ void LoopBase<BlockT, LoopT>::verifyLoop() const {
 
   // Keep track of the number of BBs visited.
   unsigned NumVisited = 0;
-
+  std::vector<BlockT*> visited;
   // Check the individual blocks.
   for ( ; BI != BE; ++BI) {
     BlockT *BB = *BI;
@@ -277,11 +278,20 @@ void LoopBase<BlockT, LoopT>::verifyLoop() const {
     }
     if( !HasInsideLoopPreds ) BB->dump();
     assert(HasInsideLoopPreds && "Loop block has no in-loop predecessors!");
+    if( !HasInsideLoopSuccs ) BB->dump();
     assert(HasInsideLoopSuccs && "Loop block has no in-loop successors!");
     assert(BB != getHeader()->getParent()->begin() &&
            "Loop contains function entry block!");
-
+    visited.push_back(BB);
     NumVisited++;
+  }
+
+  if( NumVisited != getNumBlocks() ) {
+    errs()  << "###########################################################################\n";
+    for( auto& a : blocks() ) a->dump();
+    errs()  << "--------------------------------------------------------------------------\n";
+    for( auto& a : visited ) a->dump();
+    errs() << NumVisited << " " << getNumBlocks() << " " << visited.size();
   }
 
   assert(NumVisited == getNumBlocks() && "Unreachable block in loop");

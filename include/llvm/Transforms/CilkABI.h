@@ -1245,9 +1245,9 @@ static inline llvm::Value* GetOrInitStackFrame(Function& F, bool fast = true, bo
       rets.emplace_back( inst );
     } else continue;
   }
-    
+
   assert( rets.size() > 0 );
-    
+
   Instruction* retInst = nullptr;
   if( rets.size() > 1 ) {
     //TODO check this
@@ -1264,7 +1264,7 @@ static inline llvm::Value* GetOrInitStackFrame(Function& F, bool fast = true, bo
   } else {
     retInst = rets[0];
   }
-    
+
   assert( retInst );
   CallInst::Create( GetCilkParentEpilogue( *F.getParent(), instrument ), args, "", retInst );
   return alloc;
@@ -1369,7 +1369,7 @@ static inline Function* extractDetachBodyToFunction(DetachInst& detach,
     if (!functionPieces.insert(BB).second)
       continue;
 
-    TerminatorInst* term = BB->getTerminator();      
+    TerminatorInst* term = BB->getTerminator();
     if( term == nullptr ) return nullptr;
     if( ReattachInst* inst = llvm::dyn_cast<ReattachInst>(term) ) {
       //only analyze reattaches going to the same continuation
@@ -1392,7 +1392,7 @@ static inline Function* extractDetachBodyToFunction(DetachInst& detach,
       for( unsigned idx = 0, max = inst->getNumSuccessors(); idx < max; idx++ )
         todo.emplace_back( inst->getSuccessor(idx) );
       continue;
-    } else if( auto inst = llvm::dyn_cast<UnreachableInst>(term) ) { 
+    } else if( auto inst = llvm::dyn_cast<UnreachableInst>(term) ) {
       continue;
     } else {
       term->dump();
@@ -1506,7 +1506,11 @@ static inline Function* extractDetachBodyToFunction(DetachInst& detach,
   //detach.getParent()->getParent()->dump();
   //for( auto & b : blocks)
   //  b->dump();
+  //detach.getParent()->getParent()->dump();
   CodeExtractor extractor( ArrayRef<BasicBlock*>( blocks ), /*dominator tree -- todo? */ nullptr );
+  if( !extractor.isEligible() ) {
+    for(auto& a : blocks)a->dump();
+  }
   assert( extractor.isEligible() && "Code not able to be extracted!" );
 
 
@@ -1522,7 +1526,7 @@ static inline Function* extractDetachBodyToFunction(DetachInst& detach,
 	a->dump();
         for( auto& b : ((Instruction*)a)->uses() )
           b.getUser()->dump();
-        
+
         errs() << "</BAD>\n";
        }
     }
@@ -1633,7 +1637,7 @@ static inline bool makeFunctionDetachable( Function& extracted, bool instrument 
   assert( ret && "No return from extract function" );
   //TODO alow to work for functions with multiple returns
 
-  /* 
+  /*
      __cilkrts_pop_frame(&sf);
      if (sf->flags)
      __cilkrts_leave_frame(&sf);

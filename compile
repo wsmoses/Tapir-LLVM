@@ -10,7 +10,7 @@ def call(x):
 
 dir = os.path.dirname(os.path.realpath(__file__))
 cmd = dir+"/clang"
-if __file__[-2:]=="++": cmd+="++"
+if __file__[-2:]=="++": cmd+="++"; sys.argv += ["-std=c++11"]
 opt = dir+"/opt"
 llc = dir+"/llc"
 output = "a.out"
@@ -28,8 +28,10 @@ for i, a in enumerate(sys.argv):
     output = a
     sys.argv[i] = llir
     continue
-  elif a == "-slow": fast = False; continue
   elif a == "-fast": fast = True; continue
+  elif a == "-slow": fast = False; continue
+  elif len(a)>2 and a[-2:] == '.o':
+    linking = True
   elif len(a)>2:
     no = True
     if a[:2]=="-O":
@@ -41,8 +43,6 @@ for i, a in enumerate(sys.argv):
     if no: continue
     else: no = False
   if a[0]  == "-" and a != "-o": flags += [a]
-  elif len(a)>2 and a[-2:] == '.o':
-    linking = True
 
 if "-lcilkrts" not in flags: flags += ["-lcilkrts"]
 if "-fno-exceptions" not in flags: flags += ["-fno-exceptions"]
@@ -56,15 +56,20 @@ if linking:
 sys.argv[0] = cmd
 args = sys.argv + ["-S"]
 if optl == -1: args += ["-emit-llvm"]
-args = [a for a in args if a != "-slow" and a != "-fast"]
+args = [a for a in args if a != "-slow" and a != "-fast"] + ["-O0"]
 call(args)
 
 if fast:
   preopt = "preopt.ll"
-  call([opt, llir, "-O3", "-S", "-o", preopt])
+  opts = ["-O3"]
+  call([opt, llir, "-S", "-o", preopt] + opts)
   llir = preopt
 
-ivs = "l2c.ll"
+m2r = "m2r.ll"
+call([opt, llir, "-mem2reg", "-S", "-o", m2r])
+llir = m2r
+
+ivs = "idv.ll"
 call([opt, llir, "-indvars", "-S", "-o", ivs])
 llir = ivs
 
