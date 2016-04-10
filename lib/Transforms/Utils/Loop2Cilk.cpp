@@ -291,6 +291,7 @@ bool Loop2Cilk::runOnLoop(Loop *L, LPPassManager &LPM) {
   assert(Header);
 
   auto parentL = L->getParentLoop();
+  LoopInfo &LI = getAnalysis<LoopInfoWrapperPass>().getLoopInfo();
 
   //errs() << "<F>:\n******************************************************************************************************************************************";
   //Header->getParent()->dump();
@@ -528,6 +529,9 @@ bool Loop2Cilk::runOnLoop(Loop *L, LPPassManager &LPM) {
       if( getNonPhiSize(endL) == 1 && isa<BranchInst>(endL->getTerminator()) && endL->getTerminator()->getNumSuccessors() == 1 ) {
         bool success = TryToSimplifyUncondBranchFromEmptyBlock(endL);
         if(success) {
+          removeFromAll(parentL, endL);
+          LI.changeLoopFor(endL, nullptr);
+          LI.removeBlock(endL);
           simplified = false;
           break;
         }
@@ -691,7 +695,6 @@ bool Loop2Cilk::runOnLoop(Loop *L, LPPassManager &LPM) {
     return false;
   }
 
-  LoopInfo &LI = getAnalysis<LoopInfoWrapperPass>().getLoopInfo();
   {
     for( BasicBlock& b : extracted->getBasicBlockList() )
       if( true ) {
@@ -728,6 +731,7 @@ bool Loop2Cilk::runOnLoop(Loop *L, LPPassManager &LPM) {
     removeFromAll(parentL, a2);
     DeleteDeadBlock(a2);
   }
+
   assert( Header->getTerminator()->use_empty() );
   Header->getTerminator()->eraseFromParent();
   IRBuilder<> b2(Header);
@@ -785,15 +789,8 @@ bool Loop2Cilk::runOnLoop(Loop *L, LPPassManager &LPM) {
   //LI.markAsRemoved(L);
 
   //L->verifyLoop();
-  Header->getParent()->dump();
-  if( parentL ) {
-    for(auto& b : parentL->blocks() ) {
-      errs() << (void*)b << "\n";
-      errs() << b->getName() << "\n";
-      b->dump();
-    }
-    parentL->verifyLoop();
-  }
+  //Header->getParent()->dump();
+  if( parentL ) parentL->verifyLoop();
   //LI.verify();
 
   //LPM.verifyAnalysis();
