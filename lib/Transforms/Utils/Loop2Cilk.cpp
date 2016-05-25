@@ -249,6 +249,7 @@ PHINode* getIndVar(Loop *L, BasicBlock* detacher) {
    if( auto is = cmp) {
      unsigned idx = 0;
      if( is->getOperand(idx) == opc) idx = 1-idx;
+     errs() << "CMP: (idx=" << idx << "\n"; is->dump();
      IRBuilder<> build(is);
      auto nv = build.CreateSub( is->getOperand(idx), RPN->getIncomingValueForBlock(Incoming) );
      auto nv2 = build.CreateSDiv( nv, amt );
@@ -550,10 +551,12 @@ bool Loop2Cilk::runOnLoop(Loop *L, LPPassManager &LPM) {
   for (auto it = pred_begin(syncer), et = pred_end(syncer); it != et; ++it) {
     BasicBlock* pred = *it;
     //errs() << "checking " << pred->getName() << " for cmp\n";
-    if( pred->getTerminator()->getNumSuccessors() == 1 ) continue;
+    if( !L->contains(pred) ) continue;
 
     if( cmp != 0 ){
-      errs() << "comparisoin already set\n";
+      errs() << "comp already set\n";
+      errs() << "prev cmp:\n"; cmp->dump();
+      errs() << "new cmp:\n"; pred->dump();
       return false;
     }
     BranchInst* b = dyn_cast<BranchInst>(pred->getTerminator());
@@ -586,7 +589,7 @@ bool Loop2Cilk::runOnLoop(Loop *L, LPPassManager &LPM) {
         if( uncast(is->getOperand(1)) == adder )
           P = is->getSwappedPredicate();
         else {
-          errs() << "none are \n";
+          errs() << "none are 0\n";
           //is->dump();
           goto oldvarB;
         }
@@ -623,7 +626,7 @@ bool Loop2Cilk::runOnLoop(Loop *L, LPPassManager &LPM) {
       if( uncast(is->getOperand(1)) == oldvar )
         P = is->getSwappedPredicate();
       else {
-        errs() << "none are \n";
+        errs() << "none are 1\n";
         is->dump();
         return false;
       }
