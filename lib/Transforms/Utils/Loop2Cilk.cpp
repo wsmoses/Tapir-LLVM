@@ -211,6 +211,12 @@ PHINode* getIndVar(Loop *L, BasicBlock* detacher) {
    if( isZero(RPN->getIncomingValueForBlock(Incoming) )) newV = mul;
    else newV = builder.CreateAdd(mul, RPN->getIncomingValueForBlock(Incoming) );
 
+
+   errs() << "RPN  :\n"; RPN->dump();
+   errs() << "MUL  :\n"; mul->dump();
+   errs() << "NEWV :\n"; newV->dump();
+   errs() << "NEWVP:\n"; ((Instruction*)newV)->getParent()->dump();
+
 /*   if( auto mI = dyn_cast<Instruction>(mul) )
     if( auto aI = dyn_cast<Instruction>(newV) ) {
       mI->moveBefore(aI);
@@ -224,6 +230,7 @@ PHINode* getIndVar(Loop *L, BasicBlock* detacher) {
      Instruction *I = cast<Instruction>(U.getUser());
      if( I == INCR ) INCR->setOperand(1, ConstantInt::get( RPN->getType(), 1 ) );
      else if( I == mul && mul != RPN ) continue;
+     else if( I == newV && newV != RPN ) continue;
      else if( llvm::CmpInst* is = dyn_cast<CmpInst>(I) ) cmp = is;
      else {
        U.set( newV );
@@ -253,12 +260,13 @@ PHINode* getIndVar(Loop *L, BasicBlock* detacher) {
 
    RPN->setIncomingValue( RPN->getBasicBlockIndex(Incoming),  ConstantInt::get( RPN->getType(), 0 ) );
 
-//   RPN->getParent()->getParent()->dump();
-//   RPN->dump();
-//   mul->dump();
-//   newV->dump();
-//   INCR->dump();
-//   ((Instruction*)newV)->getParent()->dump();
+
+   RPN->getParent()->getParent()->dump();
+   RPN->dump();
+   mul->dump();
+   newV->dump();
+   INCR->dump();
+   ((Instruction*)newV)->getParent()->dump();
 //   exit(1);
 
    return RPN;
