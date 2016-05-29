@@ -6,7 +6,10 @@ from subprocess import call as call2
 def call(x):
   print x
   ev = call2(x)
-  if ev != 0: sys.exit(ev)
+  if ev != 0:
+    print ' '.join(x)
+    print "Failed with error %d" % ev
+    sys.exit(ev)
 
 dir = os.path.dirname(os.path.realpath(__file__))
 cmd = dir+"/clang"
@@ -14,11 +17,12 @@ if __file__[-2:]=="++": cmd+="++"; sys.argv += ["-std=c++11"]
 opt = dir+"/opt"
 llc = dir+"/llc"
 output = "a.out"
-llir   = "temp.ll"
+llir   = output+"t.ll"
 fast   = True
 
 optl = -1
 flags = []
+lflags = []
 original = sys.argv[:]
 original[0] = cmd
 linking = False
@@ -29,6 +33,7 @@ for i, a in enumerate(sys.argv):
   if i==0: continue
   if i > 0 and sys.argv[i-1]=="-o":
     output = a
+    llir   = output+"t.ll"
     outputed = True
     sys.argv[i] = llir
     continue
@@ -42,12 +47,13 @@ for i, a in enumerate(sys.argv):
       sys.argv[i] = "-emit-llvm"
       optl = i
     elif a[:2] == "-I": flags += [a]
-    elif a[:2] == "-L": flags += [a]
-    elif a[:2] == "-l": flags += [a]
+    elif a[:2] == "-L": lflags += [a]
+    elif a[:2] == "-l": lflags += [a]
     if no: continue
     else: no = False
   if a[0]  == "-" and a != "-o": flags += [a]
 
+flags += lflags
 if "-lcilkrts" not in flags: flags += ["-lcilkrts"]
 if "-fno-exceptions" not in flags: flags += ["-fno-exceptions"]
 
@@ -60,46 +66,50 @@ if linking:
 sys.argv[0] = cmd
 args = sys.argv + ["-S"]
 if optl == -1: args += ["-emit-llvm"]
-args = [a for a in args if a != "-slow" and a != "-fast"] + ["-O0"]
+args = [a for a in args if a != "-slow" and a != "-fast" and a not in lflags] + ["-O0"]
 if not outputed: args += ["-o", llir]
- 
+
 call(args)
 
 if fast and False:
-  preopt = "preopt.ll"
+  preopt = output+"preopt.ll"
+  #opts = "-tti -no-aa -tbaa -scoped-noalias -assumption-cache-tracker -targetlibinfo -basicaa -verify -simplifycfg -domtree -sroa -early-cse -lower-expect".split(" ")
   opts = ["-O3"]
   call([opt, llir, "-S", "-o", preopt] + opts)
   llir = preopt
 
 if True:
-  m2r = "m2r.ll"
+  m2r = output+"m2r.ll"
   call([opt, llir, "-mem2reg", "-S", "-o", m2r])
   llir = m2r
 
-if False:
-  ivs = "idv.ll"
+if True:
+  ivs = output+"idv.ll"
   call([opt, llir, "-indvars", "-S", "-o", ivs])
   llir = ivs
 
-if False:
-  l2c = "l2c.ll"
+if True:
+  l2c = output+"l2c.ll"
   call([opt, llir, "-loop2cilk", "-S", "-o", l2c])
   llir = l2c
 
 if True:
-  d2c = "d2c.ll"
+  d2c = output+"d2c.ll"
   call([opt, llir, "-detach2cilk", "-S", "-o", d2c])
   llir = d2c
 
-if False:
-  fopt = "fopt.ll"
+if True:
+  fopt = output+"fopt.ll"
   call([opt, llir, "-O3", "-S", "-o", fopt])
   llir = fopt
 
 print "flags   ", flags
 print original
 print "output   ", output
-call([cmd, llir, "-o", output, "-O3"]+flags)
+
+finalOpt = "-O3"
+#finalOpt = "-O0"
+call([cmd, llir, "-o", output, finalOpt]+flags)
 
 
 
