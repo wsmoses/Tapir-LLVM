@@ -480,6 +480,10 @@ bool Loop2Cilk::runOnLoop(Loop *L, LPPassManager &LPM) {
     errs() << "invalid detach size of " << getNonPhiSize(detacher) << "|" << detacher->size() << "\n";
     return false;
   }
+  if( detacher->size() != getNonPhiSize(detacher) + 1 ) {
+    errs() << "Can only cilk_for loops with only 1 phi node\n";
+    return false;
+  }
   if( getNonPhiSize(syncer)!=1 ) {
     errs() << "invalid sync size" << "\n";
     return false;
