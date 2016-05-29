@@ -128,11 +128,13 @@ FoldBlockIntoPredecessor(BasicBlock *BB, LoopInfo* LI, ScalarEvolution *SE,
 }
 
 bool isCilkFor(Loop* L) {
+  bool hasDetach = false;
   for( auto& a : L->blocks() ) {
-    if( dyn_cast<DetachInst>(a->getTerminator())) return false;
+    if( dyn_cast<DetachInst>(a->getTerminator())) { hasDetach = true; break; }
   }
-  return true;
-  
+
+  return hasDetach;
+
     if (!L->isLoopSimplifyForm()) {
       //errs() << "not simplify form\n";
       simplifyLoop(L, nullptr, nullptr, nullptr, nullptr, false);

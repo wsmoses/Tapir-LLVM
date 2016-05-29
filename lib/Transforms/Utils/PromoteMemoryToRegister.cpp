@@ -65,8 +65,8 @@ bool llvm::isAllocaPromotable(const AllocaInst *AI) {
       // not have any meaning for a local alloca.
       if (LI->isVolatile())
         return false;
-      if (LI->usesDetachedDef())
-        return false;
+      //if (LI->usesDetachedDef())
+      //  return false;
     } else if (const StoreInst *SI = dyn_cast<StoreInst>(U)) {
       if (SI->getOperand(0) == AI)
         return false; // Don't allow a store OF the AI, only INTO the AI.
@@ -74,8 +74,8 @@ bool llvm::isAllocaPromotable(const AllocaInst *AI) {
       // not have any meaning for a local alloca.
       if (SI->isVolatile())
         return false;
-      if (SI->isDetachedDef())
-        return false;
+      //if (SI->isDetachedDef())
+      //  return false;
     } else if (const IntrinsicInst *II = dyn_cast<IntrinsicInst>(U)) {
       if (II->getIntrinsicID() != Intrinsic::lifetime_start &&
           II->getIntrinsicID() != Intrinsic::lifetime_end)

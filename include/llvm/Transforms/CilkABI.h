@@ -57,6 +57,19 @@ static inline  size_t getNonPhiSize(llvm::BasicBlock* b){
     return b->size() - bad;
 }
 
+static inline llvm::Instruction* getFirstPostPHI(llvm::BasicBlock* b){
+    llvm::BasicBlock::iterator i = b->begin();
+    while (llvm::isa<llvm::PHINode>(i) ) { ++i; }
+    return &(*i);
+}
+
+static inline llvm::Instruction* getLastNonTerm(llvm::BasicBlock* b){
+    llvm::Instruction* inst = nullptr;
+    llvm::BasicBlock::iterator i = b->begin();
+    while ( i != b->end() ) { if(!llvm::isa<llvm::TerminatorInst>(i)) inst = &(*i); ++i; }
+    return inst;
+}
+
 namespace {
 
 typedef void *__CILK_JUMP_BUFFER[5];
@@ -1320,8 +1333,8 @@ static inline void createSync(SyncInst& inst,
   Function& F = *(inst.getParent()->getParent());
   Module* M = F.getParent();
 
-  llvm::Value* args[1] = { LookupStackFrame( F ) };
-  assert( args[0] && "sync used in function without frame!" );
+  llvm::Value* args[1] = { GetOrInitStackFrame( F, /*isFast*/false, instrument) };
+  //assert( args[0] && "sync used in function without frame!" );
   CallInst::Create( GetCilkSyncFn( *M, instrument ), args, "", /*insert before*/&inst );
 
   BranchInst* toReplace = BranchInst::Create( inst.getSuccessor(0) );

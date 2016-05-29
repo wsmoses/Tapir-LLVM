@@ -275,7 +275,6 @@ void LoopBase<BlockT, LoopT>::verifyLoop() const {
           assert(CB != OutsideLoopPreds[i] &&
                  "Loop has multiple entry points!");
     }
-    if( !HasInsideLoopPreds ) BB->dump();
     assert(HasInsideLoopPreds && "Loop block has no in-loop predecessors!");
     assert(HasInsideLoopSuccs && "Loop block has no in-loop successors!");
     assert(BB != getHeader()->getParent()->begin() &&

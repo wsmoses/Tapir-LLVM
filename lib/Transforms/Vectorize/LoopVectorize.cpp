@@ -2837,8 +2837,16 @@ void InnerLoopVectorizer::createEmptyLoop() {
 
   BasicBlock *OldBasicBlock = OrigLoop->getHeader();
   BasicBlock *VectorPH = OrigLoop->getLoopPreheader();
-  BasicBlock *ExitBlock = OrigLoop->getExitBlock();
   assert(VectorPH && "Invalid loop structure");
+  BasicBlock* tempB = nullptr;
+  if( SyncInst* si = dyn_cast<SyncInst>(VectorPH->getTerminator()) ) {
+    tempB = VectorPH->splitBasicBlockWithTerminator("vector.sync_split");
+    DT->splitBlock(tempB);
+    //DT->changeImmediateDominator(LoopExitBlock, LoopBypassBlocks[0]);
+    DT->verifyDomTree();
+    VectorPH = tempB;
+  }
+  BasicBlock *ExitBlock = OrigLoop->getExitBlock();
   assert(ExitBlock && "Must have an exit block");
 
   // Some loops have a single integer induction variable, while other loops
@@ -2873,6 +2881,7 @@ void InnerLoopVectorizer::createEmptyLoop() {
     ParentLoop->addChildLoop(Lp);
     ParentLoop->addBasicBlockToLoop(ScalarPH, *LI);
     ParentLoop->addBasicBlockToLoop(MiddleBlock, *LI);
+    if( tempB ) ParentLoop->addBasicBlockToLoop(tempB, *LI);
   } else {
     LI->addTopLevelLoop(Lp);
   }

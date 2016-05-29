@@ -62,7 +62,13 @@ bool CilkPass::runOnFunction(Function &F) {
 		TerminatorInst* term = i->getTerminator();
 		if( term == nullptr ) continue;
 		if( DetachInst* inst = llvm::dyn_cast<DetachInst>(term) ) {
+          errs() << "<PRE>\n";
+          F.dump();
+          errs() << "</PRE>\n";
 		  llvm::cilk::createDetach(*inst, ClInstrumentCilk);
+          errs() << "<POST>\n";
+          F.dump();
+          errs() << "</POST>\n";
 		  Changed = true;
 		} else continue;
 	}

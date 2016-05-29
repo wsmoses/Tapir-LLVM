@@ -22,10 +22,14 @@ flags = []
 original = sys.argv[:]
 original[0] = cmd
 linking = False
+
+outputed = False
+
 for i, a in enumerate(sys.argv):
   if i==0: continue
   if i > 0 and sys.argv[i-1]=="-o":
     output = a
+    outputed = True
     sys.argv[i] = llir
     continue
   elif a == "-fast": fast = True; continue
@@ -57,34 +61,40 @@ sys.argv[0] = cmd
 args = sys.argv + ["-S"]
 if optl == -1: args += ["-emit-llvm"]
 args = [a for a in args if a != "-slow" and a != "-fast"] + ["-O0"]
+if not outputed: args += ["-o", llir]
+ 
 call(args)
 
-if fast:
+if fast and False:
   preopt = "preopt.ll"
   opts = ["-O3"]
   call([opt, llir, "-S", "-o", preopt] + opts)
   llir = preopt
 
-m2r = "m2r.ll"
-call([opt, llir, "-mem2reg", "-S", "-o", m2r])
-llir = m2r
+if True:
+  m2r = "m2r.ll"
+  call([opt, llir, "-mem2reg", "-S", "-o", m2r])
+  llir = m2r
 
-ivs = "idv.ll"
-call([opt, llir, "-indvars", "-S", "-o", ivs])
-llir = ivs
+if False:
+  ivs = "idv.ll"
+  call([opt, llir, "-indvars", "-S", "-o", ivs])
+  llir = ivs
 
-l2c = "l2c.ll"
-call([opt, llir, "-loop2cilk", "-S", "-o", l2c])
-llir = l2c
+if False:
+  l2c = "l2c.ll"
+  call([opt, llir, "-loop2cilk", "-S", "-o", l2c])
+  llir = l2c
 
+if True:
+  d2c = "d2c.ll"
+  call([opt, llir, "-detach2cilk", "-S", "-o", d2c])
+  llir = d2c
 
-d2c = "d2c.ll"
-call([opt, llir, "-detach2cilk", "-S", "-o", d2c])
-llir = d2c
-
-fopt = "fopt.ll"
-call([opt, llir, "-O3", "-S", "-o", fopt])
-llir = fopt
+if False:
+  fopt = "fopt.ll"
+  call([opt, llir, "-O3", "-S", "-o", fopt])
+  llir = fopt
 
 print "flags   ", flags
 print original

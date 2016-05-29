@@ -254,9 +254,9 @@ public:
   /// usesDetachedDef - Return true if this is a load from a memory
   /// location defined in a detached block.
   ///
-  bool usesDetachedDef() const {
+/*  bool usesDetachedDef() const {
     return ((getSubclassDataFromInstruction() >> 10) & 1);
-  }
+  }*/
 
   /// setDetachedDef - Specify whether or not this load uses a
   /// location defined in a detached block.
@@ -305,10 +305,10 @@ public:
   }
 
   bool isSimple() const {
-    return !isAtomic() && !isVolatile() && !usesDetachedDef();
+    return !isAtomic() && !isVolatile();// && !usesDetachedDef();
   }
   bool isUnordered() const {
-    return getOrdering() <= Unordered && !isVolatile() && !usesDetachedDef();
+    return getOrdering() <= Unordered && !isVolatile();// && !usesDetachedDef();
   }
 
   Value *getPointerOperand() { return getOperand(0); }
@@ -443,10 +443,10 @@ public:
   }
 
   bool isSimple() const {
-    return !isAtomic() && !isVolatile() && !isDetachedDef();
+    return !isAtomic() && !isVolatile();// && !isDetachedDef();
   }
   bool isUnordered() const {
-    return getOrdering() <= Unordered && !isVolatile() && !isDetachedDef();
+    return getOrdering() <= Unordered && !isVolatile();// && !isDetachedDef();
   }
 
   Value *getValueOperand() { return getOperand(0); }
@@ -4476,18 +4476,9 @@ public:
   DECLARE_TRANSPARENT_OPERAND_ACCESSORS(Value);
 
   unsigned getNumSuccessors() const { return 1; }
-  BasicBlock *getSuccessor(unsigned i) const {
-    assert(i < getNumSuccessors() && "Successor # out of range for Reattach!");
-    return cast_or_null<BasicBlock>((&Op<-1>() - i)->get());
-  }
 
   BasicBlock *getDetachContinue() const {
     return cast_or_null<BasicBlock>((&Op<-1>())->get());
-  }
-
-  void setSuccessor(unsigned idx, BasicBlock *NewSucc) {
-    assert(idx < 1 && "Successor # out of range for reattach!");
-    *(&Op<-1>() - idx) = (Value*)NewSucc;
   }
 
   // Methods for support type inquiry through isa, cast, and dyn_cast:
@@ -4496,6 +4487,14 @@ public:
   }
   static inline bool classof(const Value *V) {
     return isa<Instruction>(V) && classof(cast<Instruction>(V));
+  }
+  BasicBlock *getSuccessor(unsigned i) const {
+    assert(i==0 && "Successor # out of range for Reattach!");
+    return cast_or_null<BasicBlock>((&Op<-1>() - i)->get());
+  }
+  void setSuccessor(unsigned idx, BasicBlock *NewSucc) {
+    assert(idx==0 && "Successor # out of range for Reattach!");
+    *(&Op<-1>() - idx) = NewSucc;
   }
 private:
   BasicBlock *getSuccessorV(unsigned idx) const override;
@@ -4544,10 +4543,6 @@ public:
   DECLARE_TRANSPARENT_OPERAND_ACCESSORS(Value);
 
   unsigned getNumSuccessors() const { return 1; }
-  BasicBlock *getSuccessor(unsigned i) const {
-    assert(i < getNumSuccessors() && "Successor # out of range for Sync!");
-    return cast_or_null<BasicBlock>((&Op<-1>() - i)->get());
-  }
 
   // Methods for support type inquiry through isa, cast, and dyn_cast:
   static inline bool classof(const Instruction *I) {
@@ -4555,6 +4550,15 @@ public:
   }
   static inline bool classof(const Value *V) {
     return isa<Instruction>(V) && classof(cast<Instruction>(V));
+  }
+
+  BasicBlock *getSuccessor(unsigned i) const {
+    assert(i==0 && "Successor # out of range for Sync!");
+    return cast_or_null<BasicBlock>((&Op<-1>() - i)->get());
+  }
+  void setSuccessor(unsigned idx, BasicBlock *NewSucc) {
+    assert(idx==0 && "Successor # out of range for Sync!");
+    *(&Op<-1>() - idx) = NewSucc;
   }
 private:
   BasicBlock *getSuccessorV(unsigned idx) const override;

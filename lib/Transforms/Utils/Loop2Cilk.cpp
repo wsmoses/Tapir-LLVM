@@ -322,50 +322,49 @@ bool Loop2Cilk::runOnLoop(Loop *L, LPPassManager &LPM) {
     SmallVector< BasicBlock *, 32> exitBlocks;
     L->getExitBlocks(exitBlocks);
     BasicBlock* endL = 0;
-    SmallPtrSet<BasicBlock *, 32> inLoop(exitBlocks.begin(), exitBlocks.end());
-    if( inLoop.size() >= 2) {
-      for( auto& a : exitBlocks ) {
+    SmallPtrSet<BasicBlock *, 32> exits(exitBlocks.begin(), exitBlocks.end());
+    SmallPtrSet<BasicBlock *, 32> alsoLoop;
+
+    exitRemoval:
+    if( exits.size() >= 2 ) {
+      for( auto tempExit : exits ) {
         SmallPtrSet<BasicBlock *, 32> reachable;
-        std::vector<BasicBlock*> Q;
-        Q.push_back(a);
+        std::vector<BasicBlock*> Q = { tempExit };
         bool valid = true;
-        while(!Q.empty() && valid){
+        while(!Q.empty() && valid) {
           auto m = Q.back();
           Q.pop_back();
-          if( isa<UnreachableInst>(a->getTerminator()) ) {
-            //errs() << "re erasing: " << m->getName() << "\n";
-            reachable.insert(m);
-          }
-          else if( auto b = dyn_cast<BranchInst>(a->getTerminator()) ) {
+          if( isa<UnreachableInst>(m->getTerminator()) ) { reachable.insert(m); continue; }
+          else if( auto b = dyn_cast<BranchInst>(m->getTerminator()) ) {
             bool bad = false;
+            reachable.insert(m);
             for( int i=0; i<b->getNumSuccessors(); i++ ) {
-               if( L->contains( b->getSuccessor(i) ) || std::find(exitBlocks.begin(), exitBlocks.end(), b->getSuccessor(i) ) != exitBlocks.end() ) {
+               auto suc = b->getSuccessor(i);
+               if( L->contains(suc) || std::find(exitBlocks.begin(), exitBlocks.end(), suc) != exitBlocks.end() || std::find(alsoLoop.begin(), alsoLoop.end(), suc) != alsoLoop.end() || std::find(reachable.begin(), reachable.end(), suc) != reachable.end() ) {
 
                } else{
+                Q.push_back(suc);
                 bad =  true;
                 break;
               }
             }
-            if( bad ) valid = false;
-            else {
-              reachable.insert(m);
-            }
           }
           else valid = false;
-
         }
-        if( valid ) {
+        if( valid && reachable.size() > 0 ) {
           for( auto b : reachable){
-            //errs() << "erasing: " << b->getName() << "\n";
-            //inLoop.erase(b);
+            exits.erase(b);
+            alsoLoop.insert(b);
           }
+          goto exitRemoval;
         }
       }
     }
+
     //errs() << "<blocks>\n";
-    //for(auto a : inLoop) a->dump();
+    //for(auto a : exits ) a->dump();
     //errs() << "</blocks>\n";
-    if( inLoop.size() == 1 ) endL = * inLoop.begin();
+    if( exits.size() == 1 ) endL = * exits.begin();
     auto oendL = endL;
     while( endL && !isa<SyncInst>( endL->getTerminator() ) ) {
       //errs() << "THING: " << endL->size() << " " << isa<BranchInst>(endL->getTerminator()) << " " << (endL->getTerminator()->getNumSuccessors() ) << "\n";
@@ -461,7 +460,23 @@ bool Loop2Cilk::runOnLoop(Loop *L, LPPassManager &LPM) {
     detacher->dump();
     return false;
   }
+  nps_begin:
   if( getNonPhiSize(detacher)!=1 ) {
+    Instruction* badInst = getLastNonTerm(detacher);
+    errs() << "badInst:\n"; badInst->dump();
+    if( !badInst->mayWriteToMemory() ) {
+      DominatorTree &DT = getAnalysis<DominatorTreeWrapperPass>().getDomTree();
+      DT.recalculate(*L->getHeader()->getParent());
+
+      for (const Use &U : badInst->uses()) {
+        const Instruction *I = cast<Instruction>(U.getUser());
+        auto BB = I->getParent();
+        if( !DT.dominates(BasicBlockEdge(detacher, det->getSuccessor(0) ), U) ) { errs() << "use not dominated:\n"; U->dump(); goto nps_error; }
+      }
+      badInst->moveBefore( getFirstPostPHI(det->getSuccessor(0)) );
+      goto nps_begin;
+    } else errs() << "mayWrite:\n"; 
+    nps_error:
     errs() << "invalid detach size of " << getNonPhiSize(detacher) << "|" << detacher->size() << "\n";
     return false;
   }

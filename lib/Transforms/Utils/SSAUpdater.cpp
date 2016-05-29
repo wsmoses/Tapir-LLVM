@@ -535,9 +535,6 @@ run(const SmallVectorImpl<Instruction*> &Insts) const {
     if (AllocaInst *AI = dyn_cast<AllocaInst>(User))
       if (AI->hasDetachedUse()) continue;
 
-    if (LoadInst *LI = dyn_cast<LoadInst>(User))
-      if (LI->usesDetachedDef()) continue;
-
     if (StoreInst *SI = dyn_cast<StoreInst>(User))
       if (SI->isDetachedDef()) continue;
 

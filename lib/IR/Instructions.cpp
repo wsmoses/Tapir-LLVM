@@ -1070,6 +1070,7 @@ unsigned DetachInst::getNumSuccessorsV() const {
   return getNumSuccessors();
 }
 void DetachInst::setSuccessorV(unsigned idx, BasicBlock *B) {
+  assert( idx <= 1 );
   setSuccessor(idx, B);
 }
 
@@ -1119,6 +1120,7 @@ BasicBlock *ReattachInst::getSuccessorV(unsigned idx) const {
 }
 
 void ReattachInst::setSuccessorV(unsigned idx, BasicBlock *B) {
+  assert(idx == 0);
   setSuccessor(idx, B);
 }
 
@@ -1166,6 +1168,7 @@ unsigned SyncInst::getNumSuccessorsV() const {
   return getNumSuccessors();
 }
 void SyncInst::setSuccessorV(unsigned idx, BasicBlock *B) {
+  assert(idx==0);
   setSuccessor(idx, B);
 }
 
@@ -3986,7 +3989,7 @@ AllocaInst *AllocaInst::cloneImpl() const {
 LoadInst *LoadInst::cloneImpl() const {
   LoadInst *LI = new LoadInst(getOperand(0), Twine(), isVolatile(),
                               getAlignment(), getOrdering(), getSynchScope());
-  LI->setDetachedDef(usesDetachedDef());
+  //LI->setDetachedDef(usesDetachedDef());
   return LI;
 }
 
