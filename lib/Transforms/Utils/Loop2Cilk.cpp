@@ -408,10 +408,12 @@ BasicBlock* getTrueExit(Loop *L){
       }
     }
 
-    //errs() << "<blocks>\n";
-    //for(auto a : exits ) a->dump();
-    //errs() << "</blocks>\n";
     if( exits.size() == 1 ) endL = * exits.begin();
+    else {
+      errs() << "<blocks>\n";
+      for(auto a : exits ) a->dump();
+      errs() << "</blocks>\n";
+    }
     return endL;
 }
 
