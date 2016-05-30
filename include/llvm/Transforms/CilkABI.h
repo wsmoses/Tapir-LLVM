@@ -1405,6 +1405,11 @@ static inline Function* extractDetachBodyToFunction(DetachInst& detach,
       for( unsigned idx = 0, max = inst->getNumSuccessors(); idx < max; idx++ )
         todo.emplace_back( inst->getSuccessor(idx) );
       continue;
+    } else if( SwitchInst* inst = llvm::dyn_cast<SwitchInst>(term) ) {
+      //only sync inner elements, consider as branch
+      for( unsigned idx = 0, max = inst->getNumSuccessors(); idx < max; idx++ )
+        todo.emplace_back( inst->getSuccessor(idx) );
+      continue;
     } else if( llvm::isa<UnreachableInst>(term) ) {
       continue;
     } else {

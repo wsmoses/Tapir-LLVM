@@ -194,18 +194,26 @@ PHINode* getIndVar(Loop *L, BasicBlock* detacher) {
   int cmpIdx = -1;
   llvm::Value* opc = 0;
 
-  if( auto brnch = dyn_cast<BranchInst>(Backedge->getTerminator()) ) {
+  BasicBlock* cmpNode = Backedge;
+  if(H!=detacher) {
+    cmpNode = detacher->getUniquePredecessor();
+    if(cmpNode==nullptr) return nullptr;
+  }
+
+  if( auto brnch = dyn_cast<BranchInst>(cmpNode->getTerminator()) ) {
     if(!brnch->isConditional()) goto cmp_error;
     if( cmp = dyn_cast<CmpInst>(brnch->getCondition()) ) {
     } else {
       errs() << "no comparison inst from backedge\n";
-      Backedge->getTerminator()->dump();
+      cmpNode->getTerminator()->dump();
       return nullptr;
     }
   } else {
     cmp_error:
-    errs() << "no comparison from backedge\n";
-    Backedge->getTerminator()->dump();
+    errs() << "<no comparison from backedge>\n";
+    cmpNode->getTerminator()->dump();
+    cmpNode->getParent()->dump();
+    errs() << "</no comparison from backedge>\n";
     return nullptr;
   }
 
@@ -226,13 +234,13 @@ PHINode* getIndVar(Loop *L, BasicBlock* detacher) {
         assert( Inc->getOperand(0) == PN );
         bool rpnr = false;
         bool incr = false;
-        for(int i = 0; i<2; i++) {
-          rpnr |= uncast(cmp->getOperand(i)) == RPN;
+        for(int i = 0; i<cmp->getNumOperands(); i++) {
+          rpnr |= uncast(cmp->getOperand(i)) == PN;
           incr |= uncast(cmp->getOperand(i)) == Inc;
           if( rpnr | incr ) cmpIdx = i;
         }
         assert( !rpnr || !incr );
-        if( rpnr || incr ) {
+        if( rpnr | incr ) {
           amt = Inc->getOperand(1);
           RPN = PN;
           INCR = Inc;
@@ -242,6 +250,8 @@ PHINode* getIndVar(Loop *L, BasicBlock* detacher) {
         }
       } else {
         errs() << "no add found for:\n"; PN->dump(); Inc->dump();
+        H->getParent()->dump();
+        return nullptr;
       }
     } else {
       errs() << "no inc found for:\n"; PN->dump();
@@ -251,6 +261,9 @@ PHINode* getIndVar(Loop *L, BasicBlock* detacher) {
   if( RPN == 0 ) {
     errs() << "<no RPN>\n";
     cmp->dump();
+    errs() << "<---->\n";
+    H->dump();
+    errs() << "<---->\n";
     for( auto a : others ) { std::get<0>(a)->dump(); }
     errs() << "</no RPN>\n";
     return nullptr;
@@ -886,7 +899,6 @@ bool Loop2Cilk::runOnLoop(Loop *L, LPPassManager &LPM) {
   //  LI.changeLoopFor(b, nullptr);
   //  LI.removeBlock(b);
   //}
-
 
   //for(auto& b : blocks) {
   //  if( parentL && parentL->contains(b) ) parentL->removeBlockFromLoop(b);
