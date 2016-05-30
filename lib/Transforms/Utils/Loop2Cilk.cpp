@@ -565,9 +565,12 @@ bool Loop2Cilk::runOnLoop(Loop *L, LPPassManager &LPM) {
     errs() << "invalid detach size of " << getNonPhiSize(detacher) << "|" << detacher->size() << "\n";
     return false;
   }
-  if( getNonPhiSize(syncer)!=1 ) {
-    errs() << "invalid sync size" << "\n";
-    return false;
+  while( getNonPhiSize(syncer)!=1 ) {
+    Instruction* badInst = getLastNonTerm(syncer);
+    errs() << "badInst2:\n"; badInst->dump();
+    badInst->moveBefore( getFirstPostPHI(syncer->getTerminator()->getSuccessor(0)) );
+//    errs() << "invalid sync size" << "\n";
+//    return false;
   }
   errs() << "Found candidate for cilk for!\n";
 
