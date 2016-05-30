@@ -71,7 +71,7 @@ if not outputed: args += ["-o", llir]
 
 call(args)
 
-if fast and False:
+if fast:
   preopt = output+"preopt.ll"
   #opts = "-tti -no-aa -tbaa -scoped-noalias -assumption-cache-tracker -targetlibinfo -basicaa -verify -simplifycfg -domtree -sroa -early-cse -lower-expect".split(" ")
   opts = ["-O3"]

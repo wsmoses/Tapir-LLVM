@@ -1405,7 +1405,7 @@ static inline Function* extractDetachBodyToFunction(DetachInst& detach,
       for( unsigned idx = 0, max = inst->getNumSuccessors(); idx < max; idx++ )
         todo.emplace_back( inst->getSuccessor(idx) );
       continue;
-    } else if( auto inst = llvm::dyn_cast<UnreachableInst>(term) ) {
+    } else if( llvm::isa<UnreachableInst>(term) ) {
       continue;
     } else {
       term->dump();

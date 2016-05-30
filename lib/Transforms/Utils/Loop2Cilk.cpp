@@ -175,6 +175,9 @@ bool isZero(Value* v){
 
 PHINode* getIndVar(Loop *L, BasicBlock* detacher) {
   BasicBlock *H = L->getHeader();
+
+  ////H->getParent()->dump();
+
   BasicBlock *Incoming = nullptr, *Backedge = nullptr;
   pred_iterator PI = pred_begin(H);
   assert(PI != pred_end(H) && "Loop must have at least one backedge!");
@@ -187,90 +190,159 @@ PHINode* getIndVar(Loop *L, BasicBlock* detacher) {
     std::swap(Incoming, Backedge);
   } else if (!L->contains(Backedge)) return nullptr;
 
-   // Loop over all of the PHI nodes, looking for a canonical indvar.
-   PHINode* RPN = nullptr;
-   Instruction* INCR = nullptr;
-   Value* amt = nullptr;
-   for (BasicBlock::iterator I = H->begin(); isa<PHINode>(I); ++I) {
-     PHINode *PN = cast<PHINode>(H->begin());
-     if( !PN->getType()->isIntegerTy() ) continue;
-     if (auto Inc = dyn_cast<Instruction>(PN->getIncomingValueForBlock(Backedge)))
-       if (Inc->getOpcode() == Instruction::Add && ( Inc->getOperand(0) == PN || Inc->getOperand(1) == PN ) ) {
-         if( RPN != nullptr ) return nullptr;
-         if( Inc->getOperand(1) == PN ) ((BinaryOperator*)Inc)->swapOperands();
-         if( Inc->getOperand(0) == PN ) amt = Inc->getOperand(1);
+  llvm::CmpInst* cmp = 0;
+  int cmpIdx = -1;
+  llvm::Value* opc = 0;
+
+  if( auto brnch = dyn_cast<BranchInst>(Backedge->getTerminator()) ) {
+    if(!brnch->isConditional()) goto cmp_error;
+    if( cmp = dyn_cast<CmpInst>(brnch->getCondition()) ) {
+    } else {
+      errs() << "no comparison inst from backedge\n";
+      Backedge->getTerminator()->dump();
+      return nullptr;
+    }
+  } else {
+    cmp_error:
+    errs() << "no comparison from backedge\n";
+    Backedge->getTerminator()->dump();
+    return nullptr;
+  }
+
+  // Loop over all of the PHI nodes, looking for a canonical indvar.
+  PHINode* RPN = nullptr;
+  Instruction* INCR = nullptr;
+  Value* amt = nullptr;
+  std::vector<std::tuple<PHINode*,Instruction*,Value*>> others;
+  for (BasicBlock::iterator I = H->begin(); isa<PHINode>(I); ++I) {
+    PHINode *PN = cast<PHINode>(I);
+    if( !PN->getType()->isIntegerTy() ) {
+      errs() << "phinode uses non-int\n";
+      return nullptr;
+    }
+    if(auto Inc = dyn_cast<Instruction>(PN->getIncomingValueForBlock(Backedge))) {
+      if (Inc->getOpcode() == Instruction::Add && ( Inc->getOperand(0) == PN || Inc->getOperand(1) == PN ) ) {
+        if( Inc->getOperand(1) == PN ) ((BinaryOperator*)Inc)->swapOperands();
+        assert( Inc->getOperand(0) == PN );
+        bool rpnr = false;
+        bool incr = false;
+        for(int i = 0; i<2; i++) {
+          rpnr |= uncast(cmp->getOperand(i)) == RPN;
+          incr |= uncast(cmp->getOperand(i)) == Inc;
+          if( rpnr | incr ) cmpIdx = i;
+        }
+        assert( !rpnr || !incr );
+        if( rpnr || incr ) {
+          amt = Inc->getOperand(1);
           RPN = PN;
           INCR = Inc;
-       }
-   }
-   if( RPN == 0 ) return nullptr;
-   IRBuilder<> builder(detacher->getTerminator()->getSuccessor(0)->getFirstNonPHIOrDbgOrLifetime());
-   llvm::Value* mul, *newV;
-   if( isOne(amt) ) mul = RPN;
-   else mul = builder.CreateMul(RPN, amt);
-   if( isZero(RPN->getIncomingValueForBlock(Incoming) )) newV = mul;
-   else newV = builder.CreateAdd(mul, RPN->getIncomingValueForBlock(Incoming) );
+          opc = rpnr?RPN:INCR;
+        } else {
+          others.push_back( std::make_tuple(PN,Inc,Inc->getOperand(1)) );
+        }
+      } else {
+        errs() << "no add found for:\n"; PN->dump(); Inc->dump();
+      }
+    } else {
+      errs() << "no inc found for:\n"; PN->dump();
+    }
+  }
+
+  if( RPN == 0 ) {
+    errs() << "<no RPN>\n";
+    cmp->dump();
+    for( auto a : others ) { std::get<0>(a)->dump(); }
+    errs() << "</no RPN>\n";
+    return nullptr;
+  }
+
+  llvm::Value* mul;
+  llvm::Value* newV;
+  {
+    IRBuilder<> builder(detacher->getTerminator()->getSuccessor(0)->getFirstNonPHIOrDbgOrLifetime());
+    if( isOne(amt) ) mul = RPN;
+    else mul = builder.CreateMul(RPN, amt);
+    if( isZero(RPN->getIncomingValueForBlock(Incoming) )) newV = mul;
+    else newV = builder.CreateAdd(mul, RPN->getIncomingValueForBlock(Incoming) );
+
+    //  std::vector<Value*> replacements;
+    for( auto a : others ) {
+      llvm::Value* val = builder.CreateSExtOrTrunc(RPN,std::get<0>(a)->getType());
+      llvm::Value* amt0 = std::get<2>(a);
+      if( !isOne(amt0) ) val = builder.CreateMul(val,amt0);
+      llvm::Value* add0 = std::get<0>(a)->getIncomingValueForBlock(Incoming);
+      if( !isZero(add0) ) val = builder.CreateAdd(val,add0);
+      std::get<0>(a)->dump();
+      std::get<0>(a)->replaceAllUsesWith(val);
+      std::get<0>(a)->eraseFromParent();
+      if(std::get<1>(a)->getNumUses() == 0) std::get<1>(a)->eraseFromParent();
+      //replacements.push_back(val);
+    }
+
+    ////errs() << "RPN  :\n"; RPN->dump();
+    ////errs() << "MUL  :\n"; mul->dump();
+    ////errs() << "NEWV :\n"; newV->dump();
+    ////errs() << "NEWVP:\n"; ((Instruction*)newV)->getParent()->dump();
+  }
 
 
-   errs() << "RPN  :\n"; RPN->dump();
-   errs() << "MUL  :\n"; mul->dump();
-   errs() << "NEWV :\n"; newV->dump();
-   errs() << "NEWVP:\n"; ((Instruction*)newV)->getParent()->dump();
+  std::vector<Use*> uses;
+  for( auto& U : RPN->uses() ) uses.push_back(&U);
+  for( auto Up : uses ) {
+    auto&U = *Up;
+    Instruction *I = cast<Instruction>(U.getUser());
+    if( I == INCR ) INCR->setOperand(1, ConstantInt::get( RPN->getType(), 1 ) );
+    else if( I == mul && mul != RPN ) continue;
+    else if( I == newV && newV != RPN ) continue;
+    else if( I == cmp ) continue;
+    else {
+      U.set( newV );
+    }
+  }
 
-/*   if( auto mI = dyn_cast<Instruction>(mul) )
-    if( auto aI = dyn_cast<Instruction>(newV) ) {
-      mI->moveBefore(aI);
-    }*/
-   std::vector<Use*> uses;
-   llvm::CmpInst* cmp = 0;
-   llvm::Value* opc = RPN;
-   for( auto& U : RPN->uses() ) uses.push_back(&U);
-   for( auto Up : uses ) {
-     auto&U = *Up;
-     Instruction *I = cast<Instruction>(U.getUser());
-     if( I == INCR ) INCR->setOperand(1, ConstantInt::get( RPN->getType(), 1 ) );
-     else if( I == mul && mul != RPN ) continue;
-     else if( I == newV && newV != RPN ) continue;
-     else if( llvm::CmpInst* is = dyn_cast<CmpInst>(I) ) cmp = is;
-     else {
-       U.set( newV );
-     }
-   }
-   if( cmp == 0 ){
-     for( auto& U : INCR->uses() ) {
-       Instruction *I = cast<Instruction>(U.getUser());
-       if( auto is = dyn_cast<CmpInst>(I) ) {
-         cmp = is;
-         opc = INCR;
-       }
-     }
-   }
+  ////errs() << "CMP: (idx=" << cmpIdx << ")\n"; cmp->dump();
+  IRBuilder<> build(cmp);
+  llvm::Value* val = cmp->getOperand(cmpIdx);
+  llvm::Value* adder = RPN->getIncomingValueForBlock(Incoming);
+  llvm::Value* amt0  = amt;
 
-   if( auto is = cmp) {
-     unsigned idx = 0;
-     if( is->getOperand(idx) == opc) idx = 1-idx;
-     errs() << "CMP: (idx=" << idx << "\n"; is->dump();
-     IRBuilder<> build(is);
-     auto nv = build.CreateSub( is->getOperand(idx), RPN->getIncomingValueForBlock(Incoming) );
-     auto nv2 = build.CreateSDiv( nv, amt );
-      is->setOperand(idx, nv2);
-   } else {
-     errs() << "CANT FIND CMP";
-     exit(1);
-   }
+  int cast_type = 0;
+  if( isa<TruncInst>(val) ) cast_type = 1;
+  if( isa<SExtInst>(val) ) cast_type = 2;
+  if( isa<ZExtInst>(val) ) cast_type = 3;
 
-   RPN->setIncomingValue( RPN->getBasicBlockIndex(Incoming),  ConstantInt::get( RPN->getType(), 0 ) );
+  if( !isZero(adder) ) {
+    switch(cast_type){
+      default:;
+      case 1: adder = build.CreateTrunc(adder,val->getType());
+      case 2: adder = build.CreateSExt( adder,val->getType());
+      case 3: adder = build.CreateZExt( adder,val->getType());
+    }
+    val = build.CreateSub(val, adder);
+  }
+  if( !isOne(amt0) ) {
+    switch(cast_type){
+      default:;
+      case 1: amt0 = build.CreateTrunc(amt0,val->getType());
+      case 2: amt0 = build.CreateSExt( amt0,val->getType());
+      case 3: amt0 = build.CreateZExt( amt0,val->getType());
+    }
+    val = build.CreateSDiv(val, amt0);
+  }
+  cmp->setOperand(cmpIdx, val);
+
+  RPN->setIncomingValue( RPN->getBasicBlockIndex(Incoming),  ConstantInt::get( RPN->getType(), 0 ) );
 
 
-   RPN->getParent()->getParent()->dump();
-   RPN->dump();
-   mul->dump();
-   newV->dump();
-   INCR->dump();
-   ((Instruction*)newV)->getParent()->dump();
+  //RPN->getParent()->getParent()->dump();
+  ////RPN->dump();
+  //mul->dump();
+  //newV->dump();
+  //INCR->dump();
+  ////((Instruction*)newV)->getParent()->dump();
 //   exit(1);
 
-   return RPN;
+  return RPN;
 }
 
 void removeFromAll(Loop* L, BasicBlock* B){
@@ -338,7 +410,7 @@ bool Loop2Cilk::runOnLoop(Loop *L, LPPassManager &LPM) {
           else if( auto b = dyn_cast<BranchInst>(m->getTerminator()) ) {
             bool bad = false;
             reachable.insert(m);
-            for( int i=0; i<b->getNumSuccessors(); i++ ) {
+            for( unsigned i=0; i<b->getNumSuccessors(); i++ ) {
                auto suc = b->getSuccessor(i);
                if( L->contains(suc) || std::find(exitBlocks.begin(), exitBlocks.end(), suc) != exitBlocks.end() || std::find(alsoLoop.begin(), alsoLoop.end(), suc) != alsoLoop.end() || std::find(reachable.begin(), reachable.end(), suc) != reachable.end() ) {
 
@@ -436,7 +508,7 @@ bool Loop2Cilk::runOnLoop(Loop *L, LPPassManager &LPM) {
       //errs() << "has unique pred\n";
       auto term = done->getTerminator();
       bool good = true;
-      for(int i=0; i<term->getNumSuccessors(); i++)
+      for(unsigned i=0; i<term->getNumSuccessors(); i++)
         if( L->contains( term->getSuccessor(i)) ){
           //errs() << "loop contains succ " << term->getSuccessor(i)->getName() << "\n";
           good = false;
@@ -480,10 +552,6 @@ bool Loop2Cilk::runOnLoop(Loop *L, LPPassManager &LPM) {
     errs() << "invalid detach size of " << getNonPhiSize(detacher) << "|" << detacher->size() << "\n";
     return false;
   }
-  if( detacher->size() != getNonPhiSize(detacher) + 1 ) {
-    errs() << "Can only cilk_for loops with only 1 phi node\n";
-    return false;
-  }
   if( getNonPhiSize(syncer)!=1 ) {
     errs() << "invalid sync size" << "\n";
     return false;
@@ -491,16 +559,25 @@ bool Loop2Cilk::runOnLoop(Loop *L, LPPassManager &LPM) {
   errs() << "Found candidate for cilk for!\n";
 
   BasicBlock* body = det->getSuccessor(0);
-  PHINode* oldvar = L->getCanonicalInductionVariable();
+  PHINode* oldvar = oldvar = getIndVar( L, detacher);//L->getCanonicalInductionVariable();
   if( !oldvar ) {
-      oldvar = getIndVar( L, detacher);
-      if( oldvar == nullptr ) {
       errs() << "no induction var\n";
       return false;
-      }
-      else
-        errs() << "MADE IND VAR FIX\n";
   }
+  auto tmpH = L->getHeader();
+  if( tmpH->size() != getNonPhiSize(tmpH) + 1 ) {
+    //Instruction* badPHI = nullptr;
+    //for (Instruction &I : *Header)
+    //  if (&I != oldvar){ badPHI = &I; break; }
+    //if( badPHI->getType() != oldvar->getType() ) {
+    //  PHINode* pn = (PHINode*)badPHI;
+    //  llvm::Value* = 
+    //}
+    errs() << "Can only cilk_for loops with only 1 phi node " << tmpH->size() << "|" << getNonPhiSize(tmpH) << "\n";
+    tmpH->dump();
+    return false;
+  }
+
   //PHINode* var = PHINode::Create( oldvar->getType(), 1, "", &body->front() );
   //ReplaceInstWithInst( var, oldvar );
   Value* adder = 0;
@@ -736,7 +813,7 @@ bool Loop2Cilk::runOnLoop(Loop *L, LPPassManager &LPM) {
 
   //extracted->dump();
 
-	Module* M = extracted->getParent();
+  Module* M = extracted->getParent();
   auto a1 = det->getSuccessor(0);
   auto a2 = det->getSuccessor(1);
 
@@ -748,7 +825,7 @@ bool Loop2Cilk::runOnLoop(Loop *L, LPPassManager &LPM) {
   if( countPredecessors(a2) == 0 ){
     auto tmp = a1;
     a1 = a2;
-    a2 = a1;
+    a2 = tmp;
   }
 
   if( parentL ) parentL->removeChildLoop( std::find(parentL->getSubLoops().begin(), parentL->getSubLoops().end(), L) );

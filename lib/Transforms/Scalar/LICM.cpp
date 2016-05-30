@@ -397,7 +397,7 @@ bool llvm::hoistRegion(DomTreeNode *N, AliasAnalysis *AA, LoopInfo *LI,
       if (CurLoop->hasLoopInvariantOperands(&I) &&
           canSinkOrHoistInst(I, AA, DT, TLI, CurLoop, CurAST, SafetyInfo) &&
           isSafeToExecuteUnconditionally(I, DT, TLI, CurLoop, SafetyInfo,
-                                 CurLoop->getLoopPreheader()->getTerminator()))
+                                 CurLoop->getLoopPreheader()->getTerminator()) )
         Changed |= hoist(I, CurLoop->getLoopPreheader());
     }
 
@@ -720,6 +720,8 @@ static bool sink(Instruction &I, const LoopInfo *LI, const DominatorTree *DT,
 static bool hoist(Instruction &I, BasicBlock *Preheader) {
   DEBUG(dbgs() << "LICM hoisting to " << Preheader->getName() << ": "
         << I << "\n");
+  //errs() << "LICM hoisting to " << Preheader->getName() << ": "
+  //      << I << "\n";
   // Move the new node to the Preheader, before its terminator.
   I.moveBefore(Preheader->getTerminator());
 
