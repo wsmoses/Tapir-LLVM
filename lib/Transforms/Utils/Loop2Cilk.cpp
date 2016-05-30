@@ -364,46 +364,8 @@ void removeFromAll(Loop* L, BasicBlock* B){
   removeFromAll(L->getParentLoop(), B);
 }
 
-bool Loop2Cilk::runOnLoop(Loop *L, LPPassManager &LPM) {
-  if (skipOptnoneFunction(L))
-    return false;
+BasicBlock* getTrueExit(Loop *L){
 
-  errs() << "<Loop>:\n--------------------------------------------------------------------------------------------------------------------------------";
-  //for(auto a: L->blocks()){
-  //  a->dump();
-  //}
-  L->dump();
-  errs() << "</Loop>\n<------------------------------------------------------------------------------------------------>\n";
-
-  if (!L->isLoopSimplifyForm()) {
-    //errs() << "not simplify form\n";
-    simplifyLoop(L, nullptr, nullptr, nullptr, nullptr, false);
-    //return false;
-  }
-
-  BasicBlock* Header = L->getHeader();
-  assert(Header);
-
-  auto parentL = L->getParentLoop();
-  LoopInfo &LI = getAnalysis<LoopInfoWrapperPass>().getLoopInfo();
-
-  //errs() << "<F>:\n******************************************************************************************************************************************";
-  //Header->getParent()->dump();
-  //errs() << "</F>:\n******************************************************************************************************************************************";
-
-  TerminatorInst* T = Header->getTerminator();
-  if( !isa<BranchInst>(T) ) {
-    BasicBlock *Preheader = L->getLoopPreheader();
-    if( isa<BranchInst>(Preheader->getTerminator()) ) { T = Preheader->getTerminator(); Header = Preheader; }
-    else {
-      errs() << "not branch inst" << "\n";
-      T->dump();
-    return false;
-  }
-  }
-  BranchInst* B = (BranchInst*)T;
-  BasicBlock *detacher, *syncer;
-  if( B->getNumSuccessors() != 2 ) {
     SmallVector< BasicBlock *, 32> exitBlocks;
     L->getExitBlocks(exitBlocks);
     BasicBlock* endL = 0;
@@ -450,6 +412,50 @@ bool Loop2Cilk::runOnLoop(Loop *L, LPPassManager &LPM) {
     //for(auto a : exits ) a->dump();
     //errs() << "</blocks>\n";
     if( exits.size() == 1 ) endL = * exits.begin();
+    return endL;
+}
+
+bool Loop2Cilk::runOnLoop(Loop *L, LPPassManager &LPM) {
+  if (skipOptnoneFunction(L))
+    return false;
+
+  errs() << "<Loop>:\n--------------------------------------------------------------------------------------------------------------------------------";
+  //for(auto a: L->blocks()){
+  //  a->dump();
+  //}
+  L->dump();
+  errs() << "</Loop>\n<------------------------------------------------------------------------------------------------>\n";
+
+  if (!L->isLoopSimplifyForm()) {
+    //errs() << "not simplify form\n";
+    simplifyLoop(L, nullptr, nullptr, nullptr, nullptr, false);
+    //return false;
+  }
+
+  BasicBlock* Header = L->getHeader();
+  assert(Header);
+
+  auto parentL = L->getParentLoop();
+  LoopInfo &LI = getAnalysis<LoopInfoWrapperPass>().getLoopInfo();
+
+  //errs() << "<F>:\n******************************************************************************************************************************************";
+  //Header->getParent()->dump();
+  //errs() << "</F>:\n******************************************************************************************************************************************";
+
+  TerminatorInst* T = Header->getTerminator();
+  if( !isa<BranchInst>(T) ) {
+    BasicBlock *Preheader = L->getLoopPreheader();
+    if( isa<BranchInst>(Preheader->getTerminator()) ) { T = Preheader->getTerminator(); Header = Preheader; }
+    else {
+      errs() << "not branch inst" << "\n";
+      T->dump();
+    return false;
+  }
+  }
+  BranchInst* B = (BranchInst*)T;
+  BasicBlock *detacher, *syncer;
+  if( B->getNumSuccessors() != 2 ) {
+    BasicBlock* endL = getTrueExit(L);
     auto oendL = endL;
     while( endL && !isa<SyncInst>( endL->getTerminator() ) ) {
       //errs() << "THING: " << endL->size() << " " << isa<BranchInst>(endL->getTerminator()) << " " << (endL->getTerminator()->getNumSuccessors() ) << "\n";
@@ -504,7 +510,7 @@ bool Loop2Cilk::runOnLoop(Loop *L, LPPassManager &LPM) {
       return false;
     }
 
-    BasicBlock* done = L->getExitingBlock();
+    BasicBlock* done = getTrueExit(L);
     if( !done ) {
       errs() << "no unique exit block\n";
       return false;
