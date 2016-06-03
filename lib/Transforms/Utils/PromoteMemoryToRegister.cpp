@@ -39,6 +39,7 @@
 #include "llvm/IR/Module.h"
 #include "llvm/Transforms/Utils/Local.h"
 #include <algorithm>
+#include <deque>
 using namespace llvm;
 
 #define DEBUG_TYPE "mem2reg"
@@ -53,10 +54,23 @@ bool llvm::isAllocaPromotable(const AllocaInst *AI) {
   // assignments to subsections of the memory unit.
   unsigned AS = AI->getType()->getAddressSpace();
 
-  // Alloca's whose values are stored in a detached block and loaded
-  // after the corresponding reattach are not promotable.
-  if (AI->hasDetachedUse())
-    return false;
+  SmallPtrSet<const BasicBlock*, 32> blocksInDetachedScope;
+  std::deque<const BasicBlock*> blocksToVisit;
+  blocksToVisit.emplace_back(AI->getParent());
+  while (blocksToVisit.size() != 0) {
+    const BasicBlock* block = blocksToVisit.back();
+    blocksToVisit.pop_back();
+    if(blocksInDetachedScope.insert(block).second) { 
+      const TerminatorInst* term = block->getTerminator();
+      if (const DetachInst* det = dyn_cast<const DetachInst>(term)) {
+        blocksToVisit.emplace_back(det->getContinue());
+      } else {
+        for (unsigned i=0; i<term->getNumSuccessors(); i++) {
+          blocksToVisit.emplace_back(term->getSuccessor(i));
+        }
+      }
+    }
+  }
 
   // Only allow direct and non-volatile loads and stores...
   for (const User *U : AI->users()) {
@@ -65,8 +79,6 @@ bool llvm::isAllocaPromotable(const AllocaInst *AI) {
       // not have any meaning for a local alloca.
       if (LI->isVolatile())
         return false;
-      //if (LI->usesDetachedDef())
-      //  return false;
     } else if (const StoreInst *SI = dyn_cast<StoreInst>(U)) {
       if (SI->getOperand(0) == AI)
         return false; // Don't allow a store OF the AI, only INTO the AI.
@@ -74,8 +86,9 @@ bool llvm::isAllocaPromotable(const AllocaInst *AI) {
       // not have any meaning for a local alloca.
       if (SI->isVolatile())
         return false;
-      //if (SI->isDetachedDef())
-      //  return false;
+      if (blocksInDetachedScope.count(SI->getParent())==0) {
+        return false;
+      }
     } else if (const IntrinsicInst *II = dyn_cast<IntrinsicInst>(U)) {
       if (II->getIntrinsicID() != Intrinsic::lifetime_start &&
           II->getIntrinsicID() != Intrinsic::lifetime_end)
@@ -616,7 +629,7 @@ void PromoteMem2Reg::run() {
       }
     }
     if (DetachedPred) {
-      AI->setHasDetachedUse(true);
+      errs() << "Alloca has bad phi test: "; AI->dump(); 
       RemoveFromAllocasList(AllocaNum);
       continue;
     }

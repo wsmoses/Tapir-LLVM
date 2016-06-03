@@ -152,17 +152,6 @@ public:
                                (V ? 32 : 0));
   }
 
-  /// \brief Return true if this alloca is used in a detached block.
-  bool hasDetachedUse() const {
-    return getSubclassDataFromInstruction() & 64;
-  }
-
-  /// \brief Specify whether this alloca is used in a detached block.
-  void setHasDetachedUse(bool V) {
-    setInstructionSubclassData((getSubclassDataFromInstruction() & ~64) |
-                               (V ? 64 : 0));
-  }
-
   // Methods for support type inquiry through isa, cast, and dyn_cast:
   static inline bool classof(const Instruction *I) {
     return (I->getOpcode() == Instruction::Alloca);
@@ -251,21 +240,6 @@ public:
                                (V ? 1 : 0));
   }
 
-  /// usesDetachedDef - Return true if this is a load from a memory
-  /// location defined in a detached block.
-  ///
-/*  bool usesDetachedDef() const {
-    return ((getSubclassDataFromInstruction() >> 10) & 1);
-  }*/
-
-  /// setDetachedDef - Specify whether or not this load uses a
-  /// location defined in a detached block.
-  ///
-  void setDetachedDef(bool V) {
-    setInstructionSubclassData((getSubclassDataFromInstruction() & ~(1 << 10)) |
-                               ((V ? 1 : 0) << 10));
-  }
-
   /// getAlignment - Return the alignment of the access that is being performed
   ///
   unsigned getAlignment() const {
@@ -305,10 +279,11 @@ public:
   }
 
   bool isSimple() const {
-    return !isAtomic() && !isVolatile();// && !usesDetachedDef();
+    return !isAtomic() && !isVolatile();
   }
+
   bool isUnordered() const {
-    return getOrdering() <= Unordered && !isVolatile();// && !usesDetachedDef();
+    return getOrdering() <= Unordered && !isVolatile();
   }
 
   Value *getPointerOperand() { return getOperand(0); }
@@ -386,21 +361,6 @@ public:
                                (V ? 1 : 0));
   }
 
-  /// isDetachedDef - Return true if this is a store in a detached
-  /// block.
-  ///
-  bool isDetachedDef() const {
-    return ((getSubclassDataFromInstruction() >> 10) & 1);
-  }
-
-  /// setDetachedDef - Specify whether or not this store is in a
-  /// detached block.
-  ///
-  void setDetachedDef(bool V) {
-    setInstructionSubclassData((getSubclassDataFromInstruction() & ~(1 << 10)) |
-                               ((V ? 1 : 0) << 10));
-  }
-
   /// Transparently provide more efficient getOperand methods.
   DECLARE_TRANSPARENT_OPERAND_ACCESSORS(Value);
 
@@ -443,10 +403,11 @@ public:
   }
 
   bool isSimple() const {
-    return !isAtomic() && !isVolatile();// && !isDetachedDef();
+    return !isAtomic() && !isVolatile();
   }
+
   bool isUnordered() const {
-    return getOrdering() <= Unordered && !isVolatile();// && !isDetachedDef();
+    return getOrdering() <= Unordered && !isVolatile();
   }
 
   Value *getValueOperand() { return getOperand(0); }
@@ -4425,6 +4386,9 @@ protected:
   static inline bool classof(const Value *V) {
     return isa<Instruction>(V) && classof(cast<Instruction>(V));
   }
+
+  inline BasicBlock* getDetached() const { return getSuccessor(0); }
+  inline BasicBlock* getContinue() const { return getSuccessor(1); }
 private:
   BasicBlock *getSuccessorV(unsigned idx) const override;
   unsigned getNumSuccessorsV() const override;

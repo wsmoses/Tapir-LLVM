@@ -61,8 +61,6 @@ INITIALIZE_PASS_END(PromotePass, "mem2reg", "Promote Memory to Register",
 bool PromotePass::runOnFunction(Function &F) {
   std::vector<AllocaInst*> Allocas;
 
-  BasicBlock &BB = F.getEntryBlock();  // Get the entry node for the function
-
   if (F.hasFnAttribute(Attribute::OptimizeNone))
     return false;
 
@@ -77,10 +75,19 @@ bool PromotePass::runOnFunction(Function &F) {
 
     // Find allocas that are safe to promote, by looking at all instructions in
     // the entry node
-    for (BasicBlock::iterator I = BB.begin(), E = --BB.end(); I != E; ++I)
-      if (AllocaInst *AI = dyn_cast<AllocaInst>(I))       // Is it an alloca?
-        if (isAllocaPromotable(AI))
-          Allocas.push_back(AI);
+    for (BasicBlock &BB : F) {
+      bool toRun = &BB == &F.getEntryBlock();
+      if (BasicBlock* pred = BB.getUniquePredecessor()) {
+        if (DetachInst* det = dyn_cast<DetachInst>(pred->getTerminator())) {
+          toRun |= &BB == det->getDetached();
+        }
+      }
+      if (!toRun) continue;
+      for (BasicBlock::iterator I = BB.begin(), E = --BB.end(); I != E; ++I)
+        if (AllocaInst *AI = dyn_cast<AllocaInst>(I))       // Is it an alloca?
+          if (isAllocaPromotable(AI))
+            Allocas.push_back(AI);
+    }
 
     if (Allocas.empty()) break;
 
@@ -88,7 +95,6 @@ bool PromotePass::runOnFunction(Function &F) {
     NumPromoted += Allocas.size();
     Changed = true;
   }
-
   return Changed;
 }
 

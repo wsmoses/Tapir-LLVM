@@ -3924,9 +3924,6 @@ AllocaInst *SROA::rewritePartition(AllocaInst &AI, AllocaSlices &AS,
 
   if (Promotable) {
     if (PHIUsers.empty() && SelectUsers.empty()) {
-      // We don't yet know if NewAI has a detached use.  Assume it
-      // does not and let the promotion process figure it out.
-      NewAI->setHasDetachedUse(false);
       // Promote the alloca.
       PromotableAllocas.push_back(NewAI);
     } else {

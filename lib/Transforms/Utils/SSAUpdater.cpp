@@ -363,10 +363,7 @@ public:
         if (SI->getOperand(0) == Def)
           LastStore = SI;
     if (LastStore) {
-      LastStore->setDetachedDef(true);
       Value *StoreDst = LastStore->getOperand(1);
-      if (AllocaInst *AI = dyn_cast<AllocaInst>(StoreDst))
-        AI->setHasDetachedUse(true);
     }
   }
 };
@@ -510,11 +507,7 @@ run(const SmallVectorImpl<Instruction*> &Insts) const {
     Value *NewVal = SSA.GetValueInMiddleOfBlock(BB);
     if (Instruction *Def = dyn_cast<Instruction>(NewVal))
       if (SSA.GetValueIsDetachedInBlock(Def->getParent())) {
-        ALoad->setDetachedDef(true);
         Value *LoadSrc = ALoad->getOperand(0);
-        if (AllocaInst *AI = dyn_cast<AllocaInst>(LoadSrc)) {
-          AI->setHasDetachedUse(true);
-        }
         continue;
       }
     replaceLoadWithValue(ALoad, NewVal);
@@ -532,11 +525,7 @@ run(const SmallVectorImpl<Instruction*> &Insts) const {
   // from the function.  They should now all be dead or properly
   // marked as using or defining detached values.
   for (Instruction *User : Insts) {
-    if (AllocaInst *AI = dyn_cast<AllocaInst>(User))
-      if (AI->hasDetachedUse()) continue;
-
-    if (StoreInst *SI = dyn_cast<StoreInst>(User))
-      if (SI->isDetachedDef()) continue;
+    if (isa<StoreInst>(User) && !User->use_empty()) continue;
 
     // If this is a load that still has uses, then the load must have been added
     // as a live value in the SSAUpdate data structure for a block (e.g. because
