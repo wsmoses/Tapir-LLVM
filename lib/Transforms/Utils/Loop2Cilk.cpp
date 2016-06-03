@@ -437,6 +437,10 @@ bool Loop2Cilk::runOnLoop(Loop *L, LPPassManager &LPM) {
   BasicBlock* Header = L->getHeader();
   assert(Header);
 
+     // errs() << "<BEGIN-PASS>\n";
+     // Header->getParent()->dump();
+     // errs() << "</BEGIN-PASS>\n";
+
   auto parentL = L->getParentLoop();
   LoopInfo &LI = getAnalysis<LoopInfoWrapperPass>().getLoopInfo();
 
@@ -455,7 +459,7 @@ bool Loop2Cilk::runOnLoop(Loop *L, LPPassManager &LPM) {
   }
   }
   BranchInst* B = (BranchInst*)T;
-  BasicBlock *detacher, *syncer;
+  BasicBlock *detacher = nullptr, *syncer = nullptr;
   if( B->getNumSuccessors() != 2 ) {
     BasicBlock* endL = getTrueExit(L);
     auto oendL = endL;
@@ -482,6 +486,8 @@ bool Loop2Cilk::runOnLoop(Loop *L, LPPassManager &LPM) {
 
     if( endL ) {
       syncer = endL;
+          assert( syncer && isa<SyncInst>(syncer->getTerminator()) );
+;
       detacher = B->getSuccessor(0);
     } else {
       //errs() << "L\n";
@@ -495,7 +501,8 @@ bool Loop2Cilk::runOnLoop(Loop *L, LPPassManager &LPM) {
       return false;
     }
 
-
+        assert( syncer && isa<SyncInst>(syncer->getTerminator()) );
+;
   } else {
     detacher = B->getSuccessor(0);
     syncer = B->getSuccessor(1);
@@ -505,12 +512,19 @@ bool Loop2Cilk::runOnLoop(Loop *L, LPPassManager &LPM) {
       BasicBlock* temp = detacher;
       detacher = syncer;
       syncer = temp;
-    } else if( !isa<SyncInst>(syncer->getTerminator()) ) {
+          assert( syncer && isa<SyncInst>(syncer->getTerminator()) );
+;
+    } else if( isa<SyncInst>(syncer->getTerminator()) ) {
+          assert( syncer && isa<SyncInst>(syncer->getTerminator()) );
+;
+    } else {
       errs() << "none sync" << "\n";
       //syncer->dump();
       //detacher->dump();
       return false;
     }
+        assert( syncer && isa<SyncInst>(syncer->getTerminator()) );
+;
 
     BasicBlock* done = getTrueExit(L);
     if( !done ) {
@@ -544,8 +558,12 @@ bool Loop2Cilk::runOnLoop(Loop *L, LPPassManager &LPM) {
       //syncer->getParent()->dump();
       return false;
     }
-
+        assert( syncer && isa<SyncInst>(syncer->getTerminator()) );
+;
   }
+
+      assert( syncer && isa<SyncInst>(syncer->getTerminator()) );
+;
 
   DetachInst* det = dyn_cast<DetachInst>(detacher->getTerminator() );
   if( det == nullptr ) {
@@ -575,12 +593,19 @@ bool Loop2Cilk::runOnLoop(Loop *L, LPPassManager &LPM) {
   }
   while( getNonPhiSize(syncer)!=1 ) {
     Instruction* badInst = getLastNonTerm(syncer);
-    errs() << "badInst2:\n"; badInst->dump();
-    badInst->moveBefore( getFirstPostPHI(syncer->getTerminator()->getSuccessor(0)) );
-//    errs() << "invalid sync size" << "\n";
-//    return false;
+    if( !badInst->mayWriteToMemory() ) {
+      errs() << "badInst2:\n"; badInst->dump();
+      badInst->moveBefore( getFirstPostPHI(syncer->getTerminator()->getSuccessor(0)) );
+    } else {
+      errs() << "invalid sync size" << "\n";
+      return false;
+    }
   }
-  errs() << "Found candidate for cilk for!\n";
+  errs() << "Found candidate for cilk for!\n"; 
+  assert( syncer && isa<SyncInst>(syncer->getTerminator()) );
+
+  syncer->getParent()->dump();
+  syncer->dump();
 
   BasicBlock* body = det->getSuccessor(0);
   PHINode* oldvar = oldvar = getIndVar( L, detacher);//L->getCanonicalInductionVariable();
@@ -888,10 +913,10 @@ bool Loop2Cilk::runOnLoop(Loop *L, LPPassManager &LPM) {
   //Header->getParent()->dump();
   //errs() << "</M>:\n*############################################################33*****************************************************************************************************************************************";
   //M->dump();
-  auto term = syncer->getTerminator()->getSuccessor(0);
-  syncer->getTerminator()->eraseFromParent();
-  IRBuilder<> sbuild(syncer);
-  sbuild.CreateBr( term );
+  //auto term = syncer->getTerminator()->getSuccessor(0);
+  //syncer->getTerminator()->eraseFromParent();
+  //IRBuilder<> sbuild(syncer);
+  //sbuild.CreateBr( term );
 
   //Header->getParent()->dump();
 

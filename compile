@@ -19,6 +19,8 @@ llc = dir+"/llc"
 output = "a.out"
 llir   = output+"t.ll"
 fast   = True
+preoptN = "-O0"
+postoptN = "-O0"
 
 optl = -1
 flags = []
@@ -49,6 +51,7 @@ for i, a in enumerate(sys.argv):
     elif a[:2] == "-I": flags += [a]
     elif a[:2] == "-L": lflags += [a]
     elif a[:2] == "-l": lflags += [a]
+    elif a[:2] == "-f": lflags += [a]
     if no: continue
     else: no = False
   if a[0]  == "-" and a != "-o": flags += [a]
@@ -58,7 +61,7 @@ if "-lcilkrts" not in flags: flags += ["-lcilkrts"]
 if "-fno-exceptions" not in flags: flags += ["-fno-exceptions"]
 
 print linking
-original = [a for a in original if a != "-slow" and a != "-fast"]
+original = [a for a in original if a not in ["-slow","-fast"] ]
 if linking:
   call(original)
   sys.exit(0)
@@ -71,11 +74,11 @@ if not outputed: args += ["-o", llir]
 
 call(args)
 
-if fast:
+if fast and preoptN != "-O0":
   preopt = output+"preopt.ll"
   #opts = "-tti -no-aa -tbaa -scoped-noalias -assumption-cache-tracker -targetlibinfo -basicaa -verify -simplifycfg -domtree -sroa -early-cse -lower-expect".split(" ")
-  opts = ["-O3"]
-  call([opt, llir, "-S", "-o", preopt] + opts)
+  opts = [preoptN]
+  call([opt, llir, "-S", "-o", preoptN] + opts)
   llir = preopt
 
 if True:
@@ -94,22 +97,21 @@ if True:
   llir = l2c
 
 if True:
+  scfg = output+"scfg.ll"
+  call([opt, llir, "-simplifycfg", "-S", "-o", scfg])
+  llir = scfg
+
+if True:
   d2c = output+"d2c.ll"
   call([opt, llir, "-detach2cilk", "-S", "-o", d2c])
   llir = d2c
-
-if True:
-  fopt = output+"fopt.ll"
-  call([opt, llir, "-O3", "-S", "-o", fopt])
-  llir = fopt
 
 print "flags   ", flags
 print original
 print "output   ", output
 
-finalOpt = "-O3"
 #finalOpt = "-O0"
-call([cmd, llir, "-o", output, finalOpt]+flags)
+call([cmd, llir, "-o", output, postoptN]+flags)
 
 
 
