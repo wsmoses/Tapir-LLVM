@@ -19,8 +19,10 @@ llc = dir+"/llc"
 output = "a.out"
 llir   = output+"t.ll"
 fast   = True
-preoptN = "-O0"
-postoptN = "-O0"
+preoptN = "-O3"
+postoptN = "-O3"
+#preoptN = "-O0"
+#postoptN = "-O0"
 
 optl = -1
 flags = []
