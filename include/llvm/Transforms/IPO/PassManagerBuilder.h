@@ -107,6 +107,10 @@ public:
   ///    0 = none, 1 = -Os, 2 = -Oz
   unsigned SizeLevel;
 
+  /// The Pre-lowering to parallel runtime calls optimization level
+  ///    0 = -P0 = leave with detach instructions, 1 = no optimizations before conversion, 2 = optimize before conversion
+  unsigned ParallelLevel;
+
   /// LibraryInfo - Specifies information about the runtime library for the
   /// optimizer.  If this is non-null, it is added to both the function and
   /// per-module pass pipeline.
@@ -152,6 +156,7 @@ private:
   void addInitialAliasAnalysisPasses(legacy::PassManagerBase &PM) const;
   void addLTOOptimizationPasses(legacy::PassManagerBase &PM);
   void addLateLTOOptimizationPasses(legacy::PassManagerBase &PM);
+  void populateForOptLevel(legacy::PassManagerBase &PM, int level);
 
 public:
   /// populateFunctionPassManager - This fills in the function pass manager,

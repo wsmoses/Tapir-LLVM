@@ -76,31 +76,33 @@ if not outputed: args += ["-o", llir]
 
 call(args)
 
+prints = ["-p", "--print-before-all", "--print-after-all"]
+
 if fast and preoptN != "-O0":
   preopt = output+"preopt.ll"
   #opts = "-tti -no-aa -tbaa -scoped-noalias -assumption-cache-tracker -targetlibinfo -basicaa -verify -simplifycfg -domtree -sroa -early-cse -lower-expect".split(" ")
   opts = [preoptN]
-  call([opt, llir, "-S", "-o", preoptN] + opts)
+  call([opt, llir, "-S", "-o", preoptN] + opts+prints)
   llir = preopt
 
 if True:
   m2r = output+"m2r.ll"
-  call([opt, llir, "-mem2reg", "-S", "-o", m2r])
+  call([opt, llir, "-mem2reg", "-S", "-o", m2r]+prints)
   llir = m2r
 
 if True:
   ivs = output+"idv.ll"
-  call([opt, llir, "-indvars", "-S", "-o", ivs])
+  call([opt, llir, "-indvars", "-S", "-o", ivs]+prints)
   llir = ivs
 
 if True:
   l2c = output+"l2c.ll"
-  call([opt, llir, "-loop2cilk", "-S", "-o", l2c])
+  call([opt, llir, "-loop2cilk", "-S", "-o", l2c]+prints)
   llir = l2c
 
 if True:
   scfg = output+"scfg.ll"
-  call([opt, llir, "-simplifycfg", "-S", "-o", scfg])
+  call([opt, llir, "-simplifycfg", "-S", "-o", scfg]+prints)
   llir = scfg
 
 if True:

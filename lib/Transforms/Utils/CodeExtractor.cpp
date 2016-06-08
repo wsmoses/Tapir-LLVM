@@ -21,10 +21,13 @@
 #include "llvm/Analysis/RegionInfo.h"
 #include "llvm/Analysis/RegionIterator.h"
 #include "llvm/IR/Constants.h"
+#include "llvm/IR/DIBuilder.h"
 #include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/Dominators.h"
 #include "llvm/IR/Instructions.h"
+#include "llvm/IR/InstIterator.h"
 #include "llvm/IR/Intrinsics.h"
+#include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Verifier.h"
@@ -690,6 +693,29 @@ void CodeExtractor::moveCodeToFunction(Function *newFunction) {
   }
 }
 
+static Value *GetCorrectDbgValue(Function *newFunc, Value *V) {
+  Function *ActualF = nullptr;
+  if (Instruction *I = dyn_cast<Instruction>(V))
+    ActualF = I->getParent()->getParent();
+  else if (Argument *A = dyn_cast<Argument>(V))
+    ActualF = A->getParent();
+  else
+    return nullptr;
+
+  if (ActualF == newFunc)
+    return nullptr;
+
+  CallInst *CI = cast<CallInst>(newFunc->user_back());
+  unsigned i = 0;
+  for (Function::arg_iterator I = newFunc->arg_begin(),
+                              E = newFunc->arg_end(); I != E; ++I, ++i)
+    if (CI->getArgOperand(i) == V)
+      return &*I;
+
+  assert(false && "debug intrinsics are in extracted function but"
+                  " matching load/store are not.");
+}
+
 Function *CodeExtractor::extractCodeRegion() {
   if (!isEligible())
     return nullptr;
@@ -771,6 +797,32 @@ Function *CodeExtractor::extractCodeRegion() {
           }
         }
     }
+
+  // Update debug intrinsics
+  DIBuilder DIB(*newFunction->getParent());
+  std::vector<DbgValueInst *> ToDelete;
+  std::vector<AllocaInst *> ToMove;
+  for (inst_iterator I = inst_begin(newFunction),
+                     E = inst_end(newFunction); I != E; ++I)
+    if (DbgValueInst *DVI = dyn_cast<DbgValueInst>(&*I)) {
+      Value *NewVal = GetCorrectDbgValue(newFunction, DVI->getValue());
+      if (NewVal) {
+        auto DbgVal =
+          DIB.insertDbgValueIntrinsic(NewVal, DVI->getOffset(), DVI->getVariable(), DVI->getExpression(), DVI->getDebugLoc(), DVI);
+
+        DbgVal->setDebugLoc(DVI->getDebugLoc());
+        ToDelete.push_back(DVI);
+      }
+    } else if (DbgDeclareInst *DDI = dyn_cast<DbgDeclareInst>(&*I)) {
+      AllocaInst *AI = dyn_cast_or_null<AllocaInst>(DDI->getAddress());
+      if (AI && AI->getParent()->getParent() != newFunction)
+        ToMove.push_back(AI);
+    }
+
+  for (auto I : ToDelete)
+    I->eraseFromParent();
+  for (auto I : ToMove)
+    I->moveBefore(&*newFunction->getEntryBlock().begin());
 
   //cerr << "NEW FUNCTION: " << *newFunction;
   //  verifyFunction(*newFunction);

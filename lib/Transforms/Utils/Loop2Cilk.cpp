@@ -78,7 +78,6 @@ namespace {
       AU.addRequired<LoopInfoWrapperPass>();
       AU.addRequired<ScalarEvolutionWrapperPass>();
 //      AU.addRequired<SimplifyCFGPass>();
-//      AU.addRequired<PromotePass>();
       AU.addRequiredID(LoopSimplifyID);
       AU.addRequiredID(LCSSAID);
 //      AU.addPreserved<ScalarEvolutionWrapperPass>();
@@ -559,11 +558,9 @@ bool Loop2Cilk::runOnLoop(Loop *L, LPPassManager &LPM) {
       return false;
     }
         assert( syncer && isa<SyncInst>(syncer->getTerminator()) );
-;
   }
 
       assert( syncer && isa<SyncInst>(syncer->getTerminator()) );
-;
 
   DetachInst* det = dyn_cast<DetachInst>(detacher->getTerminator() );
   if( det == nullptr ) {
