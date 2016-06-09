@@ -433,6 +433,10 @@ bool LoopUnswitch::runOnLoop(Loop *L, LPPassManager &LPM_Ref) {
   if (skipOptnoneFunction(L))
     return false;
 
+  assert(L->isLCSSAForm(*DT) && "Loop is not in LCSSA form.");
+  assert((!L->getParentLoop() || L->getParentLoop()->isLCSSAForm(*DT)) &&
+         "Parent loop not left in LCSSA form before Loop-unswitch!");
+
   AC = &getAnalysis<AssumptionCacheTracker>().getAssumptionCache(
       *L->getHeader()->getParent());
   LI = &getAnalysis<LoopInfoWrapperPass>().getLoopInfo();
@@ -464,6 +468,11 @@ bool LoopUnswitch::runOnLoop(Loop *L, LPPassManager &LPM_Ref) {
   // FIXME: Reconstruct dom info, because it is not preserved properly.
   if (Changed)
     DT->recalculate(*F);
+
+  assert(L->isLCSSAForm(*DT) && "Loop is not in LCSSA form.");
+  assert((!L->getParentLoop() || L->getParentLoop()->isLCSSAForm(*DT)) &&
+         "Parent loop not left in LCSSA form after Loop-unswitch!");
+
   return Changed;
 }
 

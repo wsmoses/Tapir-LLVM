@@ -216,10 +216,11 @@ blockDominatesAnExit(BasicBlock *BB,
   return false;
 }
 
+#include "llvm/IR/Verifier.h"
 bool llvm::formLCSSA(Loop &L, DominatorTree &DT, LoopInfo *LI,
                      ScalarEvolution *SE) {
   bool Changed = false;
-
+	assert( !llvm::verifyFunction(*L.getHeader()->getParent(), &llvm::errs()) );
   // Get the set of exiting blocks.
   SmallVector<BasicBlock *, 8> ExitBlocks;
   L.getExitBlocks(ExitBlocks);
@@ -235,8 +236,9 @@ bool llvm::formLCSSA(Loop &L, DominatorTree &DT, LoopInfo *LI,
     // For large loops, avoid use-scanning by using dominance information:  In
     // particular, if a block does not dominate any of the loop exits, then none
     // of the values defined in the block could be used outside the loop.
-    if (!blockDominatesAnExit(BB, DT, ExitBlocks))
+    if (!blockDominatesAnExit(BB, DT, ExitBlocks)) {
       continue;
+    }
 
     for (Instruction &I : *BB) {
       // Reject two common cases fast: instructions with no uses (like stores)
@@ -316,9 +318,11 @@ INITIALIZE_PASS_END(LCSSA, "lcssa", "Loop-Closed SSA Form Pass", false, false)
 Pass *llvm::createLCSSAPass() { return new LCSSA(); }
 char &llvm::LCSSAID = LCSSA::ID;
 
-
+#include "llvm/IR/Verifier.h"
 /// Process all loops in the function, inner-most out.
 bool LCSSA::runOnFunction(Function &F) {
+
+	assert( !llvm::verifyFunction(F, &llvm::errs()) );
   bool Changed = false;
   LI = &getAnalysis<LoopInfoWrapperPass>().getLoopInfo();
   DT = &getAnalysis<DominatorTreeWrapperPass>().getDomTree();

@@ -200,6 +200,8 @@ bool LICM::runOnLoop(Loop *L, LPPassManager &LPM) {
   TLI = &getAnalysis<TargetLibraryInfoWrapperPass>().getTLI();
 
   assert(L->isLCSSAForm(*DT) && "Loop is not in LCSSA form.");
+  assert((!L->getParentLoop() || L->getParentLoop()->isLCSSAForm(*DT)) &&
+         "Parent loop not left in LCSSA form before LICM!");
 
   CurAST = new AliasSetTracker(*AA);
   // Collect Alias info from subloops.
@@ -280,6 +282,10 @@ bool LICM::runOnLoop(Loop *L, LPPassManager &LPM) {
   // specifically moving instructions across the loop boundary and so it is
   // especially in need of sanity checking here.
   assert(L->isLCSSAForm(*DT) && "Loop not left in LCSSA form after LICM!");
+  if( ! (!L->getParentLoop() || L->getParentLoop()->isLCSSAForm(*DT) ) ) {
+    L->getParentLoop()->dump();
+    L->getParentLoop()->getHeader()->getParent()->dump();
+  }
   assert((!L->getParentLoop() || L->getParentLoop()->isLCSSAForm(*DT)) &&
          "Parent loop not left in LCSSA form after LICM!");
 

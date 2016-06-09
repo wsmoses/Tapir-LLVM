@@ -40,6 +40,8 @@
 #include "llvm/Transforms/Utils/Local.h"
 #include <algorithm>
 #include <deque>
+#include <map>
+
 using namespace llvm;
 
 #define DEBUG_TYPE "mem2reg"
@@ -49,69 +51,6 @@ STATISTIC(NumSingleStore,   "Number of alloca's promoted with a single store");
 STATISTIC(NumDeadAlloca,    "Number of dead alloca's removed");
 STATISTIC(NumPHIInsert,     "Number of PHI nodes inserted");
 
-bool llvm::isAllocaPromotable(const AllocaInst *AI) {
-  // FIXME: If the memory unit is of pointer or integer type, we can permit
-  // assignments to subsections of the memory unit.
-  unsigned AS = AI->getType()->getAddressSpace();
-
-  SmallPtrSet<const BasicBlock*, 32> blocksInDetachedScope;
-  std::deque<const BasicBlock*> blocksToVisit;
-  blocksToVisit.emplace_back(AI->getParent());
-  while (blocksToVisit.size() != 0) {
-    const BasicBlock* block = blocksToVisit.back();
-    blocksToVisit.pop_back();
-    if(blocksInDetachedScope.insert(block).second) { 
-      const TerminatorInst* term = block->getTerminator();
-      if (const DetachInst* det = dyn_cast<const DetachInst>(term)) {
-        blocksToVisit.emplace_back(det->getContinue());
-      } else {
-        for (unsigned i=0; i<term->getNumSuccessors(); i++) {
-          blocksToVisit.emplace_back(term->getSuccessor(i));
-        }
-      }
-    }
-  }
-
-  // Only allow direct and non-volatile loads and stores...
-  for (const User *U : AI->users()) {
-    if (const LoadInst *LI = dyn_cast<LoadInst>(U)) {
-      // Note that atomic loads can be transformed; atomic semantics do
-      // not have any meaning for a local alloca.
-      if (LI->isVolatile())
-        return false;
-    } else if (const StoreInst *SI = dyn_cast<StoreInst>(U)) {
-      if (SI->getOperand(0) == AI)
-        return false; // Don't allow a store OF the AI, only INTO the AI.
-      // Note that atomic stores can be transformed; atomic semantics do
-      // not have any meaning for a local alloca.
-      if (SI->isVolatile())
-        return false;
-      if (blocksInDetachedScope.count(SI->getParent())==0) {
-        return false;
-      }
-    } else if (const IntrinsicInst *II = dyn_cast<IntrinsicInst>(U)) {
-      if (II->getIntrinsicID() != Intrinsic::lifetime_start &&
-          II->getIntrinsicID() != Intrinsic::lifetime_end)
-        return false;
-    } else if (const BitCastInst *BCI = dyn_cast<BitCastInst>(U)) {
-      if (BCI->getType() != Type::getInt8PtrTy(U->getContext(), AS))
-        return false;
-      if (!onlyUsedByLifetimeMarkers(BCI))
-        return false;
-    } else if (const GetElementPtrInst *GEPI = dyn_cast<GetElementPtrInst>(U)) {
-      if (GEPI->getType() != Type::getInt8PtrTy(U->getContext(), AS))
-        return false;
-      if (!GEPI->hasAllZeroIndices())
-        return false;
-      if (!onlyUsedByLifetimeMarkers(GEPI))
-        return false;
-    } else {
-      return false;
-    }
-  }
-
-  return true;
-}
 
 namespace {
 
@@ -152,13 +91,12 @@ struct AllocaInfo {
         DefiningBlocks.push_back(SI->getParent());
         AllocaPointerVal = SI->getOperand(0);
         OnlyStore = SI;
-      } else {
-        LoadInst *LI = cast<LoadInst>(User);
+      } else if (LoadInst *LI = dyn_cast<LoadInst>(User)) {
         // Otherwise it must be a load instruction, keep track of variable
         // reads.
         UsingBlocks.push_back(LI->getParent());
         AllocaPointerVal = LI;
-      }
+      } else continue;
 
       if (OnlyUsedInOneBlock) {
         if (!OnlyBlock)
@@ -322,6 +260,112 @@ private:
 };
 
 } // end of anonymous namespace
+
+void ExternComputeLiveInBlocks(
+    AllocaInst *AI, AllocaInfo &Info,
+    const SmallPtrSetImpl<BasicBlock *> &DefBlocks,
+    SmallPtrSetImpl<BasicBlock *> &LiveInBlocks);
+
+bool llvm::isAllocaPromotable(const AllocaInst *AIP, DominatorTree &DT) {
+  AllocaInst* AI = const_cast<AllocaInst*>(AIP);
+  // FIXME: If the memory unit is of pointer or integer type, we can permit
+  // assignments to subsections of the memory unit.
+  unsigned AS = AI->getType()->getAddressSpace();
+
+  //SmallPtrSet<const BasicBlock*, 32> storeParallelScopes;
+  //SmallPtrSet<const BasicBlock*, 32> loadParallelScopes;
+  // Only allow direct and non-volatile loads and stores...
+
+  if (AI->use_empty()) return true;
+
+  for (const User *U : AI->users()) {
+    if (const LoadInst *LI = dyn_cast<LoadInst>(U)) {
+      // Note that atomic loads can be transformed; atomic semantics do
+      // not have any meaning for a local alloca.
+      if (LI->isVolatile())
+        return false;
+      //loadParallelScopes.insert(blocksToScope[LI->getParent()]);
+    } else if (const StoreInst *SI = dyn_cast<StoreInst>(U)) {
+      if (SI->getOperand(0) == AI)
+        return false; // Don't allow a store OF the AI, only INTO the AI.
+      // Note that atomic stores can be transformed; atomic semantics do
+      // not have any meaning for a local alloca.
+      if (SI->isVolatile())
+        return false;
+      //storeParallelScopes.insert(blocksToScope[SI->getParent()]);
+    } else if (const IntrinsicInst *II = dyn_cast<IntrinsicInst>(U)) {
+      if (II->getIntrinsicID() != Intrinsic::lifetime_start &&
+          II->getIntrinsicID() != Intrinsic::lifetime_end)
+        return false;
+    } else if (const BitCastInst *BCI = dyn_cast<BitCastInst>(U)) {
+      if (BCI->getType() != Type::getInt8PtrTy(U->getContext(), AS))
+        return false;
+      if (!onlyUsedByLifetimeMarkers(BCI))
+        return false;
+    } else if (const GetElementPtrInst *GEPI = dyn_cast<GetElementPtrInst>(U)) {
+      if (GEPI->getType() != Type::getInt8PtrTy(U->getContext(), AS))
+        return false;
+      if (!GEPI->hasAllZeroIndices())
+        return false;
+      if (!onlyUsedByLifetimeMarkers(GEPI))
+        return false;
+    } else {
+      return false;
+    }
+  }
+
+  AllocaInfo Info;
+  LargeBlockInfo LBI;
+  IDFCalculator IDF(DT);
+  Function &F = *DT.getRoot()->getParent();
+
+  // Calculate the set of read and write-locations for each alloca.  This is
+  // analogous to finding the 'uses' and 'definitions' of each variable.
+  Info.AnalyzeAlloca(AI);
+
+  if (Info.OnlyUsedInOneBlock) return true;
+
+    // If we haven't computed a numbering for the BB's in the function, do so
+    // now.
+
+  DenseMap<BasicBlock *, unsigned> BBNumbers;
+  if (BBNumbers.empty()) {
+    unsigned ID = 0;
+    for (auto &BB : F)
+      BBNumbers[&BB] = ID++;
+  }
+
+    // Unique the set of defining blocks for efficient lookup.
+    SmallPtrSet<BasicBlock *, 32> DefBlocks;
+    DefBlocks.insert(Info.DefiningBlocks.begin(), Info.DefiningBlocks.end());
+
+    // Determine which blocks the value is live in.  These are blocks which lead
+    // to uses.
+    SmallPtrSet<BasicBlock *, 32> LiveInBlocks;
+    ExternComputeLiveInBlocks(AI, Info, DefBlocks, LiveInBlocks);
+
+    // Determine which blocks need phi nodes and see if we can
+    // optimize out some work by avoiding insertion of dead phi nodes.
+    IDF.setLiveInBlocks(LiveInBlocks);
+    IDF.setDefiningBlocks(DefBlocks);
+    SmallVector<BasicBlock *, 32> PHIBlocks;
+    IDF.calculate(PHIBlocks);
+    // Determine which phi nodes want to use a value from a detached
+    // predecessor.  Because register state is not preserved across a
+    // reattach, these alloca's cannot be promoted.
+    bool DetachedPred = false;
+    for (unsigned i = 0, e = PHIBlocks.size(); i != e && !DetachedPred; ++i) {
+      BasicBlock *BB = PHIBlocks[i];
+      for (pred_iterator PI = pred_begin(BB), E = pred_end(BB);
+           PI != E && !DetachedPred; ++PI) {
+        BasicBlock *P = *PI;
+        if (isa<ReattachInst>(P->getTerminator()))
+          DetachedPred = true;
+      }
+    }
+
+  return !DetachedPred;
+}
 
 static void removeLifetimeIntrinsicUsers(AllocaInst *AI) {
   // Knowing that this alloca is promotable, we know that it's safe to kill all
@@ -550,7 +594,7 @@ void PromoteMem2Reg::run() {
   for (unsigned AllocaNum = 0; AllocaNum != Allocas.size(); ++AllocaNum) {
     AllocaInst *AI = Allocas[AllocaNum];
 
-    assert(isAllocaPromotable(AI) && "Cannot promote non-promotable alloca!");
+    assert(isAllocaPromotable(AI, DT) && "Cannot promote non-promotable alloca!");
     assert(AI->getParent()->getParent() == &F &&
            "All allocas should be in the same function, which is same as DF!");
 
@@ -800,6 +844,83 @@ void PromoteMem2Reg::run() {
   }
 
   NewPhiNodes.clear();
+}
+
+
+/// \brief Determine which blocks the value is live in.
+///
+/// These are blocks which lead to uses.  Knowing this allows us to avoid
+/// inserting PHI nodes into blocks which don't lead to uses (thus, the
+/// inserted phi nodes would be dead).
+void ExternComputeLiveInBlocks(
+    AllocaInst *AI, AllocaInfo &Info,
+    const SmallPtrSetImpl<BasicBlock *> &DefBlocks,
+    SmallPtrSetImpl<BasicBlock *> &LiveInBlocks) {
+
+  // To determine liveness, we must iterate through the predecessors of blocks
+  // where the def is live.  Blocks are added to the worklist if we need to
+  // check their predecessors.  Start with all the using blocks.
+  SmallVector<BasicBlock *, 64> LiveInBlockWorklist(Info.UsingBlocks.begin(),
+                                                    Info.UsingBlocks.end());
+
+  // If any of the using blocks is also a definition block, check to see if the
+  // definition occurs before or after the use.  If it happens before the use,
+  // the value isn't really live-in.
+  for (unsigned i = 0, e = LiveInBlockWorklist.size(); i != e; ++i) {
+    BasicBlock *BB = LiveInBlockWorklist[i];
+    if (!DefBlocks.count(BB))
+      continue;
+
+    // Okay, this is a block that both uses and defines the value.  If the first
+    // reference to the alloca is a def (store), then we know it isn't live-in.
+    for (BasicBlock::iterator I = BB->begin();; ++I) {
+      if (StoreInst *SI = dyn_cast<StoreInst>(I)) {
+        if (SI->getOperand(1) != AI)
+          continue;
+
+        // We found a store to the alloca before a load.  The alloca is not
+        // actually live-in here.
+        LiveInBlockWorklist[i] = LiveInBlockWorklist.back();
+        LiveInBlockWorklist.pop_back();
+        --i, --e;
+        break;
+      }
+
+      if (LoadInst *LI = dyn_cast<LoadInst>(I)) {
+        if (LI->getOperand(0) != AI)
+          continue;
+
+        // Okay, we found a load before a store to the alloca.  It is actually
+        // live into this block.
+        break;
+      }
+    }
+  }
+
+  // Now that we have a set of blocks where the phi is live-in, recursively add
+  // their predecessors until we find the full region the value is live.
+  while (!LiveInBlockWorklist.empty()) {
+    BasicBlock *BB = LiveInBlockWorklist.pop_back_val();
+
+    // The block really is live in here, insert it into the set.  If already in
+    // the set, then it has already been processed.
+    if (!LiveInBlocks.insert(BB).second)
+      continue;
+
+    // Since the value is live into BB, it is either defined in a predecessor or
+    // live into it to.  Add the preds to the worklist unless they are a
+    // defining block.
+    for (pred_iterator PI = pred_begin(BB), E = pred_end(BB); PI != E; ++PI) {
+      BasicBlock *P = *PI;
+
+      // The value is not live into a predecessor if it defines the value.
+      if (DefBlocks.count(P))
+        continue;
+
+      // Otherwise it is, add to the worklist.
+      LiveInBlockWorklist.push_back(P);
+    }
+  }
 }
 
 /// \brief Determine which blocks the value is live in.

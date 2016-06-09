@@ -53,6 +53,7 @@
 #include "llvm/Transforms/CilkABI.h"
 #include "llvm/Transforms/Utils/PromoteMemToReg.h"
 #include "llvm/Transforms/Utils/LoopUtils.h"
+#include "llvm/IR/Verifier.h"
 
 using namespace llvm;
 
@@ -79,7 +80,7 @@ namespace {
       AU.addRequired<ScalarEvolutionWrapperPass>();
 //      AU.addRequired<SimplifyCFGPass>();
       AU.addRequiredID(LoopSimplifyID);
-      AU.addRequiredID(LCSSAID);
+//      AU.addRequiredID(LCSSAID);
 //      AU.addPreserved<ScalarEvolutionWrapperPass>();
 //      AU.addPreservedID(LoopSimplifyID);
 //      AU.addPreservedID(LCSSAID);
@@ -257,6 +258,9 @@ PHINode* getIndVar(Loop *L, BasicBlock* detacher) {
     }
   }
 
+  assert( !llvm::verifyFunction(*L->getHeader()->getParent(), &llvm::errs()) );
+
+
   if( RPN == 0 ) {
     errs() << "<no RPN>\n";
     cmp->dump();
@@ -271,7 +275,7 @@ PHINode* getIndVar(Loop *L, BasicBlock* detacher) {
   llvm::Value* mul;
   llvm::Value* newV;
   {
-    IRBuilder<> builder(detacher->getTerminator()->getSuccessor(0)->getFirstNonPHIOrDbgOrLifetime());
+    IRBuilder<> builder(RPN->getParent()->getFirstNonPHIOrDbgOrLifetime());
     if( isOne(amt) ) mul = RPN;
     else mul = builder.CreateMul(RPN, amt);
     if( isZero(RPN->getIncomingValueForBlock(Incoming) )) newV = mul;
@@ -291,12 +295,13 @@ PHINode* getIndVar(Loop *L, BasicBlock* detacher) {
       //replacements.push_back(val);
     }
 
-    ////errs() << "RPN  :\n"; RPN->dump();
-    ////errs() << "MUL  :\n"; mul->dump();
-    ////errs() << "NEWV :\n"; newV->dump();
-    ////errs() << "NEWVP:\n"; ((Instruction*)newV)->getParent()->dump();
+    errs() << "RPN  :\n"; RPN->dump();
+    errs() << "MUL  :\n"; mul->dump();
+    errs() << "NEWV :\n"; newV->dump();
+    errs() << "NEWVP:\n"; ((Instruction*)newV)->getParent()->dump();
   }
 
+  assert( !llvm::verifyFunction(*L->getHeader()->getParent(), &llvm::errs()) );
 
   std::vector<Use*> uses;
   for( auto& U : RPN->uses() ) uses.push_back(&U);
@@ -311,6 +316,9 @@ PHINode* getIndVar(Loop *L, BasicBlock* detacher) {
       U.set( newV );
     }
   }
+ 
+  if( llvm::verifyFunction(*L->getHeader()->getParent(), nullptr) ) L->getHeader()->getParent()->dump();
+  assert( !llvm::verifyFunction(*L->getHeader()->getParent(), &llvm::errs()) );
 
   ////errs() << "CMP: (idx=" << cmpIdx << ")\n"; cmp->dump();
   IRBuilder<> build(cmp);
@@ -341,10 +349,14 @@ PHINode* getIndVar(Loop *L, BasicBlock* detacher) {
     }
     val = build.CreateSDiv(val, amt0);
   }
+
+  assert( !llvm::verifyFunction(*L->getHeader()->getParent(), &llvm::errs()) );
+
   cmp->setOperand(cmpIdx, val);
 
   RPN->setIncomingValue( RPN->getBasicBlockIndex(Incoming),  ConstantInt::get( RPN->getType(), 0 ) );
 
+  assert( !llvm::verifyFunction(*L->getHeader()->getParent(), &llvm::errs()) );
 
   //RPN->getParent()->getParent()->dump();
   ////RPN->dump();
@@ -417,9 +429,12 @@ BasicBlock* getTrueExit(Loop *L){
 }
 
 bool Loop2Cilk::runOnLoop(Loop *L, LPPassManager &LPM) {
-  if (skipOptnoneFunction(L))
+  if (skipOptnoneFunction(L)) {
+  	assert( !llvm::verifyFunction(*L->getHeader()->getParent(), &llvm::errs()) );
     return false;
+  }
 
+	assert( !llvm::verifyFunction(*L->getHeader()->getParent(), &llvm::errs()) );
   errs() << "<Loop>:\n--------------------------------------------------------------------------------------------------------------------------------";
   //for(auto a: L->blocks()){
   //  a->dump();
@@ -454,9 +469,15 @@ bool Loop2Cilk::runOnLoop(Loop *L, LPPassManager &LPM) {
     else {
       errs() << "not branch inst" << "\n";
       T->dump();
+
+  	assert( !llvm::verifyFunction(*L->getHeader()->getParent(), &llvm::errs()) );
     return false;
   }
   }
+
+
+  assert( !llvm::verifyFunction(*L->getHeader()->getParent(), &llvm::errs()) );
+
   BranchInst* B = (BranchInst*)T;
   BasicBlock *detacher = nullptr, *syncer = nullptr;
   if( B->getNumSuccessors() != 2 ) {
@@ -497,8 +518,11 @@ bool Loop2Cilk::runOnLoop(Loop *L, LPPassManager &LPM) {
       if( oendL ) oendL->dump();
       T->dump();
       //T->getParent()->getParent()->dump();
+
+     	assert( !llvm::verifyFunction(*L->getHeader()->getParent(), &llvm::errs()) );
       return false;
     }
+    assert( !llvm::verifyFunction(*L->getHeader()->getParent(), &llvm::errs()) );
 
         assert( syncer && isa<SyncInst>(syncer->getTerminator()) );
 ;
@@ -506,6 +530,7 @@ bool Loop2Cilk::runOnLoop(Loop *L, LPPassManager &LPM) {
     detacher = B->getSuccessor(0);
     syncer = B->getSuccessor(1);
 
+    assert( !llvm::verifyFunction(*L->getHeader()->getParent(), &llvm::errs()) );
 
     if( isa<SyncInst>(detacher->getTerminator()) ){
       BasicBlock* temp = detacher;
@@ -528,6 +553,7 @@ bool Loop2Cilk::runOnLoop(Loop *L, LPPassManager &LPM) {
     BasicBlock* done = getTrueExit(L);
     if( !done ) {
       errs() << "no unique exit block\n";
+      assert( !llvm::verifyFunction(*L->getHeader()->getParent(), &llvm::errs()) );
       return false;
     }
     if( auto BI = dyn_cast<BranchInst>(done->getTerminator()) ) {
@@ -538,6 +564,7 @@ bool Loop2Cilk::runOnLoop(Loop *L, LPPassManager &LPM) {
           done = syncer;
       }
     }
+    assert( !llvm::verifyFunction(*L->getHeader()->getParent(), &llvm::errs()) );
     if( getUniquePred(done) == syncer ){
       //errs() << "has unique pred\n";
       auto term = done->getTerminator();
@@ -549,6 +576,7 @@ bool Loop2Cilk::runOnLoop(Loop *L, LPPassManager &LPM) {
           break;
         }
       if( good ) done = syncer;
+      assert( !llvm::verifyFunction(*L->getHeader()->getParent(), &llvm::errs()) );
     }
     if( done != syncer ) {
       errs() << "exit != sync\n";
@@ -557,17 +585,22 @@ bool Loop2Cilk::runOnLoop(Loop *L, LPPassManager &LPM) {
       //syncer->getParent()->dump();
       return false;
     }
-        assert( syncer && isa<SyncInst>(syncer->getTerminator()) );
+    assert( !llvm::verifyFunction(*L->getHeader()->getParent(), &llvm::errs()) );
+    assert( syncer && isa<SyncInst>(syncer->getTerminator()) );
   }
 
-      assert( syncer && isa<SyncInst>(syncer->getTerminator()) );
+  assert( syncer && isa<SyncInst>(syncer->getTerminator()) );
 
   DetachInst* det = dyn_cast<DetachInst>(detacher->getTerminator() );
+  assert( !llvm::verifyFunction(*L->getHeader()->getParent(), &llvm::errs()) );
   if( det == nullptr ) {
     errs() << "other not detach" << "\n";
     detacher->dump();
+   	assert( !llvm::verifyFunction(*L->getHeader()->getParent(), &llvm::errs()) );
     return false;
   }
+  assert( !llvm::verifyFunction(*L->getHeader()->getParent(), &llvm::errs()) );
+
   nps_begin:
   if( getNonPhiSize(detacher)!=1 ) {
     Instruction* badInst = getLastNonTerm(detacher);
@@ -582,12 +615,15 @@ bool Loop2Cilk::runOnLoop(Loop *L, LPPassManager &LPM) {
         if( !DT.dominates(BasicBlockEdge(detacher, det->getSuccessor(0) ), U) ) { errs() << "use not dominated:\n"; U->dump(); goto nps_error; }
       }
       badInst->moveBefore( getFirstPostPHI(det->getSuccessor(0)) );
+      assert( !llvm::verifyFunction(*L->getHeader()->getParent(), &llvm::errs()) );
       goto nps_begin;
     } else errs() << "mayWrite:\n"; 
     nps_error:
     errs() << "invalid detach size of " << getNonPhiSize(detacher) << "|" << detacher->size() << "\n";
+  	assert( !llvm::verifyFunction(*L->getHeader()->getParent(), &llvm::errs()) );
     return false;
   }
+  assert( !llvm::verifyFunction(*L->getHeader()->getParent(), &llvm::errs()) );
   while( getNonPhiSize(syncer)!=1 ) {
     Instruction* badInst = getLastNonTerm(syncer);
     if( !badInst->mayWriteToMemory() ) {
@@ -595,19 +631,36 @@ bool Loop2Cilk::runOnLoop(Loop *L, LPPassManager &LPM) {
       badInst->moveBefore( getFirstPostPHI(syncer->getTerminator()->getSuccessor(0)) );
     } else {
       errs() << "invalid sync size" << "\n";
+    	assert( !llvm::verifyFunction(*L->getHeader()->getParent(), &llvm::errs()) );
       return false;
     }
+    assert( !llvm::verifyFunction(*L->getHeader()->getParent(), &llvm::errs()) );
+  }
+  assert( !llvm::verifyFunction(*L->getHeader()->getParent(), &llvm::errs()) );
+  while (syncer->size() != 1) {
+    PHINode* pn = cast<PHINode>(& syncer->front());
+    if (pn->getNumIncomingValues() != 1 ) {
+      errs() << "invalid phi for sync\n";
+    	assert( !llvm::verifyFunction(*L->getHeader()->getParent(), &llvm::errs()) );
+      return false;
+    }
+    pn->replaceAllUsesWith(pn->getIncomingValue(0));
+    pn->eraseFromParent();
+    assert( !llvm::verifyFunction(*L->getHeader()->getParent(), &llvm::errs()) );
   }
   errs() << "Found candidate for cilk for!\n"; 
   assert( syncer && isa<SyncInst>(syncer->getTerminator()) );
 
-  syncer->getParent()->dump();
-  syncer->dump();
+  //syncer->getParent()->dump();
+  //syncer->dump();
 
   BasicBlock* body = det->getSuccessor(0);
+  assert( !llvm::verifyFunction(*L->getHeader()->getParent(), &llvm::errs()) );
   PHINode* oldvar = oldvar = getIndVar( L, detacher);//L->getCanonicalInductionVariable();
+  assert( !llvm::verifyFunction(*L->getHeader()->getParent(), &llvm::errs()) );
   if( !oldvar ) {
       errs() << "no induction var\n";
+      assert( !llvm::verifyFunction(*L->getHeader()->getParent(), &llvm::errs()) );
       return false;
   }
   auto tmpH = L->getHeader();
@@ -621,6 +674,7 @@ bool Loop2Cilk::runOnLoop(Loop *L, LPPassManager &LPM) {
     //}
     errs() << "Can only cilk_for loops with only 1 phi node " << tmpH->size() << "|" << getNonPhiSize(tmpH) << "\n";
     tmpH->dump();
+    assert( !llvm::verifyFunction(*L->getHeader()->getParent(), &llvm::errs()) );
     return false;
   }
 
@@ -632,16 +686,19 @@ bool Loop2Cilk::runOnLoop(Loop *L, LPPassManager &LPM) {
       if( ConstantInt* ci = dyn_cast<ConstantInt>(oldvar->getIncomingValue(i))) {
         if( !ci->isZero() ) {
           errs() << "nonzero start";
+          assert( !llvm::verifyFunction(*L->getHeader()->getParent(), &llvm::errs()) );
           return false;
         }
       } else {
         errs() << "non-constant start\n";
+          assert( !llvm::verifyFunction(*L->getHeader()->getParent(), &llvm::errs()) );
         return false;
       }
     } else {
       if( BinaryOperator* bo = dyn_cast<BinaryOperator>(oldvar->getIncomingValue(i))) {
         if( bo->getOpcode() != Instruction::Add ) {
           errs() << "non-adding phi node";
+          assert( !llvm::verifyFunction(*L->getHeader()->getParent(), &llvm::errs()) );
           return false;
         }
         if( oldvar != bo->getOperand(0) ) bo->swapOperands();
@@ -651,16 +708,19 @@ bool Loop2Cilk::runOnLoop(Loop *L, LPPassManager &LPM) {
         if( ConstantInt* ci = dyn_cast<ConstantInt>(bo->getOperand(1))) {
           if( !ci->isOne() ) {
             errs() << "non one inc";
+            assert( !llvm::verifyFunction(*L->getHeader()->getParent(), &llvm::errs()) );
             return false;
           }
         } else {
           errs() << "non-constant inc\n";
           //oldvar->getIncomingValue(i)->dump();
+          assert( !llvm::verifyFunction(*L->getHeader()->getParent(), &llvm::errs()) );
           return false;
         }
         adder = bo;
       } else {
         errs() << "non-constant start\n";
+        assert( !llvm::verifyFunction(*L->getHeader()->getParent(), &llvm::errs()) );
         return false;
       }
     }
@@ -668,6 +728,7 @@ bool Loop2Cilk::runOnLoop(Loop *L, LPPassManager &LPM) {
 
   if( adder == 0 ) {
     errs() << "couldn't check for increment\n";
+    assert( !llvm::verifyFunction(*L->getHeader()->getParent(), &llvm::errs()) );
     return false;
   }
   Value* cmp = 0;
@@ -699,29 +760,35 @@ bool Loop2Cilk::runOnLoop(Loop *L, LPPassManager &LPM) {
       errs() << "comp already set\n";
       errs() << "prev cmp:\n"; cmp->dump();
       errs() << "new cmp:\n"; pred->dump();
+      assert( !llvm::verifyFunction(*L->getHeader()->getParent(), &llvm::errs()) );
       return false;
     }
     BranchInst* b = dyn_cast<BranchInst>(pred->getTerminator());
     if( b == nullptr ) {
       errs() << "loop term not branch\n";
+      assert( !llvm::verifyFunction(*L->getHeader()->getParent(), &llvm::errs()) );
       return false;
     }
 
     if( b->getNumSuccessors() != 2 ) {
       errs() << "branch != 2 succ \n";
+      assert( !llvm::verifyFunction(*L->getHeader()->getParent(), &llvm::errs()) );
       return false;
     }
     if( !(b->getSuccessor(0) == detacher && b->getSuccessor(1) == syncer || b->getSuccessor(1) == detacher && b->getSuccessor(0) == syncer) ) {
       errs() << "invalid branching\n";
+      assert( !llvm::verifyFunction(*L->getHeader()->getParent(), &llvm::errs()) );
       return false;
     }
     llvm::CmpInst* is = dyn_cast<CmpInst>(b->getCondition());
     if( !is ) {
       errs() << "condition was not in block\n";
+      assert( !llvm::verifyFunction(*L->getHeader()->getParent(), &llvm::errs()) );
       return false;
     }
     if( !is->isIntPredicate() ) {
       errs() << "non-integral condition\n";
+      assert( !llvm::verifyFunction(*L->getHeader()->getParent(), &llvm::errs()) );
       return false;
     }
     auto P = is->getPredicate();
@@ -758,6 +825,7 @@ bool Loop2Cilk::runOnLoop(Loop *L, LPPassManager &LPM) {
           break;
         default:
           errs() << "weird opcode2\n";
+          assert( !llvm::verifyFunction(*L->getHeader()->getParent(), &llvm::errs()) );
           return false;
       }
       goto endT;
@@ -770,6 +838,7 @@ bool Loop2Cilk::runOnLoop(Loop *L, LPPassManager &LPM) {
       else {
         errs() << "none are 1\n";
         is->dump();
+        assert( !llvm::verifyFunction(*L->getHeader()->getParent(), &llvm::errs()) );
         return false;
       }
     }
@@ -794,6 +863,7 @@ bool Loop2Cilk::runOnLoop(Loop *L, LPPassManager &LPM) {
         break;
       default:
         errs() << "weird opcode\n";
+        assert( !llvm::verifyFunction(*L->getHeader()->getParent(), &llvm::errs()) );
         return false;
     }
 
@@ -802,6 +872,7 @@ bool Loop2Cilk::runOnLoop(Loop *L, LPPassManager &LPM) {
   endT:
   if( cmp == 0 ) {
     errs() << "cannot find cmp\n";
+    assert( !llvm::verifyFunction(*L->getHeader()->getParent(), &llvm::errs()) );
     return false;
   }
   llvm::CallInst* call = 0;
@@ -827,6 +898,7 @@ bool Loop2Cilk::runOnLoop(Loop *L, LPPassManager &LPM) {
         }
         if( inst->mayHaveSideEffects() ) {
           errs() << "something side fx\n";
+          assert( !llvm::verifyFunction(*L->getHeader()->getParent(), &llvm::errs()) );
           return false;
         }
         inst->moveBefore(pi);
@@ -845,6 +917,7 @@ bool Loop2Cilk::runOnLoop(Loop *L, LPPassManager &LPM) {
 
   if( !extracted ) {
     errs() << "not extracted\n";
+    assert( !llvm::verifyFunction(*L->getHeader()->getParent(), &llvm::errs()) );
     return false;
   }
 
@@ -947,5 +1020,6 @@ bool Loop2Cilk::runOnLoop(Loop *L, LPPassManager &LPM) {
 
   //LPM.verifyAnalysis();
 
+  assert( !llvm::verifyFunction(*Header->getParent(), &llvm::errs()) );
   return true;
 }

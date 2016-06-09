@@ -198,8 +198,12 @@ bool Loop::isLCSSAForm(DominatorTree &DT) const {
         // entry are special; uses in them don't need to go through PHIs.
         if (UserBB != BB &&
             !contains(UserBB) &&
-            DT.isReachableFromEntry(UserBB))
+            DT.isReachableFromEntry(UserBB)) {
+          errs() << "INVL\n";
+          I->dump();
+          UI->dump();
           return false;
+        }
       }
     }
   }

@@ -3638,6 +3638,7 @@ bool SROA::presplitLoadsAndStores(AllocaInst &AI, AllocaSlices &AS) {
       // a direct store) as needing to be resplit because it is no longer
       // promotable.
       if (AllocaInst *OtherAI = dyn_cast<AllocaInst>(StoreBasePtr)) {
+        {}//assert(isAllocaPromotable(OtherAI) && "Alloca must be promotable");
         ResplitPromotableAllocas.insert(OtherAI);
         Worklist.insert(OtherAI);
       } else if (AllocaInst *OtherAI = dyn_cast<AllocaInst>(
@@ -3750,6 +3751,7 @@ bool SROA::presplitLoadsAndStores(AllocaInst &AI, AllocaSlices &AS) {
     if (!SplitLoads) {
       if (AllocaInst *OtherAI = dyn_cast<AllocaInst>(LoadBasePtr)) {
         assert(OtherAI != &AI && "We can't re-split our own alloca!");
+        {}//assert(isAllocaPromotable(OtherAI) && "Alloca must be promotable");
         ResplitPromotableAllocas.insert(OtherAI);
         Worklist.insert(OtherAI);
       } else if (AllocaInst *OtherAI = dyn_cast<AllocaInst>(
@@ -3925,6 +3927,7 @@ AllocaInst *SROA::rewritePartition(AllocaInst &AI, AllocaSlices &AS,
   if (Promotable) {
     if (PHIUsers.empty() && SelectUsers.empty()) {
       // Promote the alloca.
+      {}//assert(isAllocaPromotable(NewAI) && "Alloca must be promotable");
       PromotableAllocas.push_back(NewAI);
     } else {
       // If we have either PHIs or Selects to speculate, add them to those
@@ -4188,6 +4191,8 @@ bool SROA::promoteAllocas(Function &F) {
   NumPromoted += PromotableAllocas.size();
 
   DEBUG(dbgs() << "Promoting allocas with mem2reg...\n");
+  for( auto a : PromotableAllocas) 
+        {}//assert(isAllocaPromotable(a) && "Alloca must be promotable");
   PromoteMemToReg(PromotableAllocas, *DT, nullptr, AC);
   PromotableAllocas.clear();
   return true;

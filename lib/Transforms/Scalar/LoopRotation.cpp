@@ -12,6 +12,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/Transforms/Scalar.h"
+#include "llvm/Transforms/Utils/LoopUtils.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/Analysis/AliasAnalysis.h"
 #include "llvm/Analysis/BasicAliasAnalysis.h"
@@ -36,6 +37,9 @@
 #include "llvm/Transforms/Utils/Local.h"
 #include "llvm/Transforms/Utils/SSAUpdater.h"
 #include "llvm/Transforms/Utils/ValueMapper.h"
+
+#include "llvm/IR/Verifier.h"
+
 using namespace llvm;
 
 #define DEBUG_TYPE "loop-rotate"
@@ -540,25 +544,51 @@ static bool iterativelyRotateLoop(Loop *L, unsigned MaxHeaderSize, LoopInfo *LI,
                                   const TargetTransformInfo *TTI,
                                   AssumptionCache *AC, DominatorTree *DT,
                                   ScalarEvolution *SE) {
+
+	assert( !llvm::verifyFunction(*L->getHeader()->getParent(), &llvm::errs()) );
   // Save the loop metadata.
   MDNode *LoopMD = L->getLoopID();
 
   // Simplify the loop latch before attempting to rotate the header
   // upward. Rotation may not be needed if the loop tail can be folded into the
   // loop exit.
+
+    assert(L->isLCSSAForm(*DT) && "Loop is not in LCSSA form.");
+    assert((!L->getParentLoop() || L->getParentLoop()->isLCSSAForm(*DT)) &&
+         "Parent loop not left in LCSSA form after Loop-rotation!");
+
   bool SimplifiedLatch = simplifyLoopLatch(L, LI, DT);
+
+    assert(L->isLCSSAForm(*DT) && "Loop is not in LCSSA form.");
+    assert((!L->getParentLoop() || L->getParentLoop()->isLCSSAForm(*DT)) &&
+         "Parent loop not left in LCSSA form after Loop-rotation!");
+
+
+	assert( !llvm::verifyFunction(*L->getHeader()->getParent(), &llvm::errs()) );
 
   // One loop can be rotated multiple times.
   bool MadeChange = false;
   while (rotateLoop(L, MaxHeaderSize, LI, TTI, AC, DT, SE, SimplifiedLatch)) {
     MadeChange = true;
     SimplifiedLatch = false;
+
+	assert( !llvm::verifyFunction(*L->getHeader()->getParent(), &llvm::errs()) );
+    if (L && !L->isLCSSAForm(*DT)) llvm::formLCSSARecursively(*L,*DT, LI, SE);
+    if (L->getParentLoop() && !L->getParentLoop()->isLCSSAForm(*DT)) llvm::formLCSSARecursively(*L->getParentLoop(),*DT, LI, SE);
+    assert(L->isLCSSAForm(*DT) && "Loop is not in LCSSA form.");
+    assert((!L->getParentLoop() || L->getParentLoop()->isLCSSAForm(*DT)) &&
+         "Parent loop not left in LCSSA form after Loop-rotation!");
+
   }
 
   // Restore the loop metadata.
   // NB! We presume LoopRotation DOESN'T ADD its own metadata.
   if ((MadeChange || SimplifiedLatch) && LoopMD)
     L->setLoopID(LoopMD);
+
+    assert(L->isLCSSAForm(*DT) && "Loop is not in LCSSA form.");
+    assert((!L->getParentLoop() || L->getParentLoop()->isLCSSAForm(*DT)) &&
+         "Parent loop not left in LCSSA form after Loop-rotation!");
 
   return MadeChange;
 }
@@ -588,7 +618,7 @@ public:
     AU.addRequiredID(LoopSimplifyID);
     AU.addPreservedID(LoopSimplifyID);
     AU.addRequiredID(LCSSAID);
-    AU.addPreservedID(LCSSAID);
+    //AU.addPreservedID(LCSSAID);
     AU.addPreserved<ScalarEvolutionWrapperPass>();
     AU.addPreserved<SCEVAAWrapperPass>();
     AU.addRequired<TargetTransformInfoWrapperPass>();
@@ -599,6 +629,9 @@ public:
   bool runOnLoop(Loop *L, LPPassManager &LPM) override {
     if (skipOptnoneFunction(L))
       return false;
+
+  	assert( !llvm::verifyFunction(*L->getHeader()->getParent(), &llvm::errs()) );
+
     Function &F = *L->getHeader()->getParent();
 
     auto *LI = &getAnalysis<LoopInfoWrapperPass>().getLoopInfo();
@@ -609,7 +642,19 @@ public:
     auto *SEWP = getAnalysisIfAvailable<ScalarEvolutionWrapperPass>();
     auto *SE = SEWP ? &SEWP->getSE() : nullptr;
 
-    return iterativelyRotateLoop(L, MaxHeaderSize, LI, TTI, AC, DT, SE);
+    assert(L->isLCSSAForm(*DT) && "Loop is not in LCSSA form.");
+    assert((!L->getParentLoop() || L->getParentLoop()->isLCSSAForm(*DT)) &&
+         "Parent loop not left in LCSSA form before Loop-rotation!");
+
+    bool ret = iterativelyRotateLoop(L, MaxHeaderSize, LI, TTI, AC, DT, SE);
+
+    assert(L->isLCSSAForm(*DT) && "Loop is not in LCSSA form.");
+    assert((!L->getParentLoop() || L->getParentLoop()->isLCSSAForm(*DT)) &&
+         "Parent loop not left in LCSSA form after Loop-rotation!");
+
+  	assert( !llvm::verifyFunction(*L->getHeader()->getParent(), &llvm::errs()) );
+
+    return ret;
   }
 };
 }

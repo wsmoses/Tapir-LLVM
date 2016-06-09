@@ -56,19 +56,18 @@ static RegisterPass<CilkPass> X("detach2cilk", "Promote Detach to Cilk Runtime",
 //                false, false)
 
 bool CilkPass::runOnFunction(Function &F) {
-
 	bool Changed  = false;
 	for (Function::iterator i = F.begin(), e = F.end(); i != e; ++i) {
 		TerminatorInst* term = i->getTerminator();
 		if( term == nullptr ) continue;
 		if( DetachInst* inst = llvm::dyn_cast<DetachInst>(term) ) {
-          errs() << "<PRE>\n";
+          errs() << "<D2C>\n";
           //F.dump();
-          errs() << "</PRE>\n";
+          //errs() << "</PRE>\n";
 		  llvm::cilk::createDetach(*inst, ClInstrumentCilk);
-          errs() << "<POST>\n";
+          //errs() << "<POST>\n";
           //F.dump();
-          errs() << "</POST>\n";
+          errs() << "</D2C>\n";
 		  Changed = true;
 		} else continue;
 	}

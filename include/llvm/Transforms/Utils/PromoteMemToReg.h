@@ -30,7 +30,7 @@ class AssumptionCache;
 /// (transitively) using this alloca. This also enforces that there is only
 /// ever one layer of bitcasts or GEPs between the alloca and the lifetime
 /// markers.
-bool isAllocaPromotable(const AllocaInst *AI);
+bool isAllocaPromotable(const AllocaInst *AI, DominatorTree &DT);
 
 /// \brief Promote the specified list of alloca instructions into scalar
 /// registers, inserting PHI nodes as appropriate.

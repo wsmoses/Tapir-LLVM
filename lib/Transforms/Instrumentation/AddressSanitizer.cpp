@@ -855,13 +855,14 @@ bool AddressSanitizer::isInterestingAlloca(AllocaInst &AI) {
   if (PreviouslySeenAllocaInfo != ProcessedAllocas.end())
     return PreviouslySeenAllocaInfo->getSecond();
 
+  assert(DT);
   bool IsInteresting =
       (AI.getAllocatedType()->isSized() &&
        // alloca() may be called with 0 size, ignore it.
        getAllocaSizeInBytes(&AI) > 0 &&
        // We are only interested in allocas not promotable to registers.
        // Promotable allocas are common under -O0.
-       (!ClSkipPromotableAllocas || !isAllocaPromotable(&AI)) &&
+       (!ClSkipPromotableAllocas || !isAllocaPromotable(&AI, *DT)) &&
        // inalloca allocas are not treated as static, and we don't want
        // dynamic alloca instrumentation for them as well.
        !AI.isUsedWithInAlloca());

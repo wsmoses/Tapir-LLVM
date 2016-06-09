@@ -85,7 +85,7 @@ bool PromotePass::runOnFunction(Function &F) {
       if (!toRun) continue;
       for (BasicBlock::iterator I = BB.begin(), E = --BB.end(); I != E; ++I)
         if (AllocaInst *AI = dyn_cast<AllocaInst>(I))       // Is it an alloca?
-          if (isAllocaPromotable(AI))
+          if (isAllocaPromotable(AI, DT))
             Allocas.push_back(AI);
     }
 
