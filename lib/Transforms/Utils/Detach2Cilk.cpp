@@ -13,6 +13,8 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/Transforms/CilkABI.h"
+#include "llvm/IR/Verifier.h"
+
 
 #define DEBUG_TYPE "detach2cilk"
 
@@ -67,6 +69,11 @@ bool CilkPass::runOnFunction(Function &F) {
 		  llvm::cilk::createDetach(*inst, ClInstrumentCilk);
           //errs() << "<POST>\n";
           //F.dump();
+          if( llvm::verifyFunction(F, nullptr) ) {
+            F.dump(); 
+          }
+          assert( !llvm::verifyFunction(F, &llvm::errs()) );
+
           errs() << "</D2C>\n";
 		  Changed = true;
 		} else continue;
@@ -76,9 +83,19 @@ bool CilkPass::runOnFunction(Function &F) {
 		TerminatorInst* term = i->getTerminator();
 		if( term == nullptr ) continue;
     		if( SyncInst* inst = llvm::dyn_cast<SyncInst>(term) ) {
-		  llvm::cilk::createSync(*inst, ClInstrumentCilk);
+    		  llvm::cilk::createSync(*inst, ClInstrumentCilk);
+
+          if( llvm::verifyFunction(F, nullptr) ) {
+            F.dump(); 
+          }
+          assert( !llvm::verifyFunction(F, &llvm::errs()) );
 		}
 	}
+
+  if( llvm::verifyFunction(F, nullptr) ) {
+    F.dump(); 
+  }
+  assert( !llvm::verifyFunction(F, &llvm::errs()) );
 
 	return Changed;
 }

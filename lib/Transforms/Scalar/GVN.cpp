@@ -51,6 +51,7 @@
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include "llvm/Transforms/Utils/Local.h"
 #include "llvm/Transforms/Utils/SSAUpdater.h"
+#include "llvm/IR/Verifier.h"
 #include <vector>
 using namespace llvm;
 using namespace PatternMatch;
@@ -2444,6 +2445,11 @@ bool GVN::runOnFunction(Function& F) {
   if (skipOptnoneFunction(F))
     return false;
 
+  if( llvm::verifyFunction(F, nullptr) ) {
+    F.dump();
+  }
+  assert( !llvm::verifyFunction(F, &llvm::errs()) );
+
   if (!NoLoads)
     MD = &getAnalysis<MemoryDependenceAnalysis>();
   DT = &getAnalysis<DominatorTreeWrapperPass>().getDomTree();
@@ -2476,6 +2482,11 @@ bool GVN::runOnFunction(Function& F) {
     ++Iteration;
   }
 
+  if( llvm::verifyFunction(F, nullptr) ) {
+    F.dump();
+  }
+  assert( !llvm::verifyFunction(F, &llvm::errs()) );
+
   if (EnablePRE) {
     // Fabricate val-num for dead-code in order to suppress assertion in
     // performPRE().
@@ -2496,6 +2507,11 @@ bool GVN::runOnFunction(Function& F) {
   // Do not cleanup DeadBlocks in cleanupGlobalSets() as it's called for each
   // iteration. 
   DeadBlocks.clear();
+
+  if( llvm::verifyFunction(F, nullptr) ) {
+    F.dump();
+  }
+  assert( !llvm::verifyFunction(F, &llvm::errs()) );
 
   return Changed;
 }
@@ -2658,9 +2674,9 @@ bool GVN::performScalarPRE(Instruction *CurInst) {
 
     if (!predV) {
       if (!isa<ReattachInst>(P->getTerminator())) {
-	predMap.push_back(std::make_pair(static_cast<Value *>(nullptr), P));
-	PREPred = P;
-	++NumWithout;
+	      predMap.push_back(std::make_pair(static_cast<Value *>(nullptr), P));
+	      PREPred = P;
+	      ++NumWithout;
       }
     } else if (predV == CurInst) {
       /* CurInst dominates this predecessor. */
@@ -2669,9 +2685,9 @@ bool GVN::performScalarPRE(Instruction *CurInst) {
     } else {
       predMap.push_back(std::make_pair(predV, P));
       if (isa<DetachInst>(P->getTerminator())) 
-	DetachV = predV;
+	      DetachV = predV;
       if (isa<ReattachInst>(P->getTerminator()))
-	ReattachV = predV;
+	      ReattachV = predV;
       ++NumWith;
     }
   }
@@ -2689,8 +2705,8 @@ bool GVN::performScalarPRE(Instruction *CurInst) {
 
   if (ReattachPred) {
     assert(DetachPred && "Reattach predecessor found with no detach predecessor");
-    if (nullptr != DetachV)
-      predMap.push_back(std::make_pair(DetachV, ReattachPred));
+    //if (nullptr != DetachV)
+    //  predMap.push_back(std::make_pair(DetachV, ReattachPred));
   }
 
   // We may have a case where all predecessors have the instruction,
@@ -2736,10 +2752,18 @@ bool GVN::performScalarPRE(Instruction *CurInst) {
       PHINode::Create(CurInst->getType(), predMap.size(),
                       CurInst->getName() + ".pre-phi", &CurrentBlock->front());
   for (unsigned i = 0, e = predMap.size(); i != e; ++i) {
-    if (Value *V = predMap[i].first)
+    if (Value *V = predMap[i].first) {
       Phi->addIncoming(V, predMap[i].second);
-    else
+      //llvm::errs() << "\nthing: ";
+      //V->dump();
+      //llvm::errs() << " vs " << predMap[i].second->getName() << "\n";
+    }
+    else {
       Phi->addIncoming(PREInstr, PREPred);
+      //llvm::errs() << "\nthing2: ";
+      //PREInstr->dump();
+      //llvm::errs() << " vs " << PREPred->getName() << "\n";
+    }
   }
 
   VN.add(Phi, ValNo);
@@ -2928,8 +2952,10 @@ void GVN::addDeadBlock(BasicBlock *BB) {
 
       for (BasicBlock::iterator II = B->begin(); isa<PHINode>(II); ++II) {
         PHINode &Phi = cast<PHINode>(*II);
+        assert( Phi.getNumIncomingValues() <= Preds.size() );
         Phi.setIncomingValue(Phi.getBasicBlockIndex(P),
                              UndefValue::get(Phi.getType()));
+        assert( Phi.getNumIncomingValues() <= Preds.size() );
       }
     }
   }

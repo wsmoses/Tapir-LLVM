@@ -430,11 +430,26 @@ static CallInst *EmitCilkSetJmp(IRBuilder<> &B, Value *SF, Module& M) {
 
   // Call LLVM's EH setjmp, which is lightweight.
 
-  Value* F = Intrinsic::getDeclaration(&M, Intrinsic::eh_sjlj_setjmp);
+  Value* F;
+
+  AttrBuilder attrs;
+
+//{ nounwind returns_twice "disable-tail-calls"="false" "less-precise-fpmad"="false" "no-frame-pointer-elim"="true" "no-frame-pointer-elim-non-leaf" "no-infs-fp-math"="false" "no-nans-fp-math"="false" "stack-protector-buffer-size"="8" "target-cpu"="x86-64" "target-features"="+fxsr,+mmx,+sse,+sse2" "unsafe-fp-math"="false" "use-soft-float"="false" }
+  attrs.addAttribute(Attribute::AttrKind::NoUnwind);
+  attrs.addAttribute(Attribute::AttrKind::ReturnsTwice);
+
+  //AttributeSet aset = AttributeSet::get(Ctx,0,attrs);
+  //F = M.getOrInsertFunction( "_setjmp", FunctionType::get( Int32Ty, { Int8PtrTy }, false ), aset );
+  //F->dump();
+  
+  F = Intrinsic::getDeclaration(&M, Intrinsic::eh_sjlj_setjmp);
+
   Buf = B.CreateBitCast(Buf, Int8PtrTy);
 
   CallInst *SetjmpCall = B.CreateCall(F, Buf);
   SetjmpCall->setCanReturnTwice();
+
+  //M.dump();
   return SetjmpCall;
 }
 
@@ -1330,16 +1345,130 @@ static inline llvm::Value* GetOrInitStackFrame(Function& F, bool fast = true, bo
 
 static inline void createSync(SyncInst& inst,
                               bool instrument = false) {
-  Function& F = *(inst.getParent()->getParent());
-  Module* M = F.getParent();
+  Function* Fn = (inst.getParent()->getParent());
+  Module& M = * Fn->getParent();
 
-  llvm::Value* args[1] = { GetOrInitStackFrame( F, /*isFast*/false, instrument) };
+
+  llvm::Value* SF = GetOrInitStackFrame( *Fn, /*isFast*/false, instrument);
   //assert( args[0] && "sync used in function without frame!" );
-  CallInst::Create( GetCilkSyncFn( *M, instrument ), args, "", /*insert before*/&inst );
+//  CallInst::Create( GetCilkSyncFn( *M, instrument ), args, "", /*insert before*/&inst );
 
-  BranchInst* toReplace = BranchInst::Create( inst.getSuccessor(0) );
+  LLVMContext &Ctx = M.getContext();
+
+  BasicBlock *Entry = BasicBlock::Create(Ctx, "cilk.sync.test", Fn),
+    *SaveState = BasicBlock::Create(Ctx, "cilk.sync.savestate", Fn),
+    *SyncCall = BasicBlock::Create(Ctx, "cilk.sync.runtimecall", Fn),
+    *Excepting = BasicBlock::Create(Ctx, "cilk.sync.excepting", Fn),
+    *Rethrow = EXCEPTIONS ?
+    BasicBlock::Create(Ctx, "cilk.sync.rethrow", Fn) : 0,
+    *Exit = BasicBlock::Create(Ctx, "cilk.sync.end", Fn);
+
+  auto succ = inst.getSuccessor(0);
+
+  llvm::BasicBlock::iterator i = succ->begin();
+  while (llvm::isa<llvm::PHINode>(i) ) {
+    llvm::PHINode* PN = cast<llvm::PHINode>(&*i);
+    llvm::Value* V = PN->getIncomingValueForBlock(inst.getParent());
+    PN->addIncoming(V, Exit);
+    PN->removeIncomingValue(inst.getParent());
+    ++i;
+  }
+
+
+  BranchInst* toReplace = BranchInst::Create( Entry );
 
   ReplaceInstWithInst(&inst, toReplace);
+
+// If we get here we need to add the function body
+
+  ////////////////////////////////////////////////////////////////////////////////////////////////
+
+  // Entry
+  {
+    IRBuilder<> B(Entry);
+
+    if (instrument)
+      // cilk_sync_begin
+      B.CreateCall(CILK_CSI_FUNC(sync_begin, M), SF);
+
+    // if (sf->flags & CILK_FRAME_UNSYNCHED)
+    Value *Flags = LoadField(B, SF, StackFrameBuilder::flags);
+    Flags = B.CreateAnd(Flags,
+                        ConstantInt::get(Flags->getType(),
+                                         CILK_FRAME_UNSYNCHED));
+    Value *Zero = ConstantInt::get(Flags->getType(), 0);
+    Value *Unsynced = B.CreateICmpEQ(Flags, Zero);
+    B.CreateCondBr(Unsynced, Exit, SaveState);
+  }
+
+  // SaveState
+  {
+    IRBuilder<> B(SaveState);
+
+    // sf.parent_pedigree = sf.worker->pedigree;
+    StoreField(B,
+               LoadField(B, LoadField(B, SF, StackFrameBuilder::worker),
+                         WorkerBuilder::pedigree),
+               SF, StackFrameBuilder::parent_pedigree);
+
+    // if (!CILK_SETJMP(sf.ctx))
+    Value *C = EmitCilkSetJmp(B, SF, M);
+    C = B.CreateICmpEQ(C, ConstantInt::get(C->getType(), 0));
+    B.CreateCondBr(C, SyncCall, Excepting);
+  }
+
+  // SyncCall
+  {
+    IRBuilder<> B(SyncCall);
+
+    // __cilkrts_sync(&sf);
+    B.CreateCall(CILKRTS_FUNC(sync, M), SF);
+    B.CreateBr(Exit);
+  }
+
+  // Excepting
+  {
+    IRBuilder<> B(Excepting);
+    if (EXCEPTIONS) {
+      Value *Flags = LoadField(B, SF, StackFrameBuilder::flags);
+      Flags = B.CreateAnd(Flags,
+                          ConstantInt::get(Flags->getType(),
+                                           CILK_FRAME_EXCEPTING));
+      Value *Zero = ConstantInt::get(Flags->getType(), 0);
+      Value *C = B.CreateICmpEQ(Flags, Zero);
+      B.CreateCondBr(C, Exit, Rethrow);
+    } else {
+      B.CreateBr(Exit);
+    }
+  }
+
+  // Rethrow
+  if (EXCEPTIONS) {
+    IRBuilder<> B(Rethrow);
+    B.CreateCall(CILKRTS_FUNC(rethrow, M), SF)->setDoesNotReturn();
+    B.CreateUnreachable();
+  }
+
+  // Exit
+  {
+    IRBuilder<> B(Exit);
+
+    // ++sf.worker->pedigree.rank;
+    Value *Rank = LoadField(B, SF, StackFrameBuilder::worker);
+    Rank = GEP(B, Rank, WorkerBuilder::pedigree);
+    Rank = GEP(B, Rank, PedigreeBuilder::rank);
+    B.CreateStore(B.CreateAdd(B.CreateLoad(Rank),
+                              ConstantInt::get(Rank->getType()->getPointerElementType(),
+                                               1)),
+                  Rank);
+    if (instrument)
+      // cilk_sync_end
+      B.CreateCall(CILK_CSI_FUNC(sync_end, M), SF);
+
+    B.CreateBr(succ);
+  }
+  ////////////////////////////////////////////////////////////////////////////////////////////////
+
 }
 
 static inline void replaceInList(llvm::Value* v,
@@ -1364,7 +1493,7 @@ static inline Function* extractDetachBodyToFunction(DetachInst& detach,
 						    llvm::Value** closed = 0) {
   llvm::BasicBlock* detB = detach.getParent();
   Function& F = *(detB->getParent());
-  Module* M = F.getParent();
+  //Module* M = F.getParent();
   // LLVMContext& Context = F.getContext();
   // const DataLayout& DL = M->getDataLayout();
 
@@ -1541,7 +1670,7 @@ static inline Function* extractDetachBodyToFunction(DetachInst& detach,
         assert( dyn_cast<Instruction>(a) );
         ((Instruction*)a)->getParent()->getParent()->dump();
         errs() << "<BAD>\n";
-	a->dump();
+	      a->dump();
         for( auto& b : ((Instruction*)a)->uses() )
           b.getUser()->dump();
 
@@ -1556,6 +1685,7 @@ static inline Function* extractDetachBodyToFunction(DetachInst& detach,
 
   Function* extracted = extractor.extractCodeRegion();
   assert( extracted && "could not extract code" );
+  extracted->addFnAttr(Attribute::AttrKind::NoInline);
 
   Instruction* last = extracted->getEntryBlock().getFirstNonPHI();
   for( int i=moveToFront.size()-1; i>=0; i-- ){
