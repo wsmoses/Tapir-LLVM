@@ -414,11 +414,11 @@ PHINode* getIndVar(Loop *L, BasicBlock* detacher, DominatorTree& DT) {
 
   assert( !llvm::verifyFunction(*L->getHeader()->getParent(), &llvm::errs()) );
 
-  llvm::errs() << "A RPN-parent-parent: "; RPN->getParent()->getParent()->dump();
+  //llvm::errs() << "A RPN-parent-parent: "; RPN->getParent()->getParent()->dump();
 
   cmp->setOperand(cmpIdx, val);
 
-  llvm::errs() << "B RPN-parent-parent: "; RPN->getParent()->getParent()->dump();
+  //llvm::errs() << "B RPN-parent-parent: "; RPN->getParent()->getParent()->dump();
 
   RPN->setIncomingValue( RPN->getBasicBlockIndex(Incoming),  ConstantInt::get( RPN->getType(), 0 ) );
 
@@ -729,9 +729,9 @@ bool Loop2Cilk::runOnLoop(Loop *L, LPPassManager &LPM) {
   oldvar = getIndVar( L, detacher, DT);//L->getCanonicalInductionVariable();
   }
 
-  llvm::errs() << "<IND>\n";
-  L->getHeader()->getParent()->dump();
-  llvm::errs() << "</IND>\n";
+  //llvm::errs() << "<IND>\n";
+  //L->getHeader()->getParent()->dump();
+  //llvm::errs() << "</IND>\n";
   assert( !llvm::verifyFunction(*L->getHeader()->getParent(), &llvm::errs()) );
   if( !oldvar ) {
       errs() << "no induction var\n";
