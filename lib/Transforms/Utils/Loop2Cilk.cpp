@@ -298,15 +298,32 @@ PHINode* getIndVar(Loop *L, BasicBlock* detacher, DominatorTree& DT) {
       if( !isZero(add0) ) val = builder.CreateAdd(val,add0);
       if (val != RPN) toIgnore.insert(val);
       //std::get<0>(a)->dump();
-      for( auto& u : std::get<0>(a)->uses() ) {
-        if( u == std::get<0>(a) ) continue;
-        if( !DT.dominates((Instruction*) val, u) ) {
+      Instruction* ival = cast<Instruction>(val);
+
+      for (auto& u : std::get<0>(a)->uses()) {
+        Instruction *user = cast<Instruction>(u.getUser());
+
+        //No need to override use in PHINode itself
+        if (user == std::get<0>(a)) continue;
+        //No need to override use in increment
+        if (user == std::get<1>(a)) continue;
+
+        if (!DT.dominates(ival, user)) {
+          bool movable = true;
+          for( auto & u2 : user->uses() ) {
+             if( !DT.dominates(ival, u2) ) { movable = false; break; }
+          }
+          if (movable) {
+             user->moveBefore(ival);
+             ival->moveBefore(user);
+             continue;
+          }
           val->dump();
-          u->dump();
+          user->dump();
           std::get<0>(a)->dump();
           H->getParent()->dump();
         }
-        assert( DT.dominates((Instruction*) val, u) );
+        assert(DT.dominates(ival, user));
       }
       std::get<0>(a)->replaceAllUsesWith(val);
       std::get<0>(a)->eraseFromParent();
@@ -320,6 +337,7 @@ PHINode* getIndVar(Loop *L, BasicBlock* detacher, DominatorTree& DT) {
     errs() << "NEWVP:\n"; ((Instruction*)newV)->getParent()->dump();
   }
 
+  if( llvm::verifyFunction(*L->getHeader()->getParent(), nullptr) ) L->getHeader()->getParent()->dump();
   assert( !llvm::verifyFunction(*L->getHeader()->getParent(), &llvm::errs()) );
 
   std::vector<Use*> uses;
@@ -331,7 +349,17 @@ PHINode* getIndVar(Loop *L, BasicBlock* detacher, DominatorTree& DT) {
     else if( toIgnore.count(I) > 0 && I != RPN ) continue;
     else if( uncast(I) == cmp || I == cmp->getOperand(0) || I == cmp->getOperand(1) || uncast(I) == cmp || I == RPN || I->getParent() == cmp->getParent() || I->getParent() == detacher) continue;
     else {
-      if( !DT.dominates((Instruction*) newV, U) ) {
+      Instruction* ival = cast<Instruction>(newV);
+      if( !DT.dominates((Instruction*) ival, U) ) {
+        bool movable = true;
+        for( auto & u2 : I->uses() ) {
+           if( !DT.dominates(ival, u2) ) { movable = false; break; }
+        }
+        if (movable) {
+           I->moveBefore(ival);
+           ival->moveBefore(I);
+           continue;
+        }
         llvm::errs() << "newV: ";
         newV->dump();
         llvm::errs() << "U: ";
@@ -987,20 +1015,20 @@ bool Loop2Cilk::runOnLoop(Loop *L, LPPassManager &LPM) {
   }
   assert( !llvm::verifyFunction(*Header->getParent(), &llvm::errs()) );
 
-  errs() << "<cmp>\n";
-  cmp->dump();
-  Header->getParent()->dump();
-  detacher->dump();
-  errs() << "oldV: ";
-  oldvar->dump(); 
-  errs() << "</cmp>\n";
+  //errs() << "<cmp>\n";
+  //cmp->dump();
+  //Header->getParent()->dump();
+  //detacher->dump();
+  //errs() << "oldV: ";
+  //oldvar->dump(); 
+  //errs() << "</cmp>\n";
 
   if( llvm::verifyFunction(*Header->getParent(), nullptr) ) {
     Header->getParent()->dump();
   }
   assert( !llvm::verifyFunction(*Header->getParent(), &llvm::errs()) );
   Function* extracted = llvm::cilk::extractDetachBodyToFunction( *det, &call, /*closure*/ oldvar, &closure );
-  Header->getParent()->dump();
+  //Header->getParent()->dump();
 
   if( !extracted ) {
     errs() << "not extracted\n";

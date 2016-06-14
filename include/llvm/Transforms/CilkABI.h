@@ -1486,33 +1486,21 @@ static inline void replaceInList(llvm::Value* v,
 
 }
 
-//Returns true if success
-static inline Function* extractDetachBodyToFunction(DetachInst& detach,
-						    llvm::CallInst** call = 0,
-						    llvm::Value* closure = 0,
-						    llvm::Value** closed = 0) {
-  llvm::BasicBlock* detB = detach.getParent();
-  Function& F = *(detB->getParent());
-  //Module* M = F.getParent();
-  // LLVMContext& Context = F.getContext();
-  // const DataLayout& DL = M->getDataLayout();
+static inline bool populateDetachedCFG(DetachInst& detach, SmallPtrSet<BasicBlock*,32>& functionPieces, SmallVector<BasicBlock*, 32 >& reattachB) {
+  SmallVector<BasicBlock *, 32> todo;
 
   BasicBlock* Spawned  = detach.getSuccessor(0);
   BasicBlock* Continue = detach.getSuccessor(1);
-
-  SmallPtrSet<BasicBlock *, 32> functionPieces;
-  SmallVector<BasicBlock *, 32> todo;
   todo.push_back(Spawned);
 
-  SmallVector<BasicBlock*, 32 > reattachB;
   while( todo.size() > 0 ){
     BasicBlock* BB = todo.pop_back_val();
-    // functionPieces.insert(BB);
+
     if (!functionPieces.insert(BB).second)
       continue;
 
     TerminatorInst* term = BB->getTerminator();
-    if( term == nullptr ) return nullptr;
+    if (term == nullptr) return false;
     if( ReattachInst* inst = llvm::dyn_cast<ReattachInst>(term) ) {
       //only analyze reattaches going to the same continuation
       if( inst->getSuccessor(0) != Continue ) continue;
@@ -1544,9 +1532,30 @@ static inline Function* extractDetachBodyToFunction(DetachInst& detach,
     } else {
       term->dump();
       assert( 0 && "Detached block did not absolutely terminate in reattach");
-      return nullptr;
+      return false;
     }
   }
+  return true;
+}
+
+//Returns true if success
+static inline Function* extractDetachBodyToFunction(DetachInst& detach,
+						    llvm::CallInst** call = 0,
+						    llvm::Value* closure = 0,
+						    llvm::Value** closed = 0) {
+  llvm::BasicBlock* detB = detach.getParent();
+  Function& F = *(detB->getParent());
+  //Module* M = F.getParent();
+  // LLVMContext& Context = F.getContext();
+  // const DataLayout& DL = M->getDataLayout();
+
+  BasicBlock* Spawned  = detach.getSuccessor(0);
+  BasicBlock* Continue = detach.getSuccessor(1);
+
+  SmallPtrSet<BasicBlock *, 32> functionPieces;
+  SmallVector<BasicBlock*, 32 > reattachB;
+
+  if( !populateDetachedCFG( detach, functionPieces, reattachB ) ) return nullptr;
 
   functionPieces.erase(Spawned);
   std::vector<BasicBlock*> blocks( functionPieces.begin(), functionPieces.end() );
