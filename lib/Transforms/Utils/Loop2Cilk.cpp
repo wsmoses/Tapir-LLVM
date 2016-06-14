@@ -1079,7 +1079,7 @@ bool Loop2Cilk::runOnLoop(Loop *L, LPPassManager &LPM) {
   IRBuilder<> b(detacher);
 
 //  extracted->dump();
-  Header->getParent()->dump();
+  //Header->getParent()->dump();
   //if( llvm::verifyFunction(*Header->getParent(), nullptr) ) {
   //  Header->getParent()->dump();
   //}
