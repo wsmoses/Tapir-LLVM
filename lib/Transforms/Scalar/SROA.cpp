@@ -3924,7 +3924,7 @@ AllocaInst *SROA::rewritePartition(AllocaInst &AI, AllocaSlices &AS,
       break;
     }
 
-  if (Promotable) {
+  if (Promotable && isAllocaParallelPromotable(NewAI, *DT) ) {
     if (PHIUsers.empty() && SelectUsers.empty()) {
       // Promote the alloca.
       assert(isAllocaParallelPromotable(NewAI, *DT) && "Alloca must be promotable");
