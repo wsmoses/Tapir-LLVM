@@ -274,7 +274,7 @@ PHINode* getIndVar(Loop *L, BasicBlock* detacher, DominatorTree& DT) {
     return nullptr;
   }
 
-  errs() << "PRE_REPLACE:\n"; H->getParent()->dump();
+  //errs() << "PRE_REPLACE:\n"; H->getParent()->dump();
 
   llvm::Value* mul;
   llvm::Value* newV;
@@ -331,10 +331,10 @@ PHINode* getIndVar(Loop *L, BasicBlock* detacher, DominatorTree& DT) {
       //replacements.push_back(val);
     }
 
-    errs() << "RPN  :\n"; RPN->dump();
-    errs() << "MUL  :\n"; mul->dump();
-    errs() << "NEWV :\n"; newV->dump();
-    errs() << "NEWVP:\n"; ((Instruction*)newV)->getParent()->dump();
+    //errs() << "RPN  :\n"; RPN->dump();
+    //errs() << "MUL  :\n"; mul->dump();
+    //errs() << "NEWV :\n"; newV->dump();
+    //errs() << "NEWVP:\n"; ((Instruction*)newV)->getParent()->dump();
   }
 
   if( llvm::verifyFunction(*L->getHeader()->getParent(), nullptr) ) L->getHeader()->getParent()->dump();
