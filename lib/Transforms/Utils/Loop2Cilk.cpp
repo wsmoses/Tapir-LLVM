@@ -329,7 +329,7 @@ PHINode* getIndVar(Loop *L, BasicBlock* detacher, DominatorTree& DT) {
     Instruction *I = cast<Instruction>(U.getUser());
     if( I == INCR ) INCR->setOperand(1, ConstantInt::get( RPN->getType(), 1 ) );
     else if( toIgnore.count(I) > 0 && I != RPN ) continue;
-    else if( uncast(I) == cmp || I == cmp->getOperand(0) || I == cmp->getOperand(1) || uncast(I) == cmp || I == RPN ) continue;
+    else if( uncast(I) == cmp || I == cmp->getOperand(0) || I == cmp->getOperand(1) || uncast(I) == cmp || I == RPN || I->getParent() == cmp->getParent() || I->getParent() == detacher) continue;
     else {
       if( !DT.dominates((Instruction*) newV, U) ) {
         llvm::errs() << "newV: ";
