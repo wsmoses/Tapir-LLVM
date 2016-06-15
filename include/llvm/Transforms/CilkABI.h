@@ -579,6 +579,59 @@ static Function *Get__cilkrts_detach(Module &M) {
 
   return Fn;
 }
+static inline void build_detach(IRBuilder<> B, Value* SF) {
+  Module& M = *B.GetInsertPoint()->getParent()->getParent()->getParent();
+
+  // If we get here we need to add the function body
+  LLVMContext &Ctx = M.getContext();
+
+  // struct __cilkrts_worker *w = sf->worker;
+  Value *W = LoadField(B, SF, StackFrameBuilder::worker);
+
+  // __cilkrts_stack_frame *volatile *tail = w->tail;
+  Value *Tail = LoadField(B, W, WorkerBuilder::tail);
+
+  // sf->spawn_helper_pedigree = w->pedigree;
+  StoreField(B,
+             LoadField(B, W, WorkerBuilder::pedigree),
+             SF, StackFrameBuilder::parent_pedigree);
+
+  // sf->call_parent->parent_pedigree = w->pedigree;
+  StoreField(B,
+             LoadField(B, W, WorkerBuilder::pedigree),
+             LoadField(B, SF, StackFrameBuilder::call_parent),
+             StackFrameBuilder::parent_pedigree);
+
+  // w->pedigree.rank = 0;
+  {
+    StructType *STy = PedigreeBuilder::get(Ctx);
+    llvm::Type *Ty = STy->getElementType(PedigreeBuilder::rank);
+    StoreField(B,
+               ConstantInt::get(Ty, 0),
+               GEP(B, W, WorkerBuilder::pedigree),
+               PedigreeBuilder::rank);
+  }
+
+  // w->pedigree.next = &sf->spawn_helper_pedigree;
+  StoreField(B,
+             GEP(B, SF, StackFrameBuilder::parent_pedigree),
+             GEP(B, W, WorkerBuilder::pedigree),
+             PedigreeBuilder::next);
+
+  // *tail++ = sf->call_parent;
+  B.CreateStore(LoadField(B, SF, StackFrameBuilder::call_parent), Tail);
+  Tail = B.CreateConstGEP1_32(Tail, 1);
+
+  // w->tail = tail;
+  StoreField(B, Tail, W, WorkerBuilder::tail);
+
+  // sf->flags |= CILK_FRAME_DETACHED;
+  {
+    Value *F = LoadField(B, SF, StackFrameBuilder::flags);
+    F = B.CreateOr(F, ConstantInt::get(F->getType(), CILK_FRAME_DETACHED));
+    StoreField(B, F, SF, StackFrameBuilder::flags);
+  }
+}
 
 /// \brief Get or create a LLVM function for __cilk_excepting_sync.
 /// This is a special sync to be inserted before processing a catch statement.
@@ -961,6 +1014,72 @@ static Function *Get__cilkrts_enter_frame_1(Module &M) {
   return Fn;
 }
 
+static inline void build_enter_frame_1(IRBuilder<>& B0, Value *SF) {
+  Module& M = *B0.GetInsertPoint()->getParent()->getParent()->getParent();
+  Function* Fn = B0.GetInsertPoint()->getParent()->getParent();
+  BasicBlock* Entry = B0.GetInsertPoint()->getParent();
+  BasicBlock* Restore = Entry->splitBasicBlock (B0.GetInsertPoint(), "__cilkrts_enter_frame_1.exit");
+  Entry->getTerminator()->eraseFromParent();
+  B0.SetInsertPoint(Entry);
+
+  LLVMContext &Ctx = M.getContext();
+
+  BasicBlock *SlowPath = BasicBlock::Create(Ctx, "slowpath", Fn);
+  SlowPath->moveAfter(Entry);
+  BasicBlock *FastPath = BasicBlock::Create(Ctx, "fastpath", Fn);
+  BasicBlock *Cont = BasicBlock::Create(Ctx, "cont", Fn);
+  Cont->moveAfter(SlowPath);
+
+  llvm::PointerType *WorkerPtrTy = TypeBuilder<__cilkrts_worker*, false>::get(Ctx);
+  StructType *SFTy = StackFrameBuilder::get(Ctx);
+
+  // Block  (Entry)
+  CallInst *W = 0;
+  {
+    W = B0.CreateCall(CILKRTS_FUNC(get_tls_worker, M));
+    Value *Cond = B0.CreateICmpEQ(W, ConstantPointerNull::get(WorkerPtrTy));
+    B0.CreateCondBr(Cond, SlowPath, FastPath);
+  }
+  // Block  (SlowPath)
+  CallInst *Wslow = 0;
+  {
+    IRBuilder<> B(SlowPath);
+    Wslow = B.CreateCall(CILKRTS_FUNC(bind_thread_1, M));
+    llvm::Type *Ty = SFTy->getElementType(StackFrameBuilder::flags);
+    StoreField(B,
+               ConstantInt::get(Ty, CILK_FRAME_LAST | CILK_FRAME_VERSION),
+               SF, StackFrameBuilder::flags);
+    B.CreateBr(Cont);
+  }
+  // Block  (FastPath)
+  {
+    IRBuilder<> B(FastPath);
+    llvm::Type *Ty = SFTy->getElementType(StackFrameBuilder::flags);
+    StoreField(B,
+               ConstantInt::get(Ty, CILK_FRAME_VERSION),
+               SF, StackFrameBuilder::flags);
+    B.CreateBr(Cont);
+  }
+  // Block  (Cont)
+  {
+    IRBuilder<> B(Cont);
+    Value *Wfast = W;
+    PHINode *W  = B.CreatePHI(WorkerPtrTy, 2);
+    W->addIncoming(Wslow, SlowPath);
+    W->addIncoming(Wfast, FastPath);
+
+    StoreField(B,
+               LoadField(B, W, WorkerBuilder::current_stack_frame),
+               SF, StackFrameBuilder::call_parent);
+
+    StoreField(B, W, SF, StackFrameBuilder::worker);
+    StoreField(B, SF, W, WorkerBuilder::current_stack_frame);
+
+    B.CreateBr(Restore);
+  }
+  B0.SetInsertPoint(&*Restore->begin());
+}
+
 /// \brief Get or create a LLVM function for __cilkrts_enter_frame_fast.
 /// It is equivalent to the following C code
 ///
@@ -1004,6 +1123,24 @@ static Function *Get__cilkrts_enter_frame_fast_1(Module &M) {
   Fn->addFnAttr(Attribute::InlineHint);
 
   return Fn;
+}
+
+
+static inline void build_enter_frame_fast_1(IRBuilder<> B, Value *SF) {
+  LLVMContext &Ctx = B.getContext();
+
+  Value *W = B.CreateCall(CILKRTS_FUNC(get_tls_worker, *B.GetInsertPoint()->getParent()->getParent()->getParent() ));
+  StructType *SFTy = StackFrameBuilder::get(Ctx);
+  llvm::Type *Ty = SFTy->getElementType(StackFrameBuilder::flags);
+
+  StoreField(B,
+             ConstantInt::get(Ty, CILK_FRAME_VERSION),
+             SF, StackFrameBuilder::flags);
+  StoreField(B,
+             LoadField(B, W, WorkerBuilder::current_stack_frame),
+             SF, StackFrameBuilder::call_parent);
+  StoreField(B, W, SF, StackFrameBuilder::worker);
+  StoreField(B, SF, W, WorkerBuilder::current_stack_frame);
 }
 
 // /// \brief Get or create a LLVM function for __cilk_parent_prologue.
@@ -1251,10 +1388,12 @@ static inline llvm::Value* GetOrInitStackFrame(Function& F, bool fast = true, bo
   llvm::Value* args[1] = { alloc };
   /* llvm::Instruction* inst; */
   if( fast ) {
-    IRB.CreateCall(CILKRTS_FUNC(enter_frame_fast_1, *F.getParent()), args);
+    build_enter_frame_fast_1(IRB, alloc);
+    //IRB.CreateCall(CILKRTS_FUNC(enter_frame_fast_1, *F.getParent()), args);
     /* inst = CallInst::Create(CILKRTS_FUNC(enter_frame_fast_1, *F.getParent()), args, "" ); */
   } else {
-    IRB.CreateCall(CILKRTS_FUNC(enter_frame_1, *F.getParent()), args);
+    build_enter_frame_1(IRB, alloc);
+    //IRB.CreateCall(CILKRTS_FUNC(enter_frame_1, *F.getParent()), args);
     /* inst = CallInst::Create(CILKRTS_FUNC(enter_frame_1, *F.getParent()), args, "" ); */
   }
   /* inst->insertAfter(alloc); */
@@ -1760,7 +1899,9 @@ static inline bool makeFunctionDetachable( Function& extracted, bool instrument 
   }
 
   //TODO check difference between frame fast and frame fast 1
-  IRB.CreateCall(CILKRTS_FUNC(enter_frame_fast_1, *M), args);
+  build_enter_frame_fast_1(IRB, sf);
+  //IRB.CreateCall(CILKRTS_FUNC(enter_frame_fast_1, *M), args);
+
   /* Instruction* call = CallInst::Create(CILKRTS_FUNC(enter_frame_fast_1, *M), args, "", extracted.getEntryBlock().getTerminator() ); */
   // IRBuilder<> B(call);
   // // sf->worker = 0;
@@ -1775,7 +1916,7 @@ static inline bool makeFunctionDetachable( Function& extracted, bool instrument 
     IRB.CreateCall(CILK_CSI_FUNC(detach_begin, *M), args);
   }
 
-  IRB.CreateCall(CILKRTS_FUNC(detach, *M), args);
+  build_detach(IRB, sf);
   /* Instruction* call2 = CallInst::Create(CILKRTS_FUNC(detach, *M), args, "", extracted.getEntryBlock().getTerminator() ); */
 
   if (instrument)

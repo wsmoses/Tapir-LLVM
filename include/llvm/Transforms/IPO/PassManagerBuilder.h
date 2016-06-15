@@ -119,7 +119,7 @@ public:
   /// Inliner - Specifies the inliner to use.  If this is non-null, it is
   /// added to the per-module passes.
   Pass *Inliner;
-
+  Pass *Inliner2;
   /// The function summary index to use for function importing.
   const FunctionInfoIndex *FunctionIndex;
 

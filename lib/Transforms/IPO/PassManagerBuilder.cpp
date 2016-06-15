@@ -492,6 +492,7 @@ void PassManagerBuilder::populateModulePassManager(
       if (ParallelLevel == 2) {
         llvm::errs() << "running preopt at opt: " << OptLevel << "\n";
         populateForOptLevel(MPM, OptLevel);
+        Inliner = Inliner2;
       }
       if (ParallelLevel != 2 || OptLevel == 0) {
         llvm::errs() << "running mem2reg/indvar preopt at opt: " << OptLevel << "\n";
@@ -730,6 +731,7 @@ LLVMPassManagerBuilderUseInlinerWithThreshold(LLVMPassManagerBuilderRef PMB,
                                               unsigned Threshold) {
   PassManagerBuilder *Builder = unwrap(PMB);
   Builder->Inliner = createFunctionInliningPass(Threshold);
+  Builder->Inliner2 = createFunctionInliningPass(Threshold);
 }
 
 void
@@ -757,8 +759,11 @@ void LLVMPassManagerBuilderPopulateLTOPassManager(LLVMPassManagerBuilderRef PMB,
 
   // A small backwards compatibility hack. populateLTOPassManager used to take
   // an RunInliner option.
-  if (RunInliner && !Builder->Inliner)
+  if (RunInliner && !Builder->Inliner) {
     Builder->Inliner = createFunctionInliningPass();
-
+  }
+  if (RunInliner && !Builder->Inliner2) {
+    Builder->Inliner2 = createFunctionInliningPass();
+  }
   Builder->populateLTOPassManager(*LPM);
 }
