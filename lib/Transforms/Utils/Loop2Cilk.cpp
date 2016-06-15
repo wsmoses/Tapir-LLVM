@@ -175,6 +175,73 @@ bool isZero(Value* v){
   return getInt(v, m) == 0;
 }
 
+bool attemptRecursiveMoveHelper(Instruction* toMoveAfter, Instruction* toCheck, DominatorTree& DT, std::vector<Instruction*>& candidates) {
+  switch (toCheck->getOpcode()) {
+    case Instruction::Add:
+    case Instruction::FAdd:
+    case Instruction::Sub:
+    case Instruction::FSub:
+    case Instruction::Mul:
+    case Instruction::FMul:
+    case Instruction::UDiv:
+    case Instruction::SDiv:
+    case Instruction::FDiv:
+    case Instruction::URem:
+    case Instruction::SRem:
+    case Instruction::FRem:
+
+    case Instruction::And:
+    case Instruction::Or:
+    case Instruction::Xor:
+
+    case Instruction::ICmp:
+    case Instruction::FCmp:
+    case Instruction::Select:
+    case Instruction::ExtractElement:
+    case Instruction::InsertElement:
+    case Instruction::ShuffleVector:
+    case Instruction::ExtractValue:
+    case Instruction::InsertValue:
+
+    case Instruction::Shl:
+    case Instruction::LShr:
+    case Instruction::AShr:
+
+    case Instruction::Trunc:
+    case Instruction::ZExt:
+    case Instruction::FPToUI:
+    case Instruction::UIToFP:
+    case Instruction::SIToFP:
+    case Instruction::FPTrunc:
+    case Instruction::FPExt:
+    case Instruction::PtrToInt:
+    case Instruction::IntToPtr:
+    case Instruction::BitCast:
+
+      for (auto & u2 : toCheck->uses() ) {
+        if (!DT.dominates(toMoveAfter, u2) ) {
+          if (!attemptRecursiveMoveHelper(toMoveAfter, cast<Instruction>(u2.getUser()), DT, candidates)) return false;
+        }
+      }
+    default: return false;
+  }
+  return true;
+}
+
+bool attemptRecursiveMove(Instruction* toMoveAfter, Instruction* toCheck, DominatorTree& DT) {
+  std::vector<Instruction*> candidates;
+  bool b = attemptRecursiveMoveHelper(toMoveAfter, toCheck, DT, candidates);
+  if (!b) return false;
+
+  auto last = toMoveAfter;
+  for (int i=candidates.size()-1; i>0; i--) {
+    candidates[i]->moveBefore(last);
+    last = candidates[i];
+  }
+  if (last != toMoveAfter) toMoveAfter->moveBefore(last);
+  return true; 
+}
+
 PHINode* getIndVar(Loop *L, BasicBlock* detacher, DominatorTree& DT) {
   BasicBlock *H = L->getHeader();
 
@@ -308,16 +375,7 @@ PHINode* getIndVar(Loop *L, BasicBlock* detacher, DominatorTree& DT) {
         //No need to override use in increment
         if (user == std::get<1>(a)) continue;
 
-        if (!DT.dominates(ival, user)) {
-          bool movable = true;
-          for( auto & u2 : user->uses() ) {
-             if( !DT.dominates(ival, u2) ) { movable = false; break; }
-          }
-          if (movable) {
-             user->moveBefore(ival);
-             ival->moveBefore(user);
-             continue;
-          }
+        if (!attemptRecursiveMove(ival, user, DT)) {
           val->dump();
           user->dump();
           std::get<0>(a)->dump();
@@ -341,25 +399,16 @@ PHINode* getIndVar(Loop *L, BasicBlock* detacher, DominatorTree& DT) {
   assert( !llvm::verifyFunction(*L->getHeader()->getParent(), &llvm::errs()) );
 
   std::vector<Use*> uses;
-  for( auto& U : RPN->uses() ) uses.push_back(&U);
-  for( auto Up : uses ) {
-    auto&U = *Up;
+  for( Use& U : RPN->uses() ) uses.push_back(&U);
+  for( Use* Up : uses ) {
+    Use &U = *Up;
     Instruction *I = cast<Instruction>(U.getUser());
     if( I == INCR ) INCR->setOperand(1, ConstantInt::get( RPN->getType(), 1 ) );
     else if( toIgnore.count(I) > 0 && I != RPN ) continue;
     else if( uncast(I) == cmp || I == cmp->getOperand(0) || I == cmp->getOperand(1) || uncast(I) == cmp || I == RPN || I->getParent() == cmp->getParent() || I->getParent() == detacher) continue;
     else {
       Instruction* ival = cast<Instruction>(newV);
-      if( !DT.dominates((Instruction*) ival, U) ) {
-        bool movable = true;
-        for( auto & u2 : I->uses() ) {
-           if( !DT.dominates(ival, u2) ) { movable = false; break; }
-        }
-        if (movable) {
-           I->moveBefore(ival);
-           ival->moveBefore(I);
-           continue;
-        }
+      if (attemptRecursiveMove(ival, cast<Instruction>(U.getUser()), DT)) {
         llvm::errs() << "newV: ";
         newV->dump();
         llvm::errs() << "U: ";
@@ -487,9 +536,9 @@ BasicBlock* getTrueExit(Loop *L){
 
     if( exits.size() == 1 ) endL = * exits.begin();
     else {
-      errs() << "<blocks>\n";
-      for(auto a : exits ) a->dump();
-      errs() << "</blocks>\n";
+      //errs() << "<blocks>\n";
+      //for(auto a : exits ) a->dump();
+      //errs() << "</blocks>\n";
     }
     return endL;
 }
@@ -501,12 +550,12 @@ bool Loop2Cilk::runOnLoop(Loop *L, LPPassManager &LPM) {
   }
 
 	assert( !llvm::verifyFunction(*L->getHeader()->getParent(), &llvm::errs()) );
-  errs() << "<Loop>:\n--------------------------------------------------------------------------------------------------------------------------------";
+  //errs() << "<Loop>:\n--------------------------------------------------------------------------------------------------------------------------------";
   //for(auto a: L->blocks()){
   //  a->dump();
   //}
-  L->dump();
-  errs() << "</Loop>\n<------------------------------------------------------------------------------------------------>\n";
+  //L->dump();
+  //errs() << "</Loop>\n<------------------------------------------------------------------------------------------------>\n";
 
   if (!L->isLoopSimplifyForm()) {
     //errs() << "not simplify form\n";
@@ -578,11 +627,13 @@ bool Loop2Cilk::runOnLoop(Loop *L, LPPassManager &LPM) {
     } else {
       //errs() << "L\n";
       //Header->getParent()->dump();
-      errs() << "nsucc != 2" << "\n";
-      if( endL ) endL->dump();
-      else errs() << "no endl" << "\n";
-      if( oendL ) oendL->dump();
-      T->dump();
+
+      //errs() << "nsucc != 2" << "\n";
+      //if( endL ) endL->dump();
+      //else errs() << "no endl" << "\n";
+      //if( oendL ) oendL->dump();
+      //T->dump();
+
       //T->getParent()->getParent()->dump();
 
      	assert( !llvm::verifyFunction(*L->getHeader()->getParent(), &llvm::errs()) );
@@ -608,7 +659,7 @@ bool Loop2Cilk::runOnLoop(Loop *L, LPPassManager &LPM) {
           assert( syncer && isa<SyncInst>(syncer->getTerminator()) );
 ;
     } else {
-      errs() << "none sync" << "\n";
+      //errs() << "none sync" << "\n";
       //syncer->dump();
       //detacher->dump();
       return false;
@@ -670,7 +721,7 @@ bool Loop2Cilk::runOnLoop(Loop *L, LPPassManager &LPM) {
   nps_begin:
   if( getNonPhiSize(detacher)!=1 ) {
     Instruction* badInst = getLastNonTerm(detacher);
-    errs() << "badInst:\n"; badInst->dump();
+    //errs() << "badInst:\n"; badInst->dump();
     if( !badInst->mayWriteToMemory() ) {
       DominatorTree &DT = getAnalysis<DominatorTreeWrapperPass>().getDomTree();
       DT.recalculate(*L->getHeader()->getParent());
@@ -693,7 +744,7 @@ bool Loop2Cilk::runOnLoop(Loop *L, LPPassManager &LPM) {
   while( getNonPhiSize(syncer)!=1 ) {
     Instruction* badInst = getLastNonTerm(syncer);
     if( !badInst->mayWriteToMemory() ) {
-      errs() << "badInst2:\n"; badInst->dump();
+      //errs() << "badInst2:\n"; badInst->dump();
       badInst->moveBefore( getFirstPostPHI(syncer->getTerminator()->getSuccessor(0)) );
     } else {
       errs() << "invalid sync size" << "\n";
@@ -714,7 +765,7 @@ bool Loop2Cilk::runOnLoop(Loop *L, LPPassManager &LPM) {
     pn->eraseFromParent();
     assert( !llvm::verifyFunction(*L->getHeader()->getParent(), &llvm::errs()) );
   }
-  errs() << "Found candidate for cilk for!\n"; 
+  //errs() << "Found candidate for cilk for!\n"; 
   assert( syncer && isa<SyncInst>(syncer->getTerminator()) );
 
   //syncer->getParent()->dump();
@@ -1111,7 +1162,7 @@ bool Loop2Cilk::runOnLoop(Loop *L, LPPassManager &LPM) {
 
   //Header->getParent()->dump();
 
-  errs() << "TRANSFORMED LOOP!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n";
+  //errs() << "TRANSFORMED LOOP!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n";
   //M->dump();
 
   ScalarEvolution &SE = getAnalysis<ScalarEvolutionWrapperPass>().getSE();

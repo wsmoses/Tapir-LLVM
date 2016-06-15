@@ -490,26 +490,22 @@ void PassManagerBuilder::populateModulePassManager(
     legacy::PassManagerBase &MPM) {
     if (ParallelLevel != 0) {
       if (ParallelLevel == 2) {
-        llvm::errs() << "running preopt at opt: " << OptLevel << "\n";
+        //llvm::errs() << "running preopt at opt: " << OptLevel << "\n";
         populateForOptLevel(MPM, OptLevel);
         Inliner = Inliner2;
       }
       if (ParallelLevel != 2 || OptLevel == 0) {
-        llvm::errs() << "running mem2reg/indvar preopt at opt: " << OptLevel << "\n";
+        //llvm::errs() << "running mem2reg/indvar preopt at opt: " << OptLevel << "\n";
         MPM.add(createPromoteMemoryToRegisterPass());
         MPM.add(createIndVarSimplifyPass());// Canonicalize indvars to prep for loop2cilk
       }
       MPM.add(createBarrierNoopPass());
-      llvm::errs() << "<running l2c>\n";
       MPM.add(createLoop2CilkPass());
-      llvm::errs() << "</running l2c>\n";
       MPM.add(createCFGSimplificationPass());
-      llvm::errs() << "<running d2c>\n";
       MPM.add(createPromoteDetachToCilkPass());
-      llvm::errs() << "</running d2c>\n";
       MPM.add(createBarrierNoopPass());
     }
-    llvm::errs() << "running opt at level at opt3: " << OptLevel << "\n";
+    //llvm::errs() << "running opt at level at opt3: " << OptLevel << "\n";
     MPM.add(createCFGSimplificationPass());
     populateForOptLevel(MPM, OptLevel);
 }
