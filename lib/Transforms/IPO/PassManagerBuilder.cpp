@@ -494,7 +494,10 @@ void PassManagerBuilder::populateModulePassManager(
         populateForOptLevel(MPM, OptLevel);
         Inliner = Inliner2;
       }
-      if (ParallelLevel == 3) {} else if (ParallelLevel != 2 || OptLevel == 0) {
+      if (ParallelLevel == 3) {
+         //llvm::errs() << "NO preopt at opt: " << OptLevel << "\n";
+
+      } else if (ParallelLevel != 2 || OptLevel == 0) {
         //llvm::errs() << "running mem2reg/indvar preopt at opt: " << OptLevel << "\n";
         MPM.add(createPromoteMemoryToRegisterPass());
         MPM.add(createIndVarSimplifyPass());// Canonicalize indvars to prep for loop2cilk
