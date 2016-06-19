@@ -711,8 +711,8 @@ bool Loop2Cilk::runOnLoop(Loop *L, LPPassManager &LPM) {
   DetachInst* det = dyn_cast<DetachInst>(detacher->getTerminator() );
   assert( !llvm::verifyFunction(*L->getHeader()->getParent(), &llvm::errs()) );
   if( det == nullptr ) {
-    errs() << "other not detach" << "\n";
-    detacher->dump();
+    //errs() << "other not detach" << "\n";
+    //detacher->dump();
    	assert( !llvm::verifyFunction(*L->getHeader()->getParent(), &llvm::errs()) );
     return false;
   }
