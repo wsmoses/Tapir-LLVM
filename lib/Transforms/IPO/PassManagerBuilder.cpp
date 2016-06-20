@@ -497,8 +497,8 @@ void PassManagerBuilder::populateModulePassManager(
 		//initializeIPA(Registry);
 		initializeTransformUtils(Registry);
 		initializeInstCombine(Registry);
-		initializeInstrumentation(Registry);
-		initializeTarget(Registry);
+		//initializeInstrumentation(Registry);
+		//initializeTarget(Registry);
 
     if (ParallelLevel != 0) {
       if (ParallelLevel == 2) {
