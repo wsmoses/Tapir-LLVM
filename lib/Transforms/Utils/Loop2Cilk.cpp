@@ -41,6 +41,7 @@
 #include "llvm/Transforms/Utils/PromoteMemToReg.h"
 #include "llvm/Transforms/Utils/LoopUtils.h"
 #include "llvm/IR/Verifier.h"
+#include "llvm/Transforms/Utils/PromoteMemToReg.h"
 
 #include <utility>
 using std::make_pair;
@@ -340,6 +341,16 @@ std::pair<PHINode*,Value*> getIndVar(Loop *L, BasicBlock* detacher, DominatorTre
     cmpNode->getParent()->dump();
     errs() << "</no comparison from backedge>\n";
     return make_pair(nullptr,nullptr);
+  }
+
+  for (unsigned i=0; i<2; i++) {
+    LoadInst* inst = dyn_cast<LoadInst>(uncast(cmp->getOperand(i)));
+    if (!inst) continue;
+    AllocaInst* alloca = dyn_cast<AllocaInst>(inst->getOperand(0));
+    if (!alloca) continue;
+    if (isAllocaPromotable(alloca, DT)) {
+      PromoteMemToReg({alloca}, DT, nullptr, nullptr);
+    }
   }
 
   // Loop over all of the PHI nodes, looking for a canonical indvar.

@@ -488,6 +488,18 @@ void PassManagerBuilder::populateForOptLevel(legacy::PassManagerBase &MPM, int l
 
 void PassManagerBuilder::populateModulePassManager(
     legacy::PassManagerBase &MPM) {
+
+		PassRegistry &Registry = *PassRegistry::getPassRegistry();
+		initializeCore(Registry);
+		initializeScalarOpts(Registry);
+		initializeIPO(Registry);
+		initializeAnalysis(Registry);
+		//initializeIPA(Registry);
+		initializeTransformUtils(Registry);
+		initializeInstCombine(Registry);
+		initializeInstrumentation(Registry);
+		initializeTarget(Registry);
+
     if (ParallelLevel != 0) {
       if (ParallelLevel == 2) {
         //llvm::errs() << "running preopt at opt: " << OptLevel << "\n";
@@ -503,7 +515,8 @@ void PassManagerBuilder::populateModulePassManager(
         MPM.add(createIndVarSimplifyPass());// Canonicalize indvars to prep for loop2cilk
       }
       MPM.add(createBarrierNoopPass());
-      if (ParallelLevel != 3) MPM.add(createLoop2CilkPass());
+      //if (ParallelLevel != 3) 
+      MPM.add(createLoop2CilkPass());
       MPM.add(createCFGSimplificationPass());
       MPM.add(createPromoteDetachToCilkPass());
       MPM.add(createBarrierNoopPass());
