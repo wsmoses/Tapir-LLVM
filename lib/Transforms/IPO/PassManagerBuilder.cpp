@@ -512,6 +512,10 @@ void PassManagerBuilder::populateModulePassManager(
       } else if (ParallelLevel != 2 || OptLevel == 0) {
         //llvm::errs() << "running mem2reg/indvar preopt at opt: " << OptLevel << "\n";
         MPM.add(createPromoteMemoryToRegisterPass());
+        if (UseNewSROA)
+          MPM.add(createSROAPass());
+        else
+          MPM.add(createScalarReplAggregatesPass());
         MPM.add(createIndVarSimplifyPass());// Canonicalize indvars to prep for loop2cilk
       }
       MPM.add(createBarrierNoopPass());

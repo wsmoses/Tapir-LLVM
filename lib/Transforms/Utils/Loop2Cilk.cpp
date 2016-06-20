@@ -104,10 +104,19 @@ Value* neg( Value* V ) {
     return F.CreateNeg(C);
   }
 
-  Instruction* I = cast<Instruction>(V);
+  Instruction* I = nullptr;
+  bool move = false;
+  if( Argument* A = dyn_cast<Argument>(V) ) {
+    I = A->getParent()->getEntryBlock().getFirstNonPHIOrDbgOrLifetime();
+  } else {
+    assert( isa<Instruction>(V) );
+    I = cast<Instruction>(V);
+    move = true;
+  }
+  assert(I);
   IRBuilder<> builder(I);
   Instruction* foo = cast<Instruction>(builder.CreateNeg(V));
-  I->moveBefore(foo);
+  if (move) I->moveBefore(foo);
   return foo;
 }
 
@@ -116,11 +125,19 @@ Value* subOne( Value* V ) {
     ConstantFolder F;
     return F.CreateSub(C, ConstantInt::get(V->getType(), 1) );
   }
-
-  Instruction* I = cast<Instruction>(V);
+  Instruction* I = nullptr;
+  bool move = false;
+  if( Argument* A = dyn_cast<Argument>(V) ) {
+    I = A->getParent()->getEntryBlock().getFirstNonPHIOrDbgOrLifetime();
+  } else {
+    assert( isa<Instruction>(V) );
+    I = cast<Instruction>(V);
+    move = true;
+  }
+  assert(I);
   IRBuilder<> builder(I);
   Instruction* foo = cast<Instruction>(builder.CreateSub( V, ConstantInt::get(V->getType(), 1) ));
-  I->moveBefore(foo);
+  if (move) I->moveBefore(foo);
   return foo;
 }
 
@@ -130,10 +147,19 @@ Value* addOne( Value* V ) {
     return F.CreateAdd(C, ConstantInt::get(V->getType(), 1) );
   }
 
-  Instruction* I = cast<Instruction>(V);
+  Instruction* I = nullptr;
+  bool move = false;
+  if( Argument* A = dyn_cast<Argument>(V) ) {
+    I = A->getParent()->getEntryBlock().getFirstNonPHIOrDbgOrLifetime();
+  } else {
+    assert( isa<Instruction>(V) );
+    I = cast<Instruction>(V);
+    move = true;
+  }
+  assert(I);
   IRBuilder<> builder(I);
   Instruction* foo = cast<Instruction>(builder.CreateAdd( V, ConstantInt::get(V->getType(), 1) ));
-  I->moveBefore(foo);
+  if (move) I->moveBefore(foo);
   return foo;
 }
 
@@ -221,6 +247,7 @@ bool attemptRecursiveMoveHelper(Instruction* toMoveAfter, Instruction* toCheck, 
 
       for (auto & u2 : toCheck->uses() ) {
         if (!DT.dominates(toMoveAfter, u2) ) {
+          assert( isa<Instruction>(u2.getUser()) );
           if (!attemptRecursiveMoveHelper(toMoveAfter, cast<Instruction>(u2.getUser()), DT, candidates)) return false;
         }
       }
@@ -359,6 +386,7 @@ std::pair<PHINode*,Value*> getIndVar(Loop *L, BasicBlock* detacher, DominatorTre
   Value* amt = nullptr;
   std::vector<std::tuple<PHINode*,Instruction*,Value*>> others;
   for (BasicBlock::iterator I = H->begin(); isa<PHINode>(I); ++I) {
+    assert( isa<PHINode>(I) );
     PHINode *PN = cast<PHINode>(I);
     if( !PN->getType()->isIntegerTy() ) {
       errs() << "phinode uses non-int\n";
@@ -368,8 +396,14 @@ std::pair<PHINode*,Value*> getIndVar(Loop *L, BasicBlock* detacher, DominatorTre
       if (Inc->getOpcode() == Instruction::Sub && Inc->getOperand(0) == PN) {
         IRBuilder<> build(Inc);
         auto val = build.CreateNeg(Inc->getOperand(1));
-        auto newI = cast<BinaryOperator>(build.CreateAdd(PN, val));
+        auto tmp = build.CreateAdd(PN, val);
+        assert( isa<BinaryOperator>(tmp) );
+        auto newI = cast<BinaryOperator>(tmp);
         Inc->replaceAllUsesWith(newI);
+        for (auto& tup : others) {
+          if (std::get<1>(tup) == Inc) std::get<1>(tup) = newI;
+          if (std::get<2>(tup) == Inc) std::get<2>(tup) = newI;
+        }
         Inc->eraseFromParent();
         Inc = newI;
       }
@@ -442,9 +476,11 @@ std::pair<PHINode*,Value*> getIndVar(Loop *L, BasicBlock* detacher, DominatorTre
       if( !isZero(add0) ) val = builder.CreateAdd(val,add0);
       if (val != RPN) toIgnore.insert(val);
       //std::get<0>(a)->dump();
+      assert( isa<Instruction>(val) );
       Instruction* ival = cast<Instruction>(val);
 
       for (auto& u : std::get<0>(a)->uses()) {
+        assert( isa<Instruction>(u.getUser()) );
         Instruction *user = cast<Instruction>(u.getUser());
 
         //No need to override use in PHINode itself
@@ -460,10 +496,23 @@ std::pair<PHINode*,Value*> getIndVar(Loop *L, BasicBlock* detacher, DominatorTre
         }
         assert(DT.dominates(ival, user));
       }
-      std::get<0>(a)->replaceAllUsesWith(val);
-      std::get<0>(a)->eraseFromParent();
-      if(std::get<1>(a)->getNumUses() == 0) std::get<1>(a)->eraseFromParent();
-      //replacements.push_back(val);
+      {
+        auto tmp = std::get<0>(a);
+        tmp->replaceAllUsesWith(val);
+        for (auto& tup : others) {
+          if (std::get<1>(tup) == tmp) std::get<1>(tup) = tmp;
+          if (std::get<2>(tup) == tmp) std::get<2>(tup) = tmp;
+        }
+        tmp->eraseFromParent();
+      }
+      if(std::get<1>(a)->getNumUses() == 0) {
+        auto tmp = std::get<1>(a);
+        bool replacable = true;
+        for (auto& tup : others) {
+          if (std::get<1>(tup) == tmp || std::get<2>(tup) == tmp) replacable = false;
+        }
+        if (replacable) tmp->eraseFromParent();
+      }
     }
 
     //errs() << "RPN  :\n"; RPN->dump();
@@ -479,12 +528,15 @@ std::pair<PHINode*,Value*> getIndVar(Loop *L, BasicBlock* detacher, DominatorTre
   for( Use& U : RPN->uses() ) uses.push_back(&U);
   for( Use* Up : uses ) {
     Use &U = *Up;
+    assert( isa<Instruction>(U.getUser()) );
     Instruction *I = cast<Instruction>(U.getUser());
     if( I == INCR ) INCR->setOperand(1, ConstantInt::get( RPN->getType(), 1 ) );
     else if( toIgnore.count(I) > 0 && I != RPN ) continue;
     else if( uncast(I) == cmp || I == cmp->getOperand(0) || I == cmp->getOperand(1) || uncast(I) == cmp || I == RPN || I->getParent() == cmp->getParent() || I->getParent() == detacher) continue;
     else {
+      assert( isa<Instruction>(newV) );
       Instruction* ival = cast<Instruction>(newV);
+      assert( isa<Instruction>(U.getUser()) );
       if (attemptRecursiveMove(ival, cast<Instruction>(U.getUser()), DT)) {
         llvm::errs() << "newV: ";
         newV->dump();
@@ -504,13 +556,12 @@ std::pair<PHINode*,Value*> getIndVar(Loop *L, BasicBlock* detacher, DominatorTre
       U.set( newV );
     }
   }
- 
+  
   if( llvm::verifyFunction(*L->getHeader()->getParent(), nullptr) ) L->getHeader()->getParent()->dump();
   assert( !llvm::verifyFunction(*L->getHeader()->getParent(), &llvm::errs()) );
 
-  ////errs() << "CMP: (idx=" << cmpIdx << ")\n"; cmp->dump();
   IRBuilder<> build(cmp);
-  llvm::Value* val = cmp->getOperand(cmpIdx);
+  llvm::Value* val = build.CreateSExtOrTrunc(cmp->getOperand(cmpIdx),RPN->getType());
   llvm::Value* adder = RPN->getIncomingValueForBlock(Incoming);
   llvm::Value* amt0  = amt;
 
@@ -600,25 +651,16 @@ std::pair<PHINode*,Value*> getIndVar(Loop *L, BasicBlock* detacher, DominatorTre
 
   cmp->setPredicate(CmpInst::ICMP_NE);
 
-  assert( !llvm::verifyFunction(*L->getHeader()->getParent(), &llvm::errs()) );
-
-  //llvm::errs() << "A RPN-parent-parent: "; RPN->getParent()->getParent()->dump();
-
   cmp->setOperand(cmpIdx, val);
+  cmp->setOperand(1-cmpIdx, RPN);
 
-  //llvm::errs() << "B RPN-parent-parent: "; RPN->getParent()->getParent()->dump();
+  if( llvm::verifyFunction(*L->getHeader()->getParent(), nullptr) ) L->getHeader()->getParent()->dump();
+  assert( !llvm::verifyFunction(*L->getHeader()->getParent(), &llvm::errs()) );
 
   RPN->setIncomingValue( RPN->getBasicBlockIndex(Incoming),  ConstantInt::get( RPN->getType(), 0 ) );
 
+  if( llvm::verifyFunction(*L->getHeader()->getParent(), nullptr) ) L->getHeader()->getParent()->dump();
   assert( !llvm::verifyFunction(*L->getHeader()->getParent(), &llvm::errs()) );
-
-  //llvm::errs() << "RPN-parent-parent: "; RPN->getParent()->getParent()->dump();
-  ////RPN->dump();
-  //llvm::errs() << "mul: "; mul->dump();
-  //llvm::errs() << "newv: "; newV->dump();
-  //INCR->dump();
-  ////((Instruction*)newV)->getParent()->dump();
-//   exit(1);
 
   return make_pair(RPN, val);
 }
@@ -719,6 +761,7 @@ bool Loop2Cilk::runOnLoop(Loop *L, LPPassManager &LPM) {
 
   assert( !llvm::verifyFunction(*L->getHeader()->getParent(), &llvm::errs()) );
 
+  assert( isa<BranchInst>(T) );
   BranchInst* B = cast<BranchInst>(T);
 
   BasicBlock *detacher = nullptr, *syncer = nullptr;
@@ -788,9 +831,6 @@ bool Loop2Cilk::runOnLoop(Loop *L, LPPassManager &LPM) {
     }
     if (done != syncer) {
       errs() << "exit != sync\n";
-      //done->dump();
-      //syncer->dump();
-      //syncer->getParent()->dump();
       return false;
     }
   }
@@ -808,8 +848,7 @@ bool Loop2Cilk::runOnLoop(Loop *L, LPPassManager &LPM) {
     if (!badInst->mayWriteToMemory()) {
       bool dominated = true;
       for (const Use &U : badInst->uses()) {
-        //const Instruction *I = cast<Instruction>(U.getUser());
-        if( !DT.dominates(BasicBlockEdge(detacher, det->getSuccessor(0) ), U) ) { errs() << "use not dominated:\n"; U->dump(); dominated = false; break; }
+        if (!DT.dominates(BasicBlockEdge(detacher, det->getSuccessor(0) ), U) ) { errs() << "use not dominated:\n"; U->dump(); dominated = false; break; }
       }
       if (dominated) {
         badInst->moveBefore( getFirstPostPHI(det->getSuccessor(0)) );
@@ -823,7 +862,7 @@ bool Loop2Cilk::runOnLoop(Loop *L, LPPassManager &LPM) {
   }
 
   /////!!< REQUIRE SYNC BLOCK HAS ONLY PHI's / EXIT
-  while (getNonPhiSize(syncer)!=1 ) {
+  while (getNonPhiSize(syncer)!=1) {
     Instruction* badInst = getLastNonTerm(syncer);
     if (!badInst->mayWriteToMemory()) {
       badInst->moveBefore( getFirstPostPHI(syncer->getTerminator()->getSuccessor(0)) );
@@ -836,7 +875,8 @@ bool Loop2Cilk::runOnLoop(Loop *L, LPPassManager &LPM) {
 
   /////!!< REMOVE ANY SYNC BLOCK PHI's
   while (syncer->size() != 1) {
-    PHINode* pn = cast<PHINode>(& syncer->front());
+    assert( isa<PHINode>(&syncer->front()) );
+    PHINode* pn = cast<PHINode>(&syncer->front());
     if (pn->getNumIncomingValues() != 1 ) {
       errs() << "invalid phi for sync\n";
       return false;
@@ -845,8 +885,6 @@ bool Loop2Cilk::runOnLoop(Loop *L, LPPassManager &LPM) {
     pn->eraseFromParent();
     assert( !llvm::verifyFunction(*L->getHeader()->getParent(), &llvm::errs()) );
   }
-
-  //BasicBlock* body = det->getSuccessor(0);
 
   std::pair<PHINode*,Value*> indVarResult = getIndVar(L, detacher, DT);
   PHINode* oldvar = indVarResult.first;
@@ -863,7 +901,7 @@ bool Loop2Cilk::runOnLoop(Loop *L, LPPassManager &LPM) {
   assert( ( L->getHeader()->size() == getNonPhiSize(L->getHeader()) + 1 ) && "Can only cilk_for loops with only 1 phi node " );
 
   bool simplified = false;
-  while( !simplified ){
+  while (!simplified) {
     simplified = true;
     for (auto it = pred_begin(syncer), et = pred_end(syncer); it != et; ++it) {
       BasicBlock* endL = *it;
@@ -879,18 +917,28 @@ bool Loop2Cilk::runOnLoop(Loop *L, LPPassManager &LPM) {
       }
     }
   }
+
   DT.recalculate(*L->getHeader()->getParent());
 
   llvm::CallInst* call = 0;
   llvm::Value*    closure = 0;
 
   if( llvm::verifyFunction(*Header->getParent(), nullptr) ) {
-    Header->getParent()->dump();
+    Header->getParent()->getParent()->dump();
   }
   assert( !llvm::verifyFunction(*Header->getParent(), &llvm::errs()) );
 
+  if (!recursiveMoveBefore(Header->getTerminator(), cmp, DT)) {
+    errs() << "cmp not moved\n";
+    assert( !llvm::verifyFunction(*L->getHeader()->getParent(), &llvm::errs()) );
+    return false;
+  }
   Function* extracted = llvm::cilk::extractDetachBodyToFunction( *det, &call, /*closure*/ oldvar, &closure );
-  //Header->getParent()->dump();
+  //Header->getParent()->getParent()->dump();
+  if (llvm::verifyFunction(*Header->getParent(), nullptr)) {
+    Header->getParent()->getParent()->dump();
+  }
+  assert(!llvm::verifyFunction(*Header->getParent(), &llvm::errs()));
 
   if( !extracted ) {
     errs() << "not extracted\n";
@@ -907,6 +955,11 @@ bool Loop2Cilk::runOnLoop(Loop *L, LPPassManager &LPM) {
       }
   }
 
+  if (llvm::verifyFunction(*Header->getParent(), nullptr)) {
+    Header->getParent()->getParent()->dump();
+  }
+  assert(!llvm::verifyFunction(*Header->getParent(), &llvm::errs()));
+
   Module* M = extracted->getParent();
   auto a1 = det->getSuccessor(0);
   auto a2 = det->getSuccessor(1);
@@ -915,7 +968,13 @@ bool Loop2Cilk::runOnLoop(Loop *L, LPPassManager &LPM) {
   oldvar->removeIncomingValue( 0U );
   assert( oldvar->getNumUses() == 0 );
 
+  if (llvm::verifyFunction(*Header->getParent(), nullptr)) {
+    Header->getParent()->getParent()->dump();
+  }
+  assert(!llvm::verifyFunction(*Header->getParent(), &llvm::errs()));
+
   assert( det->use_empty() );
+
   det->eraseFromParent();
   if( countPredecessors(a2) == 0 ){
     auto tmp = a1;
@@ -940,13 +999,6 @@ bool Loop2Cilk::runOnLoop(Loop *L, LPPassManager &LPM) {
   b2.CreateBr(detacher);
   IRBuilder<> b(detacher);
 
-  //extracted->dump();
-  //Header->getParent()->dump();
-  //if( llvm::verifyFunction(*Header->getParent(), nullptr) ) {
-  //  Header->getParent()->dump();
-  //}
-  //assert( !llvm::verifyFunction(*Header->getParent(), &llvm::errs()) );
-
   llvm::Function* F;
   if( ((llvm::IntegerType*)cmp->getType())->getBitWidth() == 32 )
     F = CILKRTS_FUNC(cilk_for_32, *M);
@@ -961,6 +1013,12 @@ bool Loop2Cilk::runOnLoop(Loop *L, LPPassManager &LPM) {
   assert (syncer->size() == 1);
   b.CreateBr(syncer);
 
+  if (llvm::verifyFunction(*Header->getParent(), nullptr)) {
+    llvm::errs() << "BAD\n";
+    //Header->getParent()->dump();
+  }
+  assert(!llvm::verifyFunction(*Header->getParent(), &llvm::errs()));
+
   ScalarEvolution &SE = getAnalysis<ScalarEvolutionWrapperPass>().getSE();
   SE.forgetLoop(L);
 
@@ -970,7 +1028,7 @@ bool Loop2Cilk::runOnLoop(Loop *L, LPPassManager &LPM) {
   if (parentL) parentL->verifyLoop();
 
   if (llvm::verifyFunction(*Header->getParent(), nullptr)) {
-    Header->getParent()->dump();
+    Header->getParent()->getParent()->dump();
   }
   assert(!llvm::verifyFunction(*Header->getParent(), &llvm::errs()));
   return true;
