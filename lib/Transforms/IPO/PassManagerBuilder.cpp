@@ -538,7 +538,7 @@ void PassManagerBuilder::populateModulePassManager(
       MPM.add(createBarrierNoopPass());
     }
 
-    if ( (ParallelLevel == 0 || ParallelLevel == 3) && OptLevel != 0) {
+    if ( OptLevel != 0) {
       addInitialAliasAnalysisPasses(MPM);
       MPM.add(createCFGSimplificationPass());
       if (UseNewSROA)
