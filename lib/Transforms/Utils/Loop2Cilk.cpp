@@ -739,6 +739,10 @@ bool Loop2Cilk::runOnLoop(Loop *L, LPPassManager &LPM) {
       syncer = endL;
       assert(syncer && isa<SyncInst>(syncer->getTerminator()));
       detacher = B->getSuccessor(0);
+      if(!isa<DetachInst>(detacher->getTerminator())) {
+       	assert( !llvm::verifyFunction(*L->getHeader()->getParent(), &llvm::errs()) );
+        return false;
+      }
       assert(detacher && isa<DetachInst>(detacher->getTerminator()));
     } else {
      	assert( !llvm::verifyFunction(*L->getHeader()->getParent(), &llvm::errs()) );
