@@ -176,6 +176,7 @@ void PassManagerBuilder::populateFunctionPassManager(
 
   if (OptLevel == 0) return;
 
+  /*
   addInitialAliasAnalysisPasses(FPM);
 
   FPM.add(createCFGSimplificationPass());
@@ -185,6 +186,7 @@ void PassManagerBuilder::populateFunctionPassManager(
     FPM.add(createScalarReplAggregatesPass());
   FPM.add(createEarlyCSEPass());
   FPM.add(createLowerExpectIntrinsicPass());
+  */
 }
 
 void PassManagerBuilder::populateForOptLevel(legacy::PassManagerBase &MPM, int level) {
@@ -525,6 +527,19 @@ void PassManagerBuilder::populateModulePassManager(
       MPM.add(createPromoteDetachToCilkPass());
       MPM.add(createBarrierNoopPass());
     }
+
+    if (OptLevel != 0) {
+      addInitialAliasAnalysisPasses(MPM);
+
+      MPM.add(createCFGSimplificationPass());
+      if (UseNewSROA)
+        MPM.add(createSROAPass());
+      else
+        MPM.add(createScalarReplAggregatesPass());
+      MPM.add(createEarlyCSEPass());
+      MPM.add(createLowerExpectIntrinsicPass());
+    }
+
     //llvm::errs() << "running opt at level at opt3: " << OptLevel << "\n";
     MPM.add(createCFGSimplificationPass());
     populateForOptLevel(MPM, OptLevel);
