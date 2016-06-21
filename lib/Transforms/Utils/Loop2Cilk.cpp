@@ -203,70 +203,42 @@ bool isZero(Value* v){
 }
 
 bool attemptRecursiveMoveHelper(Instruction* toMoveAfter, Instruction* toCheck, DominatorTree& DT, std::vector<Instruction*>& candidates) {
-  switch (toCheck->getOpcode()) {
-    case Instruction::Add:
-    case Instruction::FAdd:
-    case Instruction::Sub:
-    case Instruction::FSub:
-    case Instruction::Mul:
-    case Instruction::FMul:
-    case Instruction::UDiv:
-    case Instruction::SDiv:
-    case Instruction::FDiv:
-    case Instruction::URem:
-    case Instruction::SRem:
-    case Instruction::FRem:
+  if (DT.dominates(toMoveAfter, toCheck)) return true;
 
-    case Instruction::And:
-    case Instruction::Or:
-    case Instruction::Xor:
-
-    case Instruction::ICmp:
-    case Instruction::FCmp:
-    case Instruction::Select:
-    case Instruction::ExtractElement:
-    case Instruction::InsertElement:
-    case Instruction::ShuffleVector:
-    case Instruction::ExtractValue:
-    case Instruction::InsertValue:
-
-    case Instruction::Shl:
-    case Instruction::LShr:
-    case Instruction::AShr:
-
-    case Instruction::Trunc:
-    case Instruction::ZExt:
-    case Instruction::FPToUI:
-    case Instruction::UIToFP:
-    case Instruction::SIToFP:
-    case Instruction::FPTrunc:
-    case Instruction::FPExt:
-    case Instruction::PtrToInt:
-    case Instruction::IntToPtr:
-    case Instruction::BitCast:
-
-      for (auto & u2 : toCheck->uses() ) {
-        if (!DT.dominates(toMoveAfter, u2) ) {
-          assert( isa<Instruction>(u2.getUser()) );
-          if (!attemptRecursiveMoveHelper(toMoveAfter, cast<Instruction>(u2.getUser()), DT, candidates)) return false;
-        }
-      }
-    default: return false;
+  if (toCheck->mayHaveSideEffects()) {
+    llvm::errs() << "invalid move\n"; toCheck->dump();
+    return false;
   }
+
+  for (auto & u2 : toCheck->uses() ) {
+    if (!DT.dominates(toMoveAfter, u2) ) {
+      assert( isa<Instruction>(u2.getUser()) );
+      if (!attemptRecursiveMoveHelper(toMoveAfter, cast<Instruction>(u2.getUser()), DT, candidates)) return false;
+    }
+  }
+
+  candidates.push_back(toCheck);
   return true;
 }
 
-bool attemptRecursiveMove(Instruction* toMoveAfter, Instruction* toCheck, DominatorTree& DT) {
+bool attemptRecursiveMoveAfter(Instruction* toMoveAfter, Instruction* toCheck, DominatorTree& DT) {
   std::vector<Instruction*> candidates;
   bool b = attemptRecursiveMoveHelper(toMoveAfter, toCheck, DT, candidates);
   if (!b) return false;
 
   auto last = toMoveAfter;
-  for (int i=candidates.size()-1; i>0; i--) {
-    candidates[i]->moveBefore(last);
-    last = candidates[i];
+  for (Instruction* cand : candidates) {
+    cand->moveBefore(last);
+    last = cand;
   }
   if (last != toMoveAfter) toMoveAfter->moveBefore(last);
+
+  if (!DT.dominates(toMoveAfter, toCheck)) {
+    toMoveAfter->dump();
+    toCheck->dump();
+    toMoveAfter->getParent()->getParent()->dump();
+  }
+  assert(DT.dominates(toMoveAfter, toCheck));
   return true; 
 }
 
@@ -288,8 +260,6 @@ bool recursiveMoveBefore(Instruction* toMoveBefore, Value* toMoveVal, DominatorT
     toMove.pop_back();
     if( Instruction* inst = dyn_cast<Instruction>(b) ) {
       if( !DT.dominates(inst, toMoveBefore) ) {
-        //errs() << "moving: ";
-        //b->dump();
         for (User::op_iterator i = inst->op_begin(), e = inst->op_end(); i != e; ++i) {
           Value *v = *i;
           toMove.push_back(v);
@@ -452,8 +422,6 @@ std::pair<PHINode*,Value*> getIndVar(Loop *L, BasicBlock* detacher, DominatorTre
     return make_pair(nullptr,nullptr);
   }
 
-  //errs() << "PRE_REPLACE:\n"; H->getParent()->dump();
-
   llvm::Value* mul;
   llvm::Value* newV;
 
@@ -488,11 +456,13 @@ std::pair<PHINode*,Value*> getIndVar(Loop *L, BasicBlock* detacher, DominatorTre
         //No need to override use in increment
         if (user == std::get<1>(a)) continue;
 
-        if (!attemptRecursiveMove(ival, user, DT)) {
+        if (!attemptRecursiveMoveAfter(ival, user, DT)) {
           val->dump();
           user->dump();
           std::get<0>(a)->dump();
           H->getParent()->dump();
+          llvm::errs() << "FAILED TO MOVE\n";
+          return make_pair(nullptr, nullptr);
         }
         assert(DT.dominates(ival, user));
       }
@@ -507,11 +477,7 @@ std::pair<PHINode*,Value*> getIndVar(Loop *L, BasicBlock* detacher, DominatorTre
       }
       if(std::get<1>(a)->getNumUses() == 0) {
         auto tmp = std::get<1>(a);
-        bool replacable = true;
-        for (auto& tup : others) {
-          if (std::get<1>(tup) == tmp || std::get<2>(tup) == tmp) replacable = false;
-        }
-        if (replacable) tmp->eraseFromParent();
+        tmp->eraseFromParent();
       }
     }
 
@@ -520,9 +486,6 @@ std::pair<PHINode*,Value*> getIndVar(Loop *L, BasicBlock* detacher, DominatorTre
     //errs() << "NEWV :\n"; newV->dump();
     //errs() << "NEWVP:\n"; ((Instruction*)newV)->getParent()->dump();
   }
-
-  if( llvm::verifyFunction(*L->getHeader()->getParent(), nullptr) ) L->getHeader()->getParent()->dump();
-  assert( !llvm::verifyFunction(*L->getHeader()->getParent(), &llvm::errs()) );
 
   std::vector<Use*> uses;
   for( Use& U : RPN->uses() ) uses.push_back(&U);
@@ -537,7 +500,7 @@ std::pair<PHINode*,Value*> getIndVar(Loop *L, BasicBlock* detacher, DominatorTre
       assert( isa<Instruction>(newV) );
       Instruction* ival = cast<Instruction>(newV);
       assert( isa<Instruction>(U.getUser()) );
-      if (attemptRecursiveMove(ival, cast<Instruction>(U.getUser()), DT)) {
+      if (!attemptRecursiveMoveAfter(ival, cast<Instruction>(U.getUser()), DT)) {
         llvm::errs() << "newV: ";
         newV->dump();
         llvm::errs() << "U: ";
@@ -551,6 +514,8 @@ std::pair<PHINode*,Value*> getIndVar(Loop *L, BasicBlock* detacher, DominatorTre
         llvm::errs() << "RPN: ";
         RPN->dump();
         H->getParent()->dump();
+        llvm::errs() << "FAILED TO MOVE2\n";
+        return make_pair(nullptr, nullptr);
       }
       assert( DT.dominates((Instruction*) newV, U) );
       U.set( newV );
@@ -605,10 +570,7 @@ std::pair<PHINode*,Value*> getIndVar(Loop *L, BasicBlock* detacher, DominatorTre
         dir = 0;break;
     }
     if (dir < 0) { std::swap(bottom, top); }
-    //llvm::errs() << "bottom: "; bottom->dump();
-    //llvm::errs() << "top: "; top->dump();
     if( !isZero(bottom) ) val = build.CreateSub(top, bottom);
-    //llvm::errs() << "diff: "; val->dump();
     switch (cmp->getPredicate() ) {
       case CmpInst::ICMP_UGT:
       case CmpInst::ICMP_SGT:
@@ -623,11 +585,8 @@ std::pair<PHINode*,Value*> getIndVar(Loop *L, BasicBlock* detacher, DominatorTre
       default:
         break;
     }
-    //llvm::errs() << "tdiff: "; val->dump();
   }
   {
-    //llvm::errs() << "amt0 *: "; amt0->dump();
-    //llvm::errs() << "val *: "; val->dump();
     switch (cmp->getPredicate() ) {
       case CmpInst::ICMP_SLE:
       case CmpInst::ICMP_ULE:
@@ -644,7 +603,6 @@ std::pair<PHINode*,Value*> getIndVar(Loop *L, BasicBlock* detacher, DominatorTre
       default:
         break;
     }
-    //llvm::errs() << "amt0 : "; amt0->dump();
     if (!isOne(amt0)) val = build.CreateSDiv(val, amt0);
     if (cmp->getPredicate()!=CmpInst::ICMP_NE) val = addOne(val);
   }
