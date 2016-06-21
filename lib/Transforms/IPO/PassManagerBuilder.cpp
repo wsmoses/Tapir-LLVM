@@ -503,6 +503,17 @@ void PassManagerBuilder::populateModulePassManager(
 		//initializeTarget(Registry);
 
     if (ParallelLevel != 0) {
+      if ( (ParallelLevel != 3) && OptLevel != 0) {
+        addInitialAliasAnalysisPasses(MPM);
+        MPM.add(createCFGSimplificationPass());
+        if (UseNewSROA)
+          MPM.add(createSROAPass());
+        else
+          MPM.add(createScalarReplAggregatesPass());
+        MPM.add(createEarlyCSEPass());
+        MPM.add(createLowerExpectIntrinsicPass());
+      }
+
       if (ParallelLevel == 2) {
         //llvm::errs() << "running preopt at opt: " << OptLevel << "\n";
         populateForOptLevel(MPM, OptLevel);
@@ -511,14 +522,13 @@ void PassManagerBuilder::populateModulePassManager(
       if (ParallelLevel == 3) {
          //llvm::errs() << "NO preopt at opt: " << OptLevel << "\n";
 
-      } else if (ParallelLevel != 2 || OptLevel == 0) {
+      } else if (ParallelLevel != 2 && OptLevel != 0 ) {
         //llvm::errs() << "running mem2reg/indvar preopt at opt: " << OptLevel << "\n";
         MPM.add(createPromoteMemoryToRegisterPass());
         if (UseNewSROA)
           MPM.add(createSROAPass());
         else
           MPM.add(createScalarReplAggregatesPass());
-        MPM.add(createIndVarSimplifyPass());// Canonicalize indvars to prep for loop2cilk
       }
       MPM.add(createBarrierNoopPass());
       //if (ParallelLevel != 3) 
@@ -528,9 +538,8 @@ void PassManagerBuilder::populateModulePassManager(
       MPM.add(createBarrierNoopPass());
     }
 
-    if (OptLevel != 0) {
+    if ( (ParallelLevel == 0 || ParallelLevel == 3) && OptLevel != 0) {
       addInitialAliasAnalysisPasses(MPM);
-
       MPM.add(createCFGSimplificationPass());
       if (UseNewSROA)
         MPM.add(createSROAPass());
