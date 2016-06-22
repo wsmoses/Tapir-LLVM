@@ -37,7 +37,7 @@
 #include "llvm/IR/InstIterator.h"
 #include "llvm/Support/Debug.h"
 #include <iostream>
-
+#include <deque>
 
 
 static inline llvm::BasicBlock* getUniquePred(llvm::BasicBlock* syncer) {
@@ -1710,14 +1710,45 @@ static inline Function* extractDetachBodyToFunction(DetachInst& detach,
   if( call ) *call = cal;
 
 
-  if( closure ) {
+  if (closure) {
     cal->eraseFromParent();
     rstart->eraseFromParent();
     rend->eraseFromParent();
     inst->eraseFromParent();
     add->eraseFromParent();
     fake->eraseFromParent();
+  }
 
+  std::vector<AllocaInst*> Allocas;
+  
+  SmallPtrSet<BasicBlock*, 32> blocksInDetachedScope;
+  std::deque<BasicBlock*> blocksToVisit;
+  blocksToVisit.emplace_back(&extracted->getEntryBlock());
+  while (blocksToVisit.size() != 0) {
+    BasicBlock* block = blocksToVisit.back();
+    blocksToVisit.pop_back();
+    if(blocksInDetachedScope.insert(block).second) { 
+      const TerminatorInst* term = block->getTerminator();
+      if (const DetachInst* det = dyn_cast<const DetachInst>(term)) {
+        blocksToVisit.emplace_back(det->getContinue());
+      } else {
+        for (unsigned i=0; i<term->getNumSuccessors(); i++) {
+          blocksToVisit.emplace_back(term->getSuccessor(i));
+        }
+      }
+    }
+  }
+
+  blocksInDetachedScope.erase(&extracted->getEntryBlock());
+
+  for (BasicBlock* BB : blocksInDetachedScope) {
+    for (BasicBlock::iterator I = BB->begin(), E = --BB->end(); I != E; ++I)
+      if (AllocaInst *AI = dyn_cast<AllocaInst>(I))
+        Allocas.push_back(AI);
+  }
+
+  for (AllocaInst *AI : Allocas) {
+    AI->moveBefore(extracted->getEntryBlock().getTerminator());
   }
 
   return extracted;
