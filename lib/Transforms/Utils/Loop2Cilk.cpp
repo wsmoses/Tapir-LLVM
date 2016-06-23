@@ -686,6 +686,22 @@ BasicBlock* getTrueExit(Loop *L){
     return endL;
 }
 
+BasicBlock* continueToFindSync(BasicBlock* endL) {
+  //TODO consider lifetime intrinsics
+  while (endL && !isa<SyncInst>(endL->getTerminator())) {
+    if( getNonPhiSize(endL) == 1 && isa<BranchInst>(endL->getTerminator()) && endL->getTerminator()->getNumSuccessors() == 1 ) {
+      endL = endL->getTerminator()->getSuccessor(0);
+    }
+    else
+      endL = nullptr;
+  }
+
+  if (endL)
+    assert(endL && isa<SyncInst>(endL->getTerminator()));
+
+  return endL;
+}
+
 bool Loop2Cilk::runOnLoop(Loop *L, LPPassManager &LPM) {
   if (skipOptnoneFunction(L)) {
   	assert( !llvm::verifyFunction(*L->getHeader()->getParent(), &llvm::errs()) );
@@ -725,43 +741,46 @@ bool Loop2Cilk::runOnLoop(Loop *L, LPPassManager &LPM) {
   BasicBlock *detacher = nullptr, *syncer = nullptr;
   /////!!< BEGIN ESTABLISH DETACH/SYNC BLOCKS
   if (B->getNumSuccessors() != 2) {
-    BasicBlock* endL = getTrueExit(L);
-    //BasicBlock* oendL = endL;
-    while (endL && !isa<SyncInst>(endL->getTerminator())) {
-      if( getNonPhiSize(endL) == 1 && isa<BranchInst>(endL->getTerminator()) && endL->getTerminator()->getNumSuccessors() == 1 ) {
-        endL = endL->getTerminator()->getSuccessor(0);
-      }
-      else
-        endL = nullptr;
+    detacher = B->getSuccessor(0);
+    if(!isa<DetachInst>(detacher->getTerminator())) {
+     	assert( !llvm::verifyFunction(*L->getHeader()->getParent(), &llvm::errs()) );
+      return false;
     }
+    assert(detacher && isa<DetachInst>(detacher->getTerminator()));
+
+    BasicBlock* endL = getTrueExit(L);
+    endL = continueToFindSync(endL);
 
     if (endL) {
       syncer = endL;
       assert(syncer && isa<SyncInst>(syncer->getTerminator()));
-      detacher = B->getSuccessor(0);
-      if(!isa<DetachInst>(detacher->getTerminator())) {
-       	assert( !llvm::verifyFunction(*L->getHeader()->getParent(), &llvm::errs()) );
-        return false;
-      }
-      assert(detacher && isa<DetachInst>(detacher->getTerminator()));
     } else {
      	assert( !llvm::verifyFunction(*L->getHeader()->getParent(), &llvm::errs()) );
       return false;
     }
   } else {
-    detacher = B->getSuccessor(0);
-    syncer = B->getSuccessor(1);
+    int sync_idx = 1;
 
-    if (isa<DetachInst>(B->getSuccessor(0)->getTerminator()) && isa<SyncInst>(B->getSuccessor(1)->getTerminator())) {
+    if (isa<DetachInst>(B->getSuccessor(0)->getTerminator())) {
       detacher = B->getSuccessor(0);
       syncer   = B->getSuccessor(1);
-    } else if (isa<DetachInst>(B->getSuccessor(1)->getTerminator()) && isa<SyncInst>(B->getSuccessor(0)->getTerminator())) {
+    } else if (isa<DetachInst>(B->getSuccessor(1)->getTerminator())) {
+      sync_idx = 0;
       detacher = B->getSuccessor(1);
       syncer   = B->getSuccessor(0);
     } else {
-      //errs() << "none sync" << "\n";
-      //syncer->dump();
+      //errs() << "No detach found" << "\n";
       //detacher->dump();
+     	assert( !llvm::verifyFunction(*L->getHeader()->getParent(), &llvm::errs()) );
+      return false;
+    }
+
+    syncer = continueToFindSync(syncer);
+    if (!syncer) {
+      errs() << "No sync found" << "\n";
+      B->getSuccessor(sync_idx)->dump();
+      L->getHeader()->getParent()->dump();
+     	assert( !llvm::verifyFunction(*L->getHeader()->getParent(), &llvm::errs()) );
       return false;
     }
 
@@ -895,8 +914,14 @@ bool Loop2Cilk::runOnLoop(Loop *L, LPPassManager &LPM) {
     assert( !llvm::verifyFunction(*L->getHeader()->getParent(), &llvm::errs()) );
     return false;
   }
+
+  //Header->getParent()->dump();
+
   Function* extracted = llvm::cilk::extractDetachBodyToFunction( *det, &call, /*closure*/ oldvar, &closure );
+
   //Header->getParent()->getParent()->dump();
+  //extracted->dump();
+
   if (llvm::verifyFunction(*Header->getParent(), nullptr)) {
     Header->getParent()->getParent()->dump();
   }
