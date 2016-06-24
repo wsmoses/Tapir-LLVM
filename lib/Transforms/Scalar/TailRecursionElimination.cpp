@@ -164,10 +164,57 @@ bool TailCallElim::runOnFunction(Function &F) {
   if (F.getFnAttribute("disable-tail-calls").getValueAsString() == "true")
     return false;
 
+  bool removedSync = false;
+  for (Function::iterator BBI = F.begin(), E = F.end(); BBI != E; /*in loop*/) {
+    BasicBlock *BB = &*BBI++;
+    if (isa<ReturnInst>(BB->getTerminator())) {
+      bool canDesync = false;      
+      for (auto& a : *BB) {
+        if (a.mayReadOrWriteMemory()) {
+          canDesync = true; break; 
+        }
+      }
+      if (canDesync) continue;
+
+      SmallVector<BasicBlock *, 32> blocks;
+      for (pred_iterator i = pred_begin(BB), e = pred_end(BB); i != e; ) blocks.push_back(*i++);
+
+      for (auto Pred : blocks) {
+        auto term = Pred->getTerminator();
+        if (isa<SyncInst>(Pred->getTerminator())) {
+          removedSync = true;
+          term->eraseFromParent();
+          IRBuilder<> build(Pred);
+          build.CreateBr(BB);
+        }
+      }
+
+      while (auto up = BB->getUniquePredecessor()) { 
+        if(llvm::MergeBlockIntoPredecessor(BB)) { BB = up; BBI = F.begin(); }
+        else break;
+      }
+    }
+  }
+
   bool AllCallsAreTailCalls = false;
   bool Modified = markTails(F, AllCallsAreTailCalls);
   if (AllCallsAreTailCalls)
     Modified |= runTRE(F);
+
+  if (removedSync) {
+    SmallVector<BasicBlock *, 32> blocks;
+    for (BasicBlock& BB : F) { blocks.push_back(&BB); }
+
+    for (BasicBlock* BB : blocks) {
+      if (ReturnInst *Ret = dyn_cast<ReturnInst>(BB->getTerminator())) {
+        auto tret = BB->splitBasicBlock(Ret);
+        BB->getTerminator()->eraseFromParent();
+        IRBuilder<> build(BB);
+        build.CreateSync(tret);
+      }
+    }
+  }
+
   return Modified;
 }
 
