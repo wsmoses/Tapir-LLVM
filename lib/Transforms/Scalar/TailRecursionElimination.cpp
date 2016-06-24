@@ -167,7 +167,7 @@ bool TailCallElim::runOnFunction(Function &F) {
   bool removedSync = false;
   for (Function::iterator BBI = F.begin(), E = F.end(); BBI != E; /*in loop*/) {
     BasicBlock *BB = &*BBI++;
-    if (isa<ReturnInst>(BB->getTerminator())) {
+    if (ReturnInst* ret = dyn_cast<ReturnInst>(BB->getTerminator())) {
       bool canDesync = false;      
       for (auto& a : *BB) {
         if (a.mayReadOrWriteMemory()) {
@@ -186,6 +186,7 @@ bool TailCallElim::runOnFunction(Function &F) {
           term->eraseFromParent();
           IRBuilder<> build(Pred);
           build.CreateBr(BB);
+          FoldReturnIntoUncondBranch(ret, BB, Pred);
         }
       }
 
