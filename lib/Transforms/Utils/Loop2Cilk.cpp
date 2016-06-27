@@ -108,6 +108,8 @@ Value* neg( Value* V ) {
   bool move = false;
   if( Argument* A = dyn_cast<Argument>(V) ) {
     I = A->getParent()->getEntryBlock().getFirstNonPHIOrDbgOrLifetime();
+  } else if( PHINode* A = dyn_cast<PHINode>(V) ) {
+    I = A->getParent()->getFirstNonPHIOrDbgOrLifetime();
   } else {
     assert( isa<Instruction>(V) );
     I = cast<Instruction>(V);
@@ -129,6 +131,8 @@ Value* subOne( Value* V ) {
   bool move = false;
   if( Argument* A = dyn_cast<Argument>(V) ) {
     I = A->getParent()->getEntryBlock().getFirstNonPHIOrDbgOrLifetime();
+  } else if( PHINode* A = dyn_cast<PHINode>(V) ) {
+    I = A->getParent()->getFirstNonPHIOrDbgOrLifetime();
   } else {
     assert( isa<Instruction>(V) );
     I = cast<Instruction>(V);
@@ -151,6 +155,8 @@ Value* addOne( Value* V ) {
   bool move = false;
   if( Argument* A = dyn_cast<Argument>(V) ) {
     I = A->getParent()->getEntryBlock().getFirstNonPHIOrDbgOrLifetime();
+  } else if( PHINode* A = dyn_cast<PHINode>(V) ) {
+    I = A->getParent()->getFirstNonPHIOrDbgOrLifetime();
   } else {
     assert( isa<Instruction>(V) );
     I = cast<Instruction>(V);
