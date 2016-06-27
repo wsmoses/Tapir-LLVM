@@ -517,7 +517,6 @@ void PassManagerBuilder::populateModulePassManager(
       if (ParallelLevel == 2) {
         //llvm::errs() << "running preopt at opt: " << OptLevel << "\n";
         populateForOptLevel(MPM, OptLevel);
-        Inliner = Inliner2;
       }
       if (ParallelLevel == 3) {
          //llvm::errs() << "NO preopt at opt: " << OptLevel << "\n";
@@ -536,6 +535,7 @@ void PassManagerBuilder::populateModulePassManager(
       MPM.add(createCFGSimplificationPass());
       MPM.add(createPromoteDetachToCilkPass());
       MPM.add(createBarrierNoopPass());
+      Inliner = Inliner2;
     }
 
     if ( OptLevel != 0) {

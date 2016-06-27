@@ -350,6 +350,9 @@ std::pair<PHINode*,Value*> getIndVar(Loop *L, BasicBlock* detacher, DominatorTre
     }
   }
 
+  //llvm::errs() << "Preparing from loop" << H->getName() << "|" << H->getParent()->getName() << "\n";
+  //H->getParent()->dump();
+
   // Loop over all of the PHI nodes, looking for a canonical indvar.
   PHINode* RPN = nullptr;
   Instruction* INCR = nullptr;
@@ -404,12 +407,14 @@ std::pair<PHINode*,Value*> getIndVar(Loop *L, BasicBlock* detacher, DominatorTre
         return make_pair(nullptr,nullptr);
       }
     } else {
-      errs() << "no inc found for:\n"; PN->dump();
+      errs() << "no inc found for:\n"; PN->dump(); PN->getParent()->getParent()->dump();
+      return make_pair(nullptr, nullptr);
     }
   }
 
   assert( !llvm::verifyFunction(*L->getHeader()->getParent(), &llvm::errs()) );
 
+  //L->getHeader()->getParent()->dump();
 
   if( RPN == 0 ) {
     errs() << "<no RPN>\n";
@@ -550,9 +555,13 @@ std::pair<PHINode*,Value*> getIndVar(Loop *L, BasicBlock* detacher, DominatorTre
       case 3: adder = build.CreateZExt( adder,val->getType());
     }
     Value *bottom = adder, *top = val;
-    if (opc != RPN) {
-      cmp->setOperand(1-cmpIdx, RPN);
-      bottom = build.CreateAdd(adder, amt0);
+    if (opc == RPN && DT.dominates(detacher->getTerminator(), cmp)) {
+      llvm::errs() << "<adding extra for cmp>";
+      cmp->dump();
+      //cmp->getParent()->getParent()->dump();
+      llvm::errs() << "</adding extra for cmp>";
+      cmp->setOperand(cmpIdx, INCR);
+      top = build.CreateAdd(top, amt0);
     }
     int dir = 0;
     switch (cmp->getPredicate() ) {
@@ -619,6 +628,12 @@ std::pair<PHINode*,Value*> getIndVar(Loop *L, BasicBlock* detacher, DominatorTre
 
   if( llvm::verifyFunction(*L->getHeader()->getParent(), nullptr) ) L->getHeader()->getParent()->dump();
   assert( !llvm::verifyFunction(*L->getHeader()->getParent(), &llvm::errs()) );
+
+  //llvm::errs() << "Finished loop" << H->getName() << "\n";
+  //H->getParent()->dump();
+  //llvm::errs() << "+ Finished loop" << H->getName() << "| iters=";
+  //val->dump();
+  //llvm::errs() << "\n";
 
   return make_pair(RPN, val);
 }
@@ -778,8 +793,8 @@ bool Loop2Cilk::runOnLoop(Loop *L, LPPassManager &LPM) {
     syncer = continueToFindSync(syncer);
     if (!syncer) {
       errs() << "No sync found" << "\n";
-      B->getSuccessor(sync_idx)->dump();
-      L->getHeader()->getParent()->dump();
+      //B->getSuccessor(sync_idx)->dump();
+      //L->getHeader()->getParent()->dump();
      	assert( !llvm::verifyFunction(*L->getHeader()->getParent(), &llvm::errs()) );
       return false;
     }
@@ -915,12 +930,14 @@ bool Loop2Cilk::runOnLoop(Loop *L, LPPassManager &LPM) {
     return false;
   }
 
+  //llvm::errs() << "<EXTRACTING FROM " << Header->getParent()->getParent()->getName() << "\\>\n";
   //Header->getParent()->dump();
 
   Function* extracted = llvm::cilk::extractDetachBodyToFunction( *det, &call, /*closure*/ oldvar, &closure );
 
   //Header->getParent()->getParent()->dump();
   //extracted->dump();
+  //llvm::errs() << "</DONE EXTRACTING FROM " << extracted->getName() << "\\>\n";
 
   if (llvm::verifyFunction(*Header->getParent(), nullptr)) {
     Header->getParent()->getParent()->dump();
