@@ -1274,6 +1274,7 @@ static inline llvm::Value* GetOrInitStackFrame(Function& F, bool fast = true, bo
     } else continue;
   }
 
+  if (rets.size()==0) F.dump();
   assert( rets.size() > 0 );
 
   Instruction* retInst = nullptr;
