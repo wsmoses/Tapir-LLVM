@@ -77,6 +77,7 @@ typedef void *__CILK_JUMP_BUFFER[5];
 struct __cilkrts_pedigree {};
 struct __cilkrts_stack_frame {};
 struct __cilkrts_worker {};
+struct global_state_t {};
 
 enum {
   __CILKRTS_ABI_VERSION = 1
@@ -126,6 +127,7 @@ typedef void (__cilkrts_return_exception)(__cilkrts_stack_frame *sf);
 typedef void (__cilkrts_rethrow)(__cilkrts_stack_frame *sf);
 typedef void (__cilkrts_detach)(__cilkrts_stack_frame *sf);
 typedef void (__cilkrts_pop_frame)(__cilkrts_stack_frame *sf);
+typedef int (__cilkrts_get_nworkers)();
 typedef __cilkrts_worker *(__cilkrts_get_tls_worker)();
 typedef __cilkrts_worker *(__cilkrts_get_tls_worker_fast)();
 typedef __cilkrts_worker *(__cilkrts_bind_thread_1)();
@@ -158,6 +160,7 @@ typedef void (cilk_leave_end)();
                                                                         )); \
   }
 
+DEFAULT_GET_CILKRTS_FUNC(get_nworkers)
 DEFAULT_GET_CILKRTS_FUNC(sync)
 DEFAULT_GET_CILKRTS_FUNC(rethrow)
 DEFAULT_GET_CILKRTS_FUNC(leave_frame)
@@ -875,6 +878,8 @@ static Function *GetCilkSyncFn(Module &M, bool instrument = false) {
 //   return Fn;
 // }
 
+
+
 /// \brief Get or create a LLVM function for __cilkrts_enter_frame.
 /// It is equivalent to the following C code
 ///
@@ -1539,6 +1544,72 @@ static inline bool populateDetachedCFG(DetachInst& detach, SmallPtrSet<BasicBloc
   return true;
 }
 
+/*
+    if (count < 1)
+        return 1;
+
+    global_state_t* g = cilkg_get_global_state();
+    if (g->under_ptool)
+    {
+        // Grainsize = 1, when running under PIN, and when the grainsize has
+        // not explicitly been set by the user.
+        return 1;
+    }
+    else
+    {
+        // Divide loop count by 8 times the worker count and round up.
+        const int Px8 = g->P * 8;
+        count_t n = (count + Px8 - 1) / Px8;
+
+        // 2K should be enough to amortize the cost of the cilk_for. Any
+        // larger grainsize risks losing parallelism.
+        if (n > 2048)
+            return 2048;
+        return (int) n;  // n <= 2048, so no loss of precision on cast to int
+    }
+*/
+static inline Value *getGrainSize(Value* count, IRBuilder<> &b0) {
+  BasicBlock* begin  = b0.GetInsertBlock();
+  BasicBlock* target = nullptr;
+
+  Module &M = *begin->getParent()->getParent();
+  LLVMContext &Ctx = M.getContext();
+
+  if (!begin->getTerminator()) {
+    target = BasicBlock::Create(Ctx, "endGrain", begin->getParent());
+  } else {
+    BasicBlock* target = begin->splitBasicBlock(b0.GetInsertPoint());
+    begin->getTerminator()->eraseFromParent();
+  }
+  b0.SetInsertPoint(target);
+
+ 
+  IRBuilder<> builder2(target);
+  if (!target->empty())
+    builder2.SetInsertPoint(&*target->begin());
+
+  PHINode* PN = builder2.CreatePHI(count->getType(), 3, "grainsize");
+
+  IRBuilder<> builder(begin);
+  Value* cond = builder.CreateICmpSLE(count, ConstantInt::get(count->getType(), 1));
+  BasicBlock *graint = BasicBlock::Create(Ctx, "graint", begin->getParent());
+  builder.CreateCondBr(cond, target, graint);
+
+  PN->addIncoming(ConstantInt::get(count->getType(), 1), begin);
+
+  builder.SetInsertPoint(graint);
+  Value* P0 = builder.CreateCall(CILKRTS_FUNC(get_nworkers, M));
+  Value* P = builder.CreateIntCast(P0, count->getType(), false);
+  Value* P8 = builder.CreateMul(P, ConstantInt::get(P->getType(), 8));
+  Value* n = builder.CreateUDiv(builder.CreateSub(builder.CreateAdd(count, P8), ConstantInt::get(count->getType(), 1)), P8);
+  Value* cutoff = ConstantInt::get(count->getType(), 2048);
+  Value* c2 = builder.CreateICmpUGT(n, cutoff);
+  Value* pn = builder.CreateSelect(c2, cutoff, n);
+  builder.CreateBr(target);
+  PN->addIncoming(pn, graint);
+  return PN; 
+}
+
 //Returns true if success
 static inline Function* extractDetachBodyToFunction(DetachInst& detach,
 						    llvm::CallInst** call = 0,
@@ -1855,7 +1926,7 @@ static inline bool createDetach(DetachInst& detach,
   Value *SF = GetOrInitStackFrame( F, /*isFast*/ false, instrument );
   assert(SF && "null stack frame unexpected");
 
-  Function* extracted = extractDetachBodyToFunction( detach );
+  Function* extracted = extractDetachBodyToFunction(detach);
 
   TerminatorInst* bi = llvm::dyn_cast<TerminatorInst>(detB->getTerminator() );
   assert( bi );

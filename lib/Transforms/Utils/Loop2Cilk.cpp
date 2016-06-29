@@ -1007,21 +1007,45 @@ bool Loop2Cilk::runOnLoop(Loop *L, LPPassManager &LPM) {
   Header->getTerminator()->eraseFromParent();
   IRBuilder<> b2(Header);
   b2.CreateBr(detacher);
-  IRBuilder<> b(detacher);
 
-  llvm::Function* F;
-  if( ((llvm::IntegerType*)cmp->getType())->getBitWidth() == 32 )
-    F = CILKRTS_FUNC(cilk_for_32, *M);
-  else {
-    assert( ((llvm::IntegerType*)cmp->getType())->getBitWidth() == 64 );
-    F = CILKRTS_FUNC(cilk_for_64, *M);
+  {
+    IRBuilder<> b(detacher);
+  
+    LLVMContext &Ctx = M->getContext();
+   
+    IRBuilder<> builder2(syncer);
+    if (!syncer->empty())
+      builder2.SetInsertPoint(&*syncer->begin());
+    
+    auto count = cmp;
+    Value* cond = b.CreateICmpSLE(count, ConstantInt::get(count->getType(), 1));
+    BasicBlock *graint = BasicBlock::Create(Ctx, "graint", detacher->getParent());
+    b.CreateCondBr(cond, syncer, graint);
+
+    b.SetInsertPoint(graint);
+    Value* P0 = b.CreateCall(CILKRTS_FUNC(get_nworkers, *M));
+    Value* P = b.CreateIntCast(P0, count->getType(), false);
+    Value* P8 = b.CreateMul(P, ConstantInt::get(P->getType(), 8));
+    Value* n = b.CreateUDiv(b.CreateSub(b.CreateAdd(count, P8), ConstantInt::get(count->getType(), 1)), P8);
+    Value* cutoff = ConstantInt::get(count->getType(), 2048);
+    Value* c2 = b.CreateICmpUGT(n, cutoff);
+    Value* pn = b.CreateSelect(c2, cutoff, n);
+  
+    llvm::Function* F;
+    if( ((llvm::IntegerType*)cmp->getType())->getBitWidth() == 32 )
+      F = CILKRTS_FUNC(cilk_for_32, *M);
+    else {
+      assert( ((llvm::IntegerType*)cmp->getType())->getBitWidth() == 64 );
+      F = CILKRTS_FUNC(cilk_for_64, *M);
+    }
+  
+    auto grainSizeT = b.CreateIntCast(pn, llvm::Type::getIntNTy(cmp->getContext(), 8*sizeof(int)), false);
+    llvm::Value* args[] = {b.CreatePointerCast(extracted, F->getFunctionType()->getParamType(0) ), b.CreatePointerCast(closure, F->getFunctionType()->getParamType(1)), cmp, grainSizeT};
+    b.CreateCall(F, args);
+
+    assert (syncer->size() == 1);
+    b.CreateBr(syncer);
   }
-
-  llvm::Value* args[] = { b.CreatePointerCast(extracted, F->getFunctionType()->getParamType(0) ), b.CreatePointerCast( closure, F->getFunctionType()->getParamType(1) ), cmp, ConstantInt::get( llvm::Type::getIntNTy( cmp->getContext(), 8*sizeof(int) ), 0 ) };
-  b.CreateCall(F, args);
-
-  assert (syncer->size() == 1);
-  b.CreateBr(syncer);
 
   if (llvm::verifyFunction(*Header->getParent(), nullptr)) {
     llvm::errs() << "BAD\n";
