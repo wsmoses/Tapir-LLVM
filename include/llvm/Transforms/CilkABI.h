@@ -1492,7 +1492,7 @@ static inline void replaceInList(llvm::Value* v,
 
 }
 
-static inline bool populateDetachedCFG(DetachInst& detach, SmallPtrSet<BasicBlock*,32>& functionPieces, SmallVector<BasicBlock*, 32 >& reattachB) {
+static inline bool populateDetachedCFG(const DetachInst& detach, SmallPtrSet<BasicBlock*,32>& functionPieces, SmallVector<BasicBlock*, 32 >& reattachB, bool replace, bool error=true) {
   SmallVector<BasicBlock *, 32> todo;
 
   BasicBlock* Spawned  = detach.getSuccessor(0);
@@ -1510,9 +1510,11 @@ static inline bool populateDetachedCFG(DetachInst& detach, SmallPtrSet<BasicBloc
     if( ReattachInst* inst = llvm::dyn_cast<ReattachInst>(term) ) {
       //only analyze reattaches going to the same continuation
       if( inst->getSuccessor(0) != Continue ) continue;
-      BranchInst* toReplace = BranchInst::Create( Continue );
-      ReplaceInstWithInst(inst, toReplace);
-      reattachB.push_back(BB);
+      if (replace) {
+        BranchInst* toReplace = BranchInst::Create( Continue );
+        ReplaceInstWithInst(inst, toReplace);
+        reattachB.push_back(BB);
+      }
       continue;
     } else if( DetachInst* inst = llvm::dyn_cast<DetachInst>(term) ) {
       assert( inst != &detach && "Found recursive detach!" );
@@ -1537,7 +1539,8 @@ static inline bool populateDetachedCFG(DetachInst& detach, SmallPtrSet<BasicBloc
       continue;
     } else {
       term->dump();
-      assert( 0 && "Detached block did not absolutely terminate in reattach");
+      term->getParent()->getParent()->dump();
+      if (error) assert( 0 && "Detached block did not absolutely terminate in reattach");
       return false;
     }
   }
@@ -1626,7 +1629,7 @@ static inline Function* extractDetachBodyToFunction(DetachInst& detach,
   SmallPtrSet<BasicBlock *, 32> functionPieces;
   SmallVector<BasicBlock*, 32 > reattachB;
 
-  if( !populateDetachedCFG( detach, functionPieces, reattachB ) ) return nullptr;
+  if (!populateDetachedCFG( detach, functionPieces, reattachB, true)) return nullptr;
 
   functionPieces.erase(Spawned);
   std::vector<BasicBlock*> blocks( functionPieces.begin(), functionPieces.end() );

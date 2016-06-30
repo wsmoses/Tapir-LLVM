@@ -74,6 +74,7 @@
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/Transforms/CilkABI.h"
 #include <algorithm>
 #include <cstdarg>
 using namespace llvm;
@@ -242,6 +243,14 @@ public:
         I->printAsOperand(OS, true);
         OS << "\n";
         return false;
+      }
+      if (const DetachInst* det = dyn_cast<DetachInst>(&I->back())) {
+        SmallPtrSet<BasicBlock*,32> functionPieces;
+        SmallVector<BasicBlock*, 32 > reattachB;
+        if (!llvm::cilk::populateDetachedCFG(*det, functionPieces, reattachB, false, false)) {
+          OS << "Invalid end to detached CFG\n";
+          return false;
+        }
       }
     }
 

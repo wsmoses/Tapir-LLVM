@@ -842,6 +842,21 @@ bool Loop2Cilk::runOnLoop(Loop *L, LPPassManager &LPM) {
   assert(detacher && isa<DetachInst>(detacher->getTerminator()));
 
   DetachInst* det = cast<DetachInst>(detacher->getTerminator());
+  {
+    SmallPtrSet<BasicBlock *, 32> functionPieces;
+    SmallVector<BasicBlock*, 32 > reattachB;
+    if (!llvm::cilk::populateDetachedCFG(*det, functionPieces, reattachB, false)) return false;
+    for (BasicBlock* BB : functionPieces) {
+      for (Instruction &I : *BB) {
+        if (CallInst* ca = dyn_cast<CallInst>(&I)) {
+          if (ca->getCalledFunction() == Header->getParent()) {
+            errs() << "recursive cilk for\n";
+            return false;
+          }
+        }
+      }
+    }
+  }
 
   DominatorTree &DT = getAnalysis<DominatorTreeWrapperPass>().getDomTree();
 
@@ -947,10 +962,9 @@ bool Loop2Cilk::runOnLoop(Loop *L, LPPassManager &LPM) {
   //extracted->dump();
   //llvm::errs() << "</DONE EXTRACTING FROM " << extracted->getName() << "\\>\n";
 
-  if (llvm::verifyFunction(*Header->getParent(), nullptr)) {
-    Header->getParent()->getParent()->dump();
+  if (llvm::verifyFunction(*extracted, nullptr)) {
+    extracted->dump(); assert(0 && "extracted of bad form");
   }
-  assert(!llvm::verifyFunction(*Header->getParent(), &llvm::errs()));
 
   if( !extracted ) {
     errs() << "not extracted\n";
@@ -1058,23 +1072,12 @@ tail_recurse:
       }
   }
 
-  if (llvm::verifyFunction(*Header->getParent(), nullptr)) {
-    Header->getParent()->getParent()->dump();
-  }
-  assert(!llvm::verifyFunction(*Header->getParent(), &llvm::errs()));
-
   auto a1 = det->getSuccessor(0);
   auto a2 = det->getSuccessor(1);
 
   oldvar->removeIncomingValue( 1U );
   oldvar->removeIncomingValue( 0U );
   assert( oldvar->getNumUses() == 0 );
-
-  if (llvm::verifyFunction(*Header->getParent(), nullptr)) {
-    Header->getParent()->getParent()->dump();
-  }
-  assert(!llvm::verifyFunction(*Header->getParent(), &llvm::errs()));
-
   assert( det->use_empty() );
 
   det->eraseFromParent();
