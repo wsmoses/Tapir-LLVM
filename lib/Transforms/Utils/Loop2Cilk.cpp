@@ -833,8 +833,9 @@ bool Loop2Cilk::runOnLoop(Loop *L, LPPassManager &LPM) {
   assert(syncer && isa<SyncInst>(syncer->getTerminator()));
   assert(detacher && isa<DetachInst>(detacher->getTerminator()));
 
-  /*DetachInst* det = cast<DetachInst>(detacher->getTerminator());
-  {
+  DetachInst* det = cast<DetachInst>(detacher->getTerminator());
+  /*
+   {
     SmallPtrSet<BasicBlock *, 32> functionPieces;
     SmallVector<BasicBlock*, 32 > reattachB;
     if (!llvm::cilk::populateDetachedCFG(*det, functionPieces, reattachB, false)) return false;
@@ -947,7 +948,7 @@ bool Loop2Cilk::runOnLoop(Loop *L, LPPassManager &LPM) {
   //Header->getParent()->dump();
 
   std::vector<Value*> ext_args;
-  Function* extracted = llvm::cilk::extractDetachBodyToFunction(*det, &call, /*closure*/ oldvar, &closure);
+  Function* extracted = llvm::cilk::extractDetachBodyToFunction(*det, &call, /*closure*/ oldvar, &ext_args);
 
   //Header->getParent()->getParent()->dump();
   //extracted->dump();
@@ -964,25 +965,28 @@ bool Loop2Cilk::runOnLoop(Loop *L, LPPassManager &LPM) {
  
   // FIX FOR THE DAC recur
 /*
-tail_recurse:
- cilk_for_recursive(count_t low, count_t high, ...) {
+ 
+
+  cilk_for_recursive(count_t low, count_t high, ...) {
   tail_recurse:
     count_t count = high - low;
-    // Invariant: count > 0, grain >= 1
     if (count > grain)
     {
         // Invariant: count >= 2
         count_t mid = low + count / 2;
-        _Cilk_spawn cilk_for_recursive(low, mid, body, data, grain,
-                                       capture_spawn_arg_stack_frame(sf, w),
-                                       loop_root_pedigree);
+        spawn cilk_for_recursive(low, mid, grain, ...);
         low = mid;
         goto tail_recurse;
     }
-    call_cilk_for_loop_body(low, high, body, data, w, loop_root_pedigree);
+
+    for(int i=low; i<high; i++) {
+      body(i, data);
+    }
+    sync;
 */
 
-/*  {
+// /*
+  {
     LLVMContext &Ctx = M->getContext();
 
     Function::arg_iterator args = extracted->arg_begin();
@@ -1000,15 +1004,15 @@ tail_recurse:
     tail_recurse->getTerminator()->eraseFromParent();
   
     IRBuilder<> trbuilder(tail_recurse);
-    PHINode* low = trbuilder.CreatePHI(low0->getType(), 2);
+    PHINode* low = trbuilder.CreatePHI(low0->getType(), 2, "low");
     low0->replaceAllUsesWith(low);
-    Value* count = trbuilder.CreateSub(high0, low);
+    Value* count = trbuilder.CreateSub(high0, low, "count");
     Value* cond = trbuilder.CreateICmpUGT(count, grain);
     trbuilder.CreateCondBr(cond, recur, body);
     low->addIncoming(low0, entry);
 
     IRBuilder<> rbuilder(recur);
-    Value *mid = rbuilder.CreateAdd(low, rbuilder.CreateUDiv(count, ConstantInt::get(count->getType(), 2)));
+    Value *mid = rbuilder.CreateAdd(low, rbuilder.CreateUDiv(count, ConstantInt::get(count->getType(), 2)), "mid");
     BasicBlock *detached = BasicBlock::Create(Ctx, "detached", extracted);
     detached->moveAfter(recur);
     BasicBlock *reattached = BasicBlock::Create(Ctx, "reattached", extracted);
@@ -1024,8 +1028,8 @@ tail_recurse:
       next_args.push_back(&*args);
       args++;
     }
-    next_args[0] = mid;
-    next_args[1] = high0;
+    next_args[0] = low;
+    next_args[1] = mid;
     next_args[2] = grain;
     
     dbuilder.CreateCall(extracted, next_args);
@@ -1046,7 +1050,8 @@ tail_recurse:
         build.CreateSync(tret);
       }
     }
-  }*/
+    //extracted->dump();
+  } //*/
 
   if (llvm::verifyFunction(*extracted, &llvm::errs())) {
     extracted->dump();
@@ -1054,8 +1059,8 @@ tail_recurse:
   }
 
   {
-    for( BasicBlock& b : extracted->getBasicBlockList() )
-      if( true ) {
+    for (BasicBlock& b : extracted->getBasicBlockList())
+      if (true) {
         removeFromAll(parentL, &b);
         LI.changeLoopFor(&b, nullptr);
         LI.removeBlock(&b);
@@ -1093,19 +1098,47 @@ tail_recurse:
   IRBuilder<> b2(Header);
   b2.CreateBr(detacher);
 
-  {
+   {
     IRBuilder<> b(detacher);
+  
+    LLVMContext &Ctx = M->getContext();
+   
+    IRBuilder<> builder2(syncer);
+    if (!syncer->empty())
+      builder2.SetInsertPoint(&*syncer->begin());
+    
+    auto count = cmp;
+    Value* cond = b.CreateICmpSLE(count, ConstantInt::get(count->getType(), 1));
+    BasicBlock *graint = BasicBlock::Create(Ctx, "graint", detacher->getParent());
+    if (parentL) {
+      parentL->addBasicBlockToLoop(graint, LI);
+    }
 
+    b.CreateCondBr(cond, syncer, graint);
+
+    b.SetInsertPoint(graint);
+    Value* P0 = b.CreateCall(CILKRTS_FUNC(get_nworkers, *M));
+    Value* P = b.CreateIntCast(P0, count->getType(), false);
+    Value* P8 = b.CreateMul(P, ConstantInt::get(P->getType(), 8));
+    Value* n = b.CreateUDiv(b.CreateSub(b.CreateAdd(count, P8), ConstantInt::get(count->getType(), 1)), P8);
+    Value* cutoff = ConstantInt::get(count->getType(), 2048);
+    Value* c2 = b.CreateICmpUGT(n, cutoff);
+    Value* pn = b.CreateSelect(c2, cutoff, n);
+  
+    /*
     llvm::Function* F;
     if( ((llvm::IntegerType*)cmp->getType())->getBitWidth() == 32 )
       F = CILKRTS_FUNC(cilk_for_32, *M);
     else {
       assert( ((llvm::IntegerType*)cmp->getType())->getBitWidth() == 64 );
       F = CILKRTS_FUNC(cilk_for_64, *M);
-    }
-
-    llvm::Value* args[] = { b.CreatePointerCast(extracted, F->getFunctionType()->getParamType(0) ), b.CreatePointerCast( closure, F->getFunctionType()->getParamType(1) ), cmp, ConstantInt::get( llvm::Type::getIntNTy( cmp->getContext(), 8*sizeof(int) ), 0 ) };
-    b.CreateCall(F, args);
+    }*/
+  
+    ext_args[0] = ConstantInt::get(count->getType(), 0);
+    ext_args[1] = count;
+    ext_args[2] = pn;
+    
+    b.CreateCall(extracted, ext_args);
 
     assert (syncer->size() == 1);
     b.CreateBr(syncer);
