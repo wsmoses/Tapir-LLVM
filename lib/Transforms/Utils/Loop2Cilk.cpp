@@ -1112,6 +1112,10 @@ tail_recurse:
     auto count = cmp;
     Value* cond = b.CreateICmpSLE(count, ConstantInt::get(count->getType(), 1));
     BasicBlock *graint = BasicBlock::Create(Ctx, "graint", detacher->getParent());
+    if (parentL) {
+      parentL->addBasicBlockToLoop(graint, LI);
+    }
+
     b.CreateCondBr(cond, syncer, graint);
 
     b.SetInsertPoint(graint);
