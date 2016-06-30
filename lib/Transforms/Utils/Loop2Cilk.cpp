@@ -252,10 +252,10 @@ bool recursiveMoveBefore(Instruction* toMoveBefore, Value* toMoveVal, DominatorT
   Instruction* toMoveI = dyn_cast<Instruction>(toMoveVal);
   if (!toMoveI) return true;
 
-  if( llvm::verifyFunction(*toMoveBefore->getParent()->getParent(), nullptr) ) {
+  if (llvm::verifyFunction(*toMoveBefore->getParent()->getParent(), &llvm::errs())) {
     toMoveBefore->getParent()->getParent()->dump();
+    assert(0);
   }
-  assert( !llvm::verifyFunction(*toMoveBefore->getParent()->getParent(), &llvm::errs()) );
 
   std::vector<Value*> toMove;
   toMove.push_back(toMoveI);
@@ -281,10 +281,10 @@ bool recursiveMoveBefore(Instruction* toMoveBefore, Value* toMoveVal, DominatorT
     }
   }
 
-  if( llvm::verifyFunction(*toMoveBefore->getParent()->getParent(), nullptr) ) {
+  if (llvm::verifyFunction(*toMoveBefore->getParent()->getParent(), &llvm::errs())) {
     toMoveBefore->getParent()->getParent()->dump();
+    assert(0);
   }
-  assert( !llvm::verifyFunction(*toMoveBefore->getParent()->getParent(), &llvm::errs()) );
   return true;
 }
 
@@ -533,8 +533,10 @@ std::pair<PHINode*,Value*> getIndVar(Loop *L, BasicBlock* detacher, DominatorTre
     }
   }
   
-  if( llvm::verifyFunction(*L->getHeader()->getParent(), nullptr) ) L->getHeader()->getParent()->dump();
-  assert( !llvm::verifyFunction(*L->getHeader()->getParent(), &llvm::errs()) );
+  if( llvm::verifyFunction(*L->getHeader()->getParent(), &llvm::errs()) ) {
+    L->getHeader()->getParent()->dump();
+    assert(0);
+  }
 
   IRBuilder<> build(cmp);
   llvm::Value* val = build.CreateSExtOrTrunc(cmp->getOperand(cmpIdx),RPN->getType());
@@ -627,13 +629,12 @@ std::pair<PHINode*,Value*> getIndVar(Loop *L, BasicBlock* detacher, DominatorTre
   cmp->setOperand(cmpIdx, val);
   cmp->setOperand(1-cmpIdx, RPN);
 
-  if( llvm::verifyFunction(*L->getHeader()->getParent(), nullptr) ) L->getHeader()->getParent()->dump();
-  assert( !llvm::verifyFunction(*L->getHeader()->getParent(), &llvm::errs()) );
-
   RPN->setIncomingValue( RPN->getBasicBlockIndex(Incoming),  ConstantInt::get( RPN->getType(), 0 ) );
 
-  if( llvm::verifyFunction(*L->getHeader()->getParent(), nullptr) ) L->getHeader()->getParent()->dump();
-  assert( !llvm::verifyFunction(*L->getHeader()->getParent(), &llvm::errs()) );
+  if (llvm::verifyFunction(*L->getHeader()->getParent(), &llvm::errs())) {
+    L->getHeader()->getParent()->dump();
+    assert(0);
+  }
 
   //llvm::errs() << "Finished loop" << H->getName() << "\n";
   //H->getParent()->dump();
@@ -724,16 +725,16 @@ BasicBlock* continueToFindSync(BasicBlock* endL) {
 }
 
 bool Loop2Cilk::runOnLoop(Loop *L, LPPassManager &LPM) {
+	assert( !llvm::verifyFunction(*L->getHeader()->getParent(), &llvm::errs()) );
+
   if (skipOptnoneFunction(L)) {
-  	assert( !llvm::verifyFunction(*L->getHeader()->getParent(), &llvm::errs()) );
     return false;
   }
-
-	assert( !llvm::verifyFunction(*L->getHeader()->getParent(), &llvm::errs()) );
 
   if (!L->isLoopSimplifyForm()) {
     simplifyLoop(L, nullptr, nullptr, nullptr, nullptr, false);
   }
+	assert( !llvm::verifyFunction(*L->getHeader()->getParent(), &llvm::errs()) );
 
   BasicBlock* Header = L->getHeader();
   Module* M = Header->getParent()->getParent();
@@ -749,13 +750,9 @@ bool Loop2Cilk::runOnLoop(Loop *L, LPPassManager &LPM) {
     else {
       llvm::errs() << "Loop not entered via branch instance\n";
       T->dump();
-  	  assert( !llvm::verifyFunction(*L->getHeader()->getParent(), &llvm::errs()) );
       return false;
     }
   }
-
-
-  assert( !llvm::verifyFunction(*L->getHeader()->getParent(), &llvm::errs()) );
 
   assert( isa<BranchInst>(T) );
   BranchInst* B = cast<BranchInst>(T);
@@ -765,7 +762,6 @@ bool Loop2Cilk::runOnLoop(Loop *L, LPPassManager &LPM) {
   if (B->getNumSuccessors() != 2) {
     detacher = B->getSuccessor(0);
     if(!isa<DetachInst>(detacher->getTerminator())) {
-     	assert( !llvm::verifyFunction(*L->getHeader()->getParent(), &llvm::errs()) );
       return false;
     }
     assert(detacher && isa<DetachInst>(detacher->getTerminator()));
@@ -777,7 +773,6 @@ bool Loop2Cilk::runOnLoop(Loop *L, LPPassManager &LPM) {
       syncer = endL;
       assert(syncer && isa<SyncInst>(syncer->getTerminator()));
     } else {
-     	assert( !llvm::verifyFunction(*L->getHeader()->getParent(), &llvm::errs()) );
       return false;
     }
   } else {
@@ -793,7 +788,6 @@ bool Loop2Cilk::runOnLoop(Loop *L, LPPassManager &LPM) {
     } else {
       //errs() << "No detach found" << "\n";
       //detacher->dump();
-     	assert( !llvm::verifyFunction(*L->getHeader()->getParent(), &llvm::errs()) );
       return false;
     }
 
@@ -802,14 +796,12 @@ bool Loop2Cilk::runOnLoop(Loop *L, LPPassManager &LPM) {
       errs() << "No sync found" << "\n";
       //B->getSuccessor(sync_idx)->dump();
       //L->getHeader()->getParent()->dump();
-     	assert( !llvm::verifyFunction(*L->getHeader()->getParent(), &llvm::errs()) );
       return false;
     }
 
     BasicBlock* done = getTrueExit(L);
     if (!done) {
       errs() << "no unique exit block\n";
-      assert( !llvm::verifyFunction(*L->getHeader()->getParent(), &llvm::errs()) );
       return false;
     }
 
@@ -841,7 +833,7 @@ bool Loop2Cilk::runOnLoop(Loop *L, LPPassManager &LPM) {
   assert(syncer && isa<SyncInst>(syncer->getTerminator()));
   assert(detacher && isa<DetachInst>(detacher->getTerminator()));
 
-  DetachInst* det = cast<DetachInst>(detacher->getTerminator());
+  /*DetachInst* det = cast<DetachInst>(detacher->getTerminator());
   {
     SmallPtrSet<BasicBlock *, 32> functionPieces;
     SmallVector<BasicBlock*, 32 > reattachB;
@@ -851,12 +843,12 @@ bool Loop2Cilk::runOnLoop(Loop *L, LPPassManager &LPM) {
         if (CallInst* ca = dyn_cast<CallInst>(&I)) {
           if (ca->getCalledFunction() == Header->getParent()) {
             errs() << "recursive cilk for\n";
-            return false;
+            //return false;
           }
         }
       }
     }
-  }
+  }*/
 
   DominatorTree &DT = getAnalysis<DominatorTreeWrapperPass>().getDomTree();
 
@@ -912,7 +904,6 @@ bool Loop2Cilk::runOnLoop(Loop *L, LPPassManager &LPM) {
   assert( !llvm::verifyFunction(*L->getHeader()->getParent(), &llvm::errs()) );
   if (!oldvar) {
       errs() << "no induction var\n";
-      assert( !llvm::verifyFunction(*L->getHeader()->getParent(), &llvm::errs()) );
       return false;
   }
 
@@ -941,10 +932,10 @@ bool Loop2Cilk::runOnLoop(Loop *L, LPPassManager &LPM) {
   llvm::CallInst* call = 0;
   llvm::Value*    closure = 0;
 
-  if( llvm::verifyFunction(*Header->getParent(), nullptr) ) {
+  if( llvm::verifyFunction(*Header->getParent(), &llvm::errs()) ) {
     Header->getParent()->getParent()->dump();
+    assert(0);
   }
-  assert( !llvm::verifyFunction(*Header->getParent(), &llvm::errs()) );
 
   if (!recursiveMoveBefore(Header->getTerminator(), cmp, DT)) {
     errs() << "cmp not moved\n";
@@ -956,19 +947,18 @@ bool Loop2Cilk::runOnLoop(Loop *L, LPPassManager &LPM) {
   //Header->getParent()->dump();
 
   std::vector<Value*> ext_args;
-  Function* extracted = llvm::cilk::extractDetachBodyToFunction(*det, &call, /*closure*/ oldvar, &ext_args);
+  Function* extracted = llvm::cilk::extractDetachBodyToFunction(*det, &call, /*closure*/ oldvar, &closure);
 
   //Header->getParent()->getParent()->dump();
   //extracted->dump();
   //llvm::errs() << "</DONE EXTRACTING FROM " << extracted->getName() << "\\>\n";
 
-  if (llvm::verifyFunction(*extracted, nullptr)) {
+  if (llvm::verifyFunction(*extracted, &llvm::errs())) {
     extracted->dump(); assert(0 && "extracted of bad form");
   }
 
   if( !extracted ) {
     errs() << "not extracted\n";
-    assert( !llvm::verifyFunction(*L->getHeader()->getParent(), &llvm::errs()) );
     return false;
   }
  
@@ -991,7 +981,8 @@ tail_recurse:
     }
     call_cilk_for_loop_body(low, high, body, data, w, loop_root_pedigree);
 */
-  {
+
+/*  {
     LLVMContext &Ctx = M->getContext();
 
     Function::arg_iterator args = extracted->arg_begin();
@@ -1055,13 +1046,12 @@ tail_recurse:
         build.CreateSync(tret);
       }
     }
-  }
+  }*/
 
-  if (llvm::verifyFunction(*extracted, nullptr)) {
+  if (llvm::verifyFunction(*extracted, &llvm::errs())) {
     extracted->dump();
-    Header->getParent()->dump();
+    Header->getParent()->dump(); assert(0);
   }
-  assert(!llvm::verifyFunction(*extracted, &llvm::errs()));
 
   {
     for( BasicBlock& b : extracted->getBasicBlockList() )
@@ -1105,55 +1095,27 @@ tail_recurse:
 
   {
     IRBuilder<> b(detacher);
-  
-    LLVMContext &Ctx = M->getContext();
-   
-    IRBuilder<> builder2(syncer);
-    if (!syncer->empty())
-      builder2.SetInsertPoint(&*syncer->begin());
-    
-    auto count = cmp;
-    Value* cond = b.CreateICmpSLE(count, ConstantInt::get(count->getType(), 1));
-    BasicBlock *graint = BasicBlock::Create(Ctx, "graint", detacher->getParent());
-    if (parentL) {
-      parentL->addBasicBlockToLoop(graint, LI);
-    }
 
-    b.CreateCondBr(cond, syncer, graint);
-
-    b.SetInsertPoint(graint);
-    Value* P0 = b.CreateCall(CILKRTS_FUNC(get_nworkers, *M));
-    Value* P = b.CreateIntCast(P0, count->getType(), false);
-    Value* P8 = b.CreateMul(P, ConstantInt::get(P->getType(), 8));
-    Value* n = b.CreateUDiv(b.CreateSub(b.CreateAdd(count, P8), ConstantInt::get(count->getType(), 1)), P8);
-    Value* cutoff = ConstantInt::get(count->getType(), 2048);
-    Value* c2 = b.CreateICmpUGT(n, cutoff);
-    Value* pn = b.CreateSelect(c2, cutoff, n);
-  
-    /*
     llvm::Function* F;
     if( ((llvm::IntegerType*)cmp->getType())->getBitWidth() == 32 )
       F = CILKRTS_FUNC(cilk_for_32, *M);
     else {
       assert( ((llvm::IntegerType*)cmp->getType())->getBitWidth() == 64 );
       F = CILKRTS_FUNC(cilk_for_64, *M);
-    }*/
-  
-    ext_args[0] = ConstantInt::get(count->getType(), 0);
-    ext_args[1] = count;
-    ext_args[2] = pn;
-    
-    b.CreateCall(extracted, ext_args);
+    }
+
+    llvm::Value* args[] = { b.CreatePointerCast(extracted, F->getFunctionType()->getParamType(0) ), b.CreatePointerCast( closure, F->getFunctionType()->getParamType(1) ), cmp, ConstantInt::get( llvm::Type::getIntNTy( cmp->getContext(), 8*sizeof(int) ), 0 ) };
+    b.CreateCall(F, args);
 
     assert (syncer->size() == 1);
     b.CreateBr(syncer);
   }
 
-  if (llvm::verifyFunction(*Header->getParent(), nullptr)) {
+  if (llvm::verifyFunction(*Header->getParent(), &llvm::errs())) {
     llvm::errs() << "BAD\n";
     //Header->getParent()->dump();
+    assert(0);
   }
-  assert(!llvm::verifyFunction(*Header->getParent(), &llvm::errs()));
 
   ScalarEvolution &SE = getAnalysis<ScalarEvolutionWrapperPass>().getSE();
   SE.forgetLoop(L);
@@ -1163,9 +1125,9 @@ tail_recurse:
 
   if (parentL) parentL->verifyLoop();
 
-  if (llvm::verifyFunction(*Header->getParent(), nullptr)) {
+  if (llvm::verifyFunction(*Header->getParent(), &llvm::errs())) {
     Header->getParent()->getParent()->dump();
+    assert(0);
   }
-  assert(!llvm::verifyFunction(*Header->getParent(), &llvm::errs()));
   return true;
 }

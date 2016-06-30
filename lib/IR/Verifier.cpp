@@ -74,7 +74,7 @@
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/raw_ostream.h"
-#include "llvm/Transforms/CilkABI.h"
+//#include "llvm/Transforms/CilkABI.h"
 #include <algorithm>
 #include <cstdarg>
 using namespace llvm;
@@ -244,12 +244,13 @@ public:
         OS << "\n";
         return false;
       }
+      /*
       if (const DetachInst* det = dyn_cast<DetachInst>(&I->back())) {
         if (!llvm::cilk::verifyDetachedCFG(*det)) {
           OS << "Invalid end to detached CFG\n";
           return false;
         }
-      }
+      }*/
     }
 
     // Now directly compute a dominance tree. We don't rely on the pass
