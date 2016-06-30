@@ -1613,8 +1613,7 @@ static inline Value *getGrainSize(Value* count, IRBuilder<> &b0) {
 //Returns true if success
 static inline Function* extractDetachBodyToFunction(DetachInst& detach,
 						    llvm::CallInst** call = 0,
-						    llvm::Value* closure = 0,
-						    llvm::Value** closed = 0) {
+						    llvm::Value* closure = 0, std::vector<Value*> *ext_args=0) {
   llvm::BasicBlock* detB = detach.getParent();
   Function& F = *(detB->getParent());
   //Module* M = F.getParent();
@@ -1660,55 +1659,33 @@ static inline Function* extractDetachBodyToFunction(DetachInst& detach,
     }
   }
 
-  PHINode *rstart = 0, *rend = 0;
-  Instruction* inst = 0;
-  PHINode *fake;
+  PHINode *rstart = 0, *rend = 0, *grain;
+  Instruction *inst = 0, *inst0 = 0;
+  //PHINode *fake;
   Instruction* add = 0;
   std::vector<Instruction*> moveToFront;
-  if( closure ) {
+  if (closure) {
 
     IRBuilder<> inspawn(Spawned->getFirstNonPHI());
-
-    SetVector<Value*> Inputs, Outputs;
-    CodeExtractor extractor( ArrayRef<BasicBlock*>( blocks ), /*dominator tree -- todo? */ nullptr );
-    extractor.findInputsOutputs(Inputs, Outputs);
-    Inputs.insert(Outputs.begin(), Outputs.end());
-    SmallVector<Type*,0> types;
-    for(auto& a: Inputs) {
-      if( a == closure ) continue;
-      types.push_back(a->getType());
-    };
-    StructType* st = StructType::get(F.getContext(), types);
     IRBuilder<> builder(&detach);
-    rend   = PHINode::Create( closure->getType(), 2, "", &detB->front() );
-    rstart = PHINode::Create( closure->getType(), 2, "", &detB->front() );
-    llvm::AllocaInst* alloc = builder.CreateAlloca(st);
-    unsigned i=0;
-    for(auto& a: Inputs) {
-      if( a == closure ) continue;
-      auto V = builder.CreateConstGEP2_32(st, alloc, 0U, i);
-      builder.CreateStore(a, V);
-      auto gep = inspawn.CreateConstGEP2_32(st, alloc, 0U, i);
-      auto ld = inspawn.CreateLoad(gep);
-      if( Instruction* inst = dyn_cast<Instruction>(gep) ) moveToFront.push_back(inst);
-      if( Instruction* inst = dyn_cast<Instruction>(ld) ) moveToFront.push_back(inst);
-      replaceInList( a, ld, functionPieces );
-      i++;
-    }
-    assert( closed );
-    *closed = alloc;
+    rend   = PHINode::Create( closure->getType(), 2, "rend", &detB->front() );
+    rstart = PHINode::Create( closure->getType(), 2, "rstart", &detB->front() );
+    grain  = PHINode::Create( closure->getType(), 2, "rgrain", &detB->front() );
+
     // force it to be used, in right order
     add  = dyn_cast<Instruction>(inspawn.CreateAdd(rstart, rstart));
     assert( add );
     inst = dyn_cast<Instruction>(inspawn.CreateAdd(rend,   rend));
     assert( inst);
-    BasicBlock* lp = Spawned->splitBasicBlock(inst);
+    inst0 = dyn_cast<Instruction>(inspawn.CreateAdd(grain, grain));
+    assert( inst0);
+    BasicBlock* lp = Spawned->splitBasicBlock(Spawned->getTerminator());
 
     PHINode* idx = PHINode::Create( closure->getType(), 2, "", &Spawned->front() );
     idx->addIncoming( rstart, detB );
 
-    fake = PHINode::Create( alloc->getType(), 2, "", &Spawned->front() );
-    fake->addIncoming( alloc, detB );
+    //fake = PHINode::Create( alloc->getType(), 2, "", &Spawned->front() );
+    //fake->addIncoming( alloc, detB );
 
     functionPieces.insert(lp);
     blocks.push_back(lp);
@@ -1723,11 +1700,11 @@ static inline Function* extractDetachBodyToFunction(DetachInst& detach,
       }
       ((BranchInst*) a->getTerminator() )->setSuccessor(0, next );
     }
+
     IRBuilder<> nextB(next);
     auto p1 = nextB.CreateAdd(idx, ConstantInt::get(idx->getType(), 1, false) );
     nextB.CreateCondBr( nextB.CreateICmpEQ( p1, rend ), Continue, Spawned );
     idx->addIncoming( p1, next );
-    fake->addIncoming( alloc, next );
 
     replaceInList( closure, idx, functionPieces );
   }
@@ -1742,7 +1719,7 @@ static inline Function* extractDetachBodyToFunction(DetachInst& detach,
   assert( extractor.isEligible() && "Code not able to be extracted!" );
 
 
-  if( closure ) {
+  if (closure) {
     SetVector<Value*> Inputs, Outputs;
     extractor.findInputsOutputs(Inputs, Outputs);
     if( Outputs.size() != 0 ){
@@ -1759,9 +1736,12 @@ static inline Function* extractDetachBodyToFunction(DetachInst& detach,
        }
     }
     assert( Outputs.size() == 0 );
-    assert( Inputs.size() == 3 );
-    assert( Inputs[1] == rstart );
-    assert( Inputs[2] == rend );
+    if (Inputs[0] != rstart ) { Inputs[0]->dump(); F.dump(); }
+    assert( Inputs[0] == rstart );
+    if (Inputs[1] != rend )  { Inputs[1]->dump(); F.dump(); }
+    assert( Inputs[1] == rend );
+    if (Inputs[2] != grain )  { Inputs[2]->dump(); F.dump(); }
+    assert( Inputs[2] == grain );
   }
 
   Function* extracted = extractor.extractCodeRegion();
@@ -1769,7 +1749,7 @@ static inline Function* extractDetachBodyToFunction(DetachInst& detach,
   extracted->addFnAttr(Attribute::AttrKind::NoInline);
 
   Instruction* last = extracted->getEntryBlock().getFirstNonPHI();
-  for( int i=moveToFront.size()-1; i>=0; i-- ){
+  for (int i=moveToFront.size()-1; i>=0; i--) {
     moveToFront[i]->moveBefore( last );
     last = moveToFront[i];
   }
@@ -1783,12 +1763,16 @@ static inline Function* extractDetachBodyToFunction(DetachInst& detach,
 
 
   if (closure) {
+    for (unsigned i=0; i<cal->getNumArgOperands(); i++) {
+      ext_args->push_back(cal->getArgOperand(i));
+    }
     cal->eraseFromParent();
     rstart->eraseFromParent();
     rend->eraseFromParent();
+    grain->eraseFromParent();
+    inst0->eraseFromParent();
     inst->eraseFromParent();
     add->eraseFromParent();
-    fake->eraseFromParent();
   }
 
   std::vector<AllocaInst*> Allocas;
