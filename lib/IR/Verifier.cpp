@@ -245,9 +245,7 @@ public:
         return false;
       }
       if (const DetachInst* det = dyn_cast<DetachInst>(&I->back())) {
-        SmallPtrSet<BasicBlock*,32> functionPieces;
-        SmallVector<BasicBlock*, 32 > reattachB;
-        if (!llvm::cilk::populateDetachedCFG(*det, functionPieces, reattachB, false, false)) {
+        if (!llvm::cilk::verifyDetachedCFG(*det)) {
           OS << "Invalid end to detached CFG\n";
           return false;
         }

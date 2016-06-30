@@ -1492,6 +1492,59 @@ static inline void replaceInList(llvm::Value* v,
 
 }
 
+static inline bool verifyDetachedCFG(const DetachInst& detach, bool error=true) {
+  SmallVector<BasicBlock *, 32> todo;
+
+  SmallPtrSet<BasicBlock*,32> functionPieces;
+  SmallVector<BasicBlock*,32> reattachB;
+
+  BasicBlock* Spawned  = detach.getSuccessor(0);
+  BasicBlock* Continue = detach.getSuccessor(1);
+  todo.push_back(Spawned);
+
+  while( todo.size() > 0 ){
+    BasicBlock* BB = todo.pop_back_val();
+
+    if (!functionPieces.insert(BB).second)
+      continue;
+
+    TerminatorInst* term = BB->getTerminator();
+    if (term == nullptr) return false;
+    if( ReattachInst* inst = llvm::dyn_cast<ReattachInst>(term) ) {
+      //only analyze reattaches going to the same continuation
+      if( inst->getSuccessor(0) != Continue ) continue;
+      continue;
+    } else if( DetachInst* inst = llvm::dyn_cast<DetachInst>(term) ) {
+      assert( inst != &detach && "Found recursive detach!" );
+      todo.emplace_back( inst->getSuccessor(0) );
+      todo.emplace_back( inst->getSuccessor(1) );
+      continue;
+    } else if( SyncInst* inst = llvm::dyn_cast<SyncInst>(term) ) {
+      //only sync inner elements, consider as branch
+      todo.emplace_back( inst->getSuccessor(0) );
+      continue;
+    } else if( BranchInst* inst = llvm::dyn_cast<BranchInst>(term) ) {
+      //only sync inner elements, consider as branch
+      for( unsigned idx = 0, max = inst->getNumSuccessors(); idx < max; idx++ )
+        todo.emplace_back( inst->getSuccessor(idx) );
+      continue;
+    } else if( SwitchInst* inst = llvm::dyn_cast<SwitchInst>(term) ) {
+      //only sync inner elements, consider as branch
+      for( unsigned idx = 0, max = inst->getNumSuccessors(); idx < max; idx++ )
+        todo.emplace_back( inst->getSuccessor(idx) );
+      continue;
+    } else if( llvm::isa<UnreachableInst>(term) ) {
+      continue;
+    } else {
+      term->dump();
+      term->getParent()->getParent()->dump();
+      if (error) assert( 0 && "Detached block did not absolutely terminate in reattach");
+      return false;
+    }
+  }
+  return true;
+}
+
 static inline bool populateDetachedCFG(const DetachInst& detach, SmallPtrSet<BasicBlock*,32>& functionPieces, SmallVector<BasicBlock*, 32 >& reattachB, bool replace, bool error=true) {
   SmallVector<BasicBlock *, 32> todo;
 
