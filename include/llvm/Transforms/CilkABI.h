@@ -160,14 +160,22 @@ typedef void (cilk_leave_end)();
                                                                         )); \
   }
 
-DEFAULT_GET_CILKRTS_FUNC(get_nworkers)
+//DEFAULT_GET_CILKRTS_FUNC(get_nworkers)
+ static llvm::Function *Get__cilkrts_get_nworkers(llvm::Module& M) {
+    llvm::AttributeSet constset;
+    constset = constset.addAttribute(M.getContext(), llvm::AttributeSet::FunctionIndex, llvm::Attribute::AttrKind::ReadNone);
+    return llvm::cast<llvm::Function>(M.getOrInsertFunction("__cilkrts_get_nworkers", llvm::TypeBuilder<__cilkrts_get_nworkers, false>::get(M.getContext()), constset) );
+
+}
+
+
 DEFAULT_GET_CILKRTS_FUNC(sync)
 DEFAULT_GET_CILKRTS_FUNC(rethrow)
 DEFAULT_GET_CILKRTS_FUNC(leave_frame)
 DEFAULT_GET_CILKRTS_FUNC(get_tls_worker)
 DEFAULT_GET_CILKRTS_FUNC(bind_thread_1)
-DEFAULT_GET_CILKRTS_FUNC(cilk_for_32)
-DEFAULT_GET_CILKRTS_FUNC(cilk_for_64)
+//DEFAULT_GET_CILKRTS_FUNC(cilk_for_32)
+//DEFAULT_GET_CILKRTS_FUNC(cilk_for_64)
 
 #define CILK_CSI_FUNC(name, CGF) Get_cilk_##name(CGF)
 

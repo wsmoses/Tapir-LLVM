@@ -536,7 +536,7 @@ void PassManagerBuilder::populateModulePassManager(
       MPM.add(createPromoteDetachToCilkPass());
       MPM.add(createBarrierNoopPass());
       Inliner = Inliner2;
-    } else MPM.add(createLoop2CilkPass());
+    } //else MPM.add(createLoop2CilkPass());
 
 
     if ( OptLevel != 0) {

@@ -187,6 +187,8 @@ bool TailCallElim::runOnFunction(Function &F) {
           IRBuilder<> build(Pred);
           build.CreateBr(BB);
           FoldReturnIntoUncondBranch(ret, BB, Pred);
+        } else if(isa<BranchInst>(Pred->getTerminator()) && term->getNumSuccessors()==1) {
+          FoldReturnIntoUncondBranch(ret, BB, Pred);
         }
       }
 
