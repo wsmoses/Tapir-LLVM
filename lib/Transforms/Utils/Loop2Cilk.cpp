@@ -248,7 +248,7 @@ bool attemptRecursiveMoveAfter(Instruction* toMoveAfter, Instruction* toCheck, D
   return true; 
 }
 
-bool recursiveMoveBefore(Instruction* toMoveBefore, Value* toMoveVal, DominatorTree& DT) {
+bool recursiveMoveBefore(Instruction* toMoveBefore, Value* toMoveVal, DominatorTree& DT, std::string nm) {
   Instruction* toMoveI = dyn_cast<Instruction>(toMoveVal);
   if (!toMoveI) return true;
 
@@ -269,10 +269,17 @@ bool recursiveMoveBefore(Instruction* toMoveBefore, Value* toMoveVal, DominatorT
         for (User::op_iterator i = inst->op_begin(), e = inst->op_end(); i != e; ++i) {
           Value *v = *i;
           toMove.push_back(v);
+          //if (isa<Instruction>(v)) { llvm::errs()<<"for "; inst->dump(); v->dump(); }
         }
         if (inst->mayHaveSideEffects()) {
           errs() << "something side fx\n";
           assert( !llvm::verifyFunction(*toMoveBefore->getParent()->getParent(), &llvm::errs()) );
+          return false;
+        }
+        if (isa<PHINode>(inst)) {
+          errs() << "some weird phi stuff trying to move, move before:" << nm << "\n";
+          inst->dump();
+          toMoveBefore->dump();
           return false;
         }
         inst->moveBefore(pi);
@@ -364,11 +371,46 @@ std::pair<PHINode*,Value*> getIndVar(Loop *L, BasicBlock* detacher, DominatorTre
   Instruction* INCR = nullptr;
   Value* amt = nullptr;
   std::vector<std::tuple<PHINode*,Instruction*,Value*>> others;
-  for (BasicBlock::iterator I = H->begin(); isa<PHINode>(I); ++I) {
+  for (BasicBlock::iterator I = H->begin(); isa<PHINode>(I); ) {
     assert( isa<PHINode>(I) );
     PHINode *PN = cast<PHINode>(I);
+    if (LoadInst* ld = dyn_cast<LoadInst>(uncast(PN->getIncomingValueForBlock(Incoming)))) {
+      if (LoadInst* ld2 = dyn_cast<LoadInst>(uncast(PN->getIncomingValueForBlock(Backedge)))) {
+        LoadInst *t1 = ld, *t2 = ld2;
+        bool valid = false;
+        while (t1 && t2) {
+          if(t1->getPointerOperand() == t1->getPointerOperand()) { valid = true; break; } 
+          uncast(t1->getPointerOperand())->dump();
+          uncast(t2->getPointerOperand())->dump();
+
+          /// TODO GEP inst
+          ///if (LoadInst* ld = dyn_cast<LoadInst>(uncast(PN->getIncomingValueForBlock(Incoming)))) {
+          ///  if (LoadInst* ld2 = dyn_cast<LoadInst>(uncast(PN->getIncomingValueForBlock(Backedge)))) {
+
+
+          t1 = dyn_cast<LoadInst>(uncast(t1->getPointerOperand()));
+          t2 = dyn_cast<LoadInst>(uncast(t2->getPointerOperand()));
+        }
+        if (valid) {
+          ++I;
+          ld2->replaceAllUsesWith(ld);
+          PN->replaceAllUsesWith(PN->getIncomingValueForBlock(Incoming));
+          PN->eraseFromParent();
+          ld2->eraseFromParent();
+          continue;
+        } else {
+          llvm::errs() << "phinode cmp uses odd load with diff values\n";
+          ld->dump();
+          ld2->dump();
+          H->getParent()->dump();
+        }
+      }
+    }
+
     if( !PN->getType()->isIntegerTy() ) {
-      errs() << "phinode uses non-int\n";
+      errs() << "phinode uses non-int type\n";
+      PN->dump();
+      H->getParent()->dump();
       return make_pair(nullptr,nullptr);
     }
     if (BinaryOperator* Inc = dyn_cast<BinaryOperator>(PN->getIncomingValueForBlock(Backedge))) {
@@ -386,15 +428,17 @@ std::pair<PHINode*,Value*> getIndVar(Loop *L, BasicBlock* detacher, DominatorTre
         Inc->eraseFromParent();
         Inc = newI;
       }
-      if (Inc->getOpcode() == Instruction::Add && (Inc->getOperand(0) == PN || Inc->getOperand(1) == PN) ) {
-        if (Inc->getOperand(1) == PN ) Inc->swapOperands();
-        assert(Inc->getOperand(0) == PN);
+      if (Inc->getOpcode() == Instruction::Add && (uncast(Inc->getOperand(0)) == PN || uncast(Inc->getOperand(1)) == PN) ) {
+        if ( uncast(Inc->getOperand(1)) == PN ) Inc->swapOperands();
+        assert( uncast(Inc->getOperand(0)) == PN);
         bool rpnr = false;
         bool incr = false;
         for(unsigned i = 0; i < cmp->getNumOperands(); i++) {
-          rpnr |= uncast(cmp->getOperand(i)) == PN;
-          incr |= uncast(cmp->getOperand(i)) == Inc;
-          if( rpnr | incr ) cmpIdx = i;
+          bool hadr = uncast(cmp->getOperand(i)) == PN;
+          rpnr |= hadr;
+          bool hadi = uncast(cmp->getOperand(i)) == Inc;
+          incr |= hadi;
+          if (hadr | hadi) { assert(cmpIdx == -1); cmpIdx = i; }
         }
         assert( !rpnr || !incr );
         if( rpnr | incr ) {
@@ -405,8 +449,10 @@ std::pair<PHINode*,Value*> getIndVar(Loop *L, BasicBlock* detacher, DominatorTre
         } else {
           others.push_back( std::make_tuple(PN,Inc,Inc->getOperand(1)) );
         }
-        if (!recursiveMoveBefore(Incoming->getTerminator(), Inc->getOperand(1), DT)) return make_pair(nullptr, nullptr);
-        if (!recursiveMoveBefore(Incoming->getTerminator(), PN->getIncomingValueForBlock(Incoming), DT)) return make_pair(nullptr, nullptr);
+        assert( !isa<PHINode>(Inc->getOperand(1)) );
+        if (!recursiveMoveBefore(Incoming->getTerminator(), Inc->getOperand(1), DT, "1")) return make_pair(nullptr, nullptr);
+        assert( !isa<PHINode>(PN->getIncomingValueForBlock(Incoming)) );
+        if (!recursiveMoveBefore(Incoming->getTerminator(), PN->getIncomingValueForBlock(Incoming), DT, "2")) return make_pair(nullptr, nullptr);
       } else {
         errs() << "no add found for:\n"; PN->dump(); Inc->dump();
         H->getParent()->dump();
@@ -416,6 +462,7 @@ std::pair<PHINode*,Value*> getIndVar(Loop *L, BasicBlock* detacher, DominatorTre
       errs() << "no inc found for:\n"; PN->dump(); PN->getParent()->getParent()->dump();
       return make_pair(nullptr, nullptr);
     }
+    ++I;
   }
 
   assert( !llvm::verifyFunction(*L->getHeader()->getParent(), &llvm::errs()) );
@@ -440,19 +487,19 @@ std::pair<PHINode*,Value*> getIndVar(Loop *L, BasicBlock* detacher, DominatorTre
   {
     IRBuilder<> builder(detacher->getTerminator()->getSuccessor(0)->getFirstNonPHIOrDbgOrLifetime());
     if( isOne(amt) ) mul = RPN;
-    else toIgnore.insert(mul = builder.CreateMul(RPN, amt));
+    else toIgnore.insert(mul = builder.CreateMul(RPN, amt, "indmul"));
     if( isZero(RPN->getIncomingValueForBlock(Incoming) )) newV = mul;
-    else toIgnore.insert(newV = builder.CreateAdd(mul, RPN->getIncomingValueForBlock(Incoming) ));
+    else toIgnore.insert(newV = builder.CreateAdd(mul, RPN->getIncomingValueForBlock(Incoming), "indadd"));
 
     //  std::vector<Value*> replacements;
     for( auto a : others ) {
       llvm::Value* val = builder.CreateSExtOrTrunc(RPN, std::get<0>(a)->getType());
       if (val != RPN) toIgnore.insert(val); 
       llvm::Value* amt0 = std::get<2>(a);
-      if( !isOne(amt0) ) val = builder.CreateMul(val,amt0);
+      if( !isOne(amt0) ) val = builder.CreateMul(val,amt0, "vmul");
       if (val != RPN) toIgnore.insert(val);
       llvm::Value* add0 = std::get<0>(a)->getIncomingValueForBlock(Incoming);
-      if( !isZero(add0) ) val = builder.CreateAdd(val,add0);
+      if( !isZero(add0) ) val = builder.CreateAdd(val,add0, "vadd");
       if (val != RPN) toIgnore.insert(val);
       //std::get<0>(a)->dump();
       assert( isa<Instruction>(val) );
@@ -539,29 +586,33 @@ std::pair<PHINode*,Value*> getIndVar(Loop *L, BasicBlock* detacher, DominatorTre
   }
 
   IRBuilder<> build(cmp);
-  llvm::Value* val = build.CreateSExtOrTrunc(cmp->getOperand(cmpIdx),RPN->getType());
+  llvm::Value* val = build.CreateSExtOrTrunc(cmp->getOperand(1-cmpIdx),RPN->getType());
   llvm::Value* adder = RPN->getIncomingValueForBlock(Incoming);
   llvm::Value* amt0  = amt;
 
+  //llvm::errs() << "val0: "; val->dump();
+  //llvm::errs() << "adder: "; adder->dump();
+  //llvm::errs() << "amt0: "; amt0->dump();
+
   int cast_type = 0;
-  if( isa<TruncInst>(val) ) cast_type = 1;
-  if( isa<SExtInst>(val) ) cast_type = 2;
-  if( isa<ZExtInst>(val) ) cast_type = 3;
+  if (isa<TruncInst>(RPN)) cast_type = 1;
+  if (isa<SExtInst>(RPN))  cast_type = 2;
+  if (isa<ZExtInst>(RPN))  cast_type = 3;
 
   switch(cast_type) {
     default:;
-    case 1: amt0 = build.CreateTrunc(amt0,val->getType());
-    case 2: amt0 = build.CreateSExt( amt0,val->getType());
-    case 3: amt0 = build.CreateZExt( amt0,val->getType());
+    case 1: amt0 = build.CreateTrunc(amt0,RPN->getType());
+    case 2: amt0 = build.CreateSExt( amt0,RPN->getType());
+    case 3: amt0 = build.CreateZExt( amt0,RPN->getType());
+  }
+  switch(cast_type){
+    default:;
+    case 1: adder = build.CreateTrunc(adder,RPN->getType());
+    case 2: adder = build.CreateSExt( adder,RPN->getType());
+    case 3: adder = build.CreateZExt( adder,RPN->getType());
   }
 
   {
-    switch(cast_type){
-      default:;
-      case 1: adder = build.CreateTrunc(adder,val->getType());
-      case 2: adder = build.CreateSExt( adder,val->getType());
-      case 3: adder = build.CreateZExt( adder,val->getType());
-    }
     Value *bottom = adder, *top = val;
     if (opc == RPN && DT.dominates(detacher->getTerminator(), cmp)) {
       llvm::errs() << "<adding extra for cmp>";
@@ -569,7 +620,7 @@ std::pair<PHINode*,Value*> getIndVar(Loop *L, BasicBlock* detacher, DominatorTre
       //cmp->getParent()->getParent()->dump();
       llvm::errs() << "</adding extra for cmp>";
       cmp->setOperand(cmpIdx, INCR);
-      top = build.CreateAdd(top, amt0);
+      top = build.CreateAdd(top, amt0, "toplen");
     }
     int dir = 0;
     switch (cmp->getPredicate() ) {
@@ -577,7 +628,7 @@ std::pair<PHINode*,Value*> getIndVar(Loop *L, BasicBlock* detacher, DominatorTre
       case CmpInst::ICMP_UGT:
       case CmpInst::ICMP_SGE:
       case CmpInst::ICMP_SGT:
-        dir = -1;break;
+        dir = -1; break;
       case CmpInst::ICMP_ULE:
       case CmpInst::ICMP_ULT:
       case CmpInst::ICMP_SLE:
@@ -586,8 +637,10 @@ std::pair<PHINode*,Value*> getIndVar(Loop *L, BasicBlock* detacher, DominatorTre
       default:
         dir = 0;break;
     }
-    if (dir < 0) { std::swap(bottom, top); }
-    if( !isZero(bottom) ) val = build.CreateSub(top, bottom);
+    if (dir < 0 && cmpIdx == 0 || dir > 0 && cmpIdx != 0) { std::swap(bottom, top); }
+
+    if (!isZero(bottom)) val = build.CreateSub(top, bottom, "sublen");
+
     switch (cmp->getPredicate() ) {
       case CmpInst::ICMP_UGT:
       case CmpInst::ICMP_SGT:
@@ -609,25 +662,24 @@ std::pair<PHINode*,Value*> getIndVar(Loop *L, BasicBlock* detacher, DominatorTre
       case CmpInst::ICMP_ULE:
       case CmpInst::ICMP_ULT:
       case CmpInst::ICMP_SLT:
-        if (cmpIdx == 0) amt0 = neg(amt0); break;
+        if (cmpIdx == 1) amt0 = neg(amt0); break;
       case CmpInst::ICMP_SGE:
       case CmpInst::ICMP_UGE:
       case CmpInst::ICMP_UGT:
       case CmpInst::ICMP_SGT:
-        if (cmpIdx == 1) amt0 = neg(amt0); break;
+        if (cmpIdx == 0) amt0 = neg(amt0); break;
       case CmpInst::ICMP_NE:
         //amt0 = build.CreateSelect(build.CreateICmpSGT(amt0,ConstantInt::get(val->getType(), 0)),amt0,neg(amt0));
       default:
         break;
     }
-    if (!isOne(amt0)) val = build.CreateSDiv(val, amt0);
+    if (!isOne(amt0)) val = build.CreateSDiv(val, amt0, "divlen");
     if (cmp->getPredicate()!=CmpInst::ICMP_NE) val = addOne(val);
   }
 
   cmp->setPredicate(CmpInst::ICMP_NE);
-
-  cmp->setOperand(cmpIdx, val);
-  cmp->setOperand(1-cmpIdx, RPN);
+  cmp->setOperand(cmpIdx, RPN);
+  cmp->setOperand(1-cmpIdx, val);
 
   RPN->setIncomingValue( RPN->getBasicBlockIndex(Incoming),  ConstantInt::get( RPN->getType(), 0 ) );
 
@@ -641,6 +693,8 @@ std::pair<PHINode*,Value*> getIndVar(Loop *L, BasicBlock* detacher, DominatorTre
   //llvm::errs() << "+ Finished loop" << H->getName() << "| iters=";
   //val->dump();
   //llvm::errs() << "\n";
+
+  //H->getParent()->dump();
 
   return make_pair(RPN, val);
 }
@@ -701,9 +755,11 @@ BasicBlock* getTrueExit(Loop *L){
 
     if( exits.size() == 1 ) endL = * exits.begin();
     else {
-      //errs() << "<blocks>\n";
-      //for(auto a : exits ) a->dump();
-      //errs() << "</blocks>\n";
+      /*
+      L->getHeader()->getParent()->dump();
+      errs() << "<blocks>\n";
+      for(auto a : exits ) a->dump();
+      errs() << "</blocks>\n";*/
     }
     return endL;
 }
@@ -762,6 +818,10 @@ bool Loop2Cilk::runOnLoop(Loop *L, LPPassManager &LPM) {
   if (B->getNumSuccessors() != 2) {
     detacher = B->getSuccessor(0);
     if(!isa<DetachInst>(detacher->getTerminator())) {
+      if (llvm::verifyFunction(*Header->getParent(), &llvm::errs())) {
+        Header->getParent()->getParent()->dump();
+        assert(0);
+      }
       return false;
     }
     assert(detacher && isa<DetachInst>(detacher->getTerminator()));
@@ -788,6 +848,11 @@ bool Loop2Cilk::runOnLoop(Loop *L, LPPassManager &LPM) {
     } else {
       //errs() << "No detach found" << "\n";
       //detacher->dump();
+
+      if (llvm::verifyFunction(*Header->getParent(), &llvm::errs())) {
+        Header->getParent()->getParent()->dump();
+        assert(0);
+      }
       return false;
     }
 
@@ -834,7 +899,8 @@ bool Loop2Cilk::runOnLoop(Loop *L, LPPassManager &LPM) {
   assert(detacher && isa<DetachInst>(detacher->getTerminator()));
 
   DetachInst* det = cast<DetachInst>(detacher->getTerminator());
-  /*
+
+  ///*
    {
     SmallPtrSet<BasicBlock *, 32> functionPieces;
     SmallVector<BasicBlock*, 32 > reattachB;
@@ -843,13 +909,13 @@ bool Loop2Cilk::runOnLoop(Loop *L, LPPassManager &LPM) {
       for (Instruction &I : *BB) {
         if (CallInst* ca = dyn_cast<CallInst>(&I)) {
           if (ca->getCalledFunction() == Header->getParent()) {
-            errs() << "recursive cilk for\n";
+            errs() << "recursive cilk for in function " << Header->getParent()->getName() << "|" << Header->getName() << "\n";
             //return false;
           }
         }
       }
     }
-  }*/
+  } //*/
 
   DominatorTree &DT = getAnalysis<DominatorTreeWrapperPass>().getDomTree();
 
@@ -880,6 +946,11 @@ bool Loop2Cilk::runOnLoop(Loop *L, LPPassManager &LPM) {
     	assert( !llvm::verifyFunction(*L->getHeader()->getParent(), &llvm::errs()) );
     } else {
       errs() << "invalid sync size" << "\n";
+
+      if (llvm::verifyFunction(*Header->getParent(), &llvm::errs())) {
+        Header->getParent()->getParent()->dump();
+        assert(0);
+      }
       return false;
     }
   }
@@ -890,6 +961,11 @@ bool Loop2Cilk::runOnLoop(Loop *L, LPPassManager &LPM) {
     PHINode* pn = cast<PHINode>(&syncer->front());
     if (pn->getNumIncomingValues() != 1 ) {
       errs() << "invalid phi for sync\n";
+
+      if (llvm::verifyFunction(*Header->getParent(), &llvm::errs())) {
+        Header->getParent()->getParent()->dump();
+        assert(0);
+      }
       return false;
     }
     pn->replaceAllUsesWith(pn->getIncomingValue(0));
@@ -905,6 +981,10 @@ bool Loop2Cilk::runOnLoop(Loop *L, LPPassManager &LPM) {
   assert( !llvm::verifyFunction(*L->getHeader()->getParent(), &llvm::errs()) );
   if (!oldvar) {
       errs() << "no induction var\n";
+      if (llvm::verifyFunction(*Header->getParent(), &llvm::errs())) {
+        Header->getParent()->getParent()->dump();
+        assert(0);
+      }
       return false;
   }
 
@@ -937,9 +1017,9 @@ bool Loop2Cilk::runOnLoop(Loop *L, LPPassManager &LPM) {
     Header->getParent()->getParent()->dump();
     assert(0);
   }
-
-  if (!recursiveMoveBefore(Header->getTerminator(), cmp, DT)) {
-    errs() << "cmp not moved\n";
+  if (!recursiveMoveBefore(Header->getTerminator(), cmp, DT, "3")) {
+    errs() << "cmp not moved\n"; cmp->dump();
+    L->getHeader()->getParent()->dump();
     assert( !llvm::verifyFunction(*L->getHeader()->getParent(), &llvm::errs()) );
     return false;
   }
@@ -960,6 +1040,11 @@ bool Loop2Cilk::runOnLoop(Loop *L, LPPassManager &LPM) {
 
   if( !extracted ) {
     errs() << "not extracted\n";
+
+    if (llvm::verifyFunction(*Header->getParent(), &llvm::errs())) {
+      Header->getParent()->getParent()->dump();
+      assert(0);
+    }
     return false;
   }
  

@@ -322,7 +322,10 @@ char &llvm::LCSSAID = LCSSA::ID;
 /// Process all loops in the function, inner-most out.
 bool LCSSA::runOnFunction(Function &F) {
 
-	assert( !llvm::verifyFunction(F, &llvm::errs()) );
+  if (llvm::verifyFunction(F, &llvm::errs())) {
+    F.dump();
+    assert(0);
+  }
   bool Changed = false;
   LI = &getAnalysis<LoopInfoWrapperPass>().getLoopInfo();
   DT = &getAnalysis<DominatorTreeWrapperPass>().getDomTree();

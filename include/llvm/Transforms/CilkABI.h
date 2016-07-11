@@ -1553,6 +1553,14 @@ static inline bool verifyDetachedCFG(const DetachInst& detach, bool error=true) 
   return true;
 }
 
+static inline size_t getNumPred(BasicBlock* BB){
+  size_t cnt = 0;
+  for (auto it = pred_begin(BB), et = pred_end(BB); it != et; ++it) {
+    cnt++;
+  }
+  return cnt;
+}
+
 static inline bool populateDetachedCFG(const DetachInst& detach, SmallPtrSet<BasicBlock*,32>& functionPieces, SmallVector<BasicBlock*, 32 >& reattachB, bool replace, bool error=true) {
   SmallVector<BasicBlock *, 32> todo;
 
@@ -1577,7 +1585,7 @@ static inline bool populateDetachedCFG(const DetachInst& detach, SmallPtrSet<Bas
         reattachB.push_back(BB);
       }
       continue;
-    } else if( DetachInst* inst = llvm::dyn_cast<DetachInst>(term) ) {
+    } else if (DetachInst* inst = llvm::dyn_cast<DetachInst>(term)) {
       assert( inst != &detach && "Found recursive detach!" );
       todo.emplace_back( inst->getSuccessor(0) );
       todo.emplace_back( inst->getSuccessor(1) );
@@ -1586,17 +1594,27 @@ static inline bool populateDetachedCFG(const DetachInst& detach, SmallPtrSet<Bas
       //only sync inner elements, consider as branch
       todo.emplace_back( inst->getSuccessor(0) );
       continue;
-    } else if( BranchInst* inst = llvm::dyn_cast<BranchInst>(term) ) {
-      //only sync inner elements, consider as branch
-      for( unsigned idx = 0, max = inst->getNumSuccessors(); idx < max; idx++ )
-        todo.emplace_back( inst->getSuccessor(idx) );
+    } else if (BranchInst* inst = llvm::dyn_cast<BranchInst>(term)) {
+      for( unsigned idx = 0, max = inst->getNumSuccessors(); idx < max; idx++ ) {
+        BasicBlock* suc = inst->getSuccessor(idx);
+        if (isa<UnreachableInst>(suc->getTerminator()) && suc->size() == 1 && getNumPred(suc)>1) {
+          suc = BasicBlock::Create(suc->getContext(), "unreachable", suc->getParent());
+          suc->moveAfter(BB);
+          IRBuilder<> b(suc);
+          b.CreateUnreachable();
+          inst->setSuccessor(idx, suc);
+        }
+
+        todo.emplace_back(suc);
+      }
       continue;
     } else if( SwitchInst* inst = llvm::dyn_cast<SwitchInst>(term) ) {
       //only sync inner elements, consider as branch
       for( unsigned idx = 0, max = inst->getNumSuccessors(); idx < max; idx++ )
         todo.emplace_back( inst->getSuccessor(idx) );
       continue;
-    } else if( llvm::isa<UnreachableInst>(term) ) {
+    } else if (llvm::isa<UnreachableInst>(term)) {
+      
       continue;
     } else {
       term->dump();
@@ -1703,7 +1721,14 @@ static inline Function* extractDetachBodyToFunction(DetachInst& detach,
       //assert only came from the detach
       for (pred_iterator PI = pred_begin(a), E = pred_end(a); PI != E; ++PI) {
         BasicBlock *Pred = *PI;
-        if ( Pred == a ) continue;
+        if (Pred == a) continue;
+        if (Pred != detach.getParent()) {
+          detach.getParent()->dump();
+          detach.dump();
+          a->dump();
+          Pred->dump();
+          Pred->getParent()->dump();
+        }
         assert(Pred == detach.getParent() &&
                "Block inside of detached context branched into from outside branch context from detach");
         // if( Pred != detach.getParent() ) {
@@ -1715,6 +1740,11 @@ static inline Function* extractDetachBodyToFunction(DetachInst& detach,
       for (pred_iterator PI = pred_begin(a), E = pred_end(a); PI != E; ++PI) {
         BasicBlock *Pred = *PI;
         //printf("block:%s pred %s count:%u\n", a->getName().str().c_str(), Pred->getName().str().c_str(), functionPieces.count(Pred) );
+        if (functionPieces.count(Pred) == 0) {
+          a->dump();
+          Pred->dump();
+          Pred->getParent()->dump();
+        }
         assert(functionPieces.count(Pred) &&
                "Block inside of detached context branched into from outside branch context");
         // if( functionPieces.find(Pred) == functionPieces.end() ) {

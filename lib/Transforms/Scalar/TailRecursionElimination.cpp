@@ -157,6 +157,7 @@ static bool CanTRE(Function &F) {
   return true;
 }
 
+#include "llvm/IR/Verifier.h"
 bool TailCallElim::runOnFunction(Function &F) {
   if (skipOptnoneFunction(F))
     return false;
@@ -164,6 +165,11 @@ bool TailCallElim::runOnFunction(Function &F) {
   if (F.getFnAttribute("disable-tail-calls").getValueAsString() == "true")
     return false;
 
+
+  if (llvm::verifyFunction(F, &llvm::errs())) {
+    F.dump();
+    assert(0);
+  }
   bool removedSync = false;
   for (Function::iterator BBI = F.begin(), E = F.end(); BBI != E; /*in loop*/) {
     BasicBlock *BB = &*BBI++;
@@ -181,13 +187,15 @@ bool TailCallElim::runOnFunction(Function &F) {
 
       for (auto Pred : blocks) {
         auto term = Pred->getTerminator();
-        if (isa<SyncInst>(Pred->getTerminator())) {
+        if (isa<SyncInst>(term)) {
           removedSync = true;
           term->eraseFromParent();
           IRBuilder<> build(Pred);
           build.CreateBr(BB);
+          if (!BB->getFirstNonPHIOrDbg()->isTerminator()) continue; // todo consider removing this need
           FoldReturnIntoUncondBranch(ret, BB, Pred);
-        } else if(isa<BranchInst>(Pred->getTerminator()) && term->getNumSuccessors()==1) {
+        } else if(isa<BranchInst>(term) && term->getNumSuccessors()==1) {
+          if (!BB->getFirstNonPHIOrDbg()->isTerminator()) continue; // todo consider removing this need
           FoldReturnIntoUncondBranch(ret, BB, Pred);
         }
       }
@@ -197,6 +205,14 @@ bool TailCallElim::runOnFunction(Function &F) {
         else break;
       }
     }
+    if (llvm::verifyFunction(F, &llvm::errs())) {
+      F.dump();
+      assert(0);
+    }
+  }
+  if (llvm::verifyFunction(F, &llvm::errs())) {
+    F.dump();
+    assert(0);
   }
 
   bool AllCallsAreTailCalls = false;
@@ -205,6 +221,10 @@ bool TailCallElim::runOnFunction(Function &F) {
     Modified |= runTRE(F);
 
   if (removedSync) {
+    if (llvm::verifyFunction(F, &llvm::errs())) {
+      F.dump();
+      assert(0);
+    }
     SmallVector<BasicBlock *, 32> blocks;
     for (BasicBlock& BB : F) { blocks.push_back(&BB); }
 
@@ -218,6 +238,10 @@ bool TailCallElim::runOnFunction(Function &F) {
     }
   }
 
+  if (llvm::verifyFunction(F, &llvm::errs())) {
+    F.dump();
+    assert(0);
+  }
   return Modified;
 }
 
