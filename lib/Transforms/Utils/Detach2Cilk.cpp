@@ -34,7 +34,7 @@ struct CilkPass : public FunctionPass {
 
 	void getAnalysisUsage(AnalysisUsage &AU) const override {
 		//AU.addRequired<AssumptionCacheTracker>();
-		//AU.addRequired<DominatorTreeWrapperPass>();
+		AU.addRequired<DominatorTreeWrapperPass>();
 		//AU.setPreservesCFG();
 		// This is a cluster of orthogonal Transforms
 		//AU.addPreserved<UnifyFunctionExitNodes>();
@@ -50,15 +50,14 @@ static cl::opt<bool>  ClInstrumentCilk(
 
 char CilkPass::ID = 0;
 static RegisterPass<CilkPass> X("detach2cilk", "Promote Detach to Cilk Runtime", false, false);
-//INITIALIZE_PASS_BEGIN(CilkPass, "detach2cilk", "Promote Detach to Cilk Runtime",
-//                false, false)
+INITIALIZE_PASS_BEGIN(CilkPass, "detach2cilk", "Promote Detach to Cilk Runtime", false, false)
 //INITIALIZE_PASS_DEPENDENCY(AssumptionCacheTracker)
-//INITIALIZE_PASS_DEPENDENCY(DominatorTreeWrapperPass)
-//INITIALIZE_PASS_END(CilkPass, "detach2cilk", "Promote Detach to Cilk Runtime",
-//                false, false)
+INITIALIZE_PASS_DEPENDENCY(DominatorTreeWrapperPass)
+INITIALIZE_PASS_END(CilkPass, "detach2cilk", "Promote Detach to Cilk Runtime",   false, false)
 
 bool CilkPass::runOnFunction(Function &F) {
 	bool Changed  = false;
+  DominatorTree &DT = getAnalysis<DominatorTreeWrapperPass>().getDomTree();
 	for (Function::iterator i = F.begin(), e = F.end(); i != e; ++i) {
 		TerminatorInst* term = i->getTerminator();
 		if( term == nullptr ) continue;
@@ -66,7 +65,7 @@ bool CilkPass::runOnFunction(Function &F) {
           //errs() << "<D2C>\n";
           //F.dump();
           //errs() << "</PRE>\n";
-		  llvm::cilk::createDetach(*inst, ClInstrumentCilk);
+		  llvm::cilk::createDetach(*inst, DT, ClInstrumentCilk);
           //errs() << "<POST>\n";
           //F.dump();
           if( llvm::verifyFunction(F, nullptr) ) {

@@ -900,11 +900,12 @@ bool Loop2Cilk::runOnLoop(Loop *L, LPPassManager &LPM) {
 
   DetachInst* det = cast<DetachInst>(detacher->getTerminator());
 
+  DominatorTree &DT = getAnalysis<DominatorTreeWrapperPass>().getDomTree();
   ///*
    {
     SmallPtrSet<BasicBlock *, 32> functionPieces;
     SmallVector<BasicBlock*, 32 > reattachB;
-    if (!llvm::cilk::populateDetachedCFG(*det, functionPieces, reattachB, false)) return false;
+    if (!llvm::cilk::populateDetachedCFG(*det, DT, functionPieces, reattachB, false)) return false;
     for (BasicBlock* BB : functionPieces) {
       for (Instruction &I : *BB) {
         if (CallInst* ca = dyn_cast<CallInst>(&I)) {
@@ -916,8 +917,6 @@ bool Loop2Cilk::runOnLoop(Loop *L, LPPassManager &LPM) {
       }
     }
   } //*/
-
-  DominatorTree &DT = getAnalysis<DominatorTreeWrapperPass>().getDomTree();
 
   /////!!< REQUIRE DETACHER BLOCK IS EMPTY EXCEPT FOR BRANCH
   while (getNonPhiSize(detacher)!=1) {
@@ -1028,7 +1027,7 @@ bool Loop2Cilk::runOnLoop(Loop *L, LPPassManager &LPM) {
   //Header->getParent()->dump();
 
   std::vector<Value*> ext_args;
-  Function* extracted = llvm::cilk::extractDetachBodyToFunction(*det, &call, /*closure*/ oldvar, &ext_args);
+  Function* extracted = llvm::cilk::extractDetachBodyToFunction(*det, DT, &call, /*closure*/ oldvar, &ext_args);
 
   //Header->getParent()->getParent()->dump();
   //extracted->dump();

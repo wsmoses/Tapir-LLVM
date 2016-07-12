@@ -60,7 +60,7 @@ void initializeCodeGen(PassRegistry&);
 void initializeTarget(PassRegistry&);
 
 void initializeLoop2CilkPass(PassRegistry&);
-void initializeDetach2CilkPass(PassRegistry&);
+void initializeCilkPassPass(PassRegistry&);
 
 void initializeAAEvalPass(PassRegistry&);
 void initializeAddDiscriminatorsPass(PassRegistry&);

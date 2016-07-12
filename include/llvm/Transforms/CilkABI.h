@@ -1561,7 +1561,7 @@ static inline size_t getNumPred(BasicBlock* BB){
   return cnt;
 }
 
-static inline bool populateDetachedCFG(const DetachInst& detach, SmallPtrSet<BasicBlock*,32>& functionPieces, SmallVector<BasicBlock*, 32 >& reattachB, bool replace, bool error=true) {
+static inline bool populateDetachedCFG(const DetachInst& detach, DominatorTree& DT, SmallPtrSet<BasicBlock*,32>& functionPieces, SmallVector<BasicBlock*, 32 >& reattachB, bool replace, bool error=true) {
   SmallVector<BasicBlock *, 32> todo;
 
   BasicBlock* Spawned  = detach.getSuccessor(0);
@@ -1596,16 +1596,27 @@ static inline bool populateDetachedCFG(const DetachInst& detach, SmallPtrSet<Bas
       continue;
     } else if (BranchInst* inst = llvm::dyn_cast<BranchInst>(term)) {
       for( unsigned idx = 0, max = inst->getNumSuccessors(); idx < max; idx++ ) {
-        BasicBlock* suc = inst->getSuccessor(idx);
-        if (isa<UnreachableInst>(suc->getTerminator()) && suc->size() == 1 && getNumPred(suc)>1) {
-          suc = BasicBlock::Create(suc->getContext(), "unreachable", suc->getParent());
+        BasicBlock* suc0 = inst->getSuccessor(idx);
+        int np = getNumPred(suc0);
+        if (isa<UnreachableInst>(suc0->getTerminator()) && suc0->size() == 1 && np>1) {
+          BasicBlock* suc = BasicBlock::Create(suc0->getContext(), "unreachable", suc0->getParent());
           suc->moveAfter(BB);
           IRBuilder<> b(suc);
           b.CreateUnreachable();
           inst->setSuccessor(idx, suc);
+          DT.addNewBlock(suc, BB);
+          BasicBlock* dom = nullptr;
+          for (auto it = pred_begin(suc0), et = pred_end(suc0); it != et; ++it) {
+            if (dom==nullptr) dom = *it;
+            else dom = DT.findNearestCommonDominator(dom, *it);
+          }
+          assert (dom);
+          DT.changeImmediateDominator(suc0, dom);
+          DT.verifyDomTree();
+          suc0 = suc;
         }
 
-        todo.emplace_back(suc);
+        todo.emplace_back(suc0);
       }
       continue;
     } else if( SwitchInst* inst = llvm::dyn_cast<SwitchInst>(term) ) {
@@ -1694,7 +1705,7 @@ static inline Value *getGrainSize(Value* count, IRBuilder<> &b0) {
 
 //Returns true if success
 //Returns true if success
-static inline Function* extractDetachBodyToFunction(DetachInst& detach,
+static inline Function* extractDetachBodyToFunction(DetachInst& detach, DominatorTree& DT,
 						    llvm::CallInst** call = 0,
 						    llvm::Value* closure = 0, std::vector<Value*> *ext_args=0) {
   llvm::BasicBlock* detB = detach.getParent();
@@ -1709,7 +1720,7 @@ static inline Function* extractDetachBodyToFunction(DetachInst& detach,
   SmallPtrSet<BasicBlock *, 32> functionPieces;
   SmallVector<BasicBlock*, 32 > reattachB;
 
-  if (!populateDetachedCFG( detach, functionPieces, reattachB, true)) return nullptr;
+  if (!populateDetachedCFG(detach, DT, functionPieces, reattachB, true)) return nullptr;
 
   functionPieces.erase(Spawned);
   std::vector<BasicBlock*> blocks( functionPieces.begin(), functionPieces.end() );
@@ -1988,7 +1999,7 @@ static inline bool makeFunctionDetachable( Function& extracted, bool instrument 
   return true;
 }
 
-static inline bool createDetach(DetachInst& detach,
+static inline bool createDetach(DetachInst& detach, DominatorTree& DT,
                                 bool instrument = false) {
   BasicBlock* detB = detach.getParent();
   Function& F = *(detB->getParent());
@@ -2005,7 +2016,7 @@ static inline bool createDetach(DetachInst& detach,
   Value *SF = GetOrInitStackFrame( F, /*isFast*/ false, instrument );
   assert(SF && "null stack frame unexpected");
 
-  Function* extracted = extractDetachBodyToFunction(detach);
+  Function* extracted = extractDetachBodyToFunction(detach, DT);
 
   TerminatorInst* bi = llvm::dyn_cast<TerminatorInst>(detB->getTerminator() );
   assert( bi );
