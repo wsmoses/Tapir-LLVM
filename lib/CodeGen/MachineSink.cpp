@@ -548,7 +548,7 @@ static inline bool hasSetJmpPred( MachineBasicBlock *bl0 ) {
     while( term != bl->end() ) {
       auto mc = (*term).getDesc();
 //      if (mc.Opcode != 777) continue;
-       if (mc.Opcode == 777) return true;
+       if (mc.Opcode == 777) { return true; }
 //      llvm::errs() << "    flags:" << mc.Flags << " opc:" << mc.Opcode << "\n";
 //      term->dump();
       term++;
@@ -594,7 +594,8 @@ MachineSinking::GetAllSortedSuccessors(MachineInstr *MI, MachineBasicBlock *MBB,
     unstable = false;
     SmallPtrSet<MachineBasicBlock*, 10> toRemove;
     for( auto bl0 : AllSuccs0 ) {
-      if ( toRemove.count(bl0) == 0 && hasSetJmpPred(bl0)) {   
+      //if (hasSetJmpPred(bl0)) assert(bl0->hasAddressTaken());
+      if (toRemove.count(bl0) == 0 && (hasSetJmpPred(bl0) || bl0->hasAddressTaken()) ) {   
         SmallVector<MachineBasicBlock *, 10> Q;
         Q.push_back(bl0);
         toRemove.insert(bl0);

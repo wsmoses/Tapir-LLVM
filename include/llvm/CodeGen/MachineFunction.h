@@ -45,6 +45,8 @@ class TargetRegisterClass;
 struct MachinePointerInfo;
 struct WinEHFuncInfo;
 
+void setMFHasVarSizedObjects(MachineFrameInfo* mf);
+
 template <>
 struct ilist_traits<MachineBasicBlock>
     : public ilist_default_traits<MachineBasicBlock> {

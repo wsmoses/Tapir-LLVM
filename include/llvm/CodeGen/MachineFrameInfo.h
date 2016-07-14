@@ -153,10 +153,11 @@ class MachineFrameInfo {
   /// Objects list, this is also the index to the 0th object in the list.
   unsigned NumFixedObjects;
 
+public:
   /// This boolean keeps track of whether any variable
   /// sized objects have been allocated yet.
   bool HasVarSizedObjects;
-
+private:
   /// This boolean keeps track of whether there is a call
   /// to builtin \@llvm.frameaddress.
   bool FrameAddressTaken;

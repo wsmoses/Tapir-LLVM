@@ -1905,8 +1905,9 @@ static inline Function* extractDetachBodyToFunction(DetachInst& detach, Dominato
 
   for (BasicBlock* BB : blocksInDetachedScope) {
     for (BasicBlock::iterator I = BB->begin(), E = --BB->end(); I != E; ++I)
-      if (AllocaInst *AI = dyn_cast<AllocaInst>(I))
-        Allocas.push_back(AI);
+      if (AllocaInst *AI = dyn_cast<AllocaInst>(I)) {
+        if (isa<Constant>(AI->getArraySize())) Allocas.push_back(AI);
+      }
   }
 
   for (AllocaInst *AI : Allocas) {
