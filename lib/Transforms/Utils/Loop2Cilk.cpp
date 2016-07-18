@@ -294,7 +294,7 @@ bool recursiveMoveBefore(Instruction* toMoveBefore, Value* toMoveVal, DominatorT
 }
 
 /* Returns ind var / number of iterations */
-std::pair<PHINode*,Value*> getIndVar(Loop *L, BasicBlock* detacher, DominatorTree& DT) {
+std::pair<PHINode*,Value*> getIndVar(Loop *L, BasicBlock* detacher, DominatorTree& DT, bool actualFix=true) {
   BasicBlock *H = L->getHeader();
 
   BasicBlock *Incoming = nullptr, *Backedge = nullptr;
@@ -360,6 +360,7 @@ std::pair<PHINode*,Value*> getIndVar(Loop *L, BasicBlock* detacher, DominatorTre
       PromoteMemToReg({alloca}, DT, nullptr, nullptr);
     }
   }
+  if (!actualFix) return make_pair(nullptr,nullptr);
 
   //llvm::errs() << "Preparing from loop" << H->getName() << "|" << H->getParent()->getName() << "\n";
   //H->getParent()->dump();
@@ -905,6 +906,7 @@ bool Loop2Cilk::runOnLoop(Loop *L, LPPassManager &LPM) {
         if (CallInst* ca = dyn_cast<CallInst>(&I)) {
           if (ca->getCalledFunction() == Header->getParent()) {
             errs() << "recursive cilk for in function " << Header->getParent()->getName() << "|" << Header->getName() << "\n";
+            getIndVar(L, detacher, DT, false);
             return false;
           }
         }
