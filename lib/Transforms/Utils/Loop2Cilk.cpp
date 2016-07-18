@@ -241,6 +241,7 @@ bool attemptRecursiveMoveAfter(Instruction* toMoveAfter, Instruction* toCheck, D
     toMoveAfter->dump();
     toCheck->dump();
     toMoveAfter->getParent()->getParent()->dump();
+    return false;
   }
   assert(DT.dominates(toMoveAfter, toCheck));
   return true; 
@@ -484,7 +485,7 @@ std::pair<PHINode*,Value*> getIndVar(Loop *L, BasicBlock* detacher, DominatorTre
 
   SmallPtrSet<llvm::Value*, 4> toIgnore;
   {
-    IRBuilder<> builder(detacher->getTerminator()->getSuccessor(0)->getFirstNonPHIOrDbgOrLifetime());
+    IRBuilder<> builder(RPN->getParent()->getFirstNonPHIOrDbgOrLifetime());
     if( isOne(amt) ) mul = RPN;
     else toIgnore.insert(mul = builder.CreateMul(RPN, amt, "indmul"));
     if( isZero(RPN->getIncomingValueForBlock(Incoming) )) newV = mul;
@@ -941,7 +942,7 @@ bool Loop2Cilk::runOnLoop(Loop *L, LPPassManager &LPM) {
     	assert( !llvm::verifyFunction(*L->getHeader()->getParent(), &llvm::errs()) );
     } else {
       errs() << "invalid sync size" << "\n";
-
+      syncer->dump();
       if (llvm::verifyFunction(*Header->getParent(), &llvm::errs())) {
         Header->getParent()->getParent()->dump();
         assert(0);

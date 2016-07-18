@@ -1576,34 +1576,34 @@ static inline bool populateDetachedCFG(const DetachInst& detach, DominatorTree& 
 
     TerminatorInst* term = BB->getTerminator();
     if (term == nullptr) return false;
-    if( ReattachInst* inst = llvm::dyn_cast<ReattachInst>(term) ) {
+    if (isa<ReattachInst>(term)) {
       //only analyze reattaches going to the same continuation
-      if( inst->getSuccessor(0) != Continue ) continue;
+      if (term->getSuccessor(0) != Continue ) continue;
       if (replace) {
         BranchInst* toReplace = BranchInst::Create( Continue );
-        ReplaceInstWithInst(inst, toReplace);
+        ReplaceInstWithInst(term, toReplace);
         reattachB.push_back(BB);
       }
       continue;
-    } else if (DetachInst* inst = llvm::dyn_cast<DetachInst>(term)) {
-      assert( inst != &detach && "Found recursive detach!" );
-      todo.emplace_back( inst->getSuccessor(0) );
-      todo.emplace_back( inst->getSuccessor(1) );
+    } else if (isa<DetachInst>(term)) {
+      assert( term != &detach && "Found recursive detach!" );
+      todo.emplace_back(term->getSuccessor(0));
+      todo.emplace_back(term->getSuccessor(1));
       continue;
-    } else if( SyncInst* inst = llvm::dyn_cast<SyncInst>(term) ) {
+    } else if(isa<SyncInst>(term)) {
       //only sync inner elements, consider as branch
-      todo.emplace_back( inst->getSuccessor(0) );
+      todo.emplace_back(term->getSuccessor(0));
       continue;
-    } else if (BranchInst* inst = llvm::dyn_cast<BranchInst>(term)) {
-      for( unsigned idx = 0, max = inst->getNumSuccessors(); idx < max; idx++ ) {
-        BasicBlock* suc0 = inst->getSuccessor(idx);
+    } else if (llvm::isa<BranchInst>(term) || llvm::isa<SwitchInst>(term)) {
+      for( unsigned idx = 0, max = term->getNumSuccessors(); idx < max; idx++ ) {
+        BasicBlock* suc0 = term->getSuccessor(idx);
         int np = getNumPred(suc0);
         if (isa<UnreachableInst>(suc0->getTerminator()) && suc0->size() == 1 && np>1) {
           BasicBlock* suc = BasicBlock::Create(suc0->getContext(), "unreachable", suc0->getParent());
           suc->moveAfter(BB);
           IRBuilder<> b(suc);
           b.CreateUnreachable();
-          inst->setSuccessor(idx, suc);
+          term->setSuccessor(idx, suc);
           DT.addNewBlock(suc, BB);
           BasicBlock* dom = nullptr;
           for (auto it = pred_begin(suc0), et = pred_end(suc0); it != et; ++it) {
@@ -1619,13 +1619,7 @@ static inline bool populateDetachedCFG(const DetachInst& detach, DominatorTree& 
         todo.emplace_back(suc0);
       }
       continue;
-    } else if( SwitchInst* inst = llvm::dyn_cast<SwitchInst>(term) ) {
-      //only sync inner elements, consider as branch
-      for( unsigned idx = 0, max = inst->getNumSuccessors(); idx < max; idx++ )
-        todo.emplace_back( inst->getSuccessor(idx) );
-      continue;
     } else if (llvm::isa<UnreachableInst>(term)) {
-      
       continue;
     } else {
       term->dump();

@@ -258,6 +258,10 @@ static uint64_t getAttrKindEncoding(Attribute::AttrKind Kind) {
     return bitc::ATTR_KIND_UW_TABLE;
   case Attribute::ZExt:
     return bitc::ATTR_KIND_Z_EXT;
+  case Attribute::RepeatLoopOpts:
+    return bitc::ATTR_KIND_REPEAT_LOOP_OPTS;
+  case Attribute::DisableOpts:
+    return bitc::ATTR_KIND_DISABLE_OPTS;
   case Attribute::EndAttrKinds:
     llvm_unreachable("Can not encode end-attribute kinds marker.");
   case Attribute::None:
