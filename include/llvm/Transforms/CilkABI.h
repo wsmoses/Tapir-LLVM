@@ -1653,6 +1653,20 @@ static inline Function* extractDetachBodyToFunction(DetachInst& detach, Dominato
   SmallPtrSet<BasicBlock *, 32> functionPieces;
   SmallVector<BasicBlock*, 32 > reattachB;
 
+  if (getNumPred(Spawned) > 1) {
+    BasicBlock* ts = BasicBlock::Create(Spawned->getContext(), Spawned->getName()+".fx", Spawned->getParent(), detach.getParent());
+    IRBuilder<> b(ts);
+    b.CreateBr(Spawned);
+    detach.setSuccessor(0,ts);
+    llvm::BasicBlock::iterator i = Spawned->begin();
+    while (auto phi = llvm::dyn_cast<llvm::PHINode>(i)) {
+      int idx = phi->getBasicBlockIndex(detach.getParent());
+      phi->setIncomingBlock(idx, ts);
+      ++i;
+    }
+    Spawned = ts;    
+  }
+
   if (!populateDetachedCFG(detach, DT, functionPieces, reattachB, true)) return nullptr;
 
   functionPieces.erase(Spawned);
@@ -1661,30 +1675,14 @@ static inline Function* extractDetachBodyToFunction(DetachInst& detach, Dominato
   functionPieces.insert(Spawned);
 
   for( auto& a : blocks ){
-    if( a == Spawned ) {
-      //assert only came from the detach
-      for (pred_iterator PI = pred_begin(a), E = pred_end(a); PI != E; ++PI) {
-        BasicBlock *Pred = *PI;
-        if (Pred == a) continue;
-        if (Pred != detach.getParent()) {
-          detach.getParent()->dump();
-          detach.dump();
-          a->dump();
-          Pred->dump();
-          Pred->getParent()->dump();
-        }
-        assert(Pred == detach.getParent() &&
-               "Block inside of detached context branched into from outside branch context from detach");
-        // if( Pred != detach.getParent() ) {
-        //   DEBUG(dbgs() << "Bad pred " << *Pred);
-        //  assert( 0 && "Block inside of detached context branched into from outside branch context from detach");
-        // }
-      }
-    } else {
+      int dc = 0;
       for (pred_iterator PI = pred_begin(a), E = pred_end(a); PI != E; ++PI) {
         BasicBlock *Pred = *PI;
         //printf("block:%s pred %s count:%u\n", a->getName().str().c_str(), Pred->getName().str().c_str(), functionPieces.count(Pred) );
+        if (dc == 0 && a == Spawned && Pred == detach.getParent()) { dc = 1; continue; } 
         if (functionPieces.count(Pred) == 0) {
+          for(auto b : functionPieces) llvm::errs() << b->getName() << "|";
+          llvm::errs() << "\n";
           a->dump();
           Pred->dump();
           Pred->getParent()->dump();
@@ -1695,7 +1693,6 @@ static inline Function* extractDetachBodyToFunction(DetachInst& detach, Dominato
         //  assert( 0 && "Block inside of detached context branched into from outside branch context");
         // }
       }
-    }
   }
 
   PHINode *rstart = 0, *rend = 0, *grain;
