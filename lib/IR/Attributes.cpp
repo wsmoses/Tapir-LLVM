@@ -243,6 +243,10 @@ std::string Attribute::getAsString(bool InAttrGrp) const {
     return "nounwind";
   if (hasAttribute(Attribute::OptimizeNone))
     return "optnone";
+  if (hasAttribute(Attribute::DisableOpts))
+    return "disableopts";
+  if (hasAttribute(Attribute::RepeatLoopOpts))
+    return "repeatloopopts";
   if (hasAttribute(Attribute::OptimizeForSize))
     return "optsize";
   if (hasAttribute(Attribute::ReadNone))
@@ -452,6 +456,8 @@ uint64_t AttributeImpl::getAttrMask(Attribute::AttrKind Val) {
   case Attribute::NoRecurse:       return 1ULL << 48;
   case Attribute::InaccessibleMemOnly:         return 1ULL << 49;
   case Attribute::InaccessibleMemOrArgMemOnly: return 1ULL << 50;
+  case Attribute::DisableOpts: return 1ULL << 51;
+  case Attribute::RepeatLoopOpts: return 1ULL << 52;
   case Attribute::Dereferenceable:
     llvm_unreachable("dereferenceable attribute not supported in raw format");
     break;

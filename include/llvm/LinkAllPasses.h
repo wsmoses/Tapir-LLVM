@@ -123,8 +123,8 @@ namespace {
       (void) llvm::createObjCARCContractPass();
       (void) llvm::createObjCARCOptPass();
       (void) llvm::createPAEvalPass();
-      (void) llvm::createPromoteDetachToCilkPass();
-      // (void) llvm::createPromoteDetachToCilksanPass();
+      (void) llvm::createPromoteDetachToCilkPass(false);
+      (void) llvm::createReoptPass();
       (void) llvm::createPromoteMemoryToRegisterPass();
       (void) llvm::createDemoteRegisterToMemoryPass();
       (void) llvm::createPruneEHPass();

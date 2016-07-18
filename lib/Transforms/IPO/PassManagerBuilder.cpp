@@ -503,43 +503,52 @@ void PassManagerBuilder::populateModulePassManager(
 		//initializeTarget(Registry);
 
     if (ParallelLevel != 0) {
-      if ( (ParallelLevel != 3) && OptLevel != 0) {
-        addInitialAliasAnalysisPasses(MPM);
-        MPM.add(createCFGSimplificationPass());
-        if (UseNewSROA)
-          MPM.add(createSROAPass());
-        else
-          MPM.add(createScalarReplAggregatesPass());
-        MPM.add(createEarlyCSEPass());
-        MPM.add(createLowerExpectIntrinsicPass());
+      switch (ParallelLevel) {
+        case 1:
+          if (OptLevel != 0) {
+            addInitialAliasAnalysisPasses(MPM);
+            MPM.add(createCFGSimplificationPass());
+            if (UseNewSROA)
+              MPM.add(createSROAPass());
+            else
+              MPM.add(createScalarReplAggregatesPass());
+            MPM.add(createEarlyCSEPass());
+            MPM.add(createLowerExpectIntrinsicPass());
+            MPM.add(createPromoteMemoryToRegisterPass());
+          }
+          MPM.add(createCFGSimplificationPass());
+          break;
+        case 2:
+          if (OptLevel != 0) {
+            addInitialAliasAnalysisPasses(MPM);
+            MPM.add(createCFGSimplificationPass());
+            if (UseNewSROA)
+              MPM.add(createSROAPass());
+            else
+              MPM.add(createScalarReplAggregatesPass());
+            MPM.add(createEarlyCSEPass());
+            MPM.add(createLowerExpectIntrinsicPass());
+          }
+          MPM.add(createCFGSimplificationPass());
+          populateForOptLevel(MPM, OptLevel);
+          break;
+        case 3:
+          break;
+        case 0: llvm_unreachable("invalid");
       }
-
-      if (ParallelLevel == 2) {
-        //llvm::errs() << "running preopt at opt: " << OptLevel << "\n";
-        populateForOptLevel(MPM, OptLevel);
-      }
-      if (ParallelLevel == 3) {
-         //llvm::errs() << "NO preopt at opt: " << OptLevel << "\n";
-
-      } else if (ParallelLevel != 2 && OptLevel != 0 ) {
-        //llvm::errs() << "running mem2reg/indvar preopt at opt: " << OptLevel << "\n";
-        MPM.add(createPromoteMemoryToRegisterPass());
-        if (UseNewSROA)
-          MPM.add(createSROAPass());
-        else
-          MPM.add(createScalarReplAggregatesPass());
-      }
-      MPM.add(createBarrierNoopPass());
-      //if (ParallelLevel != 3) 
+      
+      if (ParallelLevel != 3) MPM.add(createBarrierNoopPass());
+      if (ParallelLevel != 3) MPM.add(createInferFunctionAttrsLegacyPass());
       MPM.add(createLoop2CilkPass());
       MPM.add(createCFGSimplificationPass());
-      MPM.add(createPromoteDetachToCilkPass());
+      if (ParallelLevel != 3) MPM.add(createInferFunctionAttrsLegacyPass());
+      MPM.add(createPromoteDetachToCilkPass(ParallelLevel == 2));
+      if (ParallelLevel != 3) MPM.add(createInferFunctionAttrsLegacyPass());
       MPM.add(createBarrierNoopPass());
       Inliner = Inliner2;
-    } //else MPM.add(createLoop2CilkPass());
+    }
 
-
-    if ( OptLevel != 0) {
+    if (OptLevel != 0) {
       addInitialAliasAnalysisPasses(MPM);
       MPM.add(createCFGSimplificationPass());
       if (UseNewSROA)
@@ -553,6 +562,10 @@ void PassManagerBuilder::populateModulePassManager(
     //llvm::errs() << "running opt at level at opt3: " << OptLevel << "\n";
     MPM.add(createCFGSimplificationPass());
     populateForOptLevel(MPM, OptLevel);
+    MPM.add(createBarrierNoopPass());
+    MPM.add(createReoptPass());
+    MPM.add(createCFGSimplificationPass());
+    MPM.add(createInferFunctionAttrsLegacyPass());
 }
 
 void PassManagerBuilder::addLTOOptimizationPasses(legacy::PassManagerBase &PM) {

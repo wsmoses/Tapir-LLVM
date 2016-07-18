@@ -14,7 +14,7 @@
 
 #include "llvm/Transforms/CilkABI.h"
 #include "llvm/IR/Verifier.h"
-
+#include "llvm/Transforms/Utils/Cloning.h"
 
 #define DEBUG_TYPE "detach2cilk"
 
@@ -24,7 +24,8 @@ namespace {
 
 struct CilkPass : public FunctionPass {
 	static char ID; // Pass identification, replacement for typeid
-	CilkPass() : FunctionPass(ID) {
+  bool DisablePostOpts;
+	CilkPass(bool disablePostOpts=false) : FunctionPass(ID), DisablePostOpts(disablePostOpts) {
 	}
 
 	// runOnFunction - To run this pass, first we calculate the alloca
@@ -78,6 +79,7 @@ bool CilkPass::runOnFunction(Function &F) {
 		} else continue;
 	}
 
+  if (Changed)
 	for (Function::iterator i = F.begin(), e = F.end(); i != e; ++i) {
 		TerminatorInst* term = i->getTerminator();
 		if( term == nullptr ) continue;
@@ -91,16 +93,52 @@ bool CilkPass::runOnFunction(Function &F) {
 		}
 	}
 
-  if( llvm::verifyFunction(F, nullptr) ) {
-    F.dump(); 
+  bool inlining = true;
+  while (inlining) {
+    inlining = false;
+    for (inst_iterator I = inst_begin(F), E = inst_end(F); I != E; ++I)
+      if (auto cal = dyn_cast<CallInst>(&*I)) {
+        if (auto fn = cal->getCalledFunction()) {
+          if (fn->getName().startswith("__cilk")) {
+            InlineFunctionInfo ifi;
+            if (InlineFunction(cal,ifi)) {
+              Changed |= true;
+              inlining = true;
+              break;
+            } else {
+              //llvm::errs() << "failed to inline function: " << fn->getName() << " in " << F.getName() << "\n";
+            }
+          }
+        }
+      }
   }
-  assert( !llvm::verifyFunction(F, &llvm::errs()) );
 
+  if (Changed) {
+    if (llvm::verifyFunction(F, nullptr)) {
+      F.dump(); 
+    }
+  }
+
+  assert( !llvm::verifyFunction(F, &llvm::errs()) );
+  if (DisablePostOpts && !Changed && !F.getName().startswith("__cilk") && !F.hasFnAttribute(Attribute::RepeatLoopOpts) && !F.hasFnAttribute(Attribute::OptimizeNone)) {
+    //F.addFnAttr(Attribute::OptimizeNone);
+    //F.addFnAttr(Attribute::NoInline);
+    F.addFnAttr(Attribute::DisableOpts);
+
+    //llvm::errs() << "<REMOVING>\n";
+    //F.dump();
+    Changed |= true;
+    //llvm::errs() << "</REMOVING>\n";
+  } else {
+    //llvm::errs() << "<KEEPING>\n";
+    //F.dump();
+    //llvm::errs() << "</KEEPING>\n";
+  }
 	return Changed;
 }
 
 // createPromoteMemoryToRegister - Provide an entry point to create this pass.
 //
-FunctionPass *llvm::createPromoteDetachToCilkPass() {
-	return new CilkPass();
+FunctionPass *llvm::createPromoteDetachToCilkPass(bool DisablePostOpts) {
+	return new CilkPass(DisablePostOpts);
 }

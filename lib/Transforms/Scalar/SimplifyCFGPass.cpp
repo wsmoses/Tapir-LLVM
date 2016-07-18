@@ -38,6 +38,7 @@
 #include "llvm/Pass.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Transforms/Utils/Local.h"
+#include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include "llvm/Transforms/Scalar.h"
 using namespace llvm;
 
@@ -127,6 +128,7 @@ static bool mergeEmptyReturnBlocks(Function &F) {
 static bool removeUselessSyncs(Function &F) {
   bool Changed = false;
   // Scan all the blocks in the function
+  check:
   for (Function::iterator BBI = F.begin(), E = F.end(); BBI != E; ) {
     BasicBlock *BB = &*BBI++;
     if (SyncInst *Sync = dyn_cast<SyncInst>(BB->getTerminator())) {
@@ -135,34 +137,36 @@ static bool removeUselessSyncs(Function &F) {
       SmallVector<BasicBlock *, 32> WorkList;
       WorkList.push_back(BB);
       while (!WorkList.empty()) {
-	BasicBlock *PBB = WorkList.pop_back_val();
-	if (!Visited.insert(PBB).second)
-	  continue;
+	      BasicBlock *PBB = WorkList.pop_back_val();
+	      if (!Visited.insert(PBB).second)
+	        continue;
 
-	for (pred_iterator PI = pred_begin(PBB), PE = pred_end(PBB);
-	     PI != PE; ++PI) {
-	  BasicBlock *Pred = *PI;
-	  TerminatorInst *PT = Pred->getTerminator();
-	  if (isa<DetachInst>(PT)) {
-	    if (PT->getSuccessor(0) == Pred)
-	      continue;
-	    else // PT->getSuccessor(1) == Pred
-	      ReachingDetach = true;
-	  }
-	  if (ReachingDetach)
-	    break;
+	      for (pred_iterator PI = pred_begin(PBB), PE = pred_end(PBB); PI != PE; ++PI) {
+	        BasicBlock *Pred = *PI;
+	        TerminatorInst *PT = Pred->getTerminator();
+	        if (isa<DetachInst>(PT)) {
+	          if (PT->getSuccessor(0) == Pred)
+	            continue;
+	          else // PT->getSuccessor(1) == Pred
+	            ReachingDetach = true;
+	        }
+	        if (ReachingDetach)
+	          break;
 
-	  if (isa<ReattachInst>(PT) || isa<SyncInst>(PT))
-	    continue;
+	        if (isa<ReattachInst>(PT) || isa<SyncInst>(PT))
+	          continue;
 
-	  WorkList.push_back(Pred);
-	}
+	        WorkList.push_back(Pred);
+	      }
       }
+
       if (!ReachingDetach) {
-	IRBuilder<> Builder(Sync);
-	Builder.CreateBr(Sync->getSuccessor(0));
-	Sync->eraseFromParent();
-	Changed = true;
+        BasicBlock* suc = Sync->getSuccessor(0);
+      	IRBuilder<> Builder(Sync);
+      	Builder.CreateBr(suc);
+      	Sync->eraseFromParent();
+      	Changed = true;
+        if (MergeBlockIntoPredecessor(suc)) goto check;
       }
     }
   }

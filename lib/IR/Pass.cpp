@@ -141,7 +141,7 @@ PassManagerType FunctionPass::getPotentialPassManagerType() const {
 }
 
 bool FunctionPass::skipOptnoneFunction(const Function &F) const {
-  if (F.hasFnAttribute(Attribute::OptimizeNone)) {
+  if (F.hasFnAttribute(Attribute::OptimizeNone) || F.hasFnAttribute(Attribute::DisableOpts)) {
     DEBUG(dbgs() << "Skipping pass '" << getPassName()
           << "' on function " << F.getName() << "\n");
     return true;
@@ -170,7 +170,7 @@ bool BasicBlockPass::doFinalization(Function &) {
 
 bool BasicBlockPass::skipOptnoneFunction(const BasicBlock &BB) const {
   const Function *F = BB.getParent();
-  if (F && F->hasFnAttribute(Attribute::OptimizeNone)) {
+  if (F && (F->hasFnAttribute(Attribute::OptimizeNone) || F->hasFnAttribute(Attribute::DisableOpts))) {
     // Report this only once per function.
     if (&BB == &F->getEntryBlock())
       DEBUG(dbgs() << "Skipping pass '" << getPassName()

@@ -339,7 +339,7 @@ void LoopPass::assignPassManager(PMStack &PMS,
 // passes should skip it.
 bool LoopPass::skipOptnoneFunction(const Loop *L) const {
   const Function *F = L->getHeader()->getParent();
-  if (F && F->hasFnAttribute(Attribute::OptimizeNone)) {
+  if (F && (F->hasFnAttribute(Attribute::OptimizeNone) || F->hasFnAttribute(Attribute::DisableOpts)) ) {
     // FIXME: Report this to dbgs() only once per function.
     DEBUG(dbgs() << "Skipping pass '" << getPassName()
           << "' in function " << F->getName() << "\n");

@@ -160,6 +160,10 @@ def UWTable : EnumAttr<"uwtable">;
 /// Zero extended before/after call.
 def ZExt : EnumAttr<"zeroext">;
 
+/// Should repeat opts
+def RepeatLoopOpts : EnumAttr<"repeatopts">;
+def DisableOpts : EnumAttr<"disableopts">;
+
 /// Target-independent string attributes.
 def LessPreciseFPMAD : StrBoolAttr<"less-precise-fpmad">;
 def NoInfsFPMath : StrBoolAttr<"no-infs-fp-math">;

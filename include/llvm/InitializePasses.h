@@ -59,6 +59,7 @@ void initializeCodeGen(PassRegistry&);
 /// initializeCodeGen - Initialize all passes linked into the CodeGen library.
 void initializeTarget(PassRegistry&);
 
+void initializeReoptPass(PassRegistry&);
 void initializeLoop2CilkPass(PassRegistry&);
 void initializeCilkPassPass(PassRegistry&);
 

@@ -31,6 +31,7 @@ add_llvm_library(LLVMTransformUtils
   MetaRenamer.cpp
   ModuleUtils.cpp
   PromoteMemoryToRegister.cpp
+  Reopt.cpp
   SSAUpdater.cpp
   SimplifyCFG.cpp
   SimplifyIndVar.cpp

@@ -64,7 +64,6 @@ namespace {
       AU.addRequired<DominatorTreeWrapperPass>();
       AU.addRequired<LoopInfoWrapperPass>();
       AU.addRequired<ScalarEvolutionWrapperPass>();
-      AU.addRequiredID(LoopSimplifyID);
     }
 
   private:
@@ -82,7 +81,6 @@ INITIALIZE_PASS_BEGIN(Loop2Cilk, "loop2cilk",
 INITIALIZE_PASS_DEPENDENCY(DominatorTreeWrapperPass)
 INITIALIZE_PASS_DEPENDENCY(LoopInfoWrapperPass)
 INITIALIZE_PASS_DEPENDENCY(ScalarEvolutionWrapperPass)
-INITIALIZE_PASS_DEPENDENCY(LoopSimplify)
 INITIALIZE_PASS_END(Loop2Cilk, "loop2cilk", "Find cilk for loops and use more efficient runtime", false, false)
 
 Pass *llvm::createLoop2CilkPass() {
@@ -98,7 +96,7 @@ size_t countPredecessors(BasicBlock* syncer) {
 }
 
 
-Value* neg( Value* V ) {
+Value* neg(Value* V) {
   if( Constant* C = dyn_cast<Constant>(V) ) {
     ConstantFolder F;
     return F.CreateNeg(C);
@@ -781,15 +779,11 @@ BasicBlock* continueToFindSync(BasicBlock* endL) {
 }
 
 bool Loop2Cilk::runOnLoop(Loop *L, LPPassManager &LPM) {
-	assert( !llvm::verifyFunction(*L->getHeader()->getParent(), &llvm::errs()) );
 
   if (skipOptnoneFunction(L)) {
     return false;
   }
 
-  if (!L->isLoopSimplifyForm()) {
-    simplifyLoop(L, nullptr, nullptr, nullptr, nullptr, false);
-  }
 	assert( !llvm::verifyFunction(*L->getHeader()->getParent(), &llvm::errs()) );
 
   BasicBlock* Header = L->getHeader();
@@ -911,7 +905,7 @@ bool Loop2Cilk::runOnLoop(Loop *L, LPPassManager &LPM) {
         if (CallInst* ca = dyn_cast<CallInst>(&I)) {
           if (ca->getCalledFunction() == Header->getParent()) {
             errs() << "recursive cilk for in function " << Header->getParent()->getName() << "|" << Header->getName() << "\n";
-            //return false;
+            return false;
           }
         }
       }
@@ -1028,7 +1022,7 @@ bool Loop2Cilk::runOnLoop(Loop *L, LPPassManager &LPM) {
 
   std::vector<Value*> ext_args;
   Function* extracted = llvm::cilk::extractDetachBodyToFunction(*det, DT, &call, /*closure*/ oldvar, &ext_args);
-
+  extracted->addFnAttr(Attribute::RepeatLoopOpts);
   //Header->getParent()->getParent()->dump();
   //extracted->dump();
   //llvm::errs() << "</DONE EXTRACTING FROM " << extracted->getName() << "\\>\n";
