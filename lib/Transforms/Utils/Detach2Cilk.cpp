@@ -102,6 +102,7 @@ bool CilkPass::runOnFunction(Function &F) {
           if (fn->getName().startswith("__cilk")) {
             InlineFunctionInfo ifi;
             if (InlineFunction(cal,ifi)) {
+              if (fn->getNumUses()==0) fn->eraseFromParent();
               Changed |= true;
               inlining = true;
               break;
@@ -120,19 +121,10 @@ bool CilkPass::runOnFunction(Function &F) {
   }
 
   assert( !llvm::verifyFunction(F, &llvm::errs()) );
-  if (DisablePostOpts && !Changed && !F.getName().startswith("__cilk") && !F.hasFnAttribute(Attribute::RepeatLoopOpts) && !F.hasFnAttribute(Attribute::OptimizeNone)) {
-    //F.addFnAttr(Attribute::OptimizeNone);
-    //F.addFnAttr(Attribute::NoInline);
-    F.addFnAttr(Attribute::DisableOpts);
-
-    //llvm::errs() << "<REMOVING>\n";
-    //F.dump();
-    Changed |= true;
-    //llvm::errs() << "</REMOVING>\n";
+  if (DisablePostOpts && !Changed && !F.getName().startswith("__cilk") && !F.hasFnAttribute(Attribute::RepeatLoopOpts) && !F.hasFnAttribute(Attribute::DisableOpts)) {
+    //F.addFnAttr(Attribute::DisableOpts);
+    //Changed |= true;
   } else {
-    //llvm::errs() << "<KEEPING>\n";
-    //F.dump();
-    //llvm::errs() << "</KEEPING>\n";
   }
 	return Changed;
 }

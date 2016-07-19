@@ -563,6 +563,11 @@ void PassManagerBuilder::populateModulePassManager(
     MPM.add(createCFGSimplificationPass());
     populateForOptLevel(MPM, OptLevel);
     MPM.add(createBarrierNoopPass());
+ 
+    if (ParallelLevel==3) {
+      populateForOptLevel(MPM, OptLevel);
+    }
+
     MPM.add(createReoptPass());
     MPM.add(createCFGSimplificationPass());
     MPM.add(createInferFunctionAttrsLegacyPass());

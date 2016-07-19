@@ -44,6 +44,10 @@ bool Reopt::runOnFunction(Function &F) {
     Changed = true;
     F.removeFnAttr(Attribute::DisableOpts);
   }
+  if (F.hasFnAttribute(Attribute::RepeatLoopOpts)) {
+    Changed = true;
+    F.removeFnAttr(Attribute::RepeatLoopOpts);
+  }
   return Changed;
 }
 

@@ -64,6 +64,7 @@ namespace {
       AU.addRequired<DominatorTreeWrapperPass>();
       AU.addRequired<LoopInfoWrapperPass>();
       AU.addRequired<ScalarEvolutionWrapperPass>();
+      AU.addRequiredID(LoopSimplifyID);
     }
 
   private:
@@ -81,6 +82,7 @@ INITIALIZE_PASS_BEGIN(Loop2Cilk, "loop2cilk",
 INITIALIZE_PASS_DEPENDENCY(DominatorTreeWrapperPass)
 INITIALIZE_PASS_DEPENDENCY(LoopInfoWrapperPass)
 INITIALIZE_PASS_DEPENDENCY(ScalarEvolutionWrapperPass)
+INITIALIZE_PASS_DEPENDENCY(LoopSimplify)
 INITIALIZE_PASS_END(Loop2Cilk, "loop2cilk", "Find cilk for loops and use more efficient runtime", false, false)
 
 Pass *llvm::createLoop2CilkPass() {
@@ -120,7 +122,7 @@ Value* neg(Value* V) {
   return foo;
 }
 
-Value* subOne( Value* V ) {
+Value* subOne (Value* V, std::string s="") {
   if( Constant* C = dyn_cast<Constant>(V) ) {
     ConstantFolder F;
     return F.CreateSub(C, ConstantInt::get(V->getType(), 1) );
@@ -138,12 +140,12 @@ Value* subOne( Value* V ) {
   }
   assert(I);
   IRBuilder<> builder(I);
-  Instruction* foo = cast<Instruction>(builder.CreateSub( V, ConstantInt::get(V->getType(), 1) ));
+  Instruction* foo = cast<Instruction>(builder.CreateSub(V, ConstantInt::get(V->getType(), 1), s));
   if (move) I->moveBefore(foo);
   return foo;
 }
 
-Value* addOne( Value* V ) {
+Value* addOne (Value* V, std::string n="") {
   if( Constant* C = dyn_cast<Constant>(V) ) {
     ConstantFolder F;
     return F.CreateAdd(C, ConstantInt::get(V->getType(), 1) );
@@ -162,7 +164,7 @@ Value* addOne( Value* V ) {
   }
   assert(I);
   IRBuilder<> builder(I);
-  Instruction* foo = cast<Instruction>(builder.CreateAdd( V, ConstantInt::get(V->getType(), 1) ));
+  Instruction* foo = cast<Instruction>(builder.CreateAdd(V, ConstantInt::get(V->getType(), 1), n));
   if (move) I->moveBefore(foo);
   return foo;
 }
@@ -363,8 +365,10 @@ std::pair<PHINode*,Value*> getIndVar(Loop *L, BasicBlock* detacher, DominatorTre
   }
   if (!actualFix) return make_pair(nullptr,nullptr);
 
-  //llvm::errs() << "Preparing from loop" << H->getName() << "|" << H->getParent()->getName() << "\n";
-  //H->getParent()->dump();
+  //if (H->getParent()->getName().startswith("_ZN8sequence4packIP8particleiNS_4getAIS2_iEEEE4_seqIT_EPS6_")) {
+  //  llvm::errs() << "Preparing from loop" << H->getName() << "|" << H->getParent()->getName() << "\n";
+  //  H->getParent()->dump();
+  //}
 
   // Loop over all of the PHI nodes, looking for a canonical indvar.
   PHINode* RPN = nullptr;
@@ -631,15 +635,14 @@ std::pair<PHINode*,Value*> getIndVar(Loop *L, BasicBlock* detacher, DominatorTre
   {
     Value *bottom = adder, *top = val;
     if (opc == RPN && DT.dominates(detacher->getTerminator(), cmp)) {
-      llvm::errs() << "<adding extra for cmp>";
+      //llvm::errs() << "<adding extra for cmp " << detacher->getParent()->getName() << ">";
       cmp->dump();
-      //cmp->getParent()->getParent()->dump();
-      llvm::errs() << "</adding extra for cmp>";
+      //llvm::errs() << "</adding extra for cmp>";
       cmp->setOperand(cmpIdx, INCR);
       top = build.CreateAdd(top, amt0, "toplen");
     }
     int dir = 0;
-    switch (cmp->getPredicate() ) {
+    switch (cmp->getPredicate()) {
       case CmpInst::ICMP_UGE:
       case CmpInst::ICMP_UGT:
       case CmpInst::ICMP_SGE:
@@ -656,13 +659,14 @@ std::pair<PHINode*,Value*> getIndVar(Loop *L, BasicBlock* detacher, DominatorTre
     if (dir < 0 && cmpIdx == 0 || dir > 0 && cmpIdx != 0) { std::swap(bottom, top); }
 
     if (!isZero(bottom)) val = build.CreateSub(top, bottom, "sublen");
+    else val = top;
 
     switch (cmp->getPredicate() ) {
       case CmpInst::ICMP_UGT:
       case CmpInst::ICMP_SGT:
       case CmpInst::ICMP_ULT:
       case CmpInst::ICMP_SLT:
-        val = subOne(val);  
+        val = subOne(val, "subineq");  
         break;  
       case CmpInst::ICMP_SLE:
       case CmpInst::ICMP_ULE:
@@ -690,7 +694,7 @@ std::pair<PHINode*,Value*> getIndVar(Loop *L, BasicBlock* detacher, DominatorTre
         break;
     }
     if (!isOne(amt0)) val = build.CreateSDiv(val, amt0, "divlen");
-    if (cmp->getPredicate()!=CmpInst::ICMP_NE) val = addOne(val);
+    if (cmp->getPredicate()!=CmpInst::ICMP_NE) val = addOne(val, "nepred");
   }
 
   cmp->setPredicate(CmpInst::ICMP_NE);
@@ -802,6 +806,9 @@ bool Loop2Cilk::runOnLoop(Loop *L, LPPassManager &LPM) {
     return false;
   }
 
+  if (!L->isLoopSimplifyForm()) {
+    simplifyLoop(L, nullptr, nullptr, nullptr, nullptr, false);
+  }
 	assert( !llvm::verifyFunction(*L->getHeader()->getParent(), &llvm::errs()) );
 
   BasicBlock* Header = L->getHeader();
@@ -870,7 +877,7 @@ bool Loop2Cilk::runOnLoop(Loop *L, LPPassManager &LPM) {
 
     syncer = continueToFindSync(syncer);
     if (!syncer) {
-      errs() << "No sync found" << "\n";
+      //errs() << "No sync found" << "\n";
       //B->getSuccessor(sync_idx)->dump();
       //L->getHeader()->getParent()->dump();
       return false;

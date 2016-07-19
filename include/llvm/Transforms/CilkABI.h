@@ -910,7 +910,7 @@ static Function *GetCilkSyncFn(Module &M, bool instrument = false) {
 static Function *Get__cilkrts_enter_frame_1(Module &M) {
   Function *Fn = 0;
 
-  if (GetOrCreateFunction<cilk_func>("__cilkrts_enter_frame_1", M, Fn, Function::AvailableExternallyLinkage))
+  if (GetOrCreateFunction<cilk_func>("__cilkrts_enter_frame_1", M, Fn))
     return Fn;
 
   LLVMContext &Ctx = M.getContext();
@@ -991,7 +991,7 @@ static Function *Get__cilkrts_enter_frame_1(Module &M) {
 static Function *Get__cilkrts_enter_frame_fast_1(Module &M) {
   Function *Fn = 0;
 
-  if (GetOrCreateFunction<cilk_func>("__cilkrts_enter_frame_fast_1", M, Fn, Function::AvailableExternallyLinkage))
+  if (GetOrCreateFunction<cilk_func>("__cilkrts_enter_frame_fast_1", M, Fn))
     return Fn;
 
   LLVMContext &Ctx = M.getContext();
