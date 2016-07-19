@@ -1191,6 +1191,7 @@ bool Loop2Cilk::runOnLoop(Loop *L, LPPassManager &LPM) {
     auto count = cmp;
     Value* cond = b.CreateICmpSLE(count, ConstantInt::get(count->getType(), 1));
     BasicBlock *graint = BasicBlock::Create(Ctx, "graint", detacher->getParent());
+    graint->moveAfter(detacher);
     if (parentL) {
       parentL->addBasicBlockToLoop(graint, LI);
     }
