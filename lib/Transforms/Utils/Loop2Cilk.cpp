@@ -1189,7 +1189,7 @@ bool Loop2Cilk::runOnLoop(Loop *L, LPPassManager &LPM) {
       builder2.SetInsertPoint(&*syncer->begin());
     
     auto count = cmp;
-    Value* cond = b.CreateICmpSLE(count, ConstantInt::get(count->getType(), 1));
+    Value* cond = b.CreateICmpSLT(count, ConstantInt::get(count->getType(), 1));
     BasicBlock *graint = BasicBlock::Create(Ctx, "graint", detacher->getParent());
     graint->moveAfter(detacher);
     if (parentL) {
