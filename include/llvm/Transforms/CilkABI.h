@@ -164,8 +164,10 @@ typedef void (cilk_leave_end)();
  static llvm::Function *Get__cilkrts_get_nworkers(llvm::Module& M) {
     llvm::AttributeSet constset;
     constset = constset.addAttribute(M.getContext(), llvm::AttributeSet::FunctionIndex, llvm::Attribute::AttrKind::ReadNone);
-    return llvm::cast<llvm::Function>(M.getOrInsertFunction("__cilkrts_get_nworkers", llvm::TypeBuilder<__cilkrts_get_nworkers, false>::get(M.getContext()), constset) );
-
+    //constset = constset.addAttribute(M.getContext(), llvm::AttributeSet::FunctionIndex, llvm::Attribute::AttrKind::InaccessibleMemOnly);
+    constset = constset.addAttribute(M.getContext(), llvm::AttributeSet::FunctionIndex, llvm::Attribute::AttrKind::NoUnwind);
+    auto F = llvm::cast<llvm::Function>(M.getOrInsertFunction("__cilkrts_get_nworkers", llvm::TypeBuilder<__cilkrts_get_nworkers, false>::get(M.getContext()), constset) );
+    return F;
 }
 
 
@@ -1209,6 +1211,7 @@ static Function *GetCilkParentEpilogue(Module &M, bool instrument = false) {
 // }
 
 static const char *stack_frame_name = "__cilkrts_sf";
+static const char *worker8_name = "__cilkrts_wc8";
 
 static llvm::Value *LookupStackFrame(Function &F) {
   return F.getValueSymbolTable().lookup(stack_frame_name);
@@ -1233,7 +1236,7 @@ static llvm::AllocaInst *CreateStackFrame(Function &F) {
 
 static inline llvm::Value* GetOrInitStackFrame(Function& F, bool fast = true, bool instrument = false) {
   llvm::Value* V = LookupStackFrame(F);
-  if( V ) return V;
+  if (V) return V;
 
   llvm::AllocaInst* alloc = CreateStackFrame(F);
   llvm::BasicBlock::iterator II = F.getEntryBlock().getFirstInsertionPt();
@@ -1310,6 +1313,20 @@ static inline llvm::Value* GetOrInitStackFrame(Function& F, bool fast = true, bo
   assert( retInst );
   CallInst::Create( GetCilkParentEpilogue( *F.getParent(), instrument ), args, "", retInst );
   return alloc;
+}
+
+/// \brief Get/Create the worker count for the spawning function.
+static inline llvm::Value *GetOrCreateWorker8(Function &F) {
+  Value* W8 = F.getValueSymbolTable().lookup(worker8_name);
+  if (W8) return W8;
+
+  llvm::LLVMContext &Ctx = F.getContext();
+
+  IRBuilder<> b(F.getEntryBlock().getFirstNonPHIOrDbgOrLifetime());
+  Value* P0 = b.CreateCall(CILKRTS_FUNC(get_nworkers, *F.getParent()));
+  Value* P8 = b.CreateMul(P0, ConstantInt::get(P0->getType(), 8), worker8_name);
+
+  return P8;
 }
 
 /*

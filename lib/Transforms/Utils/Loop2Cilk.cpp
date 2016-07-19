@@ -485,7 +485,23 @@ std::pair<PHINode*,Value*> getIndVar(Loop *L, BasicBlock* detacher, DominatorTre
 
   SmallPtrSet<llvm::Value*, 4> toIgnore;
   {
-    IRBuilder<> builder(RPN->getParent()->getFirstNonPHIOrDbgOrLifetime());
+    BasicBlock* Spawned = detacher->getTerminator()->getSuccessor(0);
+
+    if (cilk::getNumPred(Spawned) > 1) {
+      BasicBlock* ts = BasicBlock::Create(Spawned->getContext(), Spawned->getName()+".fx", Spawned->getParent(), detacher);
+      IRBuilder<> b(ts);
+      b.CreateBr(Spawned);
+      detacher->getTerminator()->setSuccessor(0,ts);
+      llvm::BasicBlock::iterator i = Spawned->begin();
+      while (auto phi = llvm::dyn_cast<llvm::PHINode>(i)) {
+        int idx = phi->getBasicBlockIndex(detacher);
+        phi->setIncomingBlock(idx, ts);
+        ++i;
+      }
+      Spawned = ts;    
+    }
+
+    IRBuilder<> builder(Spawned->getFirstNonPHIOrDbgOrLifetime());
     if( isOne(amt) ) mul = RPN;
     else toIgnore.insert(mul = builder.CreateMul(RPN, amt, "indmul"));
     if( isZero(RPN->getIncomingValueForBlock(Incoming) )) newV = mul;
@@ -1024,6 +1040,7 @@ bool Loop2Cilk::runOnLoop(Loop *L, LPPassManager &LPM) {
   //Header->getParent()->dump();
 
   std::vector<Value*> ext_args;
+  //Header->getParent()->dump();
   Function* extracted = llvm::cilk::extractDetachBodyToFunction(*det, DT, &call, /*closure*/ oldvar, &ext_args);
   extracted->addFnAttr(Attribute::RepeatLoopOpts);
   //Header->getParent()->getParent()->dump();
@@ -1191,7 +1208,7 @@ bool Loop2Cilk::runOnLoop(Loop *L, LPPassManager &LPM) {
     auto count = cmp;
     Value* cond = b.CreateICmpSLT(count, ConstantInt::get(count->getType(), 1));
     BasicBlock *graint = BasicBlock::Create(Ctx, "graint", detacher->getParent());
-    graint->moveAfter(detacher);
+    graint->moveBefore(syncer);
     if (parentL) {
       parentL->addBasicBlockToLoop(graint, LI);
     }
@@ -1199,9 +1216,7 @@ bool Loop2Cilk::runOnLoop(Loop *L, LPPassManager &LPM) {
     b.CreateCondBr(cond, syncer, graint);
 
     b.SetInsertPoint(graint);
-    Value* P0 = b.CreateCall(CILKRTS_FUNC(get_nworkers, *M));
-    Value* P = b.CreateIntCast(P0, count->getType(), false);
-    Value* P8 = b.CreateMul(P, ConstantInt::get(P->getType(), 8));
+    Value* P8 = b.CreateIntCast(cilk::GetOrCreateWorker8(*detacher->getParent()), count->getType(), false);
     Value* n = b.CreateUDiv(b.CreateSub(b.CreateAdd(count, P8), ConstantInt::get(count->getType(), 1)), P8);
     Value* cutoff = ConstantInt::get(count->getType(), 2048);
     Value* c2 = b.CreateICmpUGT(n, cutoff);
