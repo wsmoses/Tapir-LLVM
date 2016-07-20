@@ -825,6 +825,8 @@ bool Loop2Cilk::runOnLoop(Loop *L, LPPassManager &LPM) {
     else {
       llvm::errs() << "Loop not entered via branch instance\n";
       T->dump();
+      Preheader->dump();
+      Header->dump();
       return false;
     }
   }
