@@ -813,15 +813,25 @@ bool Loop2Cilk::runOnLoop(Loop *L, LPPassManager &LPM) {
 
   BasicBlock* Header = L->getHeader();
   Module* M = Header->getParent()->getParent();
+  LLVMContext &Ctx = M->getContext();
   assert(Header);
 
   Loop* parentL = L->getParentLoop();
   LoopInfo &LI = getAnalysis<LoopInfoWrapperPass>().getLoopInfo();
+  DominatorTree &DT = getAnalysis<DominatorTreeWrapperPass>().getDomTree();
 
   TerminatorInst* T = Header->getTerminator();
   if (!isa<BranchInst>(T)) {
     BasicBlock *Preheader = L->getLoopPreheader();
     if( isa<BranchInst>(Preheader->getTerminator()) ) { T = Preheader->getTerminator(); Header = Preheader; }
+    if( isa<SyncInst>(Preheader->getTerminator()) ) { 
+      BasicBlock *ph = BasicBlock::Create(Ctx, "sync.br", Header->getParent());
+      DT.addNewBlock(ph, Preheader);
+      reattached->moveAfter(Preheader);
+      IRBuilder <> b(ph);
+      b.CreateBr(T->getSuccessor(0));
+      T->setSuccessor(0,ph);
+      T = ph->getTerminator(); Header = ph; }
     else {
       llvm::errs() << "Loop not entered via branch instance\n";
       T->dump();
@@ -921,7 +931,6 @@ bool Loop2Cilk::runOnLoop(Loop *L, LPPassManager &LPM) {
 
   DetachInst* det = cast<DetachInst>(detacher->getTerminator());
 
-  DominatorTree &DT = getAnalysis<DominatorTreeWrapperPass>().getDomTree();
   ///*
    {
     SmallPtrSet<BasicBlock *, 32> functionPieces;
@@ -1094,7 +1103,6 @@ bool Loop2Cilk::runOnLoop(Loop *L, LPPassManager &LPM) {
 
 // /*
   {
-    LLVMContext &Ctx = M->getContext();
 
     Function::arg_iterator args = extracted->arg_begin();
     Argument *low0 = &*args;
