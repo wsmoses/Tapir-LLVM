@@ -636,7 +636,7 @@ std::pair<PHINode*,Value*> getIndVar(Loop *L, BasicBlock* detacher, DominatorTre
     Value *bottom = adder, *top = val;
     if (opc == RPN && DT.dominates(detacher->getTerminator(), cmp)) {
       //llvm::errs() << "<adding extra for cmp " << detacher->getParent()->getName() << ">";
-      cmp->dump();
+      //cmp->dump();
       //llvm::errs() << "</adding extra for cmp>";
       cmp->setOperand(cmpIdx, INCR);
       top = build.CreateAdd(top, amt0, "toplen");
