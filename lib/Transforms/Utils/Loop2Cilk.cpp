@@ -824,7 +824,7 @@ bool Loop2Cilk::runOnLoop(Loop *L, LPPassManager &LPM) {
   if (!isa<BranchInst>(T)) {
     BasicBlock *Preheader = L->getLoopPreheader();
     if( isa<BranchInst>(Preheader->getTerminator()) ) { T = Preheader->getTerminator(); Header = Preheader; }
-    if( isa<SyncInst>(Preheader->getTerminator()) ) { 
+    else if( isa<SyncInst>(Preheader->getTerminator()) ) { 
       BasicBlock *ph = BasicBlock::Create(Ctx, "sync.br", Header->getParent());
       DT.addNewBlock(ph, Preheader);
       ph->moveAfter(Preheader);
