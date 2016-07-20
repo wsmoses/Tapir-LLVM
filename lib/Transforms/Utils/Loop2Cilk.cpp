@@ -827,7 +827,7 @@ bool Loop2Cilk::runOnLoop(Loop *L, LPPassManager &LPM) {
     if( isa<SyncInst>(Preheader->getTerminator()) ) { 
       BasicBlock *ph = BasicBlock::Create(Ctx, "sync.br", Header->getParent());
       DT.addNewBlock(ph, Preheader);
-      reattached->moveAfter(Preheader);
+      ph->moveAfter(Preheader);
       IRBuilder <> b(ph);
       b.CreateBr(T->getSuccessor(0));
       T->setSuccessor(0,ph);
