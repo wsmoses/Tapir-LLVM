@@ -544,6 +544,7 @@ void PassManagerBuilder::populateModulePassManager(
       if (ParallelLevel != 3) MPM.add(createInferFunctionAttrsLegacyPass());
       MPM.add(createPromoteDetachToCilkPass(ParallelLevel == 2));
       if (ParallelLevel != 3) MPM.add(createInferFunctionAttrsLegacyPass());
+      if (OptLevel != 0) MPM.add(createMergeFunctionsPass());
       MPM.add(createBarrierNoopPass());
       Inliner = Inliner2;
     }

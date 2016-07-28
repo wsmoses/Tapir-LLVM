@@ -66,6 +66,7 @@ bool CilkPass::runOnFunction(Function &F) {
           //errs() << "<D2C>\n";
           //F.dump();
           //errs() << "</PRE>\n";
+      //if (!Changed) F.dump();
 		  llvm::cilk::createDetach(*inst, DT, ClInstrumentCilk);
           //errs() << "<POST>\n";
           //F.dump();
