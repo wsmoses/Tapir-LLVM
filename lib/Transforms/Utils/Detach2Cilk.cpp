@@ -49,6 +49,10 @@ static cl::opt<bool>  ClInstrumentCilk(
     "instrument-cilk", cl::init(false),
     cl::desc("Instrument Cilk events"), cl::Hidden);
 
+cl::opt<bool>  fastCilk(
+    "fast-cilk", cl::init(false),
+    cl::desc("Attempt faster cilk call implementation"), cl::Hidden);
+
 char CilkPass::ID = 0;
 static RegisterPass<CilkPass> X("detach2cilk", "Promote Detach to Cilk Runtime", false, false);
 INITIALIZE_PASS_BEGIN(CilkPass, "detach2cilk", "Promote Detach to Cilk Runtime", false, false)
@@ -58,6 +62,12 @@ INITIALIZE_PASS_END(CilkPass, "detach2cilk", "Promote Detach to Cilk Runtime",  
 
 bool CilkPass::runOnFunction(Function &F) {
 	bool Changed  = false;
+  if (fastCilk && F.getName()=="main") {
+    IRBuilder<> start(F.getEntryBlock().getFirstNonPHIOrDbg());
+    auto m = start.CreateCall(CILKRTS_FUNC(init, *F.getParent()));
+    m->moveBefore(F.getEntryBlock().getTerminator());
+  }
+  
   DominatorTree &DT = getAnalysis<DominatorTreeWrapperPass>().getDomTree();
 	for (Function::iterator i = F.begin(), e = F.end(); i != e; ++i) {
 		TerminatorInst* term = i->getTerminator();

@@ -117,6 +117,9 @@ typedef uint64_t cilk64_t;
 typedef void (*__cilk_abi_f32_t)(void *data, cilk32_t low, cilk32_t high);
 typedef void (*__cilk_abi_f64_t)(void *data, cilk64_t low, cilk64_t high);
 
+
+typedef void (__cilkrts_init)();
+
 typedef void (__cilkrts_enter_frame)(__cilkrts_stack_frame *sf);
 typedef void (__cilkrts_enter_frame_1)(__cilkrts_stack_frame *sf);
 typedef void (__cilkrts_enter_frame_fast)(__cilkrts_stack_frame *sf);
@@ -171,10 +174,12 @@ typedef void (cilk_leave_end)();
 }
 
 
+DEFAULT_GET_CILKRTS_FUNC(init)
 DEFAULT_GET_CILKRTS_FUNC(sync)
 DEFAULT_GET_CILKRTS_FUNC(rethrow)
 DEFAULT_GET_CILKRTS_FUNC(leave_frame)
 DEFAULT_GET_CILKRTS_FUNC(get_tls_worker)
+DEFAULT_GET_CILKRTS_FUNC(get_tls_worker_fast)
 DEFAULT_GET_CILKRTS_FUNC(bind_thread_1)
 //DEFAULT_GET_CILKRTS_FUNC(cilk_for_32)
 //DEFAULT_GET_CILKRTS_FUNC(cilk_for_64)
@@ -322,6 +327,8 @@ public:
 };
 
 } // namespace llvm
+
+extern llvm::cl::opt<bool>  fastCilk;
 
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -929,7 +936,11 @@ static Function *Get__cilkrts_enter_frame_1(Module &M) {
   CallInst *W = 0;
   {
     IRBuilder<> B(Entry);
-    W = B.CreateCall(CILKRTS_FUNC(get_tls_worker, M));
+    if (fastCilk) 
+      W = B.CreateCall(CILKRTS_FUNC(get_tls_worker_fast, M));
+    else
+      W = B.CreateCall(CILKRTS_FUNC(get_tls_worker, M));
+
     Value *Cond = B.CreateICmpEQ(W, ConstantPointerNull::get(WorkerPtrTy));
     B.CreateCondBr(Cond, SlowPath, FastPath);
   }
@@ -1001,7 +1012,13 @@ static Function *Get__cilkrts_enter_frame_fast_1(Module &M) {
   BasicBlock *Entry = BasicBlock::Create(Ctx, "entry", Fn);
 
   IRBuilder<> B(Entry);
-  Value *W = B.CreateCall(CILKRTS_FUNC(get_tls_worker, M));
+  Value *W;
+
+  if (fastCilk)
+    W = B.CreateCall(CILKRTS_FUNC(get_tls_worker_fast, M));
+  else
+    W = B.CreateCall(CILKRTS_FUNC(get_tls_worker, M));
+
   StructType *SFTy = StackFrameBuilder::get(Ctx);
   llvm::Type *Ty = SFTy->getElementType(StackFrameBuilder::flags);
 
