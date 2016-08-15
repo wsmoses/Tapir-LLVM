@@ -1811,6 +1811,12 @@ static inline Function* extractDetachBodyToFunction(DetachInst& detach, Dominato
   Function* extracted = extractor.extractCodeRegion();
   assert( extracted && "could not extract code" );
   extracted->addFnAttr(Attribute::AttrKind::NoInline);
+  if (F.hasFnAttribute(Attribute::AttrKind::SanitizeThread))
+     extracted->addFnAttr(Attribute::AttrKind::SanitizeThread);
+  if (F.hasFnAttribute(Attribute::AttrKind::SanitizeAddress))
+     extracted->addFnAttr(Attribute::AttrKind::SanitizeAddress);
+  if (F.hasFnAttribute(Attribute::AttrKind::SanitizeMemory))
+     extracted->addFnAttr(Attribute::AttrKind::SanitizeMemory);
 
   Instruction* last = extracted->getEntryBlock().getFirstNonPHI();
   for (int i=moveToFront.size()-1; i>=0; i--) {

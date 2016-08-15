@@ -25,7 +25,8 @@ namespace {
 struct CilkPass : public FunctionPass {
 	static char ID; // Pass identification, replacement for typeid
   bool DisablePostOpts;
-	CilkPass(bool disablePostOpts=false) : FunctionPass(ID), DisablePostOpts(disablePostOpts) {
+  bool Instrument;
+	CilkPass(bool disablePostOpts=false, bool instrument=false) : FunctionPass(ID), DisablePostOpts(disablePostOpts), Instrument(instrument) {
 	}
 
 	// runOnFunction - To run this pass, first we calculate the alloca
@@ -77,7 +78,7 @@ bool CilkPass::runOnFunction(Function &F) {
           //F.dump();
           //errs() << "</PRE>\n";
       //if (!Changed) F.dump();
-		  llvm::cilk::createDetach(*inst, DT, ClInstrumentCilk);
+		  llvm::cilk::createDetach(*inst, DT, ClInstrumentCilk || Instrument);
           //errs() << "<POST>\n";
           //F.dump();
           if( llvm::verifyFunction(F, nullptr) ) {
@@ -95,7 +96,7 @@ bool CilkPass::runOnFunction(Function &F) {
 		TerminatorInst* term = i->getTerminator();
 		if( term == nullptr ) continue;
     		if( SyncInst* inst = llvm::dyn_cast<SyncInst>(term) ) {
-    		  llvm::cilk::createSync(*inst, ClInstrumentCilk);
+    		  llvm::cilk::createSync(*inst, ClInstrumentCilk || Instrument);
 
           if( llvm::verifyFunction(F, nullptr) ) {
             F.dump(); 
@@ -142,6 +143,6 @@ bool CilkPass::runOnFunction(Function &F) {
 
 // createPromoteMemoryToRegister - Provide an entry point to create this pass.
 //
-FunctionPass *llvm::createPromoteDetachToCilkPass(bool DisablePostOpts) {
-	return new CilkPass(DisablePostOpts);
+FunctionPass *llvm::createPromoteDetachToCilkPass(bool DisablePostOpts, bool Instrument) {
+	return new CilkPass(DisablePostOpts, Instrument);
 }

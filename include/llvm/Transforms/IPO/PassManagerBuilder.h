@@ -99,6 +99,9 @@ public:
     EP_Peephole,
   };
 
+  /// Whether the Cilk Calls should be instrumented
+  bool InstrumentCilk;
+
   /// The Optimization Level - Specify the basic optimization level.
   ///    0 = -O0, 1 = -O1, 2 = -O2, 3 = -O3
   unsigned OptLevel;

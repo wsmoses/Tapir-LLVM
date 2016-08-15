@@ -29,6 +29,7 @@
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/ManagedStatic.h"
 #include "llvm/Target/TargetMachine.h"
+#include "llvm/Transforms/Instrumentation.h"
 #include "llvm/Transforms/IPO.h"
 #include "llvm/Transforms/IPO/ForceFunctionAttrs.h"
 #include "llvm/Transforms/IPO/InferFunctionAttrs.h"
@@ -106,6 +107,7 @@ static cl::opt<bool> EnableLoopLoadElim(
     cl::desc("Enable the new, experimental LoopLoadElimination Pass"));
 
 PassManagerBuilder::PassManagerBuilder() {
+    InstrumentCilk = false;
     OptLevel = 2;
     SizeLevel = 0;
     ParallelLevel = 0;
@@ -542,7 +544,7 @@ void PassManagerBuilder::populateModulePassManager(
       MPM.add(createLoop2CilkPass());
       MPM.add(createCFGSimplificationPass());
       if (ParallelLevel != 3) MPM.add(createInferFunctionAttrsLegacyPass());
-      MPM.add(createPromoteDetachToCilkPass(ParallelLevel == 2));
+      MPM.add(createPromoteDetachToCilkPass(ParallelLevel == 2, InstrumentCilk));
       if (ParallelLevel != 3) MPM.add(createInferFunctionAttrsLegacyPass());
       if (OptLevel != 0) MPM.add(createMergeFunctionsPass());
       MPM.add(createBarrierNoopPass());
