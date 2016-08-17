@@ -261,7 +261,6 @@ bool MachineSinking::runOnMachineFunction(MachineFunction &MF) {
     return false;
 
   DEBUG(dbgs() << "******** Machine Sinking ********\n");
-  //MF.dump();
 
   TII = MF.getSubtarget().getInstrInfo();
   TRI = MF.getSubtarget().getRegisterInfo();

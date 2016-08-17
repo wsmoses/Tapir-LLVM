@@ -50,7 +50,7 @@ static cl::opt<bool> DisableCleanups(
     cl::init(false));
 
 namespace {
-
+  
 class WinEHPrepare : public FunctionPass {
 public:
   static char ID; // Pass identification, replacement for typeid.
@@ -367,10 +367,7 @@ static void calculateSEHStateNumbers(WinEHFuncInfo &FuncInfo,
         BasicBlock *UnwindDest = InnerCatchSwitch->getUnwindDest();
         if (!UnwindDest || UnwindDest == CatchSwitch->getUnwindDest())
           calculateSEHStateNumbers(FuncInfo, UserI, ParentState);
-<<<<<<< HEAD
-=======
       }
->>>>>>> llvm/master
       if (auto *InnerCleanupPad = dyn_cast<CleanupPadInst>(UserI)) {
         BasicBlock *UnwindDest = getCleanupRetUnwindDest(InnerCleanupPad);
         // If a nested cleanup pad reports a null unwind destination and the

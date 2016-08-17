@@ -180,7 +180,7 @@ private:
   void addPGOInstrPasses(legacy::PassManagerBase &MPM);
   void addFunctionSimplificationPasses(legacy::PassManagerBase &MPM);
   void addInstructionCombiningPass(legacy::PassManagerBase &MPM) const;
-  void populateForOptLevel(legacy::PassManagerBase &PM, int level);
+  void prepopulateModulePassManager(legacy::PassManagerBase &MPM);
 
 public:
   /// populateFunctionPassManager - This fills in the function pass manager,

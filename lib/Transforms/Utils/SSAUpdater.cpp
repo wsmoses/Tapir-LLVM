@@ -41,8 +41,7 @@ static ValIsDetachedTy &getValIsDetached(void *VID) {
 }
 
 SSAUpdater::SSAUpdater(SmallVectorImpl<PHINode*> *NewPHI)
-  : AV(nullptr), ProtoType(nullptr), ProtoName(),
-    InsertedPHIs(NewPHI), VID(nullptr) {}
+  : AV(nullptr), ProtoType(nullptr), ProtoName(), InsertedPHIs(NewPHI), VID(nullptr) {}
 
 SSAUpdater::~SSAUpdater() {
   delete static_cast<AvailableValsTy*>(AV);

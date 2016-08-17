@@ -239,7 +239,6 @@ void PassManagerBuilder::populateFunctionPassManager(
 
   if (OptLevel == 0) return;
 
-  /*
   addInitialAliasAnalysisPasses(FPM);
 
   FPM.add(createCFGSimplificationPass());
@@ -248,7 +247,6 @@ void PassManagerBuilder::populateFunctionPassManager(
   if(EnableGVNHoist)
     FPM.add(createGVNHoistPass());
   FPM.add(createLowerExpectIntrinsicPass());
-  */
 }
 
 // Do PGO instrumentation generation or use pass as the option specified.
@@ -307,7 +305,7 @@ void PassManagerBuilder::addFunctionSimplificationPasses(
   // Rotate Loop - disable header duplication at -Oz
   MPM.add(createLoopRotatePass(SizeLevel == 2 ? 0 : -1));
   MPM.add(createLICMPass());                  // Hoist loop invariants
-  MPM.add(createLoopUnswitchPass(SizeLevel || level < 3));
+  MPM.add(createLoopUnswitchPass(SizeLevel || OptLevel < 3));
   MPM.add(createCFGSimplificationPass());
   addInstructionCombiningPass(MPM);
   MPM.add(createIndVarSimplifyPass());        // Canonicalize indvars
@@ -321,7 +319,7 @@ void PassManagerBuilder::addFunctionSimplificationPasses(
     MPM.add(createSimpleLoopUnrollPass());    // Unroll small loops
   addExtensionsToPM(EP_LoopOptimizerEnd, MPM);
 
-  if (level > 1) {
+  if (OptLevel > 1) {
     if (EnableMLSM)
       MPM.add(createMergedLoadStoreMotionPass()); // Merge ld/st in diamonds
     MPM.add(createGVNPass(DisableGVNLoadPRE));  // Remove redundancies
@@ -355,7 +353,7 @@ void PassManagerBuilder::addFunctionSimplificationPasses(
       MPM.add(createBBVectorizePass());
       addInstructionCombiningPass(MPM);
       addExtensionsToPM(EP_Peephole, MPM);
-      if (level > 1 && UseGVNAfterVectorization)
+      if (OptLevel > 1 && UseGVNAfterVectorization)
         MPM.add(createGVNPass(DisableGVNLoadPRE)); // Remove redundancies
       else
         MPM.add(createEarlyCSEPass());      // Catch trivial redundancies
@@ -376,7 +374,7 @@ void PassManagerBuilder::addFunctionSimplificationPasses(
   addExtensionsToPM(EP_Peephole, MPM);
 }
 
-void PassManagerBuilder::populateModulePassManager(
+void PassManagerBuilder::prepopulateModulePassManager(
     legacy::PassManagerBase &MPM) {
   // Allow forcing function attributes as a debugging and tuning aid.
   MPM.add(createForceFunctionAttrsLegacyPass());
@@ -563,7 +561,7 @@ void PassManagerBuilder::populateModulePassManager(
     MPM.add(createCorrelatedValuePropagationPass());
     addInstructionCombiningPass(MPM);
     MPM.add(createLICMPass());
-    MPM.add(createLoopUnswitchPass(SizeLevel || level < 3));
+    MPM.add(createLoopUnswitchPass(SizeLevel || OptLevel < 3));
     MPM.add(createCFGSimplificationPass());
     addInstructionCombiningPass(MPM);
   }
@@ -571,7 +569,7 @@ void PassManagerBuilder::populateModulePassManager(
   if (RunSLPAfterLoopVectorization) {
     if (SLPVectorize) {
       MPM.add(createSLPVectorizerPass());   // Vectorize parallel scalar chains.
-      if (level > 1 && ExtraVectorizerPasses) {
+      if (OptLevel > 1 && ExtraVectorizerPasses) {
         MPM.add(createEarlyCSEPass());
       }
     }
@@ -580,7 +578,7 @@ void PassManagerBuilder::populateModulePassManager(
       MPM.add(createBBVectorizePass());
       addInstructionCombiningPass(MPM);
       addExtensionsToPM(EP_Peephole, MPM);
-      if (level > 1 && UseGVNAfterVectorization)
+      if (OptLevel > 1 && UseGVNAfterVectorization)
         MPM.add(createGVNPass(DisableGVNLoadPRE)); // Remove redundancies
       else
         MPM.add(createEarlyCSEPass());      // Catch trivial redundancies
@@ -621,7 +619,7 @@ void PassManagerBuilder::populateModulePassManager(
 
     // GlobalOpt already deletes dead functions and globals, at -O2 try a
     // late pass of GlobalDCE.  It is capable of deleting dead cycles.
-    if (level > 1) {
+    if (OptLevel > 1) {
       MPM.add(createGlobalDCEPass());         // Remove dead fns and globals.
       MPM.add(createConstantMergePass());     // Merge dup global constants
     }
@@ -633,51 +631,17 @@ void PassManagerBuilder::populateModulePassManager(
   addExtensionsToPM(EP_OptimizerLast, MPM);
 }
 
-void PassManagerBuilder::populateModulePassManager(
-    legacy::PassManagerBase &MPM) {
-
-		PassRegistry &Registry = *PassRegistry::getPassRegistry();
-		initializeCore(Registry);
-		initializeScalarOpts(Registry);
-		initializeIPO(Registry);
-		initializeAnalysis(Registry);
-		//initializeIPA(Registry);
-		initializeTransformUtils(Registry);
-		initializeInstCombine(Registry);
-		//initializeInstrumentation(Registry);
-		//initializeTarget(Registry);
+void PassManagerBuilder::populateModulePassManager(legacy::PassManagerBase& MPM) {
 
     if (ParallelLevel != 0) {
       switch (ParallelLevel) {
-        case 1:
-          if (OptLevel != 0) {
-            addInitialAliasAnalysisPasses(MPM);
-            MPM.add(createCFGSimplificationPass());
-            if (UseNewSROA)
-              MPM.add(createSROAPass());
-            else
-              MPM.add(createScalarReplAggregatesPass());
-            MPM.add(createEarlyCSEPass());
-            MPM.add(createLowerExpectIntrinsicPass());
-            MPM.add(createPromoteMemoryToRegisterPass());
-          }
-          MPM.add(createCFGSimplificationPass());
+        case 1: //fcilkplus
+          assert (0 && "fcilkplus no longer supported");
           break;
-        case 2:
-          if (OptLevel != 0) {
-            addInitialAliasAnalysisPasses(MPM);
-            MPM.add(createCFGSimplificationPass());
-            if (UseNewSROA)
-              MPM.add(createSROAPass());
-            else
-              MPM.add(createScalarReplAggregatesPass());
-            MPM.add(createEarlyCSEPass());
-            MPM.add(createLowerExpectIntrinsicPass());
-          }
-          MPM.add(createCFGSimplificationPass());
-          populateForOptLevel(MPM, OptLevel);
+        case 2: //ftapir
+          prepopulateModulePassManager(MPM);
           break;
-        case 3:
+        case 3: //fdetach
           break;
         case 0: llvm_unreachable("invalid");
       }
@@ -693,30 +657,7 @@ void PassManagerBuilder::populateModulePassManager(
       MPM.add(createBarrierNoopPass());
       Inliner = Inliner2;
     }
-
-    if (OptLevel != 0) {
-      addInitialAliasAnalysisPasses(MPM);
-      MPM.add(createCFGSimplificationPass());
-      if (UseNewSROA)
-        MPM.add(createSROAPass());
-      else
-        MPM.add(createScalarReplAggregatesPass());
-      MPM.add(createEarlyCSEPass());
-      MPM.add(createLowerExpectIntrinsicPass());
-    }
-
-    //llvm::errs() << "running opt at level at opt3: " << OptLevel << "\n";
-    MPM.add(createCFGSimplificationPass());
-    populateForOptLevel(MPM, OptLevel);
-    MPM.add(createBarrierNoopPass());
-
-    if (ParallelLevel==3) {
-      populateForOptLevel(MPM, OptLevel);
-    }
-
-    MPM.add(createReoptPass());
-    MPM.add(createCFGSimplificationPass());
-    MPM.add(createInferFunctionAttrsLegacyPass());
+    prepopulateModulePassManager(MPM);
 }
 
 void PassManagerBuilder::addLTOOptimizationPasses(legacy::PassManagerBase &PM) {

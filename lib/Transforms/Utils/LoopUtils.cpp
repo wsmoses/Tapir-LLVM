@@ -1052,7 +1052,7 @@ bool llvm::isGuaranteedToExecute(const Instruction &Inst,
   CurLoop->getExitBlocks(ExitBlocks);
 
   // Verify that the block dominates each of the exit blocks of the loop.
-  for (BasicBlock *ExitBlock : ExitBlocks)
+  for (unsigned i=0,e=ExitBlocks.size(); i<e; i++)
     if (!DT->dominates(Inst.getParent(), ExitBlocks[i])) {
       bool valid = false;
       for( BasicBlock* b : CurLoop->getBlocks() ) {

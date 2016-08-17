@@ -613,7 +613,6 @@ bool SelectionDAGISel::runOnMachineFunction(MachineFunction &mf) {
 
   // Determine if there is a call to setjmp in the machine function.
   MF->setExposesReturnsTwice(Fn.callsFunctionThatReturnsTwice());
-  if (Fn.callsFunctionThatReturnsTwice()) MFI->HasVarSizedObjects = true;
 
   // Replace forward-declared registers with the registers containing
   // the desired value.

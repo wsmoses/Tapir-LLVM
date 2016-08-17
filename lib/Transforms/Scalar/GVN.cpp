@@ -2252,11 +2252,6 @@ bool GVN::runImpl(Function &F, AssumptionCache &RunAC, DominatorTree &RunDT,
     ++Iteration;
   }
 
-  if( llvm::verifyFunction(F, nullptr) ) {
-    F.dump();
-  }
-  assert( !llvm::verifyFunction(F, &llvm::errs()) );
-
   if (EnablePRE) {
     // Fabricate val-num for dead-code in order to suppress assertion in
     // performPRE().
@@ -2277,11 +2272,6 @@ bool GVN::runImpl(Function &F, AssumptionCache &RunAC, DominatorTree &RunDT,
   // Do not cleanup DeadBlocks in cleanupGlobalSets() as it's called for each
   // iteration.
   DeadBlocks.clear();
-
-  if( llvm::verifyFunction(F, nullptr) ) {
-    F.dump();
-  }
-  assert( !llvm::verifyFunction(F, &llvm::errs()) );
 
   return Changed;
 }
@@ -2412,7 +2402,6 @@ bool GVN::performScalarPRE(Instruction *CurInst) {
   BasicBlock *CurrentBlock = CurInst->getParent();
   BasicBlock *DetachPred = nullptr, *ReattachPred = nullptr;
   Value *DetachV = nullptr, *ReattachV = nullptr;
-  predMap.clear();
 
   SmallVector<std::pair<Value *, BasicBlock *>, 8> predMap;
   for (BasicBlock *P : predecessors(CurrentBlock)) {
@@ -2521,18 +2510,10 @@ bool GVN::performScalarPRE(Instruction *CurInst) {
       PHINode::Create(CurInst->getType(), predMap.size(),
                       CurInst->getName() + ".pre-phi", &CurrentBlock->front());
   for (unsigned i = 0, e = predMap.size(); i != e; ++i) {
-    if (Value *V = predMap[i].first) {
+    if (Value *V = predMap[i].first)
       Phi->addIncoming(V, predMap[i].second);
-      //llvm::errs() << "\nthing: ";
-      //V->dump();
-      //llvm::errs() << " vs " << predMap[i].second->getName() << "\n";
-    }
-    else {
+    else
       Phi->addIncoming(PREInstr, PREPred);
-      //llvm::errs() << "\nthing2: ";
-      //PREInstr->dump();
-      //llvm::errs() << " vs " << PREPred->getName() << "\n";
-    }
   }
 
   VN.add(Phi, ValNo);
@@ -2721,10 +2702,8 @@ void GVN::addDeadBlock(BasicBlock *BB) {
 
       for (BasicBlock::iterator II = B->begin(); isa<PHINode>(II); ++II) {
         PHINode &Phi = cast<PHINode>(*II);
-        assert( Phi.getNumIncomingValues() <= Preds.size() );
         Phi.setIncomingValue(Phi.getBasicBlockIndex(P),
                              UndefValue::get(Phi.getType()));
-        assert( Phi.getNumIncomingValues() <= Preds.size() );
       }
     }
   }

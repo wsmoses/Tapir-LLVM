@@ -53,7 +53,7 @@ static bool promoteMemoryToRegister(Function &F, DominatorTree &DT,
     }
     for (BasicBlock::iterator I = BB.begin(), E = --BB.end(); I != E; ++I)
       if (AllocaInst *AI = dyn_cast<AllocaInst>(I)) // Is it an alloca?
-        if (isAllocaPromotable(AI))
+        if (isAllocaPromotable(AI, DT))
           Allocas.push_back(AI);
 
     if (Allocas.empty())

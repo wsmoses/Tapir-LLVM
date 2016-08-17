@@ -266,10 +266,6 @@ private:
   /// instructions which manipulate the stack pointer.
   bool HasCopyImplyingStackAdjustment = false;
 
-  /// True if the function contains operations which will lower down to
-  /// instructions which manipulate the stack pointer.
-  bool HasCopyImplyingStackAdjustment;
-
   /// True if the function contains a call to the llvm.vastart intrinsic.
   bool HasVAStart = false;
 
@@ -287,40 +283,10 @@ private:
   MachineBasicBlock *Restore = nullptr;
 
 public:
-<<<<<<< HEAD
-  explicit MachineFrameInfo(unsigned StackAlign, bool isStackRealign,
-                            bool RealignOpt)
-      : StackAlignment(StackAlign), StackRealignable(isStackRealign),
-        RealignOption(RealignOpt) {
-    StackSize = NumFixedObjects = OffsetAdjustment = MaxAlignment = 0;
-    HasVarSizedObjects = false;
-    FrameAddressTaken = false;
-    ReturnAddressTaken = false;
-    HasStackMap = false;
-    HasPatchPoint = false;
-    AdjustsStack = false;
-    HasCalls = false;
-    StackProtectorIdx = -1;
-    FunctionContextIdx = -1;
-    MaxCallFrameSize = 0;
-    CSIValid = false;
-    LocalFrameSize = 0;
-    LocalFrameMaxAlign = 0;
-    UseLocalStackAllocationBlock = false;
-    HasOpaqueSPAdjustment = false;
-    HasCopyImplyingStackAdjustment = false;
-    HasVAStart = false;
-    HasMustTailInVarArgFunc = false;
-    Save = nullptr;
-    Restore = nullptr;
-    HasTailCall = false;
-  }
-=======
   explicit MachineFrameInfo(unsigned StackAlignment, bool StackRealignable,
                             bool ForcedRealign)
       : StackAlignment(StackAlignment), StackRealignable(StackRealignable),
         ForcedRealign(ForcedRealign) {}
->>>>>>> llvm/master
 
   /// Return true if there are any stack objects in this function.
   bool hasStackObjects() const { return !Objects.empty(); }

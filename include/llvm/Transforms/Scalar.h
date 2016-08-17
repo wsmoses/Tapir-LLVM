@@ -223,7 +223,6 @@ FunctionPass *createPromoteMemoryToRegisterPass();
 // PromoteDetachToCilk
 //
 FunctionPass *createPromoteDetachToCilkPass(bool DisablePostOpts, bool instrument);
-FunctionPass *createReoptPass();
 
 //===----------------------------------------------------------------------===//
 //

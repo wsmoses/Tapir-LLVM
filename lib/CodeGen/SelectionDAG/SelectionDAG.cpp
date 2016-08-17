@@ -845,11 +845,7 @@ SDNode *SelectionDAG::FindModifiedNodeSlot(SDNode *N,
   FoldingSetNodeID ID;
   AddNodeIDNode(ID, N->getOpcode(), N->getVTList(), Ops);
   AddNodeIDCustom(ID, N);
-<<<<<<< HEAD
-  SDNode *Node = FindNodeOrInsertPos(ID, N->getDebugLoc(), InsertPos);
-=======
   SDNode *Node = FindNodeOrInsertPos(ID, SDLoc(N), InsertPos);
->>>>>>> llvm/master
   if (Node)
     if (const SDNodeFlags *Flags = N->getFlags())
       Node->intersectFlagsWith(Flags);
@@ -869,11 +865,7 @@ SDNode *SelectionDAG::FindModifiedNodeSlot(SDNode *N, ArrayRef<SDValue> Ops,
   FoldingSetNodeID ID;
   AddNodeIDNode(ID, N->getOpcode(), N->getVTList(), Ops);
   AddNodeIDCustom(ID, N);
-<<<<<<< HEAD
-  SDNode *Node = FindNodeOrInsertPos(ID, N->getDebugLoc(), InsertPos);
-=======
   SDNode *Node = FindNodeOrInsertPos(ID, SDLoc(N), InsertPos);
->>>>>>> llvm/master
   if (Node)
     if (const SDNodeFlags *Flags = N->getFlags())
       Node->intersectFlagsWith(Flags);
@@ -3922,11 +3914,7 @@ SDValue SelectionDAG::getNode(unsigned Opcode, const SDLoc &DL, EVT VT,
     FoldingSetNodeID ID;
     AddNodeIDNode(ID, Opcode, VTs, Ops);
     void *IP = nullptr;
-<<<<<<< HEAD
-    if (SDNode *E = FindNodeOrInsertPos(ID, DL.getDebugLoc(), IP)) {
-=======
     if (SDNode *E = FindNodeOrInsertPos(ID, DL, IP)) {
->>>>>>> llvm/master
       if (Flags)
         E->intersectFlagsWith(Flags);
       return SDValue(E, 0);
@@ -6191,11 +6179,7 @@ SDNode *SelectionDAG::getNodeIfExists(unsigned Opcode, SDVTList VTList,
     FoldingSetNodeID ID;
     AddNodeIDNode(ID, Opcode, VTList, Ops);
     void *IP = nullptr;
-<<<<<<< HEAD
-    if (SDNode *E = FindNodeOrInsertPos(ID, DebugLoc(), IP)) {
-=======
     if (SDNode *E = FindNodeOrInsertPos(ID, SDLoc(), IP)) {
->>>>>>> llvm/master
       if (Flags)
         E->intersectFlagsWith(Flags);
       return E;

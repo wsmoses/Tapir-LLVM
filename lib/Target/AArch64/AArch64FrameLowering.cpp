@@ -404,18 +404,6 @@ static void fixupCalleeSaveRestoreStackOffset(MachineInstr &MI,
   OffsetOpnd.setImm(OffsetOpnd.getImm() + LocalStackSize / 8);
 }
 
-bool AArch64FrameLowering::canUseAsPrologue(
-    const MachineBasicBlock &MBB) const {
-  const MachineFunction *MF = MBB.getParent();
-  const AArch64Subtarget &Subtarget = MF->getSubtarget<AArch64Subtarget>();
-  const AArch64RegisterInfo *RegInfo = Subtarget.getRegisterInfo();
-
-  // Don't need a scratch register if we're not going to re-align the stack.
-  // Otherwise, we may need a scratch register to be available and we do not
-  // support that for now.
-  return !RegInfo->needsStackRealignment(*MF);
-}
-
 void AArch64FrameLowering::emitPrologue(MachineFunction &MF,
                                         MachineBasicBlock &MBB) const {
   MachineBasicBlock::iterator MBBI = MBB.begin();

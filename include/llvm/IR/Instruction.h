@@ -484,8 +484,6 @@ public:
   /// operands in the corresponding predecessor block.
   bool isUsedOutsideOfBlock(const BasicBlock *BB) const;
 
-  Constant *getIdentity() const;
-
   /// Methods for support type inquiry through isa, cast, and dyn_cast:
   static inline bool classof(const Value *V) {
     return V->getValueID() >= Value::InstructionVal;

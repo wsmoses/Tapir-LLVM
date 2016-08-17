@@ -802,14 +802,14 @@ BasicBlock* continueToFindSync(BasicBlock* endL) {
 
 bool Loop2Cilk::runOnLoop(Loop *L, LPPassManager &LPM) {
 
-  if (skipOptnoneFunction(L)) {
+  if (skipLoop(L)) {
     return false;
   }
 
-  if (!L->isLoopSimplifyForm()) {
-    simplifyLoop(L, nullptr, nullptr, nullptr, nullptr, false);
-  }
-	assert( !llvm::verifyFunction(*L->getHeader()->getParent(), &llvm::errs()) );
+  //if (!L->isLoopSimplifyForm()) {
+  //  simplifyLoop(L, nullptr, nullptr, nullptr, nullptr, false);
+  //}
+  assert( !llvm::verifyFunction(*L->getHeader()->getParent(), &llvm::errs()) );
 
   BasicBlock* Header = L->getHeader();
   Module* M = Header->getParent()->getParent();

@@ -249,9 +249,7 @@ public:
     setSynchScope(SynchScope);
   }
 
-  bool isSimple() const {
-    return !isAtomic() && !isVolatile();
-  }
+  bool isSimple() const { return !isAtomic() && !isVolatile(); }
 
   bool isUnordered() const {
     return (getOrdering() == AtomicOrdering::NotAtomic ||
@@ -370,9 +368,7 @@ public:
     setSynchScope(SynchScope);
   }
 
-  bool isSimple() const {
-    return !isAtomic() && !isVolatile();
-  }
+  bool isSimple() const { return !isAtomic() && !isVolatile(); }
 
   bool isUnordered() const {
     return (getOrdering() == AtomicOrdering::NotAtomic ||

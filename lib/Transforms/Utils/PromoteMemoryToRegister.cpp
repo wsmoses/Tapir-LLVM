@@ -321,7 +321,7 @@ bool llvm::isAllocaParallelPromotable(const AllocaInst *AIP, DominatorTree &DT) 
   AllocaInst* AI = const_cast<AllocaInst*>(AIP);
   AllocaInfo Info;
   LargeBlockInfo LBI;
-  IDFCalculator IDF(DT);
+  ForwardIDFCalculator IDF(DT);
   Function &F = *DT.getRoot()->getParent();
 
   // Calculate the set of read and write-locations for each alloca.  This is
@@ -598,14 +598,10 @@ void PromoteMem2Reg::run() {
 
   for (unsigned AllocaNum = 0; AllocaNum != Allocas.size(); ++AllocaNum) {
     AllocaInst *AI = Allocas[AllocaNum];
+
+    assert(isAllocaPromotable(AI, DT) && "Cannot promote non-promotable alloca!");
     assert(AI->getParent()->getParent() == &F &&
            "All allocas should be in the same function, which is same as DF!");
-    bool promotable = isAllocaPromotable(AI, DT);
-    if( !promotable ) {
-      AI->dump();
-      F.dump();
-    }
-    assert(promotable && "Cannot promote non-promotable alloca!");
 
     removeLifetimeIntrinsicUsers(AI);
 

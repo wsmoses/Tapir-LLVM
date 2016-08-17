@@ -1337,8 +1337,6 @@ static inline llvm::Value *GetOrCreateWorker8(Function &F) {
   Value* W8 = F.getValueSymbolTable().lookup(worker8_name);
   if (W8) return W8;
 
-  llvm::LLVMContext &Ctx = F.getContext();
-
   IRBuilder<> b(F.getEntryBlock().getFirstNonPHIOrDbgOrLifetime());
   Value* P0 = b.CreateCall(CILKRTS_FUNC(get_nworkers, *F.getParent()));
   Value* P8 = b.CreateMul(P0, ConstantInt::get(P0->getType(), 8), worker8_name);

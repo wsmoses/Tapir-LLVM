@@ -4086,15 +4086,13 @@ AllocaInst *AllocaInst::cloneImpl() const {
 }
 
 LoadInst *LoadInst::cloneImpl() const {
-  LoadInst *LI = new LoadInst(getOperand(0), Twine(), isVolatile(),
+  return new LoadInst(getOperand(0), Twine(), isVolatile(),
                               getAlignment(), getOrdering(), getSynchScope());
-  return LI;
 }
 
 StoreInst *StoreInst::cloneImpl() const {
-  StoreInst *SI = new StoreInst(getOperand(0), getOperand(1), isVolatile(),
+  return new StoreInst(getOperand(0), getOperand(1), isVolatile(),
                                 getAlignment(), getOrdering(), getSynchScope());
-  return SI;
   
 }
 

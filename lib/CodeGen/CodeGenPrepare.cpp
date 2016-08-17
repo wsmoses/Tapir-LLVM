@@ -5304,11 +5304,7 @@ static bool makeBitReverse(Instruction &I, const DataLayout &DL,
     return false;
 
   SmallVector<Instruction*, 4> Insts;
-<<<<<<< HEAD
-  if (!recognizeBitReverseOrBSwapIdiom(&I, false, true, Insts))
-=======
   if (!recognizeBSwapOrBitReverseIdiom(&I, false, true, Insts))
->>>>>>> llvm/master
     return false;
   Instruction *LastInst = Insts.back();
   I.replaceAllUsesWith(LastInst);
@@ -5329,8 +5325,6 @@ bool CodeGenPrepare::optimizeBlock(BasicBlock &BB, bool& ModifiedDT) {
     if (ModifiedDT)
       return true;
   }
-<<<<<<< HEAD
-=======
 
   bool MadeBitReverse = true;
   while (TLI && MadeBitReverse) {
@@ -5339,19 +5333,6 @@ bool CodeGenPrepare::optimizeBlock(BasicBlock &BB, bool& ModifiedDT) {
       if (makeBitReverse(I, *DL, *TLI)) {
         MadeBitReverse = MadeChange = true;
         ModifiedDT = true;
-        break;
-      }
-    }
-  }
-  MadeChange |= dupRetToEnableTailCallOpts(&BB);
->>>>>>> llvm/master
-
-  bool MadeBitReverse = true;
-  while (TLI && MadeBitReverse) {
-    MadeBitReverse = false;
-    for (auto &I : reverse(BB)) {
-      if (makeBitReverse(I, *DL, *TLI)) {
-        MadeBitReverse = MadeChange = true;
         break;
       }
     }

@@ -237,8 +237,6 @@ static void DeleteBasicBlock(BasicBlock *BB, CallGraph &CG) {
 
   Instruction *TokenInst = nullptr;
 
-  Instruction *TokenInst = nullptr;
-
   CallGraphNode *CGN = CG[BB->getParent()];
   for (BasicBlock::iterator I = BB->end(), E = BB->begin(); I != E; ) {
     --I;

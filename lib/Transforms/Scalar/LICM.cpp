@@ -218,8 +218,6 @@ bool LoopInvariantCodeMotion::runOnLoop(Loop *L, AliasAnalysis *AA,
   bool Changed = false;
 
   assert(L->isLCSSAForm(*DT) && "Loop is not in LCSSA form.");
-  assert((!L->getParentLoop() || L->getParentLoop()->isLCSSAForm(*DT)) &&
-         "Parent loop not left in LCSSA form before LICM!");
 
   AliasSetTracker *CurAST = collectAliasInfoForLoop(L, LI, AA);
 
@@ -274,10 +272,6 @@ bool LoopInvariantCodeMotion::runOnLoop(Loop *L, AliasAnalysis *AA,
   // specifically moving instructions across the loop boundary and so it is
   // especially in need of sanity checking here.
   assert(L->isLCSSAForm(*DT) && "Loop not left in LCSSA form after LICM!");
-  if( ! (!L->getParentLoop() || L->getParentLoop()->isLCSSAForm(*DT) ) ) {
-    L->getParentLoop()->dump();
-    L->getParentLoop()->getHeader()->getParent()->dump();
-  }
   assert((!L->getParentLoop() || L->getParentLoop()->isLCSSAForm(*DT)) &&
          "Parent loop not left in LCSSA form after LICM!");
 
@@ -724,7 +718,6 @@ static bool sink(Instruction &I, const LoopInfo *LI, const DominatorTree *DT,
 /// When an instruction is found to only use loop invariant operands that
 /// is safe to hoist, this instruction is called to do the dirty work.
 ///
-
 static bool hoist(Instruction &I, const DominatorTree *DT, const Loop *CurLoop,
                   const LoopSafetyInfo *SafetyInfo) {
   auto *Preheader = CurLoop->getLoopPreheader();

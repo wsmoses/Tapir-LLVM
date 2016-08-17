@@ -78,7 +78,6 @@
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include "llvm/Transforms/Utils/Local.h"
-#include "llvm/IR/Verifier.h"
 using namespace llvm;
 
 #define DEBUG_TYPE "tailcallelim"
@@ -86,7 +85,6 @@ using namespace llvm;
 STATISTIC(NumEliminated, "Number of tail calls removed");
 STATISTIC(NumRetDuped,   "Number of return duplicated");
 STATISTIC(NumAccumAdded, "Number of accumulators introduced");
-
 
 /// \brief Scan the specified function for alloca instructions.
 /// If it contains any dynamic allocas, returns false.
@@ -425,17 +423,16 @@ static Value *canTransformAccumulatorRecursion(Instruction *I, CallInst *CI) {
   // Exactly one operand should be the result of the call instruction.
   if ((I->getOperand(0) == CI && I->getOperand(1) == CI) ||
       (I->getOperand(0) != CI && I->getOperand(1) != CI))
-    return false;
+    return nullptr;
 
   // The only user of this instruction we allow is a single return instruction.
   if (!I->hasOneUse() || !isa<ReturnInst>(I->user_back()))
-    return false;
+    return nullptr;
 
-  return true;
-  // // Ok, now we have to check all of the other return instructions in this
-  // // function.  If they return non-constants or differing values, then we cannot
-  // // transform the function safely.
-  // return getCommonReturnValue(cast<ReturnInst>(I->user_back()), CI);
+  // Ok, now we have to check all of the other return instructions in this
+  // function.  If they return non-constants or differing values, then we cannot
+  // transform the function safely.
+  return getCommonReturnValue(cast<ReturnInst>(I->user_back()), CI);
 }
 
 static Instruction *firstNonDbg(BasicBlock::iterator I) {
@@ -512,7 +509,6 @@ static bool eliminateRecursiveTailCall(CallInst *CI, ReturnInst *Ret,
   // special case of accumulator recursion, the operation being "return C".
   Value *AccumulatorRecursionEliminationInitVal = nullptr;
   Instruction *AccumulatorRecursionInstr = nullptr;
-  bool AccumulatorUsingIdentity = false;
 
   // Ok, we found a potential tail call.  We can currently only transform the
   // tail call if all of the instructions between the call and the return are

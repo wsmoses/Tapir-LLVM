@@ -923,7 +923,6 @@ bool AddressSanitizer::isInterestingAlloca(const AllocaInst &AI) {
   if (PreviouslySeenAllocaInfo != ProcessedAllocas.end())
     return PreviouslySeenAllocaInfo->getSecond();
 
-  assert(DT);
   bool IsInteresting =
       (AI.getAllocatedType()->isSized() &&
        // alloca() may be called with 0 size, ignore it.
