@@ -37,12 +37,6 @@
 
 using namespace llvm;
 
-// -amdgpu-fast-fdiv - Command line option to enable faster 2.5 ulp fdiv.
-static cl::opt<bool> EnableAMDGPUFastFDIV(
-  "amdgpu-fast-fdiv",
-  cl::desc("Enable faster 2.5 ulp fdiv"),
-  cl::init(false));
-
 static unsigned findFirstFreeSGPR(CCState &CCInfo) {
   unsigned NumSGPRs = AMDGPU::SGPR_32RegClass.getNumRegs();
   for (unsigned Reg = 0; Reg < NumSGPRs; ++Reg) {
@@ -2389,7 +2383,7 @@ SDValue SITargetLowering::LowerLOAD(SDValue Op, SelectionDAG &DAG) const {
     // have the same legalization requires ments as global and private
     // loads.
     //
-    // Fall-through
+    LLVM_FALLTHROUGH;
   case AMDGPUAS::GLOBAL_ADDRESS:
   case AMDGPUAS::FLAT_ADDRESS:
     if (NumElements > 4)
