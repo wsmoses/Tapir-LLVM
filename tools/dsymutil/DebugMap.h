@@ -1,4 +1,4 @@
-//===- tools/dsymutil/DebugMap.h - Generic debug map representation -------===//
+//=== tools/dsymutil/DebugMap.h - Generic debug map representation -*- C++ -*-//
 //
 //                             The LLVM Linker
 //
@@ -117,22 +117,26 @@ public:
 class DebugMapObject {
 public:
   struct SymbolMapping {
-    yaml::Hex64 ObjectAddress;
+    Optional<yaml::Hex64> ObjectAddress;
     yaml::Hex64 BinaryAddress;
     yaml::Hex32 Size;
-    SymbolMapping(uint64_t ObjectAddress, uint64_t BinaryAddress, uint32_t Size)
-        : ObjectAddress(ObjectAddress), BinaryAddress(BinaryAddress),
-          Size(Size) {}
+    SymbolMapping(Optional<uint64_t> ObjectAddr, uint64_t BinaryAddress,
+                  uint32_t Size)
+        : BinaryAddress(BinaryAddress), Size(Size) {
+      if (ObjectAddr)
+        ObjectAddress = *ObjectAddr;
+    }
     /// For YAML IO support
     SymbolMapping() = default;
   };
 
+  typedef std::pair<std::string, SymbolMapping> YAMLSymbolMapping;
   typedef StringMapEntry<SymbolMapping> DebugMapEntry;
 
   /// \brief Adds a symbol mapping to this DebugMapObject.
   /// \returns false if the symbol was already registered. The request
   /// is discarded in this case.
-  bool addSymbol(llvm::StringRef SymName, uint64_t ObjectAddress,
+  bool addSymbol(llvm::StringRef SymName, Optional<uint64_t> ObjectAddress,
                  uint64_t LinkedAddress, uint32_t Size);
 
   /// \brief Lookup a symbol mapping.
@@ -167,10 +171,8 @@ private:
 
   /// For YAMLIO support.
   ///@{
-  typedef std::pair<std::string, SymbolMapping> YAMLSymbolMapping;
   friend yaml::MappingTraits<dsymutil::DebugMapObject>;
   friend yaml::SequenceTraits<std::vector<std::unique_ptr<DebugMapObject>>>;
-  friend yaml::SequenceTraits<std::vector<YAMLSymbolMapping>>;
   DebugMapObject() = default;
 
 public:

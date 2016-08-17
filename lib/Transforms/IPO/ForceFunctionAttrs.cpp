@@ -46,8 +46,6 @@ static Attribute::AttrKind parseAttrKind(StringRef Kind) {
       .Case("nounwind", Attribute::NoUnwind)
       .Case("optnone", Attribute::OptimizeNone)
       .Case("optsize", Attribute::OptimizeForSize)
-      .Case("repeatopts", Attribute::RepeatLoopOpts)
-      .Case("disableopts", Attribute::DisableOpts)
       .Case("readnone", Attribute::ReadNone)
       .Case("readonly", Attribute::ReadOnly)
       .Case("argmemonly", Attribute::ArgMemOnly)
@@ -82,7 +80,8 @@ static void addForcedAttributes(Function &F) {
   }
 }
 
-PreservedAnalyses ForceFunctionAttrsPass::run(Module &M) {
+PreservedAnalyses ForceFunctionAttrsPass::run(Module &M,
+                                              ModuleAnalysisManager &) {
   if (ForceAttributes.empty())
     return PreservedAnalyses::all();
 

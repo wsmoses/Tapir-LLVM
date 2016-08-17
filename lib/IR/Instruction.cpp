@@ -92,8 +92,37 @@ void Instruction::insertAfter(Instruction *InsertPos) {
 /// Unlink this instruction from its current basic block and insert it into the
 /// basic block that MovePos lives in, right before MovePos.
 void Instruction::moveBefore(Instruction *MovePos) {
-  MovePos->getParent()->getInstList().splice(
-      MovePos->getIterator(), getParent()->getInstList(), getIterator());
+  moveBefore(*MovePos->getParent(), MovePos->getIterator());
+}
+
+void Instruction::moveBefore(BasicBlock &BB,
+                             SymbolTableList<Instruction>::iterator I) {
+  assert(I == BB.end() || I->getParent() == &BB);
+  BB.getInstList().splice(I, getParent()->getInstList(), getIterator());
+}
+
+void Instruction::setHasNoUnsignedWrap(bool b) {
+  cast<OverflowingBinaryOperator>(this)->setHasNoUnsignedWrap(b);
+}
+
+void Instruction::setHasNoSignedWrap(bool b) {
+  cast<OverflowingBinaryOperator>(this)->setHasNoSignedWrap(b);
+}
+
+void Instruction::setIsExact(bool b) {
+  cast<PossiblyExactOperator>(this)->setIsExact(b);
+}
+
+bool Instruction::hasNoUnsignedWrap() const {
+  return cast<OverflowingBinaryOperator>(this)->hasNoUnsignedWrap();
+}
+
+bool Instruction::hasNoSignedWrap() const {
+  return cast<OverflowingBinaryOperator>(this)->hasNoSignedWrap();
+}
+
+bool Instruction::isExact() const {
+  return cast<PossiblyExactOperator>(this)->isExact();
 }
 
 /// Set or clear the unsafe-algebra flag on this instruction, which must be an
@@ -190,6 +219,54 @@ void Instruction::copyFastMathFlags(const Instruction *I) {
   copyFastMathFlags(I->getFastMathFlags());
 }
 
+void Instruction::copyIRFlags(const Value *V) {
+  // Copy the wrapping flags.
+  if (auto *OB = dyn_cast<OverflowingBinaryOperator>(V)) {
+    if (isa<OverflowingBinaryOperator>(this)) {
+      setHasNoSignedWrap(OB->hasNoSignedWrap());
+      setHasNoUnsignedWrap(OB->hasNoUnsignedWrap());
+    }
+  }
+
+  // Copy the exact flag.
+  if (auto *PE = dyn_cast<PossiblyExactOperator>(V))
+    if (isa<PossiblyExactOperator>(this))
+      setIsExact(PE->isExact());
+
+  // Copy the fast-math flags.
+  if (auto *FP = dyn_cast<FPMathOperator>(V))
+    if (isa<FPMathOperator>(this))
+      copyFastMathFlags(FP->getFastMathFlags());
+
+  if (auto *SrcGEP = dyn_cast<GetElementPtrInst>(V))
+    if (auto *DestGEP = dyn_cast<GetElementPtrInst>(this))
+      DestGEP->setIsInBounds(SrcGEP->isInBounds() | DestGEP->isInBounds());
+}
+
+void Instruction::andIRFlags(const Value *V) {
+  if (auto *OB = dyn_cast<OverflowingBinaryOperator>(V)) {
+    if (isa<OverflowingBinaryOperator>(this)) {
+      setHasNoSignedWrap(hasNoSignedWrap() & OB->hasNoSignedWrap());
+      setHasNoUnsignedWrap(hasNoUnsignedWrap() & OB->hasNoUnsignedWrap());
+    }
+  }
+
+  if (auto *PE = dyn_cast<PossiblyExactOperator>(V))
+    if (isa<PossiblyExactOperator>(this))
+      setIsExact(isExact() & PE->isExact());
+
+  if (auto *FP = dyn_cast<FPMathOperator>(V)) {
+    if (isa<FPMathOperator>(this)) {
+      FastMathFlags FM = getFastMathFlags();
+      FM &= FP->getFastMathFlags();
+      copyFastMathFlags(FM);
+    }
+  }
+
+  if (auto *SrcGEP = dyn_cast<GetElementPtrInst>(V))
+    if (auto *DestGEP = dyn_cast<GetElementPtrInst>(this))
+      DestGEP->setIsInBounds(SrcGEP->isInBounds() & DestGEP->isInBounds());
+}
 
 const char *Instruction::getOpcodeName(unsigned OpCode) {
   switch (OpCode) {
@@ -274,13 +351,18 @@ const char *Instruction::getOpcodeName(unsigned OpCode) {
   }
 }
 
-/// Return true if both instructions have the same special state
-/// This must be kept in sync with lib/Transforms/IPO/MergeFunctions.cpp.
+/// Return true if both instructions have the same special state This must be
+/// kept in sync with FunctionComparator::cmpOperations in
+/// lib/Transforms/IPO/MergeFunctions.cpp.
 static bool haveSameSpecialState(const Instruction *I1, const Instruction *I2,
                                  bool IgnoreAlignment = false) {
   assert(I1->getOpcode() == I2->getOpcode() &&
          "Can not compare special state of different instructions");
 
+  if (const AllocaInst *AI = dyn_cast<AllocaInst>(I1))
+    return AI->getAllocatedType() == cast<AllocaInst>(I2)->getAllocatedType() &&
+           (AI->getAlignment() == cast<AllocaInst>(I2)->getAlignment() ||
+            IgnoreAlignment);
   if (const LoadInst *LI = dyn_cast<LoadInst>(I1))
     return LI->isVolatile() == cast<LoadInst>(I2)->isVolatile() &&
            (LI->getAlignment() == cast<LoadInst>(I2)->getAlignment() ||
@@ -363,8 +445,7 @@ bool Instruction::isIdenticalToWhenDefined(const Instruction *I) const {
   return haveSameSpecialState(this, I);
 }
 
-// isSameOperationAs
-// This should be kept in sync with isEquivalentOperation in
+// Keep this in sync with FunctionComparator::cmpOperations in
 // lib/Transforms/IPO/MergeFunctions.cpp.
 bool Instruction::isSameOperationAs(const Instruction *I,
                                     unsigned flags) const {
@@ -466,9 +547,9 @@ bool Instruction::isAtomic() const {
   case Instruction::Fence:
     return true;
   case Instruction::Load:
-    return cast<LoadInst>(this)->getOrdering() != NotAtomic;
+    return cast<LoadInst>(this)->getOrdering() != AtomicOrdering::NotAtomic;
   case Instruction::Store:
-    return cast<StoreInst>(this)->getOrdering() != NotAtomic;
+    return cast<StoreInst>(this)->getOrdering() != AtomicOrdering::NotAtomic;
   }
 }
 
@@ -480,12 +561,6 @@ bool Instruction::mayThrow() const {
   if (const auto *CatchSwitch = dyn_cast<CatchSwitchInst>(this))
     return CatchSwitch->unwindsToCaller();
   return isa<ResumeInst>(this);
-}
-
-bool Instruction::mayReturn() const {
-  if (const CallInst *CI = dyn_cast<CallInst>(this))
-    return !CI->doesNotReturn();
-  return true;
 }
 
 /// isAssociative - Return true if the instruction is associative:

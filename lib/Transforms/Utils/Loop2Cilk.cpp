@@ -1060,7 +1060,6 @@ bool Loop2Cilk::runOnLoop(Loop *L, LPPassManager &LPM) {
   std::vector<Value*> ext_args;
   //Header->getParent()->dump();
   Function* extracted = llvm::cilk::extractDetachBodyToFunction(*det, DT, &call, /*closure*/ oldvar, &ext_args);
-  extracted->addFnAttr(Attribute::RepeatLoopOpts);
   //Header->getParent()->getParent()->dump();
   //extracted->dump();
   //llvm::errs() << "</DONE EXTRACTING FROM " << extracted->getName() << "\\>\n";

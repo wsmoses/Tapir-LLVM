@@ -137,8 +137,7 @@ void MachODebugMapParser::switchToNewDebugMapObject(StringRef Filename,
 }
 
 static std::string getArchName(const object::MachOObjectFile &Obj) {
-  Triple ThumbTriple;
-  Triple T = Obj.getArch(nullptr, &ThumbTriple);
+  Triple T = Obj.getArchTriple();
   return T.getArchName();
 }
 
@@ -146,8 +145,7 @@ std::unique_ptr<DebugMap>
 MachODebugMapParser::parseOneBinary(const MachOObjectFile &MainBinary,
                                     StringRef BinaryPath) {
   loadMainBinarySymbols(MainBinary);
-  Result =
-      make_unique<DebugMap>(BinaryHolder::getTriple(MainBinary), BinaryPath);
+  Result = make_unique<DebugMap>(MainBinary.getArchTriple(), BinaryPath);
   MainBinaryStrings = MainBinary.getStringTableData();
   for (const SymbolRef &Symbol : MainBinary.symbols()) {
     const DataRefImpl &DRI = Symbol.getRawDataRefImpl();
@@ -287,16 +285,17 @@ void MachODebugMapParser::dumpOneBinaryStab(const MachOObjectFile &MainBinary,
 }
 
 static bool shouldLinkArch(SmallVectorImpl<StringRef> &Archs, StringRef Arch) {
-  if (Archs.empty() ||
-      std::find(Archs.begin(), Archs.end(), "all") != Archs.end() ||
-      std::find(Archs.begin(), Archs.end(), "*") != Archs.end())
+  if (Archs.empty() || is_contained(Archs, "all") || is_contained(Archs, "*"))
     return true;
 
-  if (Arch.startswith("arm") && Arch != "arm64" &&
-      std::find(Archs.begin(), Archs.end(), "arm") != Archs.end())
+  if (Arch.startswith("arm") && Arch != "arm64" && is_contained(Archs, "arm"))
     return true;
 
-  return std::find(Archs.begin(), Archs.end(), Arch) != Archs.end();
+  SmallString<16> ArchName = Arch;
+  if (Arch.startswith("thumb"))
+    ArchName = ("arm" + Arch.substr(5)).str();
+
+  return is_contained(Archs, ArchName);
 }
 
 bool MachODebugMapParser::dumpStab() {
@@ -308,9 +307,8 @@ bool MachODebugMapParser::dumpStab() {
     return false;
   }
 
-  Triple T;
   for (const auto *Binary : *MainBinOrError)
-    if (shouldLinkArch(Archs, Binary->getArch(nullptr, &T).getArchName()))
+    if (shouldLinkArch(Archs, Binary->getArchTriple().getArchName()))
       dumpOneBinaryStab(*Binary, BinaryPath);
 
   return true;
@@ -326,9 +324,8 @@ ErrorOr<std::vector<std::unique_ptr<DebugMap>>> MachODebugMapParser::parse() {
     return Error;
 
   std::vector<std::unique_ptr<DebugMap>> Results;
-  Triple T;
   for (const auto *Binary : *MainBinOrError)
-    if (shouldLinkArch(Archs, Binary->getArch(nullptr, &T).getArchName()))
+    if (shouldLinkArch(Archs, Binary->getArchTriple().getArchName()))
       Results.push_back(parseOneBinary(*Binary, BinaryPath));
 
   return std::move(Results);
@@ -389,9 +386,7 @@ void MachODebugMapParser::handleStabSymbolTableEntry(uint32_t StringIndex,
   if (ObjectSymIt == CurrentObjectAddresses.end())
     return Warning("could not find object file symbol for symbol " +
                    Twine(Name));
-  if (!ObjectSymIt->getValue())
-    return;
-  if (!CurrentDebugMapObject->addSymbol(Name, *ObjectSymIt->getValue(), Value,
+  if (!CurrentDebugMapObject->addSymbol(Name, ObjectSymIt->getValue(), Value,
                                         Size))
     return Warning(Twine("failed to insert symbol '") + Name +
                    "' in the debug map.");
@@ -404,15 +399,21 @@ void MachODebugMapParser::loadCurrentObjectFileSymbols(
 
   for (auto Sym : Obj.symbols()) {
     uint64_t Addr = Sym.getValue();
-    ErrorOr<StringRef> Name = Sym.getName();
-    if (!Name)
+    Expected<StringRef> Name = Sym.getName();
+    if (!Name) {
+      // TODO: Actually report errors helpfully.
+      consumeError(Name.takeError());
       continue;
-    // Objective-C on i386 uses artificial absolute symbols to
-    // perform some link time checks. Those symbols have a fixed 0
-    // address that might conflict with real symbols in the object
-    // file. As I cannot see a way for absolute symbols to find
-    // their way into the debug information, let's just ignore those.
-    if (Sym.getFlags() & SymbolRef::SF_Absolute)
+    }
+    // The value of some categories of symbols isn't meaningful. For
+    // example common symbols store their size in the value field, not
+    // their address. Absolute symbols have a fixed address that can
+    // conflict with standard symbols. These symbols (especially the
+    // common ones), might still be referenced by relocations. These
+    // relocations will use the symbol itself, and won't need an
+    // object file address. The object file address field is optional
+    // in the DebugMap, leave it unassigned for these symbols.
+    if (Sym.getFlags() & (SymbolRef::SF_Absolute | SymbolRef::SF_Common))
       CurrentObjectAddresses[*Name] = None;
     else
       CurrentObjectAddresses[*Name] = Addr;
@@ -436,7 +437,13 @@ void MachODebugMapParser::loadMainBinarySymbols(
   section_iterator Section = MainBinary.section_end();
   MainBinarySymbolAddresses.clear();
   for (const auto &Sym : MainBinary.symbols()) {
-    SymbolRef::Type Type = Sym.getType();
+    Expected<SymbolRef::Type> TypeOrErr = Sym.getType();
+    if (!TypeOrErr) {
+      // TODO: Actually report errors helpfully.
+      consumeError(TypeOrErr.takeError());
+      continue;
+    }
+    SymbolRef::Type Type = *TypeOrErr;
     // Skip undefined and STAB entries.
     if ((Type & SymbolRef::ST_Debug) || (Type & SymbolRef::ST_Unknown))
       continue;
@@ -446,16 +453,22 @@ void MachODebugMapParser::loadMainBinarySymbols(
     // addresses should be fetched for the debug map.
     if (!(Sym.getFlags() & SymbolRef::SF_Global))
       continue;
-    ErrorOr<section_iterator> SectionOrErr = Sym.getSection();
-    if (!SectionOrErr)
+    Expected<section_iterator> SectionOrErr = Sym.getSection();
+    if (!SectionOrErr) {
+      // TODO: Actually report errors helpfully.
+      consumeError(SectionOrErr.takeError());
       continue;
+    }
     Section = *SectionOrErr;
     if (Section == MainBinary.section_end() || Section->isText())
       continue;
     uint64_t Addr = Sym.getValue();
-    ErrorOr<StringRef> NameOrErr = Sym.getName();
-    if (!NameOrErr)
+    Expected<StringRef> NameOrErr = Sym.getName();
+    if (!NameOrErr) {
+      // TODO: Actually report errors helpfully.
+      consumeError(NameOrErr.takeError());
       continue;
+    }
     StringRef Name = *NameOrErr;
     if (Name.size() == 0 || Name[0] == '\0')
       continue;

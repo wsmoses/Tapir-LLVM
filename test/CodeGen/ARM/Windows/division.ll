@@ -9,8 +9,9 @@ entry:
 
 ; CHECK-LABEL: sdiv32:
 ; CHECK: cbz r0
-; CHECK: bl __rt_sdiv
+; CHECK: b
 ; CHECK: udf.w #249
+; CHECK: bl __rt_sdiv
 
 define arm_aapcs_vfpcc i32 @udiv32(i32 %divisor, i32 %divident) {
 entry:
@@ -20,8 +21,9 @@ entry:
 
 ; CHECK-LABEL: udiv32:
 ; CHECK: cbz r0
-; CHECK: bl __rt_udiv
+; CHECK: b
 ; CHECK: udf.w #249
+; CHECK: bl __rt_udiv
 
 define arm_aapcs_vfpcc i64 @sdiv64(i64 %divisor, i64 %divident) {
 entry:
@@ -30,10 +32,11 @@ entry:
 }
 
 ; CHECK-LABEL: sdiv64:
-; CHECK: orr.w r12, r0, r1
-; CHECK-NEXT: cbz r12
-; CHECK: bl __rt_sdiv64
+; CHECK: orr.w r4, r0, r1
+; CHECK-NEXT: cbz r4
+; CHECK: b
 ; CHECK: udf.w #249
+; CHECK: bl __rt_sdiv64
 
 define arm_aapcs_vfpcc i64 @udiv64(i64 %divisor, i64 %divident) {
 entry:
@@ -42,8 +45,9 @@ entry:
 }
 
 ; CHECK-LABEL: udiv64:
-; CHECK: orr.w r12, r0, r1
-; CHECK-NEXT: cbz r12
-; CHECK: bl __rt_udiv64
+; CHECK: orr.w r4, r0, r1
+; CHECK-NEXT: cbz r4
+; CHECK: b
 ; CHECK: udf.w #249
+; CHECK: bl __rt_udiv64
 

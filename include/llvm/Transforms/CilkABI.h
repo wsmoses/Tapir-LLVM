@@ -1982,7 +1982,6 @@ static inline bool createDetach(DetachInst& detach, DominatorTree& DT,
   assert(SF && "null stack frame unexpected");
 
   Function* extracted = extractDetachBodyToFunction(detach, DT);
-  if (extracted->size() == 1) extracted->addFnAttr(Attribute::RepeatLoopOpts);
 
   TerminatorInst* bi = llvm::dyn_cast<TerminatorInst>(detB->getTerminator() );
   assert( bi );

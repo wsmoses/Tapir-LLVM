@@ -133,11 +133,7 @@ bool CilkPass::runOnFunction(Function &F) {
   }
 
   assert( !llvm::verifyFunction(F, &llvm::errs()) );
-  if (DisablePostOpts && !Changed && !F.getName().startswith("__cilk") && !F.hasFnAttribute(Attribute::RepeatLoopOpts) && !F.hasFnAttribute(Attribute::DisableOpts)) {
-    //F.addFnAttr(Attribute::DisableOpts);
-    //Changed |= true;
-  } else {
-  }
+  
 	return Changed;
 }
 

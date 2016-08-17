@@ -21,12 +21,12 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "llvm/Transforms/Scalar/SimplifyCFG.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/Statistic.h"
-#include "llvm/Analysis/GlobalsModRef.h"
 #include "llvm/Analysis/AssumptionCache.h"
+#include "llvm/Analysis/CFG.h"
+#include "llvm/Analysis/GlobalsModRef.h"
 #include "llvm/Analysis/TargetTransformInfo.h"
 #include "llvm/IR/Attributes.h"
 #include "llvm/IR/CFG.h"
@@ -40,6 +40,9 @@
 #include "llvm/Transforms/Utils/Local.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include "llvm/Transforms/Scalar.h"
+#include "llvm/Transforms/Scalar/SimplifyCFG.h"
+#include "llvm/Transforms/Utils/Local.h"
+#include <utility>
 using namespace llvm;
 
 #define DEBUG_TYPE "simplifycfg"
@@ -180,12 +183,19 @@ static bool iterativelySimplifyCFG(Function &F, const TargetTransformInfo &TTI,
                                    unsigned BonusInstThreshold) {
   bool Changed = false;
   bool LocalChange = true;
+
+  SmallVector<std::pair<const BasicBlock *, const BasicBlock *>, 32> Edges;
+  FindFunctionBackedges(F, Edges);
+  SmallPtrSet<BasicBlock *, 16> LoopHeaders;
+  for (unsigned i = 0, e = Edges.size(); i != e; ++i)
+    LoopHeaders.insert(const_cast<BasicBlock *>(Edges[i].second));
+
   while (LocalChange) {
     LocalChange = false;
 
     // Loop over all of the basic blocks and remove them if they are unneeded.
     for (Function::iterator BBIt = F.begin(); BBIt != F.end(); ) {
-      if (SimplifyCFG(&*BBIt++, TTI, BonusInstThreshold, AC)) {
+      if (SimplifyCFG(&*BBIt++, TTI, BonusInstThreshold, AC, &LoopHeaders)) {
         LocalChange = true;
         ++NumSimpl;
       }
@@ -229,14 +239,15 @@ SimplifyCFGPass::SimplifyCFGPass(int BonusInstThreshold)
     : BonusInstThreshold(BonusInstThreshold) {}
 
 PreservedAnalyses SimplifyCFGPass::run(Function &F,
-                                       AnalysisManager<Function> *AM) {
-  auto &TTI = AM->getResult<TargetIRAnalysis>(F);
-  auto &AC = AM->getResult<AssumptionAnalysis>(F);
+                                       FunctionAnalysisManager &AM) {
+  auto &TTI = AM.getResult<TargetIRAnalysis>(F);
+  auto &AC = AM.getResult<AssumptionAnalysis>(F);
 
   if (!simplifyFunctionCFG(F, TTI, &AC, BonusInstThreshold))
-    return PreservedAnalyses::none();
-
-  return PreservedAnalyses::all();
+    return PreservedAnalyses::all();
+  PreservedAnalyses PA;
+  PA.preserve<GlobalsAA>();
+  return PA;
 }
 
 namespace {
@@ -247,15 +258,12 @@ struct CFGSimplifyPass : public FunctionPass {
 
   CFGSimplifyPass(int T = -1,
                   std::function<bool(const Function &)> Ftor = nullptr)
-      : FunctionPass(ID), PredicateFtor(Ftor) {
+      : FunctionPass(ID), PredicateFtor(std::move(Ftor)) {
     BonusInstThreshold = (T == -1) ? UserBonusInstThreshold : unsigned(T);
     initializeCFGSimplifyPassPass(*PassRegistry::getPassRegistry());
   }
   bool runOnFunction(Function &F) override {
-    if (PredicateFtor && !PredicateFtor(F))
-      return false;
-
-    if (skipOptnoneFunction(F))
+    if (skipFunction(F) || (PredicateFtor && !PredicateFtor(F)))
       return false;
 
     AssumptionCache *AC =
@@ -285,6 +293,5 @@ INITIALIZE_PASS_END(CFGSimplifyPass, "simplifycfg", "Simplify the CFG", false,
 FunctionPass *
 llvm::createCFGSimplificationPass(int Threshold,
                                   std::function<bool(const Function &)> Ftor) {
-  return new CFGSimplifyPass(Threshold, Ftor);
+  return new CFGSimplifyPass(Threshold, std::move(Ftor));
 }
-

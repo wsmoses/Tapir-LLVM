@@ -1,16 +1,21 @@
-======================
-LLVM 3.8 Release Notes
-======================
+========================
+LLVM 4.0.0 Release Notes
+========================
 
 .. contents::
     :local:
+
+.. warning::
+   These are in-progress notes for the upcoming LLVM 4.0.0 release.  You may
+   prefer the `LLVM 3.8 Release Notes <http://llvm.org/releases/3.8.0/docs
+   /ReleaseNotes.html>`_.
 
 
 Introduction
 ============
 
 This document contains the release notes for the LLVM Compiler Infrastructure,
-release 3.8.  Here we describe the status of LLVM, including major improvements
+release 4.0.0.  Here we describe the status of LLVM, including major improvements
 from the previous release, improvements in various subprojects of LLVM, and
 some of the current users of the code.  All LLVM releases may be downloaded
 from the `LLVM releases web site <http://llvm.org/releases/>`_.
@@ -23,6 +28,7 @@ them.
 
 Non-comprehensive list of changes in this release
 =================================================
+<<<<<<< HEAD
 * With this release, the minimum Windows version required for running LLVM is
   Windows 7. Earlier versions, including Windows Vista and XP are no longer
   supported.
@@ -62,6 +68,8 @@ Non-comprehensive list of changes in this release
   handling routines have been moved to ErrorHandling.h. Both are included in
   Core.h so nothing should change for projects directly including the headers,
   but transitive dependencies may be affected.
+=======
+>>>>>>> llvm/master
 
 * llvm-ar now supports thin archives.
 
@@ -74,6 +82,7 @@ Non-comprehensive list of changes in this release
 
 * Support for dematerializing has been dropped.
 
+<<<<<<< HEAD
 * ``RegisterScheduler::setDefault`` was removed. Targets that used to call into the
   command line parser to set the ``DAGScheduler``, and that don't have enough
   control with ``setSchedulingPreference``, should look into overriding the
@@ -105,6 +114,13 @@ Non-comprehensive list of changes in this release
 
 * The optimization to move the prologue and epilogue of functions in colder
   code path (shrink-wrapping) is now enabled by default.
+=======
+Changes to the LLVM IR
+----------------------
+
+Changes to the ARM Backend
+--------------------------
+>>>>>>> llvm/master
 
 * A new target-independent gcc-compatible emulated Thread Local Storage mode
   is added.  When ``-femultated-tls`` flag is used, all accesses to TLS
@@ -113,7 +129,7 @@ Non-comprehensive list of changes in this release
 
 * MSVC-compatible exception handling has been completely overhauled. New
   instructions have been introduced to facilitate this:
-  `New exception handling instructions <ExceptionHandling.html#new-exception-handling-instructions>`_. 
+  `New exception handling instructions <ExceptionHandling.html#new-exception-handling-instructions>`_.
   While we have done our best to test this feature thoroughly, it would
   not be completely surprising if there were a few lingering issues that
   early adopters might bump into.
@@ -219,7 +235,7 @@ There are numerous improvements to the PowerPC target in this release:
 
 * Thread Sanitizer (TSAN) is now supported for PowerPC
 
-* New MI peephole pass to clean up redundant XXPERMDI instructions  
+* New MI peephole pass to clean up redundant XXPERMDI instructions
 
 * Add branch hints to highly biased branch instructions (code reaching
   unreachable terminators and exceptional control flow constructs)
@@ -232,13 +248,21 @@ There are numerous improvements to the PowerPC target in this release:
 
 * Many bugs have been identified and fixed
 
-
 Changes to the X86 Target
------------------------------
+-------------------------
 
+<<<<<<< HEAD
 * TLS is enabled for Cygwin as emutls.
 
 * Smaller code for materializing 32-bit 1 and -1 constants at ``-Os``.
+=======
+ During this release ...
+
+Changes to the AMDGPU Target
+-----------------------------
+
+ During this release ...
+>>>>>>> llvm/master
 
 * More efficient code for wide integer compares. (E.g. 64-bit compares
   on 32-bit targets.)
@@ -263,13 +287,11 @@ road to being completely merged and workable.
 Changes to the OCaml bindings
 -----------------------------
 
-* The ocaml function link_modules has been replaced with link_modules' which
-  uses LLVMLinkModules2.
 
+External Open Source Projects Using LLVM 4.0.0
+==============================================
 
-External Open Source Projects Using LLVM 3.8
-============================================
-
+<<<<<<< HEAD
 An exciting aspect of LLVM is that it is used as an enabling technology for
 a lot of other language and tools projects. This section lists some of the
 projects that have already been updated to work with LLVM 3.8.
@@ -287,6 +309,9 @@ to concurrency and offers many classical paradigms.
 combined with LLVM as backend to produce efficient native code. LDC targets
 x86/x86_64 systems like Linux, OS X and Windows and also PowerPC (32/64 bit)
 and ARM. Ports to other architectures like AArch64 and MIPS64 are underway.
+=======
+* A project...
+>>>>>>> llvm/master
 
 
 Additional Information

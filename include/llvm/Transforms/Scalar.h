@@ -15,7 +15,6 @@
 #ifndef LLVM_TRANSFORMS_SCALAR_H
 #define LLVM_TRANSFORMS_SCALAR_H
 
-#include "llvm/ADT/StringRef.h"
 #include <functional>
 
 namespace llvm {
@@ -82,6 +81,16 @@ FunctionPass *createDeadStoreEliminationPass();
 //
 FunctionPass *createAggressiveDCEPass();
 
+
+//===----------------------------------------------------------------------===//
+//
+// GuardWidening - An optimization over the @llvm.experimental.guard intrinsic
+// that (optimistically) combines multiple guards into one to have fewer checks
+// at runtime.
+//
+FunctionPass *createGuardWideningPass();
+
+
 //===----------------------------------------------------------------------===//
 //
 // BitTrackingDCE - This pass uses a bit-tracking DCE algorithm in order to
@@ -94,17 +103,6 @@ FunctionPass *createBitTrackingDCEPass();
 // SROA - Replace aggregates or pieces of aggregates with scalar SSA values.
 //
 FunctionPass *createSROAPass();
-
-//===----------------------------------------------------------------------===//
-//
-// ScalarReplAggregates - Break up alloca's of aggregates into multiple allocas
-// if possible.
-//
-FunctionPass *createScalarReplAggregatesPass(signed Threshold = -1,
-                                             bool UseDomTree = true,
-                                             signed StructMemberThreshold = -1,
-                                             signed ArrayElementThreshold = -1,
-                                             signed ScalarLoadThreshold = -1);
 
 //===----------------------------------------------------------------------===//
 //
@@ -139,7 +137,7 @@ Pass *createLoop2CilkPass();
 // into:
 //    %Z = add int 2, %X
 //
-FunctionPass *createInstructionCombiningPass();
+FunctionPass *createInstructionCombiningPass(bool ExpensiveCombines = true);
 
 //===----------------------------------------------------------------------===//
 //
@@ -160,16 +158,6 @@ Pass *createLoopInterchangePass();
 // a loop's canonical induction variable as one of their indices.
 //
 Pass *createLoopStrengthReducePass();
-
-//===----------------------------------------------------------------------===//
-//
-// GlobalMerge - This pass merges internal (by default) globals into structs
-// to enable reuse of a base pointer by indexed addressing modes.
-// It can also be configured to focus on size optimizations only.
-//
-Pass *createGlobalMergePass(const TargetMachine *TM, unsigned MaximalOffset,
-                            bool OnlyOptimizeForSize = false,
-                            bool MergeExternalByDefault = false);
 
 //===----------------------------------------------------------------------===//
 //
@@ -209,6 +197,12 @@ Pass *createLoopRotatePass(int MaxHeaderSize = -1);
 // LoopIdiom - This pass recognizes and replaces idioms in loops.
 //
 Pass *createLoopIdiomPass();
+
+//===----------------------------------------------------------------------===//
+//
+// LoopVersioningLICM - This pass is a loop versioning pass for LICM.
+//
+Pass *createLoopVersioningLICMPass();
 
 //===----------------------------------------------------------------------===//
 //
@@ -276,7 +270,10 @@ FunctionPass *createFlattenCFGPass();
 //
 // CFG Structurization - Remove irreducible control flow
 //
-Pass *createStructurizeCFGPass();
+///
+/// When \p SkipUniformRegions is true the structizer will not structurize
+/// regions that only contain uniform branches.
+Pass *createStructurizeCFGPass(bool SkipUniformRegions = false);
 
 //===----------------------------------------------------------------------===//
 //
@@ -343,17 +340,17 @@ FunctionPass *createEarlyCSEPass();
 
 //===----------------------------------------------------------------------===//
 //
+// GVNHoist - This pass performs a simple and fast GVN pass over the dominator
+// tree to hoist common expressions from sibling branches.
+//
+FunctionPass *createGVNHoistPass();
+
+//===----------------------------------------------------------------------===//
+//
 // MergedLoadStoreMotion - This pass merges loads and stores in diamonds. Loads
 // are hoisted into the header, while stores sink into the footer.
 //
 FunctionPass *createMergedLoadStoreMotionPass();
-
-//===----------------------------------------------------------------------===//
-//
-// GVN - This pass performs global value numbering and redundant load
-// elimination cotemporaneously.
-//
-FunctionPass *createGVNPass(bool NoLoads = false);
 
 //===----------------------------------------------------------------------===//
 //
@@ -393,6 +390,12 @@ FunctionPass *createSinkingPass();
 // LowerAtomic - Lower atomic intrinsics to non-atomic form
 //
 Pass *createLowerAtomicPass();
+
+//===----------------------------------------------------------------------===//
+//
+// LowerGuardIntrinsic - Lower guard intrinsics to normal control flow.
+//
+Pass *createLowerGuardIntrinsicPass();
 
 //===----------------------------------------------------------------------===//
 //
@@ -446,6 +449,10 @@ createSeparateConstOffsetFromGEPPass(const TargetMachine *TM = nullptr,
 //
 FunctionPass *createSpeculativeExecutionPass();
 
+// Same as createSpeculativeExecutionPass, but does nothing unless
+// TargetTransformInfo::hasBranchDivergence() is true.
+FunctionPass *createSpeculativeExecutionIfHasBranchDivergencePass();
+
 //===----------------------------------------------------------------------===//
 //
 // LoadCombine - Combine loads into bigger loads.
@@ -492,13 +499,38 @@ FunctionPass *createNaryReassociatePass();
 //
 // LoopDistribute - Distribute loops.
 //
-FunctionPass *createLoopDistributePass();
+// ProcessAllLoopsByDefault instructs the pass to look for distribution
+// opportunities in all loops unless -enable-loop-distribute or the
+// llvm.loop.distribute.enable metadata data override this default.
+FunctionPass *createLoopDistributePass(bool ProcessAllLoopsByDefault);
 
 //===----------------------------------------------------------------------===//
 //
 // LoopLoadElimination - Perform loop-aware load elimination.
 //
 FunctionPass *createLoopLoadEliminationPass();
+
+//===----------------------------------------------------------------------===//
+//
+// LoopSimplifyCFG - This pass performs basic CFG simplification on loops,
+// primarily to help other loop passes.
+//
+Pass *createLoopSimplifyCFGPass();
+
+//===----------------------------------------------------------------------===//
+//
+// LoopVersioning - Perform loop multi-versioning.
+//
+FunctionPass *createLoopVersioningPass();
+
+//===----------------------------------------------------------------------===//
+//
+// LoopDataPrefetch - Perform data prefetching in loops.
+//
+FunctionPass *createLoopDataPrefetchPass();
+
+///===---------------------------------------------------------------------===//
+ModulePass *createNameAnonFunctionPass();
 
 } // End llvm namespace
 
