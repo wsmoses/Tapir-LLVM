@@ -250,7 +250,6 @@ public:
   }
 
   bool isSimple() const { return !isAtomic() && !isVolatile(); }
-
   bool isUnordered() const {
     return (getOrdering() == AtomicOrdering::NotAtomic ||
             getOrdering() == AtomicOrdering::Unordered) &&
@@ -369,7 +368,6 @@ public:
   }
 
   bool isSimple() const { return !isAtomic() && !isVolatile(); }
-
   bool isUnordered() const {
     return (getOrdering() == AtomicOrdering::NotAtomic ||
             getOrdering() == AtomicOrdering::Unordered) &&
