@@ -39,17 +39,6 @@
 #include <iostream>
 #include <deque>
 
-
-static inline llvm::BasicBlock* getUniquePred(llvm::BasicBlock* syncer) {
-  llvm::BasicBlock* pred = 0;
-  size_t count = 0;
-  for (auto it = llvm::pred_begin(syncer), et = llvm::pred_end(syncer); it != et; ++it) {
-    count++;
-    pred = *it;
-  }
-  if( count != 1 ) pred = 0;
-  return pred;
-}
 static inline  size_t getNonPhiSize(llvm::BasicBlock* b){
     int bad = 0;
     llvm::BasicBlock::iterator i = b->begin();
@@ -95,8 +84,6 @@ enum {
   CILK_FRAME_UNWINDING        = 0x10000
 };
 
-const bool EXCEPTIONS = false;
-
 #define CILK_FRAME_VERSION (__CILKRTS_ABI_VERSION << 24)
 #define CILK_FRAME_VERSION_MASK  0xFF000000
 #define CILK_FRAME_FLAGS_MASK    0x00FFFFFF
@@ -126,18 +113,12 @@ typedef void (__cilkrts_enter_frame_fast)(__cilkrts_stack_frame *sf);
 typedef void (__cilkrts_enter_frame_fast_1)(__cilkrts_stack_frame *sf);
 typedef void (__cilkrts_leave_frame)(__cilkrts_stack_frame *sf);
 typedef void (__cilkrts_sync)(__cilkrts_stack_frame *sf);
-typedef void (__cilkrts_return_exception)(__cilkrts_stack_frame *sf);
-typedef void (__cilkrts_rethrow)(__cilkrts_stack_frame *sf);
 typedef void (__cilkrts_detach)(__cilkrts_stack_frame *sf);
 typedef void (__cilkrts_pop_frame)(__cilkrts_stack_frame *sf);
 typedef int (__cilkrts_get_nworkers)();
 typedef __cilkrts_worker *(__cilkrts_get_tls_worker)();
 typedef __cilkrts_worker *(__cilkrts_get_tls_worker_fast)();
 typedef __cilkrts_worker *(__cilkrts_bind_thread_1)();
-typedef void (__cilkrts_cilk_for_32)(__cilk_abi_f32_t body, void *data,
-                                     cilk32_t count, int grain);
-typedef void (__cilkrts_cilk_for_64)(__cilk_abi_f64_t body, void *data,
-                                     cilk64_t count, int grain);
 
 typedef void (cilk_func)(__cilkrts_stack_frame *);
 
@@ -176,7 +157,6 @@ typedef void (cilk_leave_end)();
 
 DEFAULT_GET_CILKRTS_FUNC(init)
 DEFAULT_GET_CILKRTS_FUNC(sync)
-DEFAULT_GET_CILKRTS_FUNC(rethrow)
 DEFAULT_GET_CILKRTS_FUNC(leave_frame)
 DEFAULT_GET_CILKRTS_FUNC(get_tls_worker)
 DEFAULT_GET_CILKRTS_FUNC(get_tls_worker_fast)
@@ -402,24 +382,6 @@ static bool GetOrCreateFunction(const char *FnName, Module& M,
   return false;
 }
 
-/// \brief Register a sync function with a named metadata.
-static void registerSyncFunction(Module &M, llvm::Function *Fn) {
-  //TODO?
-  //  LLVMContext &Context = M.getContext();
-  //  llvm::NamedMDNode *SyncMetadata = M.getOrInsertNamedMetadata("cilk.sync");
-
-  //  SyncMetadata->addOperand(llvm::MDNode::get(Context, Fn));
-}
-
-/// \brief Register a spawn helper function with a named metadata.
-static void registerSpawnFunction(Module &M, llvm::Function *Fn) {
-  //TODO?
-  //  LLVMContext &Context = Fn.getContext();
-  //  llvm::NamedMDNode *SpawnMetadata = Fn.getParent().getOrInsertNamedMetadata("cilk.spawn");
-
-  //  SpawnMetadata->addOperand(llvm::MDNode::get(Context, Fn));
-}
-
 /// \brief Emit a call to the CILK_SETJMP function.
 static CallInst *EmitCilkSetJmp(IRBuilder<> &B, Value *SF, Module& M) {
   LLVMContext &Ctx = M.getContext();
@@ -461,7 +423,7 @@ static CallInst *EmitCilkSetJmp(IRBuilder<> &B, Value *SF, Module& M) {
   //AttributeSet aset = AttributeSet::get(Ctx,0,attrs);
   //F = M.getOrInsertFunction( "_setjmp", FunctionType::get( Int32Ty, { Int8PtrTy }, false ), aset );
   //F->dump();
-  
+
   F = Intrinsic::getDeclaration(&M, Intrinsic::eh_sjlj_setjmp);
 
   Buf = B.CreateBitCast(Buf, Int8PtrTy);
@@ -600,125 +562,6 @@ static Function *Get__cilkrts_detach(Module &M) {
   return Fn;
 }
 
-/// \brief Get or create a LLVM function for __cilk_excepting_sync.
-/// This is a special sync to be inserted before processing a catch statement.
-/// Calls to this function are always inlined.
-///
-/// It is equivalent to the following C code
-///
-/// void __cilk_excepting_sync(struct __cilkrts_stack_frame *sf, void **ExnSlot) {
-///   if (sf->flags & CILK_FRAME_UNSYNCHED) {
-///     if (!CILK_SETJMP(sf->ctx)) {
-///       sf->except_data = *ExnSlot;
-///       sf->flags |= CILK_FRAME_EXCEPTING;
-///       __cilkrts_sync(sf);
-///     }
-///     sf->flags &= ~CILK_FRAME_EXCEPTING;
-///     *ExnSlot = sf->except_data;
-///   }
-///   ++sf->worker->pedigree.rank;
-/// }
-static Function *GetCilkExceptingSyncFn(Module &M) {
-  Function *Fn = 0;
-
-  typedef void (cilk_func_1)(__cilkrts_stack_frame *, void **);
-  if (GetOrCreateFunction<cilk_func_1>("__cilk_excepting_sync", M, Fn))
-    return Fn;
-
-  LLVMContext &Ctx = M.getContext();
-  assert((Fn->arg_size() == 2) && "unexpected function type");
-  Function::arg_iterator args = Fn->arg_begin();
-  Value *SF = &*args++;
-  Value *ExnSlot = &*args;
-
-  BasicBlock *Entry = BasicBlock::Create(Ctx, "entry", Fn),
-    *JumpTest = BasicBlock::Create(Ctx, "setjmp.test", Fn),
-    *JumpIf = BasicBlock::Create(Ctx, "setjmp.if", Fn),
-    *JumpCont = BasicBlock::Create(Ctx, "setjmp.cont", Fn),
-    *Exit = BasicBlock::Create(Ctx, "exit", Fn);
-
-  // Entry
-  {
-    IRBuilder<> B(Entry);
-
-    // if (sf->flags & CILK_FRAME_UNSYNCHED)
-    Value *Flags = LoadField(B, SF, StackFrameBuilder::flags);
-    Flags = B.CreateAnd(Flags,
-                        ConstantInt::get(Flags->getType(),
-                                         CILK_FRAME_UNSYNCHED));
-    Value *Zero = Constant::getNullValue(Flags->getType());
-
-    Value *Unsynced = B.CreateICmpEQ(Flags, Zero);
-    B.CreateCondBr(Unsynced, Exit, JumpTest);
-  }
-
-  // JumpTest
-  {
-    IRBuilder<> B(JumpTest);
-    // if (!CILK_SETJMP(sf.ctx))
-    Value *C = EmitCilkSetJmp(B, SF, M);
-    C = B.CreateICmpEQ(C, Constant::getNullValue(C->getType()));
-    B.CreateCondBr(C, JumpIf, JumpCont);
-  }
-
-  // JumpIf
-  {
-    IRBuilder<> B(JumpIf);
-
-    // sf->except_data = *ExnSlot;
-    StoreField(B, B.CreateLoad(ExnSlot), SF, StackFrameBuilder::except_data);
-
-    // sf->flags |= CILK_FRAME_EXCEPTING;
-    Value *Flags = LoadField(B, SF, StackFrameBuilder::flags);
-    Flags = B.CreateOr(Flags, ConstantInt::get(Flags->getType(),
-                                               CILK_FRAME_EXCEPTING));
-    StoreField(B, Flags, SF, StackFrameBuilder::flags);
-
-    // __cilkrts_sync(&sf);
-    B.CreateCall(CILKRTS_FUNC(sync, M), SF);
-    B.CreateBr(JumpCont);
-  }
-
-  // JumpCont
-  {
-    IRBuilder<> B(JumpCont);
-
-    // sf->flags &= ~CILK_FRAME_EXCEPTING;
-    Value *Flags = LoadField(B, SF, StackFrameBuilder::flags);
-    Flags = B.CreateAnd(Flags, ConstantInt::get(Flags->getType(),
-                                                ~CILK_FRAME_EXCEPTING));
-    StoreField(B, Flags, SF, StackFrameBuilder::flags);
-
-    // Exn = sf->except_data;
-    B.CreateStore(LoadField(B, SF, StackFrameBuilder::except_data), ExnSlot);
-    B.CreateBr(Exit);
-  }
-
-  // Exit
-  {
-    IRBuilder<> B(Exit);
-
-    // ++sf.worker->pedigree.rank;
-    Value *Rank = LoadField(B, SF, StackFrameBuilder::worker);
-    Rank = GEP(B, Rank, WorkerBuilder::pedigree);
-    Rank = GEP(B, Rank, PedigreeBuilder::rank);
-    B.CreateStore(B.CreateAdd(B.CreateLoad(Rank),
-                              ConstantInt::get(Rank->getType()->getPointerElementType(),
-                                               1)),
-                  Rank);
-    B.CreateRetVoid();
-  }
-
-  Fn->addFnAttr(Attribute::AlwaysInline);
-  Fn->addFnAttr(Attribute::ReturnsTwice);
-  //***INTEL
-  // Special Intel-specific attribute for inliner.
-  Fn->addFnAttr("INTEL_ALWAYS_INLINE");
-  registerSyncFunction(M, Fn);
-
-  return Fn;
-}
-
 /// \brief Get or create a LLVM function for __cilk_sync.
 /// Calls to this function is always inlined, as it saves
 /// the current stack/frame pointer values. This function must be marked
@@ -757,8 +600,6 @@ static Function *GetCilkSyncFn(Module &M, bool instrument = false) {
     *SaveState = BasicBlock::Create(Ctx, "cilk.sync.savestate", Fn),
     *SyncCall = BasicBlock::Create(Ctx, "cilk.sync.runtimecall", Fn),
     *Excepting = BasicBlock::Create(Ctx, "cilk.sync.excepting", Fn),
-    *Rethrow = EXCEPTIONS ?
-    BasicBlock::Create(Ctx, "cilk.sync.rethrow", Fn) : 0,
     *Exit = BasicBlock::Create(Ctx, "cilk.sync.end", Fn);
 
   // Entry
@@ -807,24 +648,7 @@ static Function *GetCilkSyncFn(Module &M, bool instrument = false) {
   // Excepting
   {
     IRBuilder<> B(Excepting);
-    if (EXCEPTIONS) {
-      Value *Flags = LoadField(B, SF, StackFrameBuilder::flags);
-      Flags = B.CreateAnd(Flags,
-                          ConstantInt::get(Flags->getType(),
-                                           CILK_FRAME_EXCEPTING));
-      Value *Zero = ConstantInt::get(Flags->getType(), 0);
-      Value *C = B.CreateICmpEQ(Flags, Zero);
-      B.CreateCondBr(C, Exit, Rethrow);
-    } else {
-      B.CreateBr(Exit);
-    }
-  }
-
-  // Rethrow
-  if (EXCEPTIONS) {
-    IRBuilder<> B(Rethrow);
-    B.CreateCall(CILKRTS_FUNC(rethrow, M), SF)->setDoesNotReturn();
-    B.CreateUnreachable();
+    B.CreateBr(Exit);
   }
 
   // Exit
@@ -848,54 +672,8 @@ static Function *GetCilkSyncFn(Module &M, bool instrument = false) {
 
   Fn->addFnAttr(Attribute::AlwaysInline);
   Fn->addFnAttr(Attribute::ReturnsTwice);
-  //***INTEL
-  // Special Intel-specific attribute for inliner.
-  Fn->addFnAttr("INTEL_ALWAYS_INLINE");
-
-  //TODO?
-  //  llvm::NamedMDNode *SyncMetadata = M.getOrInsertNamedMetadata("cilk.sync");
-
-  //  SyncMetadata->addOperand(llvm::MDNode::get(Ctx, Fn));
-
   return Fn;
 }
-
-// /// \brief Get or create a LLVM function to set worker to null value.
-// /// It is equivalent to the following C code
-// ///
-// /// This is a utility function to ensure that __cilk_helper_epilogue
-// /// skips uninitialized stack frames.
-// ///
-// /// void __cilk_reset_worker(__cilkrts_stack_frame *sf) {
-// ///   sf->worker = 0;
-// /// }
-// ///
-// static Function *GetCilkResetWorkerFn(Module &M) {
-//   Function *Fn = 0;
-
-//   if (GetOrCreateFunction<cilk_func>("__cilk_reset_worker", M, Fn))
-//     return Fn;
-
-//   LLVMContext &Ctx = M.getContext();
-//   Function::arg_iterator args = Fn->arg_begin();
-//   Value *SF = &*args;
-
-//   BasicBlock *Entry = BasicBlock::Create(Ctx, "entry", Fn);
-//   IRBuilder<> B(Entry);
-
-//   // sf->worker = 0;
-//   StoreField(B,
-//              Constant::getNullValue(TypeBuilder<__cilkrts_worker*, false>::get(Ctx)),
-//              SF, StackFrameBuilder::worker);
-
-//   B.CreateRetVoid();
-
-//   Fn->addFnAttr(Attribute::InlineHint);
-
-//   return Fn;
-// }
-
-
 
 /// \brief Get or create a LLVM function for __cilkrts_enter_frame.
 /// It is equivalent to the following C code
@@ -936,7 +714,7 @@ static Function *Get__cilkrts_enter_frame_1(Module &M) {
   CallInst *W = 0;
   {
     IRBuilder<> B(Entry);
-    if (fastCilk) 
+    if (fastCilk)
       W = B.CreateCall(CILKRTS_FUNC(get_tls_worker_fast, M));
     else
       W = B.CreateCall(CILKRTS_FUNC(get_tls_worker, M));
@@ -1134,99 +912,6 @@ static Function *GetCilkParentEpilogue(Module &M, bool instrument = false) {
   return Fn;
 }
 
-// /// \brief Get or create a LLVM function for __cilk_helper_prologue.
-// /// It is equivalent to the following C code
-// ///
-// /// void __cilk_helper_prologue(__cilkrts_stack_frame *sf) {
-// ///   __cilkrts_enter_frame_fast_1(sf);
-// ///   __cilkrts_detach(sf);
-// /// }
-// static llvm::Function *GetCilkHelperPrologue(Module &M) {
-//   Function *Fn = 0;
-
-//   if (GetOrCreateFunction<cilk_func>("__cilk_helper_prologue", M, Fn))
-//  return Fn;
-
-//   // If we get here we need to add the function body
-//   LLVMContext &Ctx = M.getContext();
-
-//   Function::arg_iterator args = Fn->arg_begin();
-//   Value *SF = &*args;
-
-//   BasicBlock *Entry = BasicBlock::Create(Ctx, "entry", Fn);
-//   IRBuilder<> B(Entry);
-
-//   // __cilkrts_enter_frame_fast_1(sf);
-//   B.CreateCall(CILKRTS_FUNC(enter_frame_fast_1, M), SF);
-
-//   // __cilkrts_detach(sf);
-//   B.CreateCall(CILKRTS_FUNC(detach, M), SF);
-
-//   B.CreateRetVoid();
-
-//   Fn->addFnAttr(Attribute::InlineHint);
-
-//   return Fn;
-// }
-
-// /// \brief Get or create a LLVM function for __cilk_helper_epilogue.
-// /// It is equivalent to the following C code
-// ///
-// /// void __cilk_helper_epilogue(__cilkrts_stack_frame *sf) {
-// ///   if (sf->worker) {
-// ///     __cilkrts_pop_frame(sf);
-// ///     __cilkrts_leave_frame(sf);
-// ///   }
-// /// }
-// static llvm::Function *GetCilkHelperEpilogue(Module &M) {
-//   Function *Fn = 0;
-
-//   if (GetOrCreateFunction<cilk_func>("__cilk_helper_epilogue", M, Fn))
-//  return Fn;
-
-//   // If we get here we need to add the function body
-//   LLVMContext &Ctx = M.getContext();
-
-//   Function::arg_iterator args = Fn->arg_begin();
-//   Value *SF = &*args;
-
-//   BasicBlock *Entry = BasicBlock::Create(Ctx, "entry", Fn);
-//   BasicBlock *Body = BasicBlock::Create(Ctx, "body", Fn);
-//   BasicBlock *Exit = BasicBlock::Create(Ctx, "exit", Fn);
-
-//   // Entry
-//   {
-//  IRBuilder<> B(Entry);
-
-//  // if (sf->worker)
-//  Value *C = B.CreateIsNotNull(LoadField(B, SF, StackFrameBuilder::worker));
-//  B.CreateCondBr(C, Body, Exit);
-//   }
-
-//   // Body
-//   {
-//  IRBuilder<> B(Body);
-
-//  // __cilkrts_pop_frame(sf);
-//  B.CreateCall(CILKRTS_FUNC(pop_frame, M), SF);
-
-//  // __cilkrts_leave_frame(sf);
-//  B.CreateCall(CILKRTS_FUNC(leave_frame, M), SF);
-
-//  B.CreateBr(Exit);
-//   }
-
-//   // Exit
-//   {
-//  IRBuilder<> B(Exit);
-//  B.CreateRetVoid();
-//   }
-
-//   Fn->addFnAttr(Attribute::InlineHint);
-
-//   return Fn;
-// }
-
 static const char *stack_frame_name = "__cilkrts_sf";
 static const char *worker8_name = "__cilkrts_wc8";
 
@@ -1327,8 +1012,8 @@ static inline llvm::Value* GetOrInitStackFrame(Function& F, bool fast = true, bo
     retInst = rets[0];
   }
 
-  assert( retInst );
-  CallInst::Create( GetCilkParentEpilogue( *F.getParent(), instrument ), args, "", retInst );
+  assert (retInst);
+  CallInst::Create(GetCilkParentEpilogue(*F.getParent(), instrument ), args, "", retInst);
   return alloc;
 }
 
@@ -1336,55 +1021,11 @@ static inline llvm::Value* GetOrInitStackFrame(Function& F, bool fast = true, bo
 static inline llvm::Value *GetOrCreateWorker8(Function &F) {
   Value* W8 = F.getValueSymbolTable().lookup(worker8_name);
   if (W8) return W8;
-
   IRBuilder<> b(F.getEntryBlock().getFirstNonPHIOrDbgOrLifetime());
   Value* P0 = b.CreateCall(CILKRTS_FUNC(get_nworkers, *F.getParent()));
   Value* P8 = b.CreateMul(P0, ConstantInt::get(P0->getType(), 8), worker8_name);
-
   return P8;
 }
-
-/*
-  Type* getFrameType(LLVMContext& Context){
-  return StackFrameBuilder::get(Context);
-  }
-
-  Value* getFrameCTX(Instruction& insertBefore){
-  //todo will require gep / load
-  llvm::Value* frame = getFrameFromFunction(*insertBefore.getParent()->getParent());
-  return CastInst::CreatePointerCast( frame, Type::getInt8PtrTy(insertBefore.getContext()), "", &insertBefore );
-  }
-
-
-  Value* getFrameFlagsIsZero(Instruction& insertBefore){
-  //todo will require gep / load
-  LLVMContext& Context = insertBefore.getContext();
-  Value* frame = getFrameFromFunction(*insertBefore.getParent()->getParent());
-  Value *Idxs[] = {
-  ConstantInt::get(Type::getInt32Ty(Context), 0),
-  ConstantInt::get(Type::getInt32Ty(Context), 1)
-  };
-  Value* gep = GetElementPtrInst::Create( nullptr, frame, Idxs, "", &insertBefore );
-  Value* load = new LoadInst( gep, "", &insertBefore );
-
-  return new ICmpInst(&insertBefore, ICmpInst::ICMP_EQ, load, ConstantInt::get( load->getType(), 0 ) );
-  }
-
-  Type* getFramePointerType(LLVMContext& Context){
-  return getFrameType(Context)->getPointerTo();
-  }
-*/
-
-//todo beef up
-//use EmitCilkSetJmp
-
-/*
-  Value* saveStack( Instruction& insertBefore ) {
-  Function* setjumpF = Intrinsic::getDeclaration(insertBefore.getModule(), Intrinsic::eh_sjlj_setjmp);
-  Value* args[1] = { getFrameCTX( insertBefore ) };
-  return CallInst::Create(setjumpF, ArrayRef<Value*>(args), "", &insertBefore );
-  }
-*/
 
 //#####################################################################################################3333
 
@@ -1405,8 +1046,6 @@ static inline void createSync(SyncInst& inst,
     *SaveState = BasicBlock::Create(Ctx, "cilk.sync.savestate", Fn),
     *SyncCall = BasicBlock::Create(Ctx, "cilk.sync.runtimecall", Fn),
     *Excepting = BasicBlock::Create(Ctx, "cilk.sync.excepting", Fn),
-    *Rethrow = EXCEPTIONS ?
-    BasicBlock::Create(Ctx, "cilk.sync.rethrow", Fn) : 0,
     *Exit = BasicBlock::Create(Ctx, "cilk.sync.end", Fn);
 
   auto succ = inst.getSuccessor(0);
@@ -1475,24 +1114,7 @@ static inline void createSync(SyncInst& inst,
   // Excepting
   {
     IRBuilder<> B(Excepting);
-    if (EXCEPTIONS) {
-      Value *Flags = LoadField(B, SF, StackFrameBuilder::flags);
-      Flags = B.CreateAnd(Flags,
-                          ConstantInt::get(Flags->getType(),
-                                           CILK_FRAME_EXCEPTING));
-      Value *Zero = ConstantInt::get(Flags->getType(), 0);
-      Value *C = B.CreateICmpEQ(Flags, Zero);
-      B.CreateCondBr(C, Exit, Rethrow);
-    } else {
-      B.CreateBr(Exit);
-    }
-  }
-
-  // Rethrow
-  if (EXCEPTIONS) {
-    IRBuilder<> B(Rethrow);
-    B.CreateCall(CILKRTS_FUNC(rethrow, M), SF)->setDoesNotReturn();
-    B.CreateUnreachable();
+    B.CreateBr(Exit);
   }
 
   // Exit
@@ -1690,7 +1312,7 @@ static inline Function* extractDetachBodyToFunction(DetachInst& detach, Dominato
       phi->setIncomingBlock(idx, ts);
       ++i;
     }
-    Spawned = ts;    
+    Spawned = ts;
   }
 
   if (!populateDetachedCFG(detach, DT, functionPieces, reattachB, true)) return nullptr;
@@ -1705,7 +1327,7 @@ static inline Function* extractDetachBodyToFunction(DetachInst& detach, Dominato
       for (pred_iterator PI = pred_begin(a), E = pred_end(a); PI != E; ++PI) {
         BasicBlock *Pred = *PI;
         //printf("block:%s pred %s count:%u\n", a->getName().str().c_str(), Pred->getName().str().c_str(), functionPieces.count(Pred) );
-        if (dc == 0 && a == Spawned && Pred == detach.getParent()) { dc = 1; continue; } 
+        if (dc == 0 && a == Spawned && Pred == detach.getParent()) { dc = 1; continue; }
         if (functionPieces.count(Pred) == 0) {
           for(auto b : functionPieces) llvm::errs() << b->getName() << "|";
           llvm::errs() << "\n";
@@ -1844,14 +1466,14 @@ static inline Function* extractDetachBodyToFunction(DetachInst& detach, Dominato
   }
 
   std::vector<AllocaInst*> Allocas;
-  
+
   SmallPtrSet<BasicBlock*, 32> blocksInDetachedScope;
   std::deque<BasicBlock*> blocksToVisit;
   blocksToVisit.emplace_back(&extracted->getEntryBlock());
   while (blocksToVisit.size() != 0) {
     BasicBlock* block = blocksToVisit.back();
     blocksToVisit.pop_back();
-    if(blocksInDetachedScope.insert(block).second) { 
+    if(blocksInDetachedScope.insert(block).second) {
       const TerminatorInst* term = block->getTerminator();
       if (const DetachInst* det = dyn_cast<const DetachInst>(term)) {
         blocksToVisit.emplace_back(det->getContinue());

@@ -1,4 +1,4 @@
-//===- Detach2Cilk.cpp - The -detach2cilk pass, a wrapper around the Utils lib ----===//
+//===- Detach2Cilk.cpp - The -detach2cilk pass, a conversion to cilk runtime calls ----===//
 //
 //                     The LLVM Compiler Infrastructure
 //
@@ -29,19 +29,13 @@ struct CilkPass : public FunctionPass {
 	CilkPass(bool disablePostOpts=false, bool instrument=false) : FunctionPass(ID), DisablePostOpts(disablePostOpts), Instrument(instrument) {
 	}
 
-	// runOnFunction - To run this pass, first we calculate the alloca
-	// instructions that are safe for promotion, then we promote each one.
+	// runOnFunction - To run this pass, first we find appropriate instructions,
+	// then we promote each one.
 	//
 	bool runOnFunction(Function &F) override;
 
 	void getAnalysisUsage(AnalysisUsage &AU) const override {
-		//AU.addRequired<AssumptionCacheTracker>();
 		AU.addRequired<DominatorTreeWrapperPass>();
-		//AU.setPreservesCFG();
-		// This is a cluster of orthogonal Transforms
-		//AU.addPreserved<UnifyFunctionExitNodes>();
-		//AU.addPreservedID(LowerSwitchID);
-		//AU.addPreservedID(LowerInvokePassID);
 	}
 };
 }  // end of anonymous namespace
@@ -57,58 +51,42 @@ cl::opt<bool>  fastCilk(
 char CilkPass::ID = 0;
 static RegisterPass<CilkPass> X("detach2cilk", "Promote Detach to Cilk Runtime", false, false);
 INITIALIZE_PASS_BEGIN(CilkPass, "detach2cilk", "Promote Detach to Cilk Runtime", false, false)
-//INITIALIZE_PASS_DEPENDENCY(AssumptionCacheTracker)
 INITIALIZE_PASS_DEPENDENCY(DominatorTreeWrapperPass)
 INITIALIZE_PASS_END(CilkPass, "detach2cilk", "Promote Detach to Cilk Runtime",   false, false)
 
 bool CilkPass::runOnFunction(Function &F) {
+	if (llvm::verifyFunction(F, &llvm::errs())) {
+      F.dump();
+      assert(0);
+	}
+
+
 	bool Changed  = false;
   if (fastCilk && F.getName()=="main") {
     IRBuilder<> start(F.getEntryBlock().getFirstNonPHIOrDbg());
     auto m = start.CreateCall(CILKRTS_FUNC(init, *F.getParent()));
     m->moveBefore(F.getEntryBlock().getTerminator());
   }
-  
+
   DominatorTree &DT = getAnalysis<DominatorTreeWrapperPass>().getDomTree();
 	for (Function::iterator i = F.begin(), e = F.end(); i != e; ++i) {
-		TerminatorInst* term = i->getTerminator();
-		if( term == nullptr ) continue;
-		if( DetachInst* inst = llvm::dyn_cast<DetachInst>(term) ) {
-          //errs() << "<D2C>\n";
-          //F.dump();
-          //errs() << "</PRE>\n";
-      //if (!Changed) F.dump();
-		  llvm::cilk::createDetach(*inst, DT, ClInstrumentCilk || Instrument);
-          //errs() << "<POST>\n";
-          //F.dump();
-          if( llvm::verifyFunction(F, nullptr) ) {
-            F.dump(); 
-          }
-          assert( !llvm::verifyFunction(F, &llvm::errs()) );
-
-          //errs() << "</D2C>\n";
-		  Changed = true;
-		} else continue;
+			if (DetachInst* inst = llvm::dyn_cast_or_null<DetachInst>(i->getTerminator())) {
+		  	llvm::cilk::createDetach(*inst, DT, ClInstrumentCilk || Instrument);
+		  	Changed = true;
+			}
 	}
 
-  if (Changed)
 	for (Function::iterator i = F.begin(), e = F.end(); i != e; ++i) {
-		TerminatorInst* term = i->getTerminator();
-		if( term == nullptr ) continue;
-    		if( SyncInst* inst = llvm::dyn_cast<SyncInst>(term) ) {
+			if (SyncInst* inst = llvm::dyn_cast_or_null<SyncInst>(i->getTerminator())) {
     		  llvm::cilk::createSync(*inst, ClInstrumentCilk || Instrument);
-
-          if( llvm::verifyFunction(F, nullptr) ) {
-            F.dump(); 
-          }
-          assert( !llvm::verifyFunction(F, &llvm::errs()) );
-		}
+					Changed = true;
+			}
 	}
 
   bool inlining = true;
   while (inlining) {
     inlining = false;
-    for (inst_iterator I = inst_begin(F), E = inst_end(F); I != E; ++I)
+    for (inst_iterator I = inst_begin(F), E = inst_end(F); I != E; ++I) {
       if (auto cal = dyn_cast<CallInst>(&*I)) {
         if (auto fn = cal->getCalledFunction()) {
           if (fn->getName().startswith("__cilk")) {
@@ -118,26 +96,22 @@ bool CilkPass::runOnFunction(Function &F) {
               Changed |= true;
               inlining = true;
               break;
-            } else {
-              //llvm::errs() << "failed to inline function: " << fn->getName() << " in " << F.getName() << "\n";
             }
           }
         }
       }
+		}
   }
 
-  if (Changed) {
-    if (llvm::verifyFunction(F, nullptr)) {
-      F.dump(); 
-    }
-  }
+	if (llvm::verifyFunction(F, &llvm::errs())) {
+      F.dump();
+      assert(0);
+	}
 
-  assert( !llvm::verifyFunction(F, &llvm::errs()) );
-  
 	return Changed;
 }
 
-// createPromoteMemoryToRegister - Provide an entry point to create this pass.
+// createPromoteDetachToCilkPass - Provide an entry point to create this pass.
 //
 FunctionPass *llvm::createPromoteDetachToCilkPass(bool DisablePostOpts, bool Instrument) {
 	return new CilkPass(DisablePostOpts, Instrument);

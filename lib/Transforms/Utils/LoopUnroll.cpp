@@ -275,7 +275,7 @@ bool isCilkFor(Loop* L) {
             done = syncer;
         }
       }
-      if( getUniquePred(done) == syncer ){
+      if (done->getUniquePredecessor() == syncer) {
         //errs() << "has unique pred\n";
         auto term = done->getTerminator();
         bool good = true;
@@ -284,22 +284,22 @@ bool isCilkFor(Loop* L) {
             good = false;
             break;
           }
-        if( good ) done = syncer;
+        if (good) done = syncer;
       }
-      if( done != syncer ) {
+      if (done != syncer) {
         return false;
       }
 
     }
 
     DetachInst* det = dyn_cast<DetachInst>(detacher->getTerminator() );
-    if( det == nullptr ) {
+    if (det == nullptr) {
       return false;
     }
-    if( getNonPhiSize(detacher)!=1 ) {
+    if (getNonPhiSize(detacher)!=1) {
       return false;
     }
-    if( getNonPhiSize(syncer)!=1 ) {
+    if (getNonPhiSize(syncer)!=1) {
       return false;
     }
   return false;
