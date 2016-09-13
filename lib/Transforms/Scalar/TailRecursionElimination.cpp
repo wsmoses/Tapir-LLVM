@@ -768,6 +768,7 @@ static bool removeSyncs(Function& F) {
       }
     }
   }
+  return removedSync;
 }
 
 static void recreateSyncs(bool removedSync, Function &F) {

@@ -131,7 +131,6 @@ ModRefInfo AAResults::getModRefInfo(Instruction *I, ImmutableCallSite Call) {
 ModRefInfo AAResults::getModRefInfo(ImmutableCallSite CS,
                                     const MemoryLocation &Loc) {
   ModRefInfo Result = MRI_ModRef;
-
   for (const auto &AA : AAs) {
     Result = ModRefInfo(Result & AA->getModRefInfo(CS, Loc));
 
@@ -439,7 +438,10 @@ ModRefInfo AAResults::getModRefInfo(const DetachInst *D,
       if (isa<SyncInst>(I))
 	continue;
 
-      Result = ModRefInfo(Result | getModRefInfo(&*I, Loc));
+      if (!Loc.Ptr)
+        Result = ModRefInfo(Result | getModRefInfo(&*I));
+      else
+        Result = ModRefInfo(Result | getModRefInfo(&*I, Loc));
 
       // Early-exit the moment we reach the top of the lattice.
       if (Result == MRI_ModRef)
