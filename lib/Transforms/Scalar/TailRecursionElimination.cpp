@@ -733,6 +733,7 @@ static bool processReturningBlock(ReturnInst *Ret, BasicBlock *&OldEntry,
 
 static bool removeSyncs(Function& F) {
   bool removedSync = false;
+  if (!F.getFunctionType()->getReturnType()->isVoidTy()) return false;
   for (Function::iterator BBI = F.begin(), E = F.end(); BBI != E; /*in loop*/) {
     BasicBlock *BB = &*BBI++;
     if (ReturnInst* ret = dyn_cast<ReturnInst>(BB->getTerminator())) {
