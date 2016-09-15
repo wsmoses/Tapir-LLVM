@@ -678,7 +678,7 @@ void PromoteMem2Reg::run() {
       }
     }
     if (DetachedPred) {
-      errs() << "Alloca has bad phi test: "; AI->dump(); 
+      errs() << "Alloca has bad phi test: "; AI->dump();
       RemoveFromAllocasList(AllocaNum);
       continue;
     }

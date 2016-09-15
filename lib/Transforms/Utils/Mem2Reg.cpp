@@ -30,7 +30,6 @@ STATISTIC(NumPromoted, "Number of alloca's promoted");
 static bool promoteMemoryToRegister(Function &F, DominatorTree &DT,
                                     AssumptionCache &AC) {
   std::vector<AllocaInst *> Allocas;
-  BasicBlock &BB = F.getEntryBlock(); // Get the entry node for the function
   bool Changed = false;
 
   while (1) {
@@ -51,10 +50,6 @@ static bool promoteMemoryToRegister(Function &F, DominatorTree &DT,
           if (isAllocaPromotable(AI, DT))
             Allocas.push_back(AI);
     }
-    for (BasicBlock::iterator I = BB.begin(), E = --BB.end(); I != E; ++I)
-      if (AllocaInst *AI = dyn_cast<AllocaInst>(I)) // Is it an alloca?
-        if (isAllocaPromotable(AI, DT))
-          Allocas.push_back(AI);
 
     if (Allocas.empty())
       break;
