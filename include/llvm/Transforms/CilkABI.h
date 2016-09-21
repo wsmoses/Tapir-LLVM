@@ -1039,8 +1039,10 @@ static inline void createSync(SyncInst& inst,
   llvm::Value* SF = GetOrInitStackFrame( *Fn, /*isFast*/false, instrument);
   llvm::Value* args[] = {SF };
   assert( args[0] && "sync used in function without frame!" );
-  CallInst::Create( GetCilkSyncFn( M, instrument ), args, "", /*insert before*/&inst );
-  inst.removeFromParent();
+  auto ci = CallInst::Create( GetCilkSyncFn( M, instrument ), args, "", /*insert before*/&inst );
+  auto suc = inst.getSuccessor(0);
+  inst.eraseFromParent();
+  BranchInst::Create(suc, ci->getParent());
 }
 
 static inline void replaceInList(llvm::Value* v,

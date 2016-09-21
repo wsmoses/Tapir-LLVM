@@ -631,33 +631,52 @@ void PassManagerBuilder::prepopulateModulePassManager(
   addExtensionsToPM(EP_OptimizerLast, MPM);
 }
 
+#include "llvm/Analysis/ScalarEvolution.h"
 void PassManagerBuilder::populateModulePassManager(legacy::PassManagerBase& MPM) {
-
-    if (ParallelLevel != 0) {
-      switch (ParallelLevel) {
-        case 1: //fcilkplus
-          assert (0 && "fcilkplus no longer supported");
-          break;
-        case 2: //ftapir
-          prepopulateModulePassManager(MPM);
-          break;
-        case 3: //fdetach
-          break;
-        case 0: llvm_unreachable("invalid");
-      }
-
-      if (ParallelLevel != 3) MPM.add(createBarrierNoopPass());
-      if (ParallelLevel != 3) MPM.add(createInferFunctionAttrsLegacyPass());
-      MPM.add(createLoop2CilkPass());
-      MPM.add(createCFGSimplificationPass());
-      if (ParallelLevel != 3) MPM.add(createInferFunctionAttrsLegacyPass());
-      MPM.add(createPromoteDetachToCilkPass(ParallelLevel == 2, InstrumentCilk));
-      if (ParallelLevel != 3) MPM.add(createInferFunctionAttrsLegacyPass());
-      if (OptLevel != 0) MPM.add(createMergeFunctionsPass());
-      MPM.add(createBarrierNoopPass());
-      Inliner = Inliner2;
+  if (ParallelLevel != 0) {
+    switch (ParallelLevel) {
+      case 1: //fcilkplus
+//        assert (0 && "fcilkplus no longer supported");
+//        break;
+      case 2: //ftapir
+        prepopulateModulePassManager(MPM);
+        break;
+      case 3: //fdetach
+        break;
+      case 0: llvm_unreachable("invalid");
     }
-    prepopulateModulePassManager(MPM);
+
+    MPM.add(createBarrierNoopPass());
+
+    {
+      MPM.add(createIndVarSimplifyPass());
+    }
+
+
+    MPM.add(createLoop2CilkPass());
+    {
+
+
+
+  MPM.add(createIPSCCPPass());          // IP SCCP
+  MPM.add(createGlobalOptimizerPass()); // Optimize out global vars
+  // Promote any localized global vars.
+  MPM.add(createPromoteMemoryToRegisterPass());
+
+  MPM.add(createDeadArgEliminationPass()); // Dead argument elimination
+
+  addInstructionCombiningPass(MPM); // Clean up after IPCP & DAE
+  addExtensionsToPM(EP_Peephole, MPM);
+    }
+    MPM.add(createCFGSimplificationPass());
+    if (ParallelLevel != 3) MPM.add(createInferFunctionAttrsLegacyPass());
+    MPM.add(createPromoteDetachToCilkPass(ParallelLevel == 2, InstrumentCilk));
+    if (ParallelLevel != 3) MPM.add(createInferFunctionAttrsLegacyPass());
+    if (OptLevel != 0) MPM.add(createMergeFunctionsPass());
+    MPM.add(createBarrierNoopPass());
+    Inliner = nullptr;//Inliner2;
+  }
+  prepopulateModulePassManager(MPM);
 }
 
 void PassManagerBuilder::addLTOOptimizationPasses(legacy::PassManagerBase &PM) {

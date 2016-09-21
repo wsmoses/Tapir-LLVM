@@ -55,13 +55,13 @@ INITIALIZE_PASS_DEPENDENCY(DominatorTreeWrapperPass)
 INITIALIZE_PASS_END(CilkPass, "detach2cilk", "Promote Detach to Cilk Runtime",   false, false)
 
 bool CilkPass::runOnFunction(Function &F) {
-	if (llvm::verifyFunction(F, &llvm::errs())) {
-      F.dump();
-      assert(0);
-	}
+  if (llvm::verifyFunction(F, &llvm::errs())) {
+    F.dump();
+    assert(0);
+  }
 
 
-	bool Changed  = false;
+  bool Changed  = false;
   if (fastCilk && F.getName()=="main") {
     IRBuilder<> start(F.getEntryBlock().getFirstNonPHIOrDbg());
     auto m = start.CreateCall(CILKRTS_FUNC(init, *F.getParent()));
@@ -69,19 +69,24 @@ bool CilkPass::runOnFunction(Function &F) {
   }
 
   DominatorTree &DT = getAnalysis<DominatorTreeWrapperPass>().getDomTree();
-	for (Function::iterator i = F.begin(), e = F.end(); i != e; ++i) {
-			if (DetachInst* inst = llvm::dyn_cast_or_null<DetachInst>(i->getTerminator())) {
-		  	llvm::cilk::createDetach(*inst, DT, ClInstrumentCilk || Instrument);
-		  	Changed = true;
-			}
-	}
+  for (Function::iterator i = F.begin(), e = F.end(); i != e; ++i) {
+    if (DetachInst* inst = llvm::dyn_cast_or_null<DetachInst>(i->getTerminator())) {
+      llvm::cilk::createDetach(*inst, DT, ClInstrumentCilk || Instrument);
+      Changed = true;
+    }
+  }
 
-	for (Function::iterator i = F.begin(), e = F.end(); i != e; ++i) {
-			if (SyncInst* inst = llvm::dyn_cast_or_null<SyncInst>(i->getTerminator())) {
-    		  llvm::cilk::createSync(*inst, ClInstrumentCilk || Instrument);
-					Changed = true;
-			}
-	}
+  for (Function::iterator i = F.begin(), e = F.end(); i != e; ++i) {
+    if (SyncInst* inst = llvm::dyn_cast_or_null<SyncInst>(i->getTerminator())) {
+      llvm::cilk::createSync(*inst, ClInstrumentCilk || Instrument);
+      Changed = true;
+    }
+  }
+
+  if (llvm::verifyFunction(F, &llvm::errs())) {
+    F.dump();
+    assert(0);
+  }
 
   bool inlining = true;
   while (inlining) {
@@ -103,12 +108,12 @@ bool CilkPass::runOnFunction(Function &F) {
 		}
   }
 
-	if (llvm::verifyFunction(F, &llvm::errs())) {
-      F.dump();
-      assert(0);
-	}
+  if (llvm::verifyFunction(F, &llvm::errs())) {
+    F.dump();
+    assert(0);
+  }
 
-	return Changed;
+  return Changed;
 }
 
 // createPromoteDetachToCilkPass - Provide an entry point to create this pass.

@@ -64,7 +64,7 @@ namespace {
     void getAnalysisUsage(AnalysisUsage &AU) const override {
       AU.addRequired<DominatorTreeWrapperPass>();
       AU.addRequired<LoopInfoWrapperPass>();
-      AU.addRequired<ScalarEvolutionWrapperPass>();
+      //AU.addRequired<ScalarEvolutionWrapperPass>();
       AU.addRequiredID(LoopSimplifyID);
     }
 
@@ -82,7 +82,7 @@ INITIALIZE_PASS_BEGIN(Loop2Cilk, "loop2cilk",
                 "Find cilk for loops and use more efficient runtime", false, false)
 INITIALIZE_PASS_DEPENDENCY(DominatorTreeWrapperPass)
 INITIALIZE_PASS_DEPENDENCY(LoopInfoWrapperPass)
-INITIALIZE_PASS_DEPENDENCY(ScalarEvolutionWrapperPass)
+//INITIALIZE_PASS_DEPENDENCY(ScalarEvolutionWrapperPass)
 INITIALIZE_PASS_DEPENDENCY(LoopSimplify)
 INITIALIZE_PASS_END(Loop2Cilk, "loop2cilk", "Find cilk for loops and use more efficient runtime", false, false)
 
@@ -971,7 +971,7 @@ bool Loop2Cilk::performDAC(Loop *L, LPPassManager &LPM) {
   //extracted->dump();
   //llvm::errs() << "</DONE EXTRACTING FROM " << extracted->getName() << "\\>\n";
 
-  if( !extracted ) {
+  if (!extracted) {
     errs() << "not extracted\n";
     return false;
   }
@@ -1089,8 +1089,13 @@ bool Loop2Cilk::performDAC(Loop *L, LPPassManager &LPM) {
 
   if (parentL) parentL->removeChildLoop( std::find(parentL->getSubLoops().begin(), parentL->getSubLoops().end(), L) );
   LI.removeBlock(a1);
-
   removeFromAll(parentL, a1);
+
+  if (auto term = a1->getTerminator())
+    term->eraseFromParent();
+  if (auto term = a2->getTerminator())
+    term->eraseFromParent();
+
   DeleteDeadBlock(a1);
   if (a1 != a2) {
     LI.removeBlock(a2);
@@ -1098,8 +1103,8 @@ bool Loop2Cilk::performDAC(Loop *L, LPPassManager &LPM) {
     DeleteDeadBlock(a2);
   }
 
-  assert (Header->getTerminator()->use_empty());
-  Header->getTerminator()->eraseFromParent();
+  if (auto term = Header->getTerminator())
+    term->eraseFromParent();
   IRBuilder<> b2(Header);
   b2.CreateBr(detacher);
 
@@ -1139,8 +1144,8 @@ bool Loop2Cilk::performDAC(Loop *L, LPPassManager &LPM) {
     b.CreateBr(syncer);
   }
 
-  ScalarEvolution &SE = getAnalysis<ScalarEvolutionWrapperPass>().getSE();
-  SE.forgetLoop(L);
+  //ScalarEvolution &SE = getAnalysis<ScalarEvolutionWrapperPass>().getSE();
+  //SE.forgetLoop(L);
 
   DT.recalculate(*Header->getParent());
   L->invalidate();

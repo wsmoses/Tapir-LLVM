@@ -2003,6 +2003,7 @@ bool llvm::InlineFunction(CallSite CS, InlineFunctionInfo &IFI,
   // this is an invoke instruction or a call instruction.
   BasicBlock *AfterCallBB;
   BranchInst *CreatedBranchToNormalDest = nullptr;
+
   if (InvokeInst *II = dyn_cast<InvokeInst>(TheCall)) {
 
     // Add an unconditional branch to make this look like the CallInst case...

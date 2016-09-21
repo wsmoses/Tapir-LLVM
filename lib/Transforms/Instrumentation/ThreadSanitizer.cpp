@@ -351,7 +351,7 @@ void ThreadSanitizer::chooseInstructionsToInstrument(
     Value *Addr = isa<StoreInst>(*I)
         ? cast<StoreInst>(I)->getPointerOperand()
         : cast<LoadInst>(I)->getPointerOperand();
-    if (isa<AllocaInst>(GetUnderlyingObject(Addr, DL)) &&
+    if (false && isa<AllocaInst>(GetUnderlyingObject(Addr, DL)) &&
         !PointerMayBeCaptured(Addr, true, true)) {
       // The variable is addressable but not captured, so it cannot be
       // referenced from a different thread and participate in a data race
