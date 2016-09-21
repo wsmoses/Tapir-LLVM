@@ -38,7 +38,6 @@
 #include "llvm/Transforms/Utils/LoopSimplify.h"
 #include "llvm/Transforms/Utils/LoopUtils.h"
 #include "llvm/Transforms/Utils/SimplifyIndVar.h"
-#include "llvm/Transforms/CilkABI.h"
 using namespace llvm;
 
 #define DEBUG_TYPE "loop-unroll"
@@ -144,164 +143,12 @@ foldBlockIntoPredecessor(BasicBlock *BB, LoopInfo *LI, ScalarEvolution *SE,
   return OnlyPred;
 }
 
+//! Identify if a loop could be a cilk for loop and thus diasble unrolling
 bool isCilkFor(Loop* L) {
-  bool hasDetach = false;
-  for( auto& a : L->blocks() ) {
-    if( dyn_cast<DetachInst>(a->getTerminator())) { hasDetach = true; break; }
-  }
-
-  return hasDetach;
-
-    if (!L->isLoopSimplifyForm()) {
-      //errs() << "not simplify form\n";
-      simplifyLoop(L, nullptr, nullptr, nullptr, nullptr, false);
-      //return false;
-    }
-
-    BasicBlock* Header = L->getHeader();
-    assert(Header);
-
-    //errs() << "<F>:\n******************************************************************************************************************************************";
-    //Header->getParent()->dump();
-    //errs() << "</F>:\n******************************************************************************************************************************************";
-
-    TerminatorInst* T = Header->getTerminator();
-    if( !isa<BranchInst>(T) ) {
-      BasicBlock *Preheader = L->getLoopPreheader();
-      if( isa<BranchInst>(Preheader->getTerminator()) ) { T = Preheader->getTerminator(); Header = Preheader; }
-      else {
-      return false;
-    }
-    }
-    BranchInst* B = (BranchInst*)T;
-    BasicBlock *detacher, *syncer;
-    if( B->getNumSuccessors() != 2 ) {
-      SmallVector< BasicBlock *, 32> exitBlocks;
-      L->getExitBlocks(exitBlocks);
-      BasicBlock* endL = 0;
-      SmallPtrSet<BasicBlock *, 32> inLoop(exitBlocks.begin(), exitBlocks.end());
-      if( inLoop.size() >= 2) {
-        for( auto& a : exitBlocks ) {
-          SmallPtrSet<BasicBlock *, 32> reachable;
-          std::vector<BasicBlock*> Q;
-          Q.push_back(a);
-          bool valid = true;
-          while(!Q.empty() && valid){
-            auto m = Q.back();
-            Q.pop_back();
-            if( isa<UnreachableInst>(a->getTerminator()) ) {
-              //errs() << "re erasing: " << m->getName() << "\n";
-              reachable.insert(m);
-            }
-            else if( auto b = dyn_cast<BranchInst>(a->getTerminator()) ) {
-              bool bad = false;
-              for( int i=0; i<b->getNumSuccessors(); i++ ) {
-                 if( L->contains( b->getSuccessor(i) ) || std::find(exitBlocks.begin(), exitBlocks.end(), b->getSuccessor(i) ) != exitBlocks.end() ) {
-
-                 } else{
-                  bad =  true;
-                  break;
-                }
-              }
-              if( bad ) valid = false;
-              else {
-                reachable.insert(m);
-              }
-            }
-            else valid = false;
-
-          }
-          if( valid ) {
-            for( auto b : reachable){
-              //errs() << "erasing: " << b->getName() << "\n";
-              //inLoop.erase(b);
-            }
-          }
-        }
-      }
-      if( inLoop.size() == 1 ) endL = * inLoop.begin();
-      auto oendL = endL;
-      while( endL && !isa<SyncInst>( endL->getTerminator() ) ) {
-        //errs() << "THING: " << endL->size() << " " << isa<BranchInst>(endL->getTerminator()) << " " << (endL->getTerminator()->getNumSuccessors() ) << "\n";
-        //endL->dump();
-        if( getNonPhiSize(endL) == 1 && isa<BranchInst>(endL->getTerminator()) && endL->getTerminator()->getNumSuccessors() == 1 ) {
-          //TODO merging
-          //endL->dump();
-          //endL->getTerminator()->getSuccessor(0)->dump();
-          auto temp = endL->getTerminator()->getSuccessor(0);
-          //bool success = TryToSimplifyUncondBranchFromEmptyBlock(endL);
-  //        bool success = MergeBlockIntoPredecessor(endL->getTerminator()->getSuccessor(0));
-          //if( !success ) {
-          //  endL = nullptr;
-          //  errs() << "no success :(\n";
-          //} else {
-            endL = temp;
-          //}
-        }
-        else
-          endL = nullptr;
-      }
-
-      if( endL ) {
-        syncer = endL;
-        detacher = B->getSuccessor(0);
-      } else {
-        return false;
-      }
-
-
-    } else {
-      detacher = B->getSuccessor(0);
-      syncer = B->getSuccessor(1);
-
-
-      if( isa<SyncInst>(detacher->getTerminator()) ){
-        BasicBlock* temp = detacher;
-        detacher = syncer;
-        syncer = temp;
-      } else if( !isa<SyncInst>(syncer->getTerminator()) ) {
-        return false;
-      }
-
-      BasicBlock* done = L->getExitingBlock();
-      if( !done ) {
-        return false;
-      }
-      if( auto BI = dyn_cast<BranchInst>(done->getTerminator()) ) {
-        if( BI->getNumSuccessors() == 2 ) {
-          if( BI->getSuccessor(0) == detacher && BI->getSuccessor(1) == syncer )
-            done = syncer;
-          if( BI->getSuccessor(1) == detacher && BI->getSuccessor(0) == syncer )
-            done = syncer;
-        }
-      }
-      if (done->getUniquePredecessor() == syncer) {
-        //errs() << "has unique pred\n";
-        auto term = done->getTerminator();
-        bool good = true;
-        for(int i=0; i<term->getNumSuccessors(); i++)
-          if( L->contains( term->getSuccessor(i)) ){
-            good = false;
-            break;
-          }
-        if (good) done = syncer;
-      }
-      if (done != syncer) {
-        return false;
-      }
-
-    }
-
-    DetachInst* det = dyn_cast<DetachInst>(detacher->getTerminator() );
-    if (det == nullptr) {
-      return false;
-    }
-    if (getNonPhiSize(detacher)!=1) {
-      return false;
-    }
-    if (getNonPhiSize(syncer)!=1) {
-      return false;
-    }
+  //TODO use a more precise detection of cilk for loops
+  for (BasicBlock* BB : L->blocks())
+    if (dyn_cast<DetachInst>(BB->getTerminator()))
+      return true;
   return false;
 }
 
@@ -389,7 +236,7 @@ bool llvm::UnrollLoop(Loop *L, unsigned Count, unsigned TripCount, bool Force,
   BasicBlock *Header = L->getHeader();
   BranchInst *BI = dyn_cast<BranchInst>(LatchBlock->getTerminator());
 
-  if( isCilkFor(L) ) return false;
+  if (isCilkFor(L)) return false;
 
   if (!BI || BI->isUnconditional()) {
     // The loop-rotate pass can be helpful to avoid this in many cases.
