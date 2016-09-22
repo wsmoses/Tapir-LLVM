@@ -48,8 +48,6 @@ class TargetRegisterClass;
 struct MachinePointerInfo;
 struct WinEHFuncInfo;
 
-void setMFHasVarSizedObjects(MachineFrameInfo* mf);
-
 template <>
 struct ilist_sentinel_traits<MachineBasicBlock>
     : public ilist_half_embedded_sentinel_traits<MachineBasicBlock> {};

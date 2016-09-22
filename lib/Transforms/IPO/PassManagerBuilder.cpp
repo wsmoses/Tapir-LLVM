@@ -631,13 +631,10 @@ void PassManagerBuilder::prepopulateModulePassManager(
   addExtensionsToPM(EP_OptimizerLast, MPM);
 }
 
-#include "llvm/Analysis/ScalarEvolution.h"
 void PassManagerBuilder::populateModulePassManager(legacy::PassManagerBase& MPM) {
   if (ParallelLevel != 0) {
     switch (ParallelLevel) {
       case 1: //fcilkplus
-//        assert (0 && "fcilkplus no longer supported");
-//        break;
       case 2: //ftapir
         prepopulateModulePassManager(MPM);
         break;
@@ -648,33 +645,17 @@ void PassManagerBuilder::populateModulePassManager(legacy::PassManagerBase& MPM)
 
     MPM.add(createBarrierNoopPass());
 
-    {
-      MPM.add(createIndVarSimplifyPass());
-    }
-
+    MPM.add(createIndVarSimplifyPass());
 
     MPM.add(createLoop2CilkPass());
-    {
 
-
-
-  MPM.add(createIPSCCPPass());          // IP SCCP
-  MPM.add(createGlobalOptimizerPass()); // Optimize out global vars
-  // Promote any localized global vars.
-  MPM.add(createPromoteMemoryToRegisterPass());
-
-  MPM.add(createDeadArgEliminationPass()); // Dead argument elimination
-
-  addInstructionCombiningPass(MPM); // Clean up after IPCP & DAE
-  addExtensionsToPM(EP_Peephole, MPM);
-    }
     MPM.add(createCFGSimplificationPass());
+
     if (ParallelLevel != 3) MPM.add(createInferFunctionAttrsLegacyPass());
     MPM.add(createPromoteDetachToCilkPass(ParallelLevel == 2, InstrumentCilk));
     if (ParallelLevel != 3) MPM.add(createInferFunctionAttrsLegacyPass());
     if (OptLevel != 0) MPM.add(createMergeFunctionsPass());
     MPM.add(createBarrierNoopPass());
-    Inliner = nullptr;//Inliner2;
   }
   prepopulateModulePassManager(MPM);
 }
@@ -937,7 +918,6 @@ LLVMPassManagerBuilderUseInlinerWithThreshold(LLVMPassManagerBuilderRef PMB,
                                               unsigned Threshold) {
   PassManagerBuilder *Builder = unwrap(PMB);
   Builder->Inliner = createFunctionInliningPass(Threshold);
-  Builder->Inliner2 = createFunctionInliningPass(Threshold);
 }
 
 void
@@ -967,9 +947,6 @@ void LLVMPassManagerBuilderPopulateLTOPassManager(LLVMPassManagerBuilderRef PMB,
   // an RunInliner option.
   if (RunInliner && !Builder->Inliner) {
     Builder->Inliner = createFunctionInliningPass();
-  }
-  if (RunInliner && !Builder->Inliner2) {
-    Builder->Inliner2 = createFunctionInliningPass();
   }
   Builder->populateLTOPassManager(*LPM);
 }

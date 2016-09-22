@@ -50,7 +50,6 @@
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include "llvm/Transforms/Utils/Local.h"
 #include "llvm/Transforms/Utils/SSAUpdater.h"
-#include "llvm/IR/Verifier.h"
 #include <vector>
 using namespace llvm;
 using namespace llvm::gvn;

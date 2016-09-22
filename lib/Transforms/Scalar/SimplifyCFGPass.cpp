@@ -165,10 +165,10 @@ static bool removeUselessSyncs(Function &F) {
 
       if (!ReachingDetach) {
         BasicBlock* suc = Sync->getSuccessor(0);
-      	IRBuilder<> Builder(Sync);
-      	Builder.CreateBr(suc);
-      	Sync->eraseFromParent();
-      	Changed = true;
+        IRBuilder<> Builder(Sync);
+        Builder.CreateBr(suc);
+        Sync->eraseFromParent();
+        Changed = true;
         if (MergeBlockIntoPredecessor(suc)) goto check;
       }
     }

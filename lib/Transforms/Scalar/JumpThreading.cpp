@@ -1084,7 +1084,6 @@ bool JumpThreadingPass::SimplifyPartiallyRedundantLoad(LoadInst *LI) {
   // Now we know that each predecessor of this block has a value in
   // AvailablePreds, sort them for efficient access as we're walking the preds.
   array_pod_sort(AvailablePreds.begin(), AvailablePreds.end());
-  DEBUG(dbgs() << "Creating a Phi node to eliminate " << *LI << "\n");
   // Create a PHI node at the start of the block for the PRE'd load value.
   pred_iterator PB = pred_begin(LoadBB), PE = pred_end(LoadBB);
   PHINode *PN = PHINode::Create(LI->getType(), std::distance(PB, PE), "",

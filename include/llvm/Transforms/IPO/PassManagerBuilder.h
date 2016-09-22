@@ -130,7 +130,6 @@ public:
   /// Inliner - Specifies the inliner to use.  If this is non-null, it is
   /// added to the per-module passes.
   Pass *Inliner;
-  Pass *Inliner2;
 
   /// The module summary index to use for function importing.
   const ModuleSummaryIndex *ModuleSummary;

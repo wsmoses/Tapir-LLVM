@@ -39,7 +39,7 @@
 #include <iostream>
 #include <deque>
 
-static inline  size_t getNonPhiSize(llvm::BasicBlock* b){
+static inline size_t getNonPhiSize(llvm::BasicBlock* b){
     int bad = 0;
     llvm::BasicBlock::iterator i = b->begin();
     while (llvm::isa<llvm::PHINode>(i) ) { ++i; bad++; }
@@ -55,7 +55,10 @@ static inline llvm::Instruction* getFirstPostPHI(llvm::BasicBlock* b){
 static inline llvm::Instruction* getLastNonTerm(llvm::BasicBlock* b){
     llvm::Instruction* inst = nullptr;
     llvm::BasicBlock::iterator i = b->begin();
-    while ( i != b->end() ) { if(!llvm::isa<llvm::TerminatorInst>(i)) inst = &(*i); ++i; }
+    while (i != b->end()) {
+      if(!llvm::isa<llvm::TerminatorInst>(i)) inst = &(*i);
+      ++i;
+    }
     return inst;
 }
 
@@ -99,17 +102,9 @@ enum {
                             CILK_FRAME_UNWINDING        |       \
                             CILK_FRAME_VERSION_MASK))
 
-typedef uint32_t cilk32_t;
-typedef uint64_t cilk64_t;
-typedef void (*__cilk_abi_f32_t)(void *data, cilk32_t low, cilk32_t high);
-typedef void (*__cilk_abi_f64_t)(void *data, cilk64_t low, cilk64_t high);
-
-
 typedef void (__cilkrts_init)();
 
-typedef void (__cilkrts_enter_frame)(__cilkrts_stack_frame *sf);
 typedef void (__cilkrts_enter_frame_1)(__cilkrts_stack_frame *sf);
-typedef void (__cilkrts_enter_frame_fast)(__cilkrts_stack_frame *sf);
 typedef void (__cilkrts_enter_frame_fast_1)(__cilkrts_stack_frame *sf);
 typedef void (__cilkrts_leave_frame)(__cilkrts_stack_frame *sf);
 typedef void (__cilkrts_sync)(__cilkrts_stack_frame *sf);
@@ -412,26 +407,16 @@ static CallInst *EmitCilkSetJmp(IRBuilder<> &B, Value *SF, Module& M) {
 
   // Call LLVM's EH setjmp, which is lightweight.
 
-  Value* F;
-
   AttrBuilder attrs;
-
-//{ nounwind returns_twice "disable-tail-calls"="false" "less-precise-fpmad"="false" "no-frame-pointer-elim"="true" "no-frame-pointer-elim-non-leaf" "no-infs-fp-math"="false" "no-nans-fp-math"="false" "stack-protector-buffer-size"="8" "target-cpu"="x86-64" "target-features"="+fxsr,+mmx,+sse,+sse2" "unsafe-fp-math"="false" "use-soft-float"="false" }
-  attrs.addAttribute(Attribute::AttrKind::NoUnwind);
   attrs.addAttribute(Attribute::AttrKind::ReturnsTwice);
 
-  //AttributeSet aset = AttributeSet::get(Ctx,0,attrs);
-  //F = M.getOrInsertFunction( "_setjmp", FunctionType::get( Int32Ty, { Int8PtrTy }, false ), aset );
-  //F->dump();
-
-  F = Intrinsic::getDeclaration(&M, Intrinsic::eh_sjlj_setjmp);
+  Value* F = Intrinsic::getDeclaration(&M, Intrinsic::eh_sjlj_setjmp);
 
   Buf = B.CreateBitCast(Buf, Int8PtrTy);
 
   CallInst *SetjmpCall = B.CreateCall(F, Buf);
   SetjmpCall->setCanReturnTwice();
 
-  //M.dump();
   return SetjmpCall;
 }
 
@@ -1128,7 +1113,7 @@ static inline bool populateDetachedCFG(const DetachInst& detach, DominatorTree& 
   BasicBlock* Continue = detach.getSuccessor(1);
   todo.push_back(Spawned);
 
-  while( todo.size() > 0 ){
+  while (todo.size() > 0) {
     BasicBlock* BB = todo.pop_back_val();
 
     if (!functionPieces.insert(BB).second)
@@ -1197,9 +1182,6 @@ static inline Function* extractDetachBodyToFunction(DetachInst& detach, Dominato
 						    llvm::Value* closure = 0, std::vector<Value*> *ext_args=0) {
   llvm::BasicBlock* detB = detach.getParent();
   Function& F = *(detB->getParent());
-  //Module* M = F.getParent();
-  // LLVMContext& Context = F.getContext();
-  // const DataLayout& DL = M->getDataLayout();
 
   BasicBlock* Spawned  = detach.getSuccessor(0);
   BasicBlock* Continue = detach.getSuccessor(1);
@@ -1228,30 +1210,21 @@ static inline Function* extractDetachBodyToFunction(DetachInst& detach, Dominato
   blocks.insert( blocks.begin(), Spawned );
   functionPieces.insert(Spawned);
 
-  for( auto& a : blocks ){
-      int dc = 0;
-      for (pred_iterator PI = pred_begin(a), E = pred_end(a); PI != E; ++PI) {
+  for (BasicBlock* BB: blocks) {
+      int detached_count = 0;
+      for (pred_iterator PI = pred_begin(BB), E = pred_end(BB); PI != E; ++PI) {
         BasicBlock *Pred = *PI;
-        //printf("block:%s pred %s count:%u\n", a->getName().str().c_str(), Pred->getName().str().c_str(), functionPieces.count(Pred) );
-        if (dc == 0 && a == Spawned && Pred == detach.getParent()) { dc = 1; continue; }
-        if (functionPieces.count(Pred) == 0) {
-          for(auto b : functionPieces) llvm::errs() << b->getName() << "|";
-          llvm::errs() << "\n";
-          a->dump();
-          Pred->dump();
-          Pred->getParent()->dump();
+        if (detached_count == 0 && BB == Spawned && Pred == detach.getParent()) {
+          detached_count = 1;
+          continue;
         }
         assert(functionPieces.count(Pred) &&
                "Block inside of detached context branched into from outside branch context");
-        // if( functionPieces.find(Pred) == functionPieces.end() ) {
-        //  assert( 0 && "Block inside of detached context branched into from outside branch context");
-        // }
       }
   }
 
   PHINode *rstart = 0, *rend = 0, *grain;
   Instruction *inst = 0, *inst0 = 0;
-  //PHINode *fake;
   Instruction* add = 0;
   std::vector<Instruction*> moveToFront;
   if (closure) {
@@ -1274,9 +1247,6 @@ static inline Function* extractDetachBodyToFunction(DetachInst& detach, Dominato
     PHINode* idx = PHINode::Create( closure->getType(), 2, "", &Spawned->front() );
     idx->addIncoming( rstart, detB );
 
-    //fake = PHINode::Create( alloc->getType(), 2, "", &Spawned->front() );
-    //fake->addIncoming( alloc, detB );
-
     functionPieces.insert(lp);
     blocks.push_back(lp);
 
@@ -1288,7 +1258,7 @@ static inline Function* extractDetachBodyToFunction(DetachInst& detach, Dominato
       if( a == Spawned ) {
         a = lp;
       }
-      ((BranchInst*) a->getTerminator() )->setSuccessor(0, next );
+      ((BranchInst*) a->getTerminator() )->setSuccessor(0, next);
     }
 
     IRBuilder<> nextB(next);
@@ -1298,39 +1268,19 @@ static inline Function* extractDetachBodyToFunction(DetachInst& detach, Dominato
 
     replaceInList( closure, idx, functionPieces );
   }
-  //detach.getParent()->getParent()->dump();
-  //for( auto & b : blocks)
-  //  b->dump();
-  //detach.getParent()->getParent()->dump();
-  CodeExtractor extractor( ArrayRef<BasicBlock*>( blocks ), /*dominator tree -- todo? */ nullptr );
-  if( !extractor.isEligible() ) {
-    for(auto& a : blocks)a->dump();
-  }
-  assert( extractor.isEligible() && "Code not able to be extracted!" );
 
+  CodeExtractor extractor(ArrayRef<BasicBlock*>(blocks), &DT);
+  if (!extractor.isEligible()) {
+    for(auto& a : blocks)a->dump();
+    assert(0 && "Code not able to be extracted!" );
+  }
 
   if (closure) {
     SetVector<Value*> Inputs, Outputs;
     extractor.findInputsOutputs(Inputs, Outputs);
-    if( Outputs.size() != 0 ){
-       for( auto& b : blocks ) b->dump();
-       for( auto& a : Outputs ) {
-        assert( dyn_cast<Instruction>(a) );
-        ((Instruction*)a)->getParent()->getParent()->dump();
-        errs() << "<BAD>\n";
-	      a->dump();
-        for( auto& b : ((Instruction*)a)->uses() )
-          b.getUser()->dump();
-
-        errs() << "</BAD>\n";
-       }
-    }
     assert( Outputs.size() == 0 );
-    if (Inputs[0] != rstart ) { Inputs[0]->dump(); F.dump(); }
     assert( Inputs[0] == rstart );
-    if (Inputs[1] != rend )  { Inputs[1]->dump(); F.dump(); }
     assert( Inputs[1] == rend );
-    if (Inputs[2] != grain )  { Inputs[2]->dump(); F.dump(); }
     assert( Inputs[2] == grain );
   }
 
@@ -1413,7 +1363,7 @@ static inline bool makeFunctionDetachable( Function& extracted, bool instrument 
   // const DataLayout& DL = M->getDataLayout();
   /*
     __cilkrts_stack_frame sf;
-    __cilkrts_enter_frame_fast(&sf);
+    __cilkrts_enter_frame_fast_1(&sf);
     __cilkrts_detach();
     *x = f(y);
     */
@@ -1443,14 +1393,7 @@ static inline bool makeFunctionDetachable( Function& extracted, bool instrument 
     IRB.CreateCall(CILK_CSI_FUNC(enter_helper_begin, *M), begin_args);
   }
 
-  //TODO check difference between frame fast and frame fast 1
   IRB.CreateCall(CILKRTS_FUNC(enter_frame_fast_1, *M), args);
-  /* Instruction* call = CallInst::Create(CILKRTS_FUNC(enter_frame_fast_1, *M), args, "", extracted.getEntryBlock().getTerminator() ); */
-  // IRBuilder<> B(call);
-  // // sf->worker = 0;
-  // StoreField(B,
-  //           Constant::getNullValue(TypeBuilder<__cilkrts_worker*, false>::get(M->getContext())),
-  //           sf, StackFrameBuilder::worker);
 
   if (instrument) {
     llvm::Value* end_args[2] = { sf, StackSave };
@@ -1460,7 +1403,6 @@ static inline bool makeFunctionDetachable( Function& extracted, bool instrument 
   }
 
   IRB.CreateCall(CILKRTS_FUNC(detach, *M), args);
-  /* Instruction* call2 = CallInst::Create(CILKRTS_FUNC(detach, *M), args, "", extracted.getEntryBlock().getTerminator() ); */
 
   if (instrument)
     IRB.CreateCall(CILK_CSI_FUNC(detach_end, *M));
@@ -1476,14 +1418,12 @@ static inline bool makeFunctionDetachable( Function& extracted, bool instrument 
     }
   }
   assert( ret && "No return from extract function" );
-  //TODO alow to work for functions with multiple returns
 
   /*
      __cilkrts_pop_frame(&sf);
      if (sf->flags)
      __cilkrts_leave_frame(&sf);
   */
-  //TODO WHY I
   auto PE = GetCilkParentEpilogue(*M, instrument);
 
   CallInst::Create(PE, args,"",ret);
@@ -1499,9 +1439,6 @@ static inline bool createDetach(DetachInst& detach, DominatorTree& DT,
   BasicBlock* Continue = detach.getSuccessor(1);
 
   Module* M = F.getParent();
-  // LLVMContext& Context = F.getContext();
-  // const DataLayout& DL = M->getDataLayout();
-
   //replace with branch to succesor
   //entry / cilk.spawn.savestate
   Value *SF = GetOrInitStackFrame( F, /*isFast*/ false, instrument );

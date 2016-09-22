@@ -90,15 +90,6 @@ Pass *llvm::createLoop2CilkPass() {
   return new Loop2Cilk();
 }
 
-size_t countPredecessors(BasicBlock* syncer) {
-  size_t count = 0;
-  for (auto it = pred_begin(syncer), et = pred_end(syncer); it != et; ++it) {
-    count++;
-  }
-  return count;
-}
-
-
 Value* neg(Value* V) {
   if( Constant* C = dyn_cast<Constant>(V) ) {
     ConstantFolder F;
@@ -123,7 +114,7 @@ Value* neg(Value* V) {
   return foo;
 }
 
-Value* subOne (Value* V, std::string s="") {
+Value* subOne(Value* V, std::string s="") {
   if( Constant* C = dyn_cast<Constant>(V) ) {
     ConstantFolder F;
     return F.CreateSub(C, ConstantInt::get(V->getType(), 1) );
@@ -146,7 +137,7 @@ Value* subOne (Value* V, std::string s="") {
   return foo;
 }
 
-Value* addOne (Value* V, std::string n="") {
+Value* addOne(Value* V, std::string n="") {
   if (Constant* C = dyn_cast<Constant>(V)) {
     ConstantFolder F;
     return F.CreateAdd(C, ConstantInt::get(V->getType(), 1) );
@@ -317,14 +308,13 @@ std::pair<PHINode*,Value*> getIndVar(Loop *L, BasicBlock* detacher, DominatorTre
 
   if (BranchInst* brnch = dyn_cast<BranchInst>(cmpNode->getTerminator()) ) {
     if (!brnch->isConditional()) goto cmp_error;
-    if ( (cmp = dyn_cast<CmpInst>(brnch->getCondition())) ) {
-
-    } else {
+    cmp = dyn_cast<CmpInst>(brnch->getCondition());
+    if (cmp == nullptr) {
       errs() << "no comparison inst from backedge\n";
       cmpNode->getTerminator()->dump();
       return make_pair(nullptr,nullptr);
     }
-    if ( !L->contains(brnch->getSuccessor(0)) ) {
+    if (!L->contains(brnch->getSuccessor(0))) {
       cmp->setPredicate(CmpInst::getInversePredicate(cmp->getPredicate()));
       brnch->swapSuccessors();
     }
@@ -454,7 +444,7 @@ std::pair<PHINode*,Value*> getIndVar(Loop *L, BasicBlock* detacher, DominatorTre
     ++I;
   }
 
-  if( RPN == 0 ) {
+  if (RPN == 0) {
     errs() << "<no RPN>\n";
     cmp->dump();
     errs() << "<---->\n";
@@ -492,7 +482,6 @@ std::pair<PHINode*,Value*> getIndVar(Loop *L, BasicBlock* detacher, DominatorTre
     if( isZero(RPN->getIncomingValueForBlock(Incoming) )) newV = mul;
     else toIgnore.insert(newV = builder.CreateAdd(mul, RPN->getIncomingValueForBlock(Incoming), "indadd"));
 
-    //  std::vector<Value*> replacements;
     for( auto a : others ) {
       llvm::Value* val = builder.CreateSExtOrTrunc(RPN, std::get<0>(a)->getType());
       if (val != RPN) toIgnore.insert(val);
@@ -502,7 +491,6 @@ std::pair<PHINode*,Value*> getIndVar(Loop *L, BasicBlock* detacher, DominatorTre
       llvm::Value* add0 = std::get<0>(a)->getIncomingValueForBlock(Incoming);
       if( !isZero(add0) ) val = builder.CreateAdd(val,add0, "vadd");
       if (val != RPN) toIgnore.insert(val);
-      //std::get<0>(a)->dump();
       assert( isa<Instruction>(val) );
       Instruction* ival = cast<Instruction>(val);
 
@@ -602,9 +590,6 @@ std::pair<PHINode*,Value*> getIndVar(Loop *L, BasicBlock* detacher, DominatorTre
   {
     Value *bottom = adder, *top = val;
     if (opc == RPN && DT.dominates(detacher->getTerminator(), cmp)) {
-      //llvm::errs() << "<adding extra for cmp " << detacher->getParent()->getName() << ">";
-      //cmp->dump();
-      //llvm::errs() << "</adding extra for cmp>";
       cmp->setOperand(cmpIdx, INCR);
       top = build.CreateAdd(top, amt0, "toplen");
     }
@@ -623,7 +608,8 @@ std::pair<PHINode*,Value*> getIndVar(Loop *L, BasicBlock* detacher, DominatorTre
       default:
         dir = 0;break;
     }
-    if (dir < 0 && cmpIdx == 0 || dir > 0 && cmpIdx != 0) { std::swap(bottom, top); }
+    if ( (dir < 0 && cmpIdx == 0) || (dir > 0 && cmpIdx != 0))
+      std::swap(bottom, top);
 
     if (!isZero(bottom)) val = build.CreateSub(top, bottom, "sublen");
     else val = top;
@@ -746,11 +732,92 @@ BasicBlock* continueToFindSync(BasicBlock* endL) {
   return endL;
 }
 
-bool Loop2Cilk::performDAC(Loop *L, LPPassManager &LPM) {
 
-  //if (!L->isLoopSimplifyForm()) {
-  //  simplifyLoop(L, nullptr, nullptr, nullptr, nullptr, false);
-  //}
+/*
+cilk_for_recursive(count_t low, count_t high, ...) {
+tail_recurse:
+  count_t count = high - low;
+  if (count > grain)
+  {
+      // Invariant: count >= 2
+      count_t mid = low + count / 2;
+      spawn cilk_for_recursive(low, mid, grain, ...);
+      low = mid;
+      goto tail_recurse;
+  }
+
+  for(int i=low; i<high; i++) {
+    body(i, data);
+  }
+  sync;
+*/
+bool createDACOnExtractedFunction(Function* extracted, LLVMContext &Ctx, std::vector<Value*>& ext_args) {
+  Function::arg_iterator args = extracted->arg_begin();
+  Argument *low0 = &*args;
+  args++;
+  Argument *high0 = &*args;
+  args++;
+  Argument *grain = &*args;
+
+  BasicBlock *entry = &extracted->getEntryBlock();
+  BasicBlock *body = entry->getTerminator()->getSuccessor(0);
+  BasicBlock *tail_recurse = entry->splitBasicBlock(entry->getTerminator(), "tail_recurse");
+  BasicBlock *recur = BasicBlock::Create(Ctx, "recur", extracted);
+  recur->moveAfter(tail_recurse);
+  tail_recurse->getTerminator()->eraseFromParent();
+
+  IRBuilder<> trbuilder(tail_recurse);
+  PHINode* low = trbuilder.CreatePHI(low0->getType(), 2, "low");
+  low0->replaceAllUsesWith(low);
+  Value* count = trbuilder.CreateSub(high0, low, "count");
+  Value* cond = trbuilder.CreateICmpUGT(count, grain);
+  trbuilder.CreateCondBr(cond, recur, body);
+  low->addIncoming(low0, entry);
+
+  IRBuilder<> rbuilder(recur);
+  Value *mid = rbuilder.CreateAdd(low, rbuilder.CreateUDiv(count, ConstantInt::get(count->getType(), 2)), "mid");
+  BasicBlock *detached = BasicBlock::Create(Ctx, "detached", extracted);
+  detached->moveAfter(recur);
+  BasicBlock *reattached = BasicBlock::Create(Ctx, "reattached", extracted);
+  reattached->moveAfter(detached);
+  rbuilder.CreateDetach(detached, reattached);
+
+  IRBuilder<> dbuilder(detached);
+
+  //Fill in closure arguments
+  std::vector<Value*> next_args;
+  args = extracted->arg_begin();
+  for (unsigned i=0, len = ext_args.size(); i<len; i++) {
+    next_args.push_back(&*args);
+    args++;
+  }
+
+  //Replace the bounds arguments
+  next_args[0] = low;
+  next_args[1] = mid;
+  next_args[2] = grain;
+
+  dbuilder.CreateCall(extracted, next_args);
+  dbuilder.CreateReattach(reattached);
+
+  IRBuilder<> rebuilder(reattached);
+  rebuilder.CreateBr(tail_recurse);
+  low->addIncoming(mid, reattached);
+
+  SmallVector<BasicBlock *, 32> blocks;
+  for (BasicBlock& BB : *extracted) { blocks.push_back(&BB); }
+
+  for (BasicBlock* BB : blocks) {
+    if (ReturnInst *Ret = dyn_cast<ReturnInst>(BB->getTerminator())) {
+      auto tret = BB->splitBasicBlock(Ret);
+      BB->getTerminator()->eraseFromParent();
+      IRBuilder<> build(BB);
+      build.CreateSync(tret);
+    }
+  }
+}
+
+bool Loop2Cilk::performDAC(Loop *L, LPPassManager &LPM) {
 
   BasicBlock* Header = L->getHeader();
   Module* M = Header->getParent()->getParent();
@@ -861,7 +928,6 @@ bool Loop2Cilk::performDAC(Loop *L, LPPassManager &LPM) {
 
   DetachInst* det = cast<DetachInst>(detacher->getTerminator());
 
-  ///*
    {
     SmallPtrSet<BasicBlock *, 32> functionPieces;
     SmallVector<BasicBlock*, 32 > reattachB;
@@ -870,14 +936,13 @@ bool Loop2Cilk::performDAC(Loop *L, LPPassManager &LPM) {
       for (Instruction &I : *BB) {
         if (CallInst* ca = dyn_cast<CallInst>(&I)) {
           if (ca->getCalledFunction() == Header->getParent()) {
-            errs() << "recursive cilk for in function " << Header->getParent()->getName() << "|" << Header->getName() << "\n";
-            getIndVar(L, detacher, DT, false);
+            errs() << "Selecing successive spawn in place of DAC for recursive cilk_for in function " << Header->getParent()->getName() << "|" << Header->getName() << "\n";
             return false;
           }
         }
       }
     }
-  } //*/
+  }
 
   /////!!< REQUIRE DETACHER BLOCK IS EMPTY EXCEPT FOR BRANCH
   while (getNonPhiSize(detacher)!=1) {
@@ -885,13 +950,19 @@ bool Loop2Cilk::performDAC(Loop *L, LPPassManager &LPM) {
     if (!badInst->mayWriteToMemory()) {
       bool dominated = true;
       for (const Use &U : badInst->uses()) {
-        if (!DT.dominates(BasicBlockEdge(detacher, det->getSuccessor(0) ), U) ) { errs() << "use not dominated:\n"; U->dump(); dominated = false; break; }
+        if (!DT.dominates(BasicBlockEdge(detacher, det->getSuccessor(0) ), U) ) {
+          errs() << "use not dominated:\n";
+          U->dump();
+          dominated = false;
+          break;
+        }
       }
       if (dominated) {
         badInst->moveBefore( getFirstPostPHI(det->getSuccessor(0)) );
         continue;
       }
-    } else errs() << "mayWrite:\n";
+    } else
+      errs() << "mayWrite:\n";
     errs() << "invalid detach size of " << getNonPhiSize(detacher) << "|" << detacher->size() << "\n";
     detacher->dump();
     return false;
@@ -961,15 +1032,8 @@ bool Loop2Cilk::performDAC(Loop *L, LPPassManager &LPM) {
     return false;
   }
 
-  //llvm::errs() << "<EXTRACTING FROM " << Header->getParent()->getParent()->getName() << "\\>\n";
-  //Header->getParent()->dump();
-
   std::vector<Value*> ext_args;
-  //Header->getParent()->dump();
   Function* extracted = llvm::cilk::extractDetachBodyToFunction(*det, DT, &call, /*closure*/ oldvar, &ext_args);
-  //Header->getParent()->getParent()->dump();
-  //extracted->dump();
-  //llvm::errs() << "</DONE EXTRACTING FROM " << extracted->getName() << "\\>\n";
 
   if (!extracted) {
     errs() << "not extracted\n";
@@ -977,99 +1041,12 @@ bool Loop2Cilk::performDAC(Loop *L, LPPassManager &LPM) {
   }
 
   // FIX FOR THE DAC recur
-/*
+  createDACOnExtractedFunction(extracted, Ctx, ext_args);
 
-
-  cilk_for_recursive(count_t low, count_t high, ...) {
-  tail_recurse:
-    count_t count = high - low;
-    if (count > grain)
-    {
-        // Invariant: count >= 2
-        count_t mid = low + count / 2;
-        spawn cilk_for_recursive(low, mid, grain, ...);
-        low = mid;
-        goto tail_recurse;
-    }
-
-    for(int i=low; i<high; i++) {
-      body(i, data);
-    }
-    sync;
-*/
-  {
-
-    Function::arg_iterator args = extracted->arg_begin();
-    Argument *low0 = &*args;
-    args++;
-    Argument *high0 = &*args;
-    args++;
-    Argument *grain = &*args;
-
-    BasicBlock *entry = &extracted->getEntryBlock();
-    BasicBlock *body = entry->getTerminator()->getSuccessor(0);
-    BasicBlock *tail_recurse = entry->splitBasicBlock(entry->getTerminator(), "tail_recurse");
-    BasicBlock *recur = BasicBlock::Create(Ctx, "recur", extracted);
-    recur->moveAfter(tail_recurse);
-    tail_recurse->getTerminator()->eraseFromParent();
-
-    IRBuilder<> trbuilder(tail_recurse);
-    PHINode* low = trbuilder.CreatePHI(low0->getType(), 2, "low");
-    low0->replaceAllUsesWith(low);
-    Value* count = trbuilder.CreateSub(high0, low, "count");
-    Value* cond = trbuilder.CreateICmpUGT(count, grain);
-    trbuilder.CreateCondBr(cond, recur, body);
-    low->addIncoming(low0, entry);
-
-    IRBuilder<> rbuilder(recur);
-    Value *mid = rbuilder.CreateAdd(low, rbuilder.CreateUDiv(count, ConstantInt::get(count->getType(), 2)), "mid");
-    BasicBlock *detached = BasicBlock::Create(Ctx, "detached", extracted);
-    detached->moveAfter(recur);
-    BasicBlock *reattached = BasicBlock::Create(Ctx, "reattached", extracted);
-    reattached->moveAfter(detached);
-    rbuilder.CreateDetach(detached, reattached);
-
-    IRBuilder<> dbuilder(detached);
-
-    unsigned len = ext_args.size();
-    std::vector<Value*> next_args;
-    args = extracted->arg_begin();
-    for (unsigned i=0; i<len; i++) {
-      next_args.push_back(&*args);
-      args++;
-    }
-    next_args[0] = low;
-    next_args[1] = mid;
-    next_args[2] = grain;
-
-    dbuilder.CreateCall(extracted, next_args);
-    dbuilder.CreateReattach(reattached);
-
-    IRBuilder<> rebuilder(reattached);
-    rebuilder.CreateBr(tail_recurse);
-    low->addIncoming(mid, reattached);
-
-    SmallVector<BasicBlock *, 32> blocks;
-    for (BasicBlock& BB : *extracted) { blocks.push_back(&BB); }
-
-    for (BasicBlock* BB : blocks) {
-      if (ReturnInst *Ret = dyn_cast<ReturnInst>(BB->getTerminator())) {
-        auto tret = BB->splitBasicBlock(Ret);
-        BB->getTerminator()->eraseFromParent();
-        IRBuilder<> build(BB);
-        build.CreateSync(tret);
-      }
-    }
-    //extracted->dump();
-  } //*/
-
-  {
-    for (BasicBlock& b : extracted->getBasicBlockList())
-      if (true) {
-        removeFromAll(parentL, &b);
-        LI.changeLoopFor(&b, nullptr);
-        LI.removeBlock(&b);
-      }
+  for (BasicBlock& b : extracted->getBasicBlockList()) {
+      removeFromAll(parentL, &b);
+      LI.changeLoopFor(&b, nullptr);
+      LI.removeBlock(&b);
   }
 
   auto a1 = det->getSuccessor(0);
@@ -1081,21 +1058,22 @@ bool Loop2Cilk::performDAC(Loop *L, LPPassManager &LPM) {
   assert( det->use_empty() );
 
   det->eraseFromParent();
-  if( countPredecessors(a2) == 0 ){
+  if (cilk::getNumPred(a2) == 0) {
     auto tmp = a1;
     a1 = a2;
     a2 = tmp;
   }
 
-  if (parentL) parentL->removeChildLoop( std::find(parentL->getSubLoops().begin(), parentL->getSubLoops().end(), L) );
-  LI.removeBlock(a1);
-  removeFromAll(parentL, a1);
+  if (parentL)
+    parentL->removeChildLoop(std::find(parentL->getSubLoops().begin(), parentL->getSubLoops().end(), L));
 
   if (auto term = a1->getTerminator())
     term->eraseFromParent();
   if (auto term = a2->getTerminator())
     term->eraseFromParent();
 
+  LI.removeBlock(a1);
+  removeFromAll(parentL, a1);
   DeleteDeadBlock(a1);
   if (a1 != a2) {
     LI.removeBlock(a2);
@@ -1105,6 +1083,7 @@ bool Loop2Cilk::performDAC(Loop *L, LPPassManager &LPM) {
 
   if (auto term = Header->getTerminator())
     term->eraseFromParent();
+
   IRBuilder<> b2(Header);
   b2.CreateBr(detacher);
 
@@ -1143,9 +1122,6 @@ bool Loop2Cilk::performDAC(Loop *L, LPPassManager &LPM) {
     assert (syncer->size() == 1);
     b.CreateBr(syncer);
   }
-
-  //ScalarEvolution &SE = getAnalysis<ScalarEvolutionWrapperPass>().getSE();
-  //SE.forgetLoop(L);
 
   DT.recalculate(*Header->getParent());
   L->invalidate();
