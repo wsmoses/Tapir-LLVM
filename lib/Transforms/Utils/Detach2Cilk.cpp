@@ -71,7 +71,11 @@ bool CilkPass::runOnFunction(Function &F) {
   DominatorTree &DT = getAnalysis<DominatorTreeWrapperPass>().getDomTree();
   for (Function::iterator i = F.begin(), e = F.end(); i != e; ++i) {
     if (DetachInst* inst = llvm::dyn_cast_or_null<DetachInst>(i->getTerminator())) {
-      llvm::cilk::createDetach(*inst, DT, ClInstrumentCilk || Instrument);
+      auto cal = llvm::cilk::createDetach(*inst, DT, ClInstrumentCilk || Instrument);
+			if (Instrument) {
+				InlineFunctionInfo ifi;
+				InlineFunction(cal,ifi);
+			}
       Changed = true;
     }
   }

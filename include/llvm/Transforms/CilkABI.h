@@ -149,15 +149,12 @@ typedef void (cilk_leave_end)();
     return F;
 }
 
-
 DEFAULT_GET_CILKRTS_FUNC(init)
 DEFAULT_GET_CILKRTS_FUNC(sync)
 DEFAULT_GET_CILKRTS_FUNC(leave_frame)
 DEFAULT_GET_CILKRTS_FUNC(get_tls_worker)
 DEFAULT_GET_CILKRTS_FUNC(get_tls_worker_fast)
 DEFAULT_GET_CILKRTS_FUNC(bind_thread_1)
-//DEFAULT_GET_CILKRTS_FUNC(cilk_for_32)
-//DEFAULT_GET_CILKRTS_FUNC(cilk_for_64)
 
 #define CILK_CSI_FUNC(name, CGF) Get_cilk_##name(CGF)
 
@@ -1380,6 +1377,7 @@ static inline bool makeFunctionDetachable( Function& extracted, bool instrument 
   } while (curinst != sf);
   llvm::Value *StackSave;
   IRBuilder<> IRB( &(extracted.getEntryBlock()), II );
+
   if (instrument) {
     llvm::Type *Int8PtrTy = IRB.getInt8PtrTy();
     llvm::Value *ThisFn =
@@ -1411,8 +1409,8 @@ static inline bool makeFunctionDetachable( Function& extracted, bool instrument 
   for (Function::iterator i = extracted.begin(), e = extracted.end(); i != e; ++i) {
     BasicBlock* bb = &*i;
     TerminatorInst* term = bb->getTerminator();
-    if( !term ) continue;
-    if( ReturnInst* inst = llvm::dyn_cast<ReturnInst>( term ) ) {
+    if (!term) continue;
+    if (ReturnInst* inst = llvm::dyn_cast<ReturnInst>(term)) {
       assert( ret == nullptr && "Multiple return" );
       ret = inst;
     }
@@ -1430,7 +1428,7 @@ static inline bool makeFunctionDetachable( Function& extracted, bool instrument 
   return true;
 }
 
-static inline bool createDetach(DetachInst& detach, DominatorTree& DT,
+static inline llvm::CallInst* createDetach(DetachInst& detach, DominatorTree& DT,
                                 bool instrument = false) {
   BasicBlock* detB = detach.getParent();
   Function& F = *(detB->getParent());
@@ -1444,7 +1442,8 @@ static inline bool createDetach(DetachInst& detach, DominatorTree& DT,
   Value *SF = GetOrInitStackFrame( F, /*isFast*/ false, instrument );
   assert(SF && "null stack frame unexpected");
 
-  Function* extracted = extractDetachBodyToFunction(detach, DT);
+  llvm::CallInst* cal = nullptr;
+  Function* extracted = extractDetachBodyToFunction(detach, DT, &cal);
 
   TerminatorInst* bi = llvm::dyn_cast<TerminatorInst>(detB->getTerminator() );
   assert( bi );
@@ -1473,7 +1472,7 @@ static inline bool createDetach(DetachInst& detach, DominatorTree& DT,
 
   makeFunctionDetachable( *extracted, instrument );
 
-  return true;
+  return cal;
 }
 
 }  // end of cilk namespace

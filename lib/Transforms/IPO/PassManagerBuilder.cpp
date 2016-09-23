@@ -647,7 +647,8 @@ void PassManagerBuilder::populateModulePassManager(legacy::PassManagerBase& MPM)
 
     MPM.add(createIndVarSimplifyPass());
 
-    MPM.add(createLoop2CilkPass());
+    if(!InstrumentCilk)
+      MPM.add(createLoop2CilkPass());
 
     MPM.add(createCFGSimplificationPass());
 
