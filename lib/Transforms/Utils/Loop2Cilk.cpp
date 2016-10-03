@@ -815,6 +815,7 @@ bool createDACOnExtractedFunction(Function* extracted, LLVMContext &Ctx, std::ve
       build.CreateSync(tret);
     }
   }
+  return true;
 }
 
 bool Loop2Cilk::performDAC(Loop *L, LPPassManager &LPM) {

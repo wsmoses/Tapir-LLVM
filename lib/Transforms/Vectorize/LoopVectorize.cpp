@@ -3189,7 +3189,7 @@ void InnerLoopVectorizer::createEmptyLoop() {
   assert(ExitBlock && "Must have an exit block");
 
   BasicBlock *sync_split = nullptr;
-  if (SyncInst* si = dyn_cast<SyncInst>(VectorPH->getTerminator())) {
+  if (isa<SyncInst>(VectorPH->getTerminator())) {
     sync_split = VectorPH->splitBasicBlockWithTerminator("vector.sync_split");
     DT->splitBlock(sync_split);
     //DT->changeImmediateDominator(LoopExitBlock, LoopBypassBlocks[0]);
