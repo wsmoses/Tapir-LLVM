@@ -836,13 +836,22 @@ bool Loop2Cilk::performDAC(Loop *L, LPPassManager &LPM) {
       T = Preheader->getTerminator();
       Header = Preheader;
     } else if (isa<SyncInst>(Preheader->getTerminator())) {
-      BasicBlock *ph = BasicBlock::Create(Ctx, "sync.br", Header->getParent());
-      DT.addNewBlock(ph, Preheader);
-      ph->moveAfter(Preheader);
-      IRBuilder <> b(ph);
-      b.CreateBr(T->getSuccessor(0));
-      T->setSuccessor(0,ph);
-      T = ph->getTerminator(); Header = ph;
+      // BasicBlock *ph = BasicBlock::Create(Ctx, "sync.br", Header->getParent());
+      // DT.addNewBlock(ph, Preheader);
+      // ph->moveAfter(Preheader);
+      // IRBuilder <> b(ph);
+      // T = Preheader->getTerminator();
+      // assert(T->getSuccessor(0) == Header);
+      // b.CreateBr(T->getSuccessor(0));
+      // T->setSuccessor(0,ph);
+      // Header->dump();
+      // T = ph->getTerminator(); Header = ph;
+      BasicBlock *NewPreheader = SplitEdge(Preheader, Header, &DT, &LI);
+      SyncInst::Create(NewPreheader, Preheader->getTerminator());
+      Preheader->getTerminator()->eraseFromParent();
+      T = BranchInst::Create(Header, NewPreheader->getTerminator());
+      NewPreheader->getTerminator()->eraseFromParent();
+      Header = NewPreheader;
     } else {
       llvm::errs() << "Loop not entered via branch instance\n";
       T->dump();
@@ -937,7 +946,7 @@ bool Loop2Cilk::performDAC(Loop *L, LPPassManager &LPM) {
       for (Instruction &I : *BB) {
         if (CallInst* ca = dyn_cast<CallInst>(&I)) {
           if (ca->getCalledFunction() == Header->getParent()) {
-            errs() << "Selecing successive spawn in place of DAC for recursive cilk_for in function " << Header->getParent()->getName() << "|" << Header->getName() << "\n";
+            errs() << "Selecting successive spawn in place of DAC for recursive cilk_for in function " << Header->getParent()->getName() << "|" << Header->getName() << "\n";
             return false;
           }
         }
@@ -1134,17 +1143,17 @@ bool Loop2Cilk::performDAC(Loop *L, LPPassManager &LPM) {
 
 
 bool Loop2Cilk::runOnLoop(Loop *L, LPPassManager &LPM) {
-	if (llvm::verifyFunction(*L->getHeader()->getParent(), &llvm::errs())) {
-      L->getHeader()->getParent()->dump();
-      assert(0);
-	}
+  if (llvm::verifyFunction(*L->getHeader()->getParent(), &llvm::errs())) {
+    L->getHeader()->getParent()->dump();
+    assert(0);
+  }
   if (skipLoop(L)) {
     return false;
   }
   bool ans = performDAC(L, LPM);
   if (llvm::verifyFunction(*L->getHeader()->getParent(), &llvm::errs())) {
-      L->getHeader()->getParent()->dump();
-      assert(0);
-	}
+    L->getHeader()->getParent()->dump();
+    assert(0);
+  }
   return ans;
 }
