@@ -236,8 +236,6 @@ bool llvm::UnrollLoop(Loop *L, unsigned Count, unsigned TripCount, bool Force,
   BasicBlock *Header = L->getHeader();
   BranchInst *BI = dyn_cast<BranchInst>(LatchBlock->getTerminator());
 
-  if (isCilkFor(L)) return false;
-
   if (!BI || BI->isUnconditional()) {
     // The loop-rotate pass can be helpful to avoid this in many cases.
     DEBUG(dbgs() <<
@@ -273,6 +271,7 @@ bool llvm::UnrollLoop(Loop *L, unsigned Count, unsigned TripCount, bool Force,
 
   // Are we eliminating the loop control altogether?
   bool CompletelyUnroll = Count == TripCount;
+  if (isCilkFor(L) && !CompletelyUnroll) return false;
   SmallVector<BasicBlock *, 4> ExitBlocks;
   L->getExitBlocks(ExitBlocks);
   std::vector<BasicBlock*> OriginalLoopBlocks = L->getBlocks();
