@@ -116,35 +116,44 @@ ModRefInfo AAResults::getModRefInfo(Instruction *I, ImmutableCallSite Call) {
   } else if (I->isFenceLike()) {
     // If this is a fence, just return MRI_ModRef.
     return MRI_ModRef;
-  } else if(auto D = dyn_cast<DetachInst>(I)) {
-	  ModRefInfo Result = MRI_NoModRef;
-	  SmallPtrSet<const BasicBlock *, 32> Visited;
-	  SmallVector<const BasicBlock *, 32> WorkList;
-	  WorkList.push_back(D->getSuccessor(0));
-	  while(!WorkList.empty()) {
-	    const BasicBlock *BB = WorkList.pop_back_val();
-	    if (!Visited.insert(BB).second)
-	      continue;
+  } else if (auto D = dyn_cast<DetachInst>(I)) {
+    ModRefInfo Result = MRI_NoModRef;
+    SmallPtrSet<const BasicBlock *, 32> Visited;
+    SmallVector<const BasicBlock *, 32> WorkList;
+    WorkList.push_back(D->getSuccessor(0));
+    while(!WorkList.empty()) {
+      const BasicBlock *BB = WorkList.pop_back_val();
+      if (!Visited.insert(BB).second)
+        continue;
 
-	    // ++E;
-	    for (BasicBlock::const_iterator I = BB->begin(), E = BB->end(); I != E; ++I) {
-	      // Ignore sync instructions in this analysis
-	      if (isa<SyncInst>(&*I) || isa<DetachInst>(&*I))
-		continue;
-             
-              if (isa<LoadInst>(&*I) || isa<StoreInst>(&*I) || isa<AtomicCmpXchgInst>(&*I) || isa<AtomicRMWInst>(&*I) || (&*I)->isFenceLike() || ImmutableCallSite(&*I))
-	        Result = ModRefInfo(Result | getModRefInfo((Instruction*) &*I, Call));
-	      if (&*I == (&(Instruction&)Call) ) return MRI_NoModRef;
-	    }
+      for (BasicBlock::const_iterator I = BB->begin(), E = BB->end(); I != E; ++I) {
+        // Fail fast if we encounter an invalid CFG.
+        assert(!(D == &*I) &&
+	       "Invalid CFG found: Detached CFG reaches its own Detach instruction.");
 
-	    // Add successors
-	    const TerminatorInst *T = BB->getTerminator();
-	    if (!isa<ReattachInst>(T) ||
-		T->getSuccessor(0) != D->getSuccessor(1))
-	      for (unsigned idx = 0, max = T->getNumSuccessors(); idx < max; ++idx)
-		WorkList.push_back(T->getSuccessor(idx));
-	  }
-      return Result;
+        // Ignore sync instructions in this analysis
+        if (isa<SyncInst>(&*I) || isa<DetachInst>(&*I))
+          continue;
+
+        if (isa<LoadInst>(&*I) ||
+	    isa<StoreInst>(&*I) ||
+	    isa<AtomicCmpXchgInst>(&*I) ||
+	    isa<AtomicRMWInst>(&*I) ||
+	    (&*I)->isFenceLike() ||
+	    ImmutableCallSite(&*I))
+          Result = ModRefInfo(Result | getModRefInfo((Instruction*) &*I, Call));
+        if (&*I == (&(Instruction&)Call))
+	  return MRI_NoModRef;
+      }
+
+      // Add successors
+      const TerminatorInst *T = BB->getTerminator();
+      if (!isa<ReattachInst>(T) ||
+          T->getSuccessor(0) != D->getSuccessor(1))
+        for (unsigned idx = 0, max = T->getNumSuccessors(); idx < max; ++idx)
+          WorkList.push_back(T->getSuccessor(idx));
+    }
+    return Result;
   } else {
     // Otherwise, check if the call modifies or references the
     // location this memory access defines.  The best we can say
@@ -461,11 +470,14 @@ ModRefInfo AAResults::getModRefInfo(const DetachInst *D,
     if (!Visited.insert(BB).second)
       continue;
 
-    // ++E;
     for (BasicBlock::const_iterator I = BB->begin(), E = BB->end(); I != E; ++I) {
       // Ignore sync instructions in this analysis
       if (isa<SyncInst>(I))
 	continue;
+
+      // Fail fast if we encounter an invalid CFG.
+      assert(!(D == &*I) &&
+             "Invalid CFG found: Detached CFG reaches its own Detach instruction.");
 
       if (!Loc.Ptr)
         Result = ModRefInfo(Result | getModRefInfo(&*I));
