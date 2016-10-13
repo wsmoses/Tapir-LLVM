@@ -31,6 +31,7 @@ class Function;
 class BranchInst;
 class Instruction;
 class CallInst;
+class DetachInst;
 class DbgDeclareInst;
 class StoreInst;
 class LoadInst;
@@ -243,6 +244,15 @@ Value *EmitGEPOffset(IRBuilderTy *Builder, const DataLayout &DL, User *GEP,
   }
   return Result;
 }
+
+/// Serialize the sub-CFG detached by the specified detach
+/// instruction.  Removes the detach instruction and returns a pointer
+/// to the branch instruction that replaces it.
+BranchInst* SerializeDetachedCFG(DetachInst *DI, DominatorTree *DT = nullptr);
+
+/// Get the entry basic block to the detached context that contains
+/// the specified block.
+const BasicBlock *GetDetachedCtx(const BasicBlock *BB);
 
 ///===---------------------------------------------------------------------===//
 ///  Dbg Intrinsic utilities

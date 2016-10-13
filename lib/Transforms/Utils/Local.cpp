@@ -1034,6 +1034,113 @@ unsigned llvm::getOrEnforceKnownAlignment(Value *V, unsigned PrefAlign,
   return Align;
 }
 
+/// SerializeDetachedCFG - Serialize the sub-CFG detached by the
+/// specified detach instruction.  Removes the detach instruction and
+/// returns a pointer to the branch instruction that replaces it.
+///
+BranchInst *llvm::SerializeDetachedCFG(DetachInst *DI, DominatorTree *DT) {
+  // Get the parent of the detach instruction.
+  BasicBlock *Detacher = DI->getParent();
+  // Get the detached block and continuation of this detach.
+  BasicBlock *Detached = DI->getDetached();
+  BasicBlock *Continuation = DI->getContinue();
+
+  assert(Detached->getSinglePredecessor() &&
+	 "Detach instruction does not have just one predecessor.");
+
+  // Get the detach edge from DI.
+  BasicBlockEdge DetachEdge(Detacher, Detached);
+
+  // Collect the reattaches into the continuation.  If DT is
+  // available, verify that all reattaches are dominated by the detach
+  // edge from DI.
+  SmallVector<ReattachInst *, 8> Reattaches;
+  // If we only find a single reattach into the continuation, capture
+  // it so we can later update the dominator tree.
+  BasicBlock *SingleReattacher = nullptr;
+  int ReattachesFound = 0;
+  for (auto PI = pred_begin(Continuation), PE = pred_end(Continuation);
+       PI != PE; PI++) {
+    BasicBlock *Pred = *PI;
+    // Skip the detacher.
+    if (Detacher == Pred) continue;
+    // Record the reattaches found.
+    if (isa<ReattachInst>(Pred->getTerminator())) {
+      ReattachesFound++;
+      if (!SingleReattacher)
+	SingleReattacher = Pred;
+      if (DT) {
+	assert(DT->dominates(DetachEdge, Pred) &&
+	       "Detach edge does not dominate a reattach into its continuation.");
+      }
+      Reattaches.push_back(cast<ReattachInst>(Pred->getTerminator()));
+    }
+  }
+  assert(!Reattaches.empty() && "No reattach found for detach.");
+
+  // Replace each reattach with branches to the continuation.
+  for (ReattachInst *RI : Reattaches) {
+    BranchInst::Create(Continuation, RI->getParent()->getTerminator());
+    RI->getParent()->getTerminator()->eraseFromParent();
+  }
+
+  // Replace the new detach with a branch to the detached CFG.
+  BranchInst *Replacement = BranchInst::Create(Detached, DI);
+  DI->eraseFromParent();
+
+  // Update the dominator tree.
+  if (DT)
+    if (DT->dominates(Detacher, Continuation) && 1 == ReattachesFound)
+      DT->changeImmediateDominator(Continuation, SingleReattacher);
+
+  return Replacement;
+}
+
+/// GetDetachedCtx - Get the entry basic block to the detached context
+/// that contains the specified block.
+///
+const BasicBlock *llvm::GetDetachedCtx(const BasicBlock *BB) {
+  // Traverse the CFG backwards until we either reach the entry block
+  // of the function or we find a detach instruction that detaches the
+  // current block.
+  SmallPtrSet<const BasicBlock *, 32> Visited;
+  SmallVector<const BasicBlock *, 32> WorkList;
+  WorkList.push_back(BB);
+  while (!WorkList.empty()) {
+    const BasicBlock *CurrBB = WorkList.pop_back_val();
+    if (!Visited.insert(CurrBB).second)
+      continue;
+
+    for (auto PI = pred_begin(CurrBB), PE = pred_end(CurrBB);
+	 PI != PE; ++PI) {
+      const BasicBlock *PredBB = *PI;
+
+      // Skip predecessors via reattach instructions.  The detacher
+      // block corresponding to this reattach is also a predecessor of
+      // the current basic block.
+      if (isa<ReattachInst>(PredBB->getTerminator()))
+	continue;
+
+      // If the predecessor is terminated by a detach, check to see if
+      // that detach detached the current basic block.
+      if (isa<DetachInst>(PredBB->getTerminator())) {
+	const DetachInst *DI = cast<DetachInst>(PredBB->getTerminator());
+	if (DI->getDetached() == CurrBB)
+	  // Return the entry of this detached sub-CFG.
+	  return PredBB;
+      }
+
+      // Otherwise, add the predecessor block to the work list to
+      // search.
+      WorkList.push_back(PredBB);
+    }
+  }
+
+  // Our search didn't find anything, so return the entry of the
+  // function containing the given block.
+  return &(BB->getParent()->getEntryBlock());
+}
+
 ///===---------------------------------------------------------------------===//
 ///  Dbg Intrinsic utilities
 ///

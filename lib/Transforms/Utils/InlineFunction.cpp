@@ -1480,6 +1480,18 @@ bool llvm::InlineFunction(CallSite CS, InlineFunctionInfo &IFI,
         !isa<ConstantTokenNone>(CallSiteUnwindDestToken);
   }
 
+  // Determine if the detached context of the call instruction is
+  // simply its parent function.  If not, then we won't move alloca's
+  // to the entry block.
+  bool DetachedCtxIsFunction;
+  {
+    const BasicBlock *CallingBlock = TheCall->getParent();
+    const BasicBlock *ThisCallFunctionEntry =
+      &(CallingBlock->getParent()->getEntryBlock());
+    DetachedCtxIsFunction =
+      (ThisCallFunctionEntry == GetDetachedCtx(CallingBlock));
+  }
+
   // Get an iterator to the last basic block in the function, which will have
   // the new function inlined after it.
   Function::iterator LastBlock = --Caller->end();
@@ -1642,7 +1654,7 @@ bool llvm::InlineFunction(CallSite CS, InlineFunctionInfo &IFI,
         continue;
       }
 
-      if (!allocaWouldBeStaticInEntry(AI))
+      if (!DetachedCtxIsFunction || !allocaWouldBeStaticInEntry(AI))
         continue;
       
       // Keep track of the static allocas that we inline into the caller.
