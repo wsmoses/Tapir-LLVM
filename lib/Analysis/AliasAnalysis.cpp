@@ -121,7 +121,7 @@ ModRefInfo AAResults::getModRefInfo(Instruction *I, ImmutableCallSite Call) {
     SmallPtrSet<const BasicBlock *, 32> Visited;
     SmallVector<const BasicBlock *, 32> WorkList;
     WorkList.push_back(D->getSuccessor(0));
-    while(!WorkList.empty()) {
+    while (!WorkList.empty()) {
       const BasicBlock *BB = WorkList.pop_back_val();
       if (!Visited.insert(BB).second)
         continue;
@@ -465,7 +465,7 @@ ModRefInfo AAResults::getModRefInfo(const DetachInst *D,
   SmallPtrSet<const BasicBlock *, 32> Visited;
   SmallVector<const BasicBlock *, 32> WorkList;
   WorkList.push_back(D->getSuccessor(0));
-  while(!WorkList.empty()) {
+  while (!WorkList.empty()) {
     const BasicBlock *BB = WorkList.pop_back_val();
     if (!Visited.insert(BB).second)
       continue;
