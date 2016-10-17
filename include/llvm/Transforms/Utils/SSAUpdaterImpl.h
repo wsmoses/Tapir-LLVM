@@ -380,12 +380,12 @@ public:
           ReattachPredInfo = PredInfo;
           continue;
         }
-        if (Traits::BlockDetaches(Pred, Updater))
-          DetachPredInfo = PredInfo;
         // Skip to the nearest preceding definition.
         if (PredInfo->DefBB != PredInfo)
           PredInfo = PredInfo->DefBB;
         Traits::AddPHIOperand(PHI, PredInfo->AvailableVal, Pred);
+        if (Traits::BlockDetaches(Pred, Updater))
+          DetachPredInfo = PredInfo;
       }
       if (ReattachPredInfo) {
         assert(DetachPredInfo &&
