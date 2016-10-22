@@ -89,6 +89,24 @@ void llvm::appendToGlobalDtors(Module &M, Function *F, int Priority, Constant *D
   appendToGlobalArray("llvm.global_dtors", M, F, Priority, Data);
 }
 
+Function *llvm::checkCsiInterfaceFunction(Constant *FuncOrBitcast) {
+  if (Function *F = dyn_cast<Function>(FuncOrBitcast)) {
+    return F;
+  }
+  if (ConstantExpr *CE = dyn_cast<ConstantExpr>(FuncOrBitcast)) {
+    if (CE->isCast() && CE->getOpcode() == Instruction::BitCast) {
+      if (Function *F = dyn_cast<Function>(CE->getOperand(0))) {
+        return F;
+      }
+    }
+  }
+  FuncOrBitcast->dump();
+  std::string Err;
+  raw_string_ostream Stream(Err);
+  Stream << "ComprehensiveStaticInstrumentation interface function redefined: " << *FuncOrBitcast;
+  report_fatal_error(Err);
+}
+
 Function *llvm::checkSanitizerInterfaceFunction(Constant *FuncOrBitcast) {
   if (isa<Function>(FuncOrBitcast))
     return cast<Function>(FuncOrBitcast);
