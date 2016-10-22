@@ -11,7 +11,6 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "llvm/Transforms/Scalar.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/Statistic.h"
@@ -24,23 +23,29 @@
 #include "llvm/IR/CFG.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DataLayout.h"
+#include "llvm/IR/DebugInfoMetadata.h"
 #include "llvm/IR/Dominators.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/PatternMatch.h"
 #include "llvm/IR/Type.h"
+#include "llvm/IR/ValueMap.h"
+#include "llvm/IR/Verifier.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include "llvm/Transforms/Utils/Local.h"
-#include "llvm/Transforms/Utils/SimplifyIndVar.h"
+//#include "llvm/Transforms/Utils/SimplifyIndVar.h"
+#include "llvm/Transforms/Scalar.h"
+#include "llvm/Transforms/Scalar/IndVarSimplify.h"
 #include "llvm/Transforms/Scalar/SimplifyCFG.h"
-#include "llvm/Transforms/CilkABI.h"
+#include "llvm/Transforms/Scalar/LoopDeletion.h"
+#include "llvm/Transforms/Utils/CilkABI.h"
 #include "llvm/Transforms/Utils/PromoteMemToReg.h"
 #include "llvm/Transforms/Utils/LoopUtils.h"
-#include "llvm/IR/Verifier.h"
+#include "llvm/Transforms/Utils/ValueMapper.h"
 #include "llvm/Transforms/Utils/PromoteMemToReg.h"
 
 #include <utility>
@@ -50,11 +55,14 @@ using namespace llvm;
 
 #define DEBUG_TYPE "loop2cilk"
 
+STATISTIC(LoopsConvertedToDAC,
+          "Number of Tapir loops converted to divide-and-conquer iteration spawning");
+STATISTIC(LoopsAnalyzed, "Number of Tapir loops analyzed for conversion");
+
 namespace {
   class Loop2Cilk : public LoopPass {
 
   public:
-
     static char ID; // Pass identification, replacement for typeid
     Loop2Cilk() : LoopPass(ID) { }
 
@@ -62,16 +70,35 @@ namespace {
     bool performDAC(Loop *L, LPPassManager &LPM);
 
     void getAnalysisUsage(AnalysisUsage &AU) const override {
+      AU.addRequiredID(LoopSimplifyID);
+      AU.addRequiredID(LCSSAID);
       AU.addRequired<DominatorTreeWrapperPass>();
       AU.addRequired<LoopInfoWrapperPass>();
-      //AU.addRequired<ScalarEvolutionWrapperPass>();
-      AU.addRequiredID(LoopSimplifyID);
+      AU.addRequired<ScalarEvolutionWrapperPass>();
     }
 
+  protected:
+    bool verifyLoopExit(const Loop *L);
+    bool verifyLoopStructureForConversion(const Loop *L);
+    PHINode* canonicalizeIVs(Loop *L, Type *Ty, ScalarEvolution &SE, DominatorTree &DT);
+    Value* canonicalizeLoopLatch(Loop *L, PHINode *IV, Value *Limit);
+    Value* computeGrainsize(Loop *L, Value *Limit);
+    void implementDACIterSpawnOnHelper(Function *Helper,
+                                       BasicBlock *Preheader,
+                                       BasicBlock *Header,
+                                       PHINode *CanonicalIV,
+                                       Argument *Limit,
+                                       Argument *Grainsize,
+                                       DominatorTree *DT,
+                                       LoopInfo *LI,
+                                       bool CanonicalIVFlagNUW = false,
+                                       bool CanonicalIVFlagNSW = false);
+    void eraseLoop(Loop *L, ScalarEvolution &SE, DominatorTree &DT, LoopInfo &LoopInfo);
+    Function* convertLoopToDACIterSpawn(Loop *L, ScalarEvolution &SE,
+                                        DominatorTree &DT, LoopInfo &LI);
+    
   private:
-    void releaseMemory() override {
-    }
-
+    void releaseMemory() override { }
   };
 }
 
@@ -82,13 +109,861 @@ INITIALIZE_PASS_BEGIN(Loop2Cilk, "loop2cilk",
                 "Find cilk for loops and use more efficient runtime", false, false)
 INITIALIZE_PASS_DEPENDENCY(DominatorTreeWrapperPass)
 INITIALIZE_PASS_DEPENDENCY(LoopInfoWrapperPass)
-//INITIALIZE_PASS_DEPENDENCY(ScalarEvolutionWrapperPass)
+INITIALIZE_PASS_DEPENDENCY(LCSSAWrapperPass)
+INITIALIZE_PASS_DEPENDENCY(ScalarEvolutionWrapperPass)
 INITIALIZE_PASS_DEPENDENCY(LoopSimplify)
 INITIALIZE_PASS_END(Loop2Cilk, "loop2cilk", "Find cilk for loops and use more efficient runtime", false, false)
 
 Pass *llvm::createLoop2CilkPass() {
   return new Loop2Cilk();
 }
+
+/// Verify that the CFG between the loop exit and the subsequent sync is
+/// appropriately simple -- essentially, a straight sequence of basic blocks
+/// that unconditionally branch to the sync.  Return false if this process
+/// fails, indicating that this loop is not a simple loop for conversion.
+bool Loop2Cilk::verifyLoopExit(const Loop *L) {
+  BasicBlock *LoopExit = L->getExitBlock();
+  SmallPtrSet<BasicBlock *, 8> Visited;
+  Visited.insert(LoopExit);
+  // Attempt to remove empty blocks terminated by unconditional
+  // branches that follow the loop exit until the loop exit is empty
+  // aside from a sync.
+  do {
+    // LoopExit = L->getExitBlock();
+    dbgs() << "verifyLoopExit: Checking block " << *LoopExit;
+    // // Fail if the loop exit has multiple predecessors.
+    // if (!LoopExit->getUniquePredecessor()) {
+    //   dbgs() << "L2C loop exit does not have a unique predecessor.\n";
+    //   return false;
+    // }
+
+    // Fail if the loop exit contains non-terminator instructions
+    // other than PHI nodes or debug instructions.
+    if (LoopExit->getFirstNonPHIOrDbg() != LoopExit->getTerminator()) {
+      dbgs() << "L2C loop exit contains non-terminator instructions other than PHI nodes and debug instructions.\n";
+      return false;
+    }
+
+    // If the loop exit is terminated by a sync, we're done.
+    if (isa<SyncInst>(LoopExit->getTerminator()))
+      return true;
+
+    // Check if the loop exit is terminated by an unconditional branch.
+    if (BranchInst *Br = dyn_cast_or_null<BranchInst>(LoopExit->getTerminator())) {
+      if (Br->isConditional()) {
+        dbgs() << "L2C loop exit is terminated by a conditional branch.\n";
+        return false;
+      }
+    } else {
+      dbgs() << "L2C loop exit is not terminated by a branch.\n";
+      return false;
+    }
+    LoopExit = LoopExit->getTerminator()->getSuccessor(0);
+  } while (Visited.insert(LoopExit).second);
+  // } while (TryToSimplifyUncondBranchFromEmptyBlock(LoopExit));
+
+  dbgs() << "L2C could not confirm simple exit to sync.\n";
+  return false;
+}
+
+/// Verify assumptions on the structure of the Loop:
+/// 1) Loop has a single preheader, latch, and exit.
+/// 2) Loop header is terminated by a detach.
+/// 3) Continuation of detach in header is the latch.
+/// 4) All other predecessors of the latch are terminated by reattach
+/// instructions.
+bool Loop2Cilk::verifyLoopStructureForConversion(const Loop *L) {
+  const BasicBlock *Header = L->getHeader();
+  const BasicBlock *Preheader = L->getLoopPreheader();
+  const BasicBlock *Latch = L->getLoopLatch();
+  const BasicBlock *Exit = L->getExitBlock();
+
+  // dbgs() << "verifying structure of " << *L;
+
+  // Header must be terminated by a detach.
+  if (!isa<DetachInst>(Header->getTerminator())) {
+    DEBUG(dbgs() << "L2C Loop header is not terminated by a detach.\n");
+    return false;
+  }
+
+  // Loop must have a single preheader.
+  if (nullptr == Preheader) {
+    DEBUG(dbgs() << "L2C Loop preheader not found.\n");
+    return false;
+  }
+
+  // Loop must have a unique latch.
+  if (nullptr == Latch) {
+    DEBUG(dbgs() << "L2C Loop does not have a unique latch.\n");
+    return false;
+  }
+
+  // Loop must have a unique exit block.
+  if (nullptr == Exit) {
+    DEBUG(dbgs() << "L2C Loop does not have a unique exit block.\n");
+    return false;
+  }
+
+  // Continuation of header terminator must be the latch.
+  const DetachInst *HeaderDetach = cast<DetachInst>(Header->getTerminator());
+  const BasicBlock *Continuation = HeaderDetach->getContinue();
+  if (Continuation != Latch) {
+    DEBUG(dbgs() << "L2C Continuation of detach in header is not the latch.\n");
+    return false;
+  }
+
+  // All other predecessors of Latch are terminated by reattach instructions.
+  for (auto PI = pred_begin(Latch), PE = pred_end(Latch);  PI != PE; ++PI) {
+    const BasicBlock *Pred = *PI;
+    if (Header == Pred) continue;
+    if (!isa<ReattachInst>(Pred->getTerminator())) {
+      DEBUG(dbgs() << "L2C Latch has a predecessor that is not terminated by a reattach.\n");
+      return false;
+    }
+  }
+
+  return verifyLoopExit(L);
+}
+
+/// Canonicalize the induction variables in the loop L.  Return the canonical
+/// induction variable created or inserted by the scalar evolution expander..
+PHINode* Loop2Cilk::canonicalizeIVs(Loop *L, Type *Ty, ScalarEvolution &SE, DominatorTree &DT) {
+  BasicBlock* Header = L->getHeader();
+  Module* M = Header->getParent()->getParent();
+
+  DEBUG(dbgs() << "L2C Header:" << *Header);
+  BasicBlock *Latch = L->getLoopLatch();
+  DEBUG(dbgs() << "L2C Latch:" << *Latch);
+
+  // dbgs() << "L2C SE trip count: " << SE->getSmallConstantTripCount(L, L->getExitingBlock()) << "\n";
+  // dbgs() << "L2C SE trip multiple: " << SE->getSmallConstantTripMultiple(L, L->getExitingBlock()) << "\n";
+  DEBUG(dbgs() << "L2C SE backedge taken count: " << *(SE.getBackedgeTakenCount(L)) << "\n");
+  // dbgs() << "L2C SE max backedge taken count: " << *(SE.getMaxBackedgeTakenCount(L)) << "\n";
+  DEBUG(dbgs() << "L2C SE exit count: " << *(SE.getExitCount(L, L->getExitingBlock())) << "\n");
+
+  SCEVExpander Exp(SE, M->getDataLayout(), "l2c");
+
+  PHINode *CanonicalIV = Exp.getOrInsertCanonicalInductionVariable(L, Ty);
+  DEBUG(dbgs() << "L2C Canonical induction variable " << *CanonicalIV << "\n");
+
+  SmallVector<WeakVH, 16> DeadInsts;
+  Exp.replaceCongruentIVs(L, &DT, DeadInsts);
+  // dbgs() << "Updated header:" << *(L->getHeader());
+  // dbgs() << "Updated exiting block:" << *(L->getExitingBlock());
+  for (WeakVH V : DeadInsts) {
+    DEBUG(dbgs() << "L2C erasing dead inst " << *V << "\n");
+    Instruction *I = cast<Instruction>(V);
+    I->eraseFromParent();
+  }
+
+  return CanonicalIV;
+}
+
+/// \brief Replace the Latch of Loop L to check that IV is always less
+/// than or equal to Limit.
+///
+/// This method assumes that L has a single loop latch and a single
+/// exit block.
+Value* Loop2Cilk::canonicalizeLoopLatch(Loop *L, PHINode *IV, Value *Limit) {
+  Value *NewCondition;
+  BasicBlock *Header = L->getHeader();
+  BasicBlock *Latch = L->getLoopLatch();
+  assert(Latch && "No single loop latch found for loop.");
+
+  IRBuilder<> Builder(&*Latch->getFirstInsertionPt());
+
+  // This process assumes that IV's increment is in Latch.
+
+  // Create comparison between IV and Limit at top of Latch.
+  NewCondition = Builder.CreateICmpULT(IV, Limit);
+
+  // Replace the conditional branch at the end of Latch.
+  BranchInst *LatchBr = dyn_cast_or_null<BranchInst>(Latch->getTerminator());
+  assert(LatchBr && LatchBr->isConditional() &&
+         "Latch does not terminate with a conditional branch.");
+  Builder.SetInsertPoint(Latch->getTerminator());
+  assert(L->getExitBlock() &&
+         "Loop does not have a single exit block.");
+  Builder.CreateCondBr(NewCondition, Header, L->getExitBlock());
+
+  // Erase the old conditional branch.
+  LatchBr->eraseFromParent();
+
+  return NewCondition;
+}
+
+/// \brief Compute the grainsize of Loop L, based on Limit.
+///
+/// The grainsize is computed by the following equation:
+///
+///     Grainsize = min(2048, ceil(Limit / (8 * workers)))
+///
+/// This computation is inserted into the Preheader of the Loop L.
+Value* Loop2Cilk::computeGrainsize(Loop *L, Value *Limit) {
+  Value *Grainsize;
+  BasicBlock *Preheader = L->getLoopPreheader();
+  assert(Preheader && "No Preheader found for loop.");
+
+  IRBuilder<> Builder(Preheader->getTerminator());
+
+  // Get 8 * workers
+  Value *Workers8 = Builder.CreateIntCast(cilk::GetOrCreateWorker8(*Preheader->getParent()),
+                                          Limit->getType(), false);
+  // Compute ceil(limit / 8 * workers) = (limit + 8 * workers - 1) / (8 * workers)
+  Value *SmallLoopVal =
+    Builder.CreateUDiv(Builder.CreateSub(Builder.CreateAdd(Limit, Workers8),
+                                         ConstantInt::get(Limit->getType(), 1)),
+                       Workers8);
+  // Compute min
+  Value *LargeLoopVal = ConstantInt::get(Limit->getType(), 2048);
+  Value *Cmp = Builder.CreateICmpULT(LargeLoopVal, SmallLoopVal);
+  Grainsize = Builder.CreateSelect(Cmp, LargeLoopVal, SmallLoopVal);
+
+  return Grainsize;
+}
+
+/// \brief Method to help convertLoopToDACIterSpawn convert the Tapir
+/// loop cloned into function Helper to spawn its iterations in a
+/// parallel divide-and-conquer fashion.
+///
+/// Example: Suppose that Helper contains the following Tapir loop:
+///
+/// Helper(iter_t start, iter_t end, iter_t grain, ...) {
+///   iter_t i = start;
+///   ... Other loop setup ...
+///   do {
+///     spawn { ... loop body ... };
+///   } while (i++ < end);
+///   sync;
+/// }
+///
+/// Then this method transforms Helper into the following form:
+///
+/// Helper(iter_t start, iter_t end, iter_t grain, ...) {
+/// recur:
+///   iter_t itercount = end - start;
+///   if (itercount > grain) {
+///     // Invariant: itercount >= 2
+///     count_t miditer = start + itercount / 2;
+///     spawn Helper(start, miditer, grain, ...);
+///     start = miditer + 1;
+///     goto recur;
+///   }
+///
+///   iter_t i = start;
+///   ... Other loop setup ...
+///   do {
+///     ... Loop Body ...
+///   } while (i++ < end);
+///   sync;
+/// }
+///
+void Loop2Cilk::implementDACIterSpawnOnHelper(Function *Helper,
+                                              BasicBlock *Preheader,
+                                              BasicBlock *Header,
+                                              PHINode *CanonicalIV,
+                                              Argument *Limit,
+                                              Argument *Grainsize,
+                                              DominatorTree *DT,
+                                              LoopInfo *LI,
+                                              bool CanonicalIVFlagNUW,
+                                              bool CanonicalIVFlagNSW) {
+  // Serialize the cloned copy of the loop.
+  assert(Preheader->getParent() == Helper &&
+         "Preheader does not belong to helper function.");
+  assert(Header->getParent() == Helper &&
+         "Header does not belong to helper function.");
+  assert(CanonicalIV->getParent() == Header &&
+         "CanonicalIV does not belong to header");
+  assert(isa<DetachInst>(Header->getTerminator()) &&
+         "Cloned header is not terminated by a detach.");
+  DetachInst *DI = dyn_cast<DetachInst>(Header->getTerminator());
+  SerializeDetachedCFG(DI, DT);
+
+  // Convert the cloned loop into the strip-mined loop body.
+
+  BasicBlock *DACHead = Preheader;
+  if (&(Helper->getEntryBlock()) == Preheader)
+    // Split the entry block.  We'll want to create a backedge into
+    // the split block later.
+    DACHead = SplitBlock(Preheader, &(Preheader->front()), DT, LI);
+
+  BasicBlock *RecurHead, *RecurDet, *RecurCont;
+  Value *IterCount;
+  Value *CanonicalIVInput;
+  PHINode *CanonicalIVStart;
+  {
+    Instruction *PreheaderOrigFront = &(DACHead->front());
+    IRBuilder<> Builder(PreheaderOrigFront);
+    // Create branch based on grainsize.
+    DEBUG(dbgs() << "L2C CanonicalIV: " << *CanonicalIV << "\n");
+    CanonicalIVInput = CanonicalIV->getIncomingValueForBlock(DACHead);
+    CanonicalIVStart = Builder.CreatePHI(CanonicalIV->getType(), 2,
+                                         CanonicalIV->getName()+".dac");
+    CanonicalIVInput->replaceAllUsesWith(CanonicalIVStart);
+    IterCount = Builder.CreateSub(Limit, CanonicalIVStart,
+                                  "itercount");
+    Value *IterCountCmp = Builder.CreateICmpUGT(IterCount, Grainsize);
+    // dbgs() << "DAC head before split:" << *DACHead;
+    TerminatorInst *RecurTerm =
+      SplitBlockAndInsertIfThen(IterCountCmp, PreheaderOrigFront,
+                                /*Unreachable=*/false,
+                                /*BranchWeights=*/nullptr,
+                                DT);
+    RecurHead = RecurTerm->getParent();
+    // Create skeleton of divide-and-conquer recursion:
+    // DACHead -> RecurHead -> RecurDet -> RecurCont -> DACHead
+    RecurDet = SplitBlock(RecurHead, RecurHead->getTerminator(),
+                          DT, LI);
+    RecurCont = SplitBlock(RecurDet, RecurDet->getTerminator(),
+                           DT, LI);
+    RecurCont->getTerminator()->replaceUsesOfWith(RecurTerm->getSuccessor(0),
+                                                  DACHead);
+    // Builder.SetInsertPoint(&(RecurCont->front()));
+    // Builder.CreateBr(DACHead);
+    // RecurCont->getTerminator()->eraseFromParent();
+  }
+
+  // Compute mid iteration in RecurHead.
+  Value *MidIter, *MidIterPlusOne;
+  {
+    IRBuilder<> Builder(&(RecurHead->front()));
+    MidIter = Builder.CreateAdd(CanonicalIVStart,
+                                Builder.CreateLShr(IterCount, 1,
+                                                   "halfcount"),
+                                "miditer",
+                                CanonicalIVFlagNUW, CanonicalIVFlagNSW);
+  }
+
+  // Create recursive call in RecurDet.
+  {
+    // Create input array for recursive call.
+    IRBuilder<> Builder(&(RecurDet->front()));
+    SetVector<Value*> RecurInputs;
+    Function::arg_iterator AI = Helper->arg_begin();
+    assert(cast<Argument>(CanonicalIVInput) == &*AI &&
+           "First argument does not match original input to canonical IV.");
+    RecurInputs.insert(CanonicalIVStart);
+    ++AI;
+    assert(Limit == &*AI &&
+           "Second argument does not match original input to the loop limit.");
+    RecurInputs.insert(MidIter);
+    ++AI;
+    for (Function::arg_iterator AE = Helper->arg_end();
+         AI != AE;  ++AI)
+        RecurInputs.insert(&*AI);
+    // RecurInputs.insert(CanonicalIVStart);
+    // // for (PHINode *IV : IVs)
+    // //   RecurInputs.insert(DACStart[IV]);
+    // RecurInputs.insert(Limit);
+    // RecurInputs.insert(Grainsize);
+    // for (Value *V : BodyInputs)
+    //   RecurInputs.insert(VMap[V]);
+    DEBUG({
+        dbgs() << "RecurInputs: ";
+        for (Value *Input : RecurInputs)
+          dbgs() << *Input << ", ";
+        dbgs() << "\n";
+      });
+
+    // Create call instruction.
+    CallInst *RecurCall = Builder.CreateCall(Helper, RecurInputs.getArrayRef());
+    RecurCall->setDebugLoc(Header->getTerminator()->getDebugLoc());
+    // Use a fast calling convention for the helper.
+    RecurCall->setCallingConv(CallingConv::Fast);
+    // RecurCall->setCallingConv(Helper->getCallingConv());
+  }
+
+  // Set up continuation of detached recursive call.  We effectively
+  // inline this tail call automatically.
+  {
+    IRBuilder<> Builder(&(RecurCont->front()));
+    MidIterPlusOne = Builder.CreateAdd(MidIter,
+                                       ConstantInt::get(Limit->getType(), 1),
+                                       "miditerplusone",
+                                       CanonicalIVFlagNUW,
+                                       CanonicalIVFlagNSW);
+  }
+
+  // Finish setup of new phi node for canonical IV.
+  {
+    CanonicalIVStart->addIncoming(CanonicalIVInput, Preheader);
+    CanonicalIVStart->addIncoming(MidIterPlusOne, RecurCont);
+  }
+
+  /// Make the recursive DAC parallel.
+  {
+    IRBuilder<> Builder(RecurHead->getTerminator());
+    // Create the detach.
+    Builder.CreateDetach(RecurDet, RecurCont);
+    RecurHead->getTerminator()->eraseFromParent();
+    // Create the reattach.
+    Builder.SetInsertPoint(RecurDet->getTerminator());
+    Builder.CreateReattach(RecurCont);
+    RecurDet->getTerminator()->eraseFromParent();
+  }
+}
+
+/// Recursive routine to mark a loop and all of its subloops as removed.
+static void markLoopAndAllSubloopsAsRemoved(Loop *L, LoopInfo &LoopInfo) {
+  for (Loop *SL : L->getSubLoops())
+    markLoopAndAllSubloopsAsRemoved(SL, LoopInfo);
+
+  LoopInfo.markAsRemoved(L);
+}
+
+/// Erase the specified loop, and update analysis accordingly.
+void Loop2Cilk::eraseLoop(Loop *L, ScalarEvolution &SE,
+                          DominatorTree &DT, LoopInfo &LoopInfo) {
+    // Get components of the old loop.
+    BasicBlock *Preheader = L->getLoopPreheader();
+    assert(Preheader && "Loop does not have a unique preheader.");
+    BasicBlock *ExitBlock = L->getExitBlock();
+    assert(ExitBlock && "Loop does not have a unique exit block.");
+    BasicBlock *ExitingBlock = L->getExitingBlock();
+    assert(ExitingBlock && "Loop does not have a unique exiting block.");
+
+    // Invalidate the analysis of the old loop.
+    SE.forgetLoop(L);
+
+    // Redirect the preheader to branch directly to loop exit.
+    assert(1 == Preheader->getTerminator()->getNumSuccessors() &&
+           "Preheader does not have a unique successor.");
+    Preheader->getTerminator()->replaceUsesOfWith(L->getHeader(),
+                                                  ExitBlock);
+    
+    // Rewrite phis in the exit block to get their inputs from
+    // the preheader instead of the exiting block.
+    BasicBlock::iterator BI = ExitBlock->begin();
+    while (PHINode *P = dyn_cast<PHINode>(BI)) {
+      int j = P->getBasicBlockIndex(ExitingBlock);
+      assert(j >= 0 && "Can't find exiting block in exit block's phi node!");
+      P->setIncomingBlock(j, Preheader);
+      P->removeIncomingValue(ExitingBlock);
+      ++BI;
+    }
+
+  // Update the dominator tree and remove the instructions and blocks that will
+  // be deleted from the reference counting scheme.
+  SmallVector<DomTreeNode*, 8> ChildNodes;
+  for (Loop::block_iterator LI = L->block_begin(), LE = L->block_end();
+       LI != LE; ++LI) {
+    // Move all of the block's children to be children of the preheader, which
+    // allows us to remove the domtree entry for the block.
+    ChildNodes.insert(ChildNodes.begin(), DT[*LI]->begin(), DT[*LI]->end());
+    for (DomTreeNode *ChildNode : ChildNodes) {
+      DT.changeImmediateDominator(ChildNode, DT[Preheader]);
+    }
+
+    ChildNodes.clear();
+    DT.eraseNode(*LI);
+
+    // Remove the block from the reference counting scheme, so that we can
+    // delete it freely later.
+    (*LI)->dropAllReferences();
+  }
+
+  // Erase the instructions and the blocks without having to worry
+  // about ordering because we already dropped the references.
+  // NOTE: This iteration is safe because erasing the block does not remove its
+  // entry from the loop's block list.  We do that in the next section.
+  for (Loop::block_iterator LI = L->block_begin(), LE = L->block_end();
+       LI != LE; ++LI)
+    (*LI)->eraseFromParent();
+
+  // Finally, the blocks from loopinfo.  This has to happen late because
+  // otherwise our loop iterators won't work.
+
+  SmallPtrSet<BasicBlock *, 8> Blocks;
+  Blocks.insert(L->block_begin(), L->block_end());
+  for (BasicBlock *BB : Blocks)
+    LoopInfo.removeBlock(BB);
+
+  // The last step is to update LoopInfo now that we've eliminated this loop.
+  // for (Loop *SL : L->getSubLoops())
+  //   LoopInfo.markAsRemoved(SL);
+  // LoopInfo.markAsRemoved(L);
+  markLoopAndAllSubloopsAsRemoved(L, LoopInfo);
+}
+
+/// Top-level call to convert loop to spawn its iterations in a
+/// divide-and-conquer fashion.
+Function* Loop2Cilk::convertLoopToDACIterSpawn(Loop *L, ScalarEvolution &SE,
+                                               DominatorTree &DT, LoopInfo &LI) {
+
+  // Verification already done in the caller.
+  // // Verify that we can extract loop.
+  // if (!verifyLoopStructureForConversion(L))
+  //   return nullptr;
+
+  ++LoopsAnalyzed;
+
+  BasicBlock *Header = L->getHeader();
+  BasicBlock *Preheader = L->getLoopPreheader();
+  BasicBlock *Latch = L->getLoopLatch();
+  Module* M = Header->getParent()->getParent();
+
+  /// Get loop limit.
+  const SCEV *Limit = SE.getBackedgeTakenCount(L);
+  // const SCEV *Limit = SE.getAddExpr(BETC, SE.getOne(BETC->getType()));
+  DEBUG(dbgs() << "L2C Loop limit: " << *Limit << "\n");
+  if (SE.getCouldNotCompute() == Limit) {
+    DEBUG(dbgs() << "SE could not compute loop limit.  Quitting extractLoop.\n");
+    return nullptr;
+  }
+
+  /// Clean up the loop's induction variables.
+  PHINode *CanonicalIV = canonicalizeIVs(L, Limit->getType(), SE, DT);
+  const SCEVAddRecExpr *CanonicalSCEV =
+    cast<const SCEVAddRecExpr>(SE.getSCEV(CanonicalIV));
+  // dbgs() << "[Loop2Cilk] Current loop preheader";
+  // dbgs() << *Preheader;
+  // dbgs() << "[Loop2Cilk] Current loop:";
+  // for (BasicBlock *BB : L->getBlocks()) {
+  //   dbgs() << *BB;
+  // }
+  if (!CanonicalIV) {
+    DEBUG(dbgs() << "Could not get canonical IV.  Quitting extractLoop.\n");
+    return nullptr;
+  }
+
+  // Remove all IV's other can CanonicalIV.
+  // First, check that we can do this.
+  bool CanRemoveIVs = true;
+  for (BasicBlock::iterator II = Header->begin(); isa<PHINode>(II); ++II) {
+    PHINode *PN = cast<PHINode>(II);
+    if (CanonicalIV == PN) continue;
+    dbgs() << "IV " << *PN;
+    const SCEV *S = SE.getSCEV(PN);
+    dbgs() << " SCEV " << *S << "\n";
+    if (SE.getCouldNotCompute() == S)
+      CanRemoveIVs = false;
+  }
+
+  if (!CanRemoveIVs) {
+    DEBUG(dbgs() << "Could not compute SCEV for all IV's.  Quitting extractLoop.\n");
+    return nullptr;
+  }
+
+  ////////////////////////////////////////////////////////////////////////
+  // We now have everything we need to extract the loop.  It's time to
+  // do some surgery.
+
+  SCEVExpander Exp(SE, M->getDataLayout(), "l2c");
+
+  // Remove the IV's (other than CanonicalIV) and replace them with
+  // their stronger forms.
+  //
+  // TODO?: We can probably adapt this loop->DAC process such that we
+  // don't require all IV's to be canonical.
+  {
+    SmallVector<PHINode*, 8> IVsToRemove;
+    for (BasicBlock::iterator II = Header->begin(); isa<PHINode>(II); ++II) {
+      PHINode *PN = cast<PHINode>(II);
+      if (PN == CanonicalIV) continue;
+      const SCEV *S = SE.getSCEV(PN);
+      Value *NewIV = Exp.expandCodeFor(S, S->getType(), CanonicalIV);
+      PN->replaceAllUsesWith(NewIV);
+      IVsToRemove.push_back(PN);
+    }
+    for (PHINode *PN : IVsToRemove)
+      PN->eraseFromParent();
+  }
+  // dbgs() << "EL Preheader after IV removal:" << *Preheader;
+  // dbgs() << "EL Header after IV removal:" << *Header;
+  // dbgs() << "EL Latch after IV removal:" << *Latch;
+
+  // All remaining IV's should be canonical.  Collect them.
+  //
+  // TODO?: We can probably adapt this loop->DAC process such that we
+  // don't require all IV's to be canonical.
+  SmallVector<PHINode*, 8> IVs;
+  bool AllCanonical = true;
+  for (BasicBlock::iterator II = Header->begin(); isa<PHINode>(II); ++II) {
+    PHINode *PN = cast<PHINode>(II);
+    const SCEVAddRecExpr *PNSCEV = dyn_cast<const SCEVAddRecExpr>(SE.getSCEV(PN));
+    assert(PNSCEV && "PHINode did not have corresponding SCEVAddRecExpr.");
+    assert(PNSCEV->getStart()->isZero() && "PHINode SCEV does not start at 0.");
+    DEBUG(dbgs() << "L2C step recurrence for SCEV " << *PNSCEV << " is " << *(PNSCEV->getStepRecurrence(SE)) << "\n");
+    assert(PNSCEV->getStepRecurrence(SE)->isOne() && "PHINode SCEV step is not 1.");
+    if (ConstantInt *C = dyn_cast<ConstantInt>(PN->getIncomingValueForBlock(Preheader))) {
+      if (C->isZero())
+        IVs.push_back(PN);
+    } else {
+      AllCanonical = false;
+      DEBUG(dbgs() << "Remaining non-canonical PHI Node found: " << *PN << "\n");
+    }
+  }
+  if (!AllCanonical)
+    return nullptr;
+
+  // Insert the computation for the loop limit into the Preheader.
+  Value *LimitVar = Exp.expandCodeFor(Limit, Limit->getType(),
+                                      &(Preheader->front()));
+  DEBUG(dbgs() << "LimitVar: " << *LimitVar << "\n");
+  // dbgs() << "EL Preheader after adding Limit:" << *Preheader;
+  // dbgs() << "EL Header after adding Limit:" << *Header;
+  // dbgs() << "EL Latch after adding Limit:" << *Latch;
+
+  // Canonicalize the loop latch.
+  // dbgs() << "Loop backedge guarded by " << *(SE.getSCEV(CanonicalIV)) << " < " << *Limit <<
+  //    ": " << SE.isLoopBackedgeGuardedByCond(L, ICmpInst::ICMP_ULT, SE.getSCEV(CanonicalIV), Limit) << "\n";
+  assert(SE.isLoopBackedgeGuardedByCond(L, ICmpInst::ICMP_ULT, SE.getSCEV(CanonicalIV), Limit) &&
+         "Loop backedge is not guarded by canonical comparison with limit.");
+  Value *NewCond = canonicalizeLoopLatch(L, CanonicalIV, LimitVar);
+
+  // dbgs() << "EL Preheader after new Latch:" << *Preheader;
+  // dbgs() << "EL Header after new Latch:" << *Header;
+  // dbgs() << "EL Latch after new Latch:" << *Latch;
+
+  // Insert computation of grainsize into the Preheader.
+  // For debugging.
+  Value *GrainVar = ConstantInt::get(Limit->getType(), 2);
+  // Value *GrainVar = computeGrainsize(L, LimitVar);
+  DEBUG(dbgs() << "GrainVar: " << *GrainVar << "\n");
+  // dbgs() << "EL Preheader after adding grainsize computation:" << *Preheader;
+  // dbgs() << "EL Header after adding grainsize computation:" << *Header;
+  // dbgs() << "EL Latch after adding grainsize computation:" << *Latch;
+
+  /// Clone the loop into a new function.
+
+  // Get the inputs and outputs for the Loop blocks.
+  SetVector<Value*> Inputs, Outputs;
+  SetVector<Value*> BodyInputs, BodyOutputs;
+  ValueToValueMapTy VMap, InputMap;
+  // Add start iteration, end iteration, and grainsize to inputs.
+  {
+    // Get the inputs and outputs for the loop body.
+    CodeExtractor Ext(L->getBlocks(), &DT);
+    Ext.findInputsOutputs(BodyInputs, BodyOutputs);
+
+    // Add argument for start of CanonicalIV.
+    Value *CanonicalIVInput = CanonicalIV->getIncomingValueForBlock(Preheader);
+    // CanonicalIVInput should be the constant 0.
+    assert(isa<Constant>(CanonicalIVInput) &&
+           "Input to canonical IV from preheader is not constant.");
+    Argument *StartArg = new Argument(CanonicalIV->getType(),
+                                      CanonicalIV->getName()+".start");
+    Inputs.insert(StartArg);
+    InputMap[CanonicalIV] = StartArg;
+
+    // for (PHINode *IV : IVs) {
+    //   Value *IVInput = IV->getIncomingValueForBlock(Preheader);
+    //   if (isa<Constant>(IVInput)) {
+    //     Argument *StartArg = new Argument(IV->getType(), IV->getName()+".start");
+    //     Inputs.insert(StartArg);
+    //     InputMap[IV] = StartArg;
+    //   } else {
+    //     assert(BodyInputs.count(IVInput) &&
+    //            "Non-constant input to IV not captured.");
+    //     Inputs.insert(IVInput);
+    //     InputMap[IV] = IVInput;
+    //   }
+    // }
+
+    // Add argument for end.
+    if (isa<Constant>(LimitVar)) {
+      Argument *EndArg = new Argument(LimitVar->getType(), "end");
+      Inputs.insert(EndArg);
+      InputMap[LimitVar] = EndArg;
+      // if (!isa<Constant>(LimitVar))
+      //   VMap[LimitVar] = EndArg;
+    } else {
+      Inputs.insert(LimitVar);
+      InputMap[LimitVar] = LimitVar;
+    }
+
+    // Add argument for grainsize.
+    Inputs.insert(GrainVar);
+
+    // Put all of the inputs together, and clear redundant inputs from
+    // the set for the loop body.
+    SmallVector<Value*, 8> BodyInputsToRemove;
+    for (Value *V : BodyInputs)
+      if (!Inputs.count(V))
+        Inputs.insert(V);
+      else
+        BodyInputsToRemove.push_back(V);
+    for (Value *V : BodyInputsToRemove)
+      BodyInputs.remove(V);
+    assert(0 == BodyOutputs.size() &&
+           "All results from parallel loop should be passed by memory already.");
+  }
+  DEBUG({
+      for (Value *V : Inputs)
+        dbgs() << "EL input: " << *V << "\n";
+      // for (Value *V : Outputs)
+      //        dbgs() << "EL output: " << *V << "\n";
+    });
+
+  Function *Helper;
+  {
+    SmallVector<ReturnInst *, 4> Returns;  // Ignore returns cloned.
+    Helper = llvm::cilk::CreateHelper(Inputs, Outputs, L->getBlocks(),
+                                      Header, Preheader, L->getExitBlock(),
+                                      VMap, Header->getParent()->getParent(),
+                                      /*ModuleLevelChanges=*/true, Returns, ".l2c",
+                                      nullptr, nullptr, nullptr);
+
+    assert(Returns.empty() && "Returns cloned when cloning loop.");
+
+    // If we have debug info, update it.  "ModuleLevelChanges = true"
+    // above does the heavy lifting, we just need to repoint
+    // subprogram at the same DICompileUnit as the original function.
+    //
+    // TODO: Cleanup the template parameters in
+    // Helper->getSubprogram() to reflect the variables used in the
+    // helper.
+    if (DISubprogram *SP = Header->getParent()->getSubprogram())
+      Helper->getSubprogram()->replaceUnit(SP->getUnit());
+
+    // Use a fast calling convention for the helper.
+    Helper->setCallingConv(CallingConv::Fast);
+    // Helper->setCallingConv(Header->getParent()->getCallingConv());
+  }
+
+  // Add a sync to the helper's return.
+  {
+    BasicBlock *HelperExit = cast<BasicBlock>(VMap[L->getExitBlock()]);
+    assert(isa<ReturnInst>(HelperExit->getTerminator()));
+    BasicBlock *NewHelperExit = SplitBlock(HelperExit,
+                                           HelperExit->getTerminator(),
+                                           &DT, &LI);
+    IRBuilder<> Builder(&(HelperExit->front()));
+    SyncInst *NewSync = Builder.CreateSync(NewHelperExit);
+    // Set debug info of new sync.
+    if (isa<SyncInst>(L->getExitBlock()->getTerminator()))
+      NewSync->setDebugLoc(L->getExitBlock()->getTerminator()->getDebugLoc());
+    else
+      DEBUG(dbgs() << "Sync not found in loop exit block.\n");
+    RemapInstruction(NewSync, VMap, RF_None | RF_IgnoreMissingLocals);
+    HelperExit->getTerminator()->eraseFromParent();
+  }
+
+  BasicBlock *NewPreheader = cast<BasicBlock>(VMap[Preheader]);
+  PHINode *NewCanonicalIV = cast<PHINode>(VMap[CanonicalIV]);
+
+  // Rewrite the cloned IV's to start at the start iteration argument.
+  {
+    // Rewrite clone of canonical IV to start at the start iteration
+    // argument.
+    Argument *NewCanonicalIVStart = cast<Argument>(VMap[InputMap[CanonicalIV]]);
+    {
+      int NewPreheaderIdx = NewCanonicalIV->getBasicBlockIndex(NewPreheader);
+      assert(isa<Constant>(NewCanonicalIV->getIncomingValue(NewPreheaderIdx)) &&
+             "Cloned canonical IV does not inherit a constant value from cloned preheader.");
+      NewCanonicalIV->setIncomingValue(NewPreheaderIdx, NewCanonicalIVStart);
+    }
+
+    // Rewrite other cloned IV's to start at their value at the start
+    // iteration.
+    const SCEV *StartIterSCEV = SE.getSCEV(NewCanonicalIVStart);
+    DEBUG(dbgs() << "StartIterSCEV: " << *StartIterSCEV << "\n");
+    for (PHINode *IV : IVs) {
+      if (CanonicalIV == IV) continue;
+
+      // Get the value of the IV at the start iteration.
+      DEBUG(dbgs() << "IV " << *IV);
+      const SCEV *IVSCEV = SE.getSCEV(IV);
+      DEBUG(dbgs() << " (SCEV " << *IVSCEV << ")");
+      const SCEVAddRecExpr *IVSCEVAddRec = cast<const SCEVAddRecExpr>(IVSCEV);
+      const SCEV *IVAtIter = IVSCEVAddRec->evaluateAtIteration(StartIterSCEV, SE);
+      DEBUG(dbgs() << " expands at iter " << *StartIterSCEV <<
+            " to " << *IVAtIter << "\n");
+
+      // NOTE: Expanded code should not refer to other IV's.
+      Value *IVStart = Exp.expandCodeFor(IVAtIter, IVAtIter->getType(),
+                                         NewPreheader->getTerminator());
+
+
+      // Set the value that the cloned IV inherits from the cloned preheader.
+      PHINode *NewIV = cast<PHINode>(VMap[IV]);
+      int NewPreheaderIdx = NewIV->getBasicBlockIndex(NewPreheader);
+      assert(isa<Constant>(NewIV->getIncomingValue(NewPreheaderIdx)) &&
+             "Cloned IV does not inherit a constant value from cloned preheader.");
+      NewIV->setIncomingValue(NewPreheaderIdx, IVStart);
+    }
+
+    // Remap the newly added instructions in the new preheader to use
+    // values local to the helper.
+    // dbgs() << "NewPreheader:" << *NewPreheader;
+    for (Instruction &II : *NewPreheader)
+      RemapInstruction(&II, VMap, RF_IgnoreMissingLocals,
+                       /*TypeMapper=*/nullptr, /*Materializer=*/nullptr);
+  }
+  
+  // // Rewrite cloned IV's to start at the start iteration argument.
+  // BasicBlock *NewPreheader = cast<BasicBlock>(VMap[Preheader]);
+  // for (PHINode *IV : IVs) {
+  //   PHINode *NewIV = cast<PHINode>(VMap[IV]);
+  //   int NewPreheaderIdx = NewIV->getBasicBlockIndex(NewPreheader);
+  //   if (isa<Constant>(NewIV->getIncomingValue(NewPreheaderIdx)))
+  //     NewIV->setIncomingValue(NewPreheaderIdx, cast<Value>(VMap[InputMap[IV]]));
+  // }
+  
+  // If the loop limit is constant, then rewrite the loop latch
+  // condition to use the end-iteration argument.
+  if (isa<Constant>(LimitVar)) {
+    CmpInst *HelperCond = cast<CmpInst>(VMap[NewCond]);
+    assert(HelperCond->getOperand(1) == LimitVar);
+    IRBuilder<> Builder(HelperCond);
+    Value *NewHelperCond = Builder.CreateICmpULT(HelperCond->getOperand(0),
+                                                 VMap[InputMap[LimitVar]]);
+    HelperCond->replaceAllUsesWith(NewHelperCond);
+    HelperCond->eraseFromParent();
+  }
+
+  // DT.recalculate(*Helper);
+
+  // For debugging:
+  // BasicBlock *NewHeader = cast<BasicBlock>(VMap[Header]);
+  // SerializeDetachedCFG(cast<DetachInst>(NewHeader->getTerminator()), nullptr);
+  implementDACIterSpawnOnHelper(Helper, NewPreheader,
+                                cast<BasicBlock>(VMap[Header]),
+                                cast<PHINode>(VMap[CanonicalIV]),
+                                cast<Argument>(VMap[InputMap[LimitVar]]),
+                                cast<Argument>(VMap[GrainVar]),
+                                /*DT=*/nullptr, /*LI=*/nullptr,
+                                CanonicalSCEV->getNoWrapFlags(SCEV::FlagNUW),
+                                CanonicalSCEV->getNoWrapFlags(SCEV::FlagNSW));
+
+  // TODO: Replace this once the function is complete.
+  // dbgs() << "New Helper function:" << *Helper;
+  if (llvm::verifyFunction(*Helper, &dbgs()))
+    return nullptr;
+
+  // Add call to helper function.
+  {
+    // Setup arguments for call.
+    SetVector<Value*> TopCallArgs;
+    // Add start iteration 0.
+    assert(CanonicalSCEV->getStart()->isZero() &&
+           "Canonical IV does not start at zero.");
+    TopCallArgs.insert(ConstantInt::get(CanonicalIV->getType(), 0));
+    // Add loop limit.
+    TopCallArgs.insert(LimitVar);
+    // Add grainsize.
+    TopCallArgs.insert(GrainVar);
+    // Add the rest of the arguments.
+    for (Value *V : BodyInputs)
+      TopCallArgs.insert(V);
+
+    // Create call instruction.
+    IRBuilder<> Builder(Preheader->getTerminator());
+    CallInst *TopCall = Builder.CreateCall(Helper, TopCallArgs.getArrayRef());
+    // Use a fast calling convention for the helper.
+    TopCall->setCallingConv(CallingConv::Fast);
+    // TopCall->setCallingConv(Helper->getCallingConv());
+    TopCall->setDebugLoc(Preheader->getTerminator()->getDebugLoc());
+  }
+  
+  ++LoopsConvertedToDAC;
+
+  return Helper;
+}
+
+////////////////////////////////////////////////////////////////////////
 
 Value* neg(Value* V) {
   if( Constant* C = dyn_cast<Constant>(V) ) {
@@ -353,6 +1228,7 @@ std::pair<PHINode*,Value*> getIndVar(Loop *L, BasicBlock* detacher, DominatorTre
   for (BasicBlock::iterator I = H->begin(); isa<PHINode>(I); ) {
     assert( isa<PHINode>(I) );
     PHINode *PN = cast<PHINode>(I);
+    dbgs() << "examining PHI Node " << *PN << "\n";
     if (LoadInst* ld = dyn_cast<LoadInst>(uncast(PN->getIncomingValueForBlock(Incoming)))) {
       if (LoadInst* ld2 = dyn_cast<LoadInst>(uncast(PN->getIncomingValueForBlock(Backedge)))) {
         LoadInst *t1 = ld, *t2 = ld2;
@@ -828,6 +1704,7 @@ bool Loop2Cilk::performDAC(Loop *L, LPPassManager &LPM) {
   Loop* parentL = L->getParentLoop();
   LoopInfo &LI = getAnalysis<LoopInfoWrapperPass>().getLoopInfo();
   DominatorTree &DT = getAnalysis<DominatorTreeWrapperPass>().getDomTree();
+  ScalarEvolution &SE = getAnalysis<ScalarEvolutionWrapperPass>().getSE();
 
   TerminatorInst* T = Header->getTerminator();
   if (!isa<BranchInst>(T)) {
@@ -836,21 +1713,12 @@ bool Loop2Cilk::performDAC(Loop *L, LPPassManager &LPM) {
       T = Preheader->getTerminator();
       Header = Preheader;
     } else if (isa<SyncInst>(Preheader->getTerminator())) {
-      // BasicBlock *ph = BasicBlock::Create(Ctx, "sync.br", Header->getParent());
-      // DT.addNewBlock(ph, Preheader);
-      // ph->moveAfter(Preheader);
-      // IRBuilder <> b(ph);
-      // T = Preheader->getTerminator();
-      // assert(T->getSuccessor(0) == Header);
-      // b.CreateBr(T->getSuccessor(0));
-      // T->setSuccessor(0,ph);
-      // Header->dump();
-      // T = ph->getTerminator(); Header = ph;
       BasicBlock *NewPreheader = SplitEdge(Preheader, Header, &DT, &LI);
-      SyncInst::Create(NewPreheader, Preheader->getTerminator());
-      Preheader->getTerminator()->eraseFromParent();
-      T = BranchInst::Create(Header, NewPreheader->getTerminator());
-      NewPreheader->getTerminator()->eraseFromParent();
+      // SyncInst::Create(NewPreheader, Preheader->getTerminator());
+      // Preheader->getTerminator()->eraseFromParent();
+      // T = BranchInst::Create(Header, NewPreheader->getTerminator());
+      // NewPreheader->getTerminator()->eraseFromParent();
+      T = NewPreheader->getTerminator();
       Header = NewPreheader;
     } else {
       llvm::errs() << "Loop not entered via branch instance\n";
@@ -860,6 +1728,35 @@ bool Loop2Cilk::performDAC(Loop *L, LPPassManager &LPM) {
       return false;
     }
   }
+
+  // dbgs() << "L2C evaluating " << *L << "\n";
+  // for (BasicBlock *BB : L->getBlocks())
+  //   dbgs() << *BB;
+
+  // Header = L->getHeader();
+  // DEBUG(dbgs() << "L2C Header:" << *Header);
+  // BasicBlock *Latch = L->getLoopLatch();
+  // DEBUG(dbgs() << "L2C Latch:" << *Latch);
+  // DEBUG(dbgs() << "L2C SE exit count: " << *(SE.getExitCount(L, L->getExitingBlock())) << "\n");
+
+  // Verify that we can extract loop.
+  if (!verifyLoopStructureForConversion(L))
+    return false;
+
+  if (convertLoopToDACIterSpawn(L, SE, DT, LI)) {
+    // Erase the old loop.
+    Loop *ParentLoop = L->getParentLoop();
+    eraseLoop(L, SE, DT, LI);
+    // Verify parent loop, if one exits.
+    if (ParentLoop)
+      ParentLoop->verifyLoop();
+    return true;
+  }
+
+  dbgs() << "L2C Failed to transform verified " << *L << "\n";
+  return false;
+
+  dbgs() << "L2C Falling back to old method for promoting " << *L << "\n";
 
   assert (isa<BranchInst>(T));
   BranchInst* B = cast<BranchInst>(T);
@@ -935,10 +1832,11 @@ bool Loop2Cilk::performDAC(Loop *L, LPPassManager &LPM) {
   /////!!< END ESTABLISH DETACH/SYNC BLOCKS
   assert(syncer && isa<SyncInst>(syncer->getTerminator()));
   assert(detacher && isa<DetachInst>(detacher->getTerminator()));
-
+  dbgs() << "syncer:" << *syncer;
+  dbgs() << "detacher:" << *detacher;
   DetachInst* det = cast<DetachInst>(detacher->getTerminator());
 
-   {
+  {
     SmallPtrSet<BasicBlock *, 32> functionPieces;
     SmallVector<BasicBlock*, 32 > reattachB;
     if (!llvm::cilk::populateDetachedCFG(*det, DT, functionPieces, reattachB, false)) return false;
@@ -953,18 +1851,21 @@ bool Loop2Cilk::performDAC(Loop *L, LPPassManager &LPM) {
       }
     }
   }
-
+  
   /////!!< REQUIRE DETACHER BLOCK IS EMPTY EXCEPT FOR BRANCH
   while (getNonPhiSize(detacher)!=1) {
+    dbgs() << "[Loop2Cilk] detacher:" << *detacher;
     Instruction* badInst = getLastNonTerm(detacher);
+    dbgs() << "[Loop2Cilk] badInst: " << *badInst << "\n";
+    // dbgs() << "[Loop2Cilk] SCEV " << *(SE->getSCEV(badInst)) << "\n";
     if (!badInst->mayWriteToMemory()) {
       bool dominated = true;
       for (const Use &U : badInst->uses()) {
-        if (!DT.dominates(BasicBlockEdge(detacher, det->getSuccessor(0) ), U) ) {
-          errs() << "use not dominated:\n";
-          U->dump();
+        if (!DT.dominates(BasicBlockEdge(detacher, det->getSuccessor(0)), U)) {
+          errs() << "use " << *(U) << " not dominated: " << *(U.getUser()) << "\n";
+          // U.dump();
           dominated = false;
-          break;
+          //break;
         }
       }
       if (dominated) {
@@ -1031,10 +1932,10 @@ bool Loop2Cilk::performDAC(Loop *L, LPPassManager &LPM) {
       }
     }
   }
-
+  SE.forgetLoop(L);
   DT.recalculate(*L->getHeader()->getParent());
 
-  llvm::CallInst* call = 0;
+  llvm::CallInst* call = nullptr;
 
   if (!recursiveMoveBefore(Header->getTerminator(), cmp, DT, "3")) {
     errs() << "cmp not moved\n"; cmp->dump();
@@ -1050,6 +1951,10 @@ bool Loop2Cilk::performDAC(Loop *L, LPPassManager &LPM) {
     return false;
   }
 
+  // dbgs() << "extracted:" << *extracted;
+  for (Value *V : ext_args)
+    dbgs() << "extracted arg: " << *V << "\n";
+
   // FIX FOR THE DAC recur
   createDACOnExtractedFunction(extracted, Ctx, ext_args);
 
@@ -1061,27 +1966,41 @@ bool Loop2Cilk::performDAC(Loop *L, LPPassManager &LPM) {
 
   auto a1 = det->getSuccessor(0);
   auto a2 = det->getSuccessor(1);
+  dbgs() << "a1:" << *a1;
+  dbgs() << "a2:" << *a2;
 
   oldvar->removeIncomingValue( 1U );
   oldvar->removeIncomingValue( 0U );
   assert( oldvar->getNumUses() == 0 );
   assert( det->use_empty() );
 
+  dbgs() << "Erasing from parent:" << *det;
+
   det->eraseFromParent();
+  dbgs() << " done\n";
   if (cilk::getNumPred(a2) == 0) {
     auto tmp = a1;
     a1 = a2;
     a2 = tmp;
   }
 
-  if (parentL)
+  if (parentL) {
+    dbgs() << "This loop: " << *L << "\n";
+    for (Loop *SL : parentL->getSubLoops())
+      dbgs() << "Subloop of parent: " << *SL << "\n";
     parentL->removeChildLoop(std::find(parentL->getSubLoops().begin(), parentL->getSubLoops().end(), L));
-
-  if (auto term = a1->getTerminator())
+  }
+  if (auto term = a1->getTerminator()) {
+    dbgs() << "Removing a1 terminator " << *term << "\n";
     term->eraseFromParent();
-  if (auto term = a2->getTerminator())
+  }
+  if (auto term = a2->getTerminator()) {
+    dbgs() << "Removing a2 terminator " << *term << "\n";
     term->eraseFromParent();
-
+  }
+  
+  dbgs() << "a1:" << *a1;
+  dbgs() << "a2:" << *a2;
   LI.removeBlock(a1);
   removeFromAll(parentL, a1);
   DeleteDeadBlock(a1);
@@ -1091,8 +2010,10 @@ bool Loop2Cilk::performDAC(Loop *L, LPPassManager &LPM) {
     DeleteDeadBlock(a2);
   }
 
-  if (auto term = Header->getTerminator())
+  if (auto term = Header->getTerminator()) {
+    dbgs() << "Erasing Header terminator " << *term << "\n";
     term->eraseFromParent();
+  }
 
   IRBuilder<> b2(Header);
   b2.CreateBr(detacher);
@@ -1143,16 +2064,17 @@ bool Loop2Cilk::performDAC(Loop *L, LPPassManager &LPM) {
 
 
 bool Loop2Cilk::runOnLoop(Loop *L, LPPassManager &LPM) {
-  if (llvm::verifyFunction(*L->getHeader()->getParent(), &llvm::errs())) {
-    L->getHeader()->getParent()->dump();
+  Function *ParentF = L->getHeader()->getParent();
+  if (llvm::verifyFunction(*ParentF, &llvm::errs())) {
+    ParentF->dump();
     assert(0);
   }
   if (skipLoop(L)) {
     return false;
   }
   bool ans = performDAC(L, LPM);
-  if (llvm::verifyFunction(*L->getHeader()->getParent(), &llvm::errs())) {
-    L->getHeader()->getParent()->dump();
+  if (llvm::verifyFunction(*ParentF, &llvm::errs())) {
+    ParentF->dump();
     assert(0);
   }
   return ans;
