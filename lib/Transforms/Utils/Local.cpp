@@ -1046,7 +1046,7 @@ BranchInst *llvm::SerializeDetachedCFG(DetachInst *DI, DominatorTree *DT) {
   BasicBlock *Continuation = DI->getContinue();
 
   assert(Detached->getSinglePredecessor() &&
-	 "Detach instruction does not have just one predecessor.");
+         "Detach instruction does not have just one predecessor.");
 
   // Get the detach edge from DI.
   BasicBlockEdge DetachEdge(Detacher, Detached);
@@ -1068,10 +1068,10 @@ BranchInst *llvm::SerializeDetachedCFG(DetachInst *DI, DominatorTree *DT) {
     if (isa<ReattachInst>(Pred->getTerminator())) {
       ReattachesFound++;
       if (!SingleReattacher)
-	SingleReattacher = Pred;
+        SingleReattacher = Pred;
       if (DT) {
-	assert(DT->dominates(DetachEdge, Pred) &&
-	       "Detach edge does not dominate a reattach into its continuation.");
+        assert(DT->dominates(DetachEdge, Pred) &&
+               "Detach edge does not dominate a reattach into its continuation.");
       }
       Reattaches.push_back(cast<ReattachInst>(Pred->getTerminator()));
     }
@@ -1114,22 +1114,22 @@ const BasicBlock *llvm::GetDetachedCtx(const BasicBlock *BB) {
       continue;
 
     for (auto PI = pred_begin(CurrBB), PE = pred_end(CurrBB);
-	 PI != PE; ++PI) {
+         PI != PE; ++PI) {
       const BasicBlock *PredBB = *PI;
 
       // Skip predecessors via reattach instructions.  The detacher
       // block corresponding to this reattach is also a predecessor of
       // the current basic block.
       if (isa<ReattachInst>(PredBB->getTerminator()))
-	continue;
+        continue;
 
       // If the predecessor is terminated by a detach, check to see if
       // that detach detached the current basic block.
       if (isa<DetachInst>(PredBB->getTerminator())) {
-	const DetachInst *DI = cast<DetachInst>(PredBB->getTerminator());
-	if (DI->getDetached() == CurrBB)
-	  // Return the entry of this detached sub-CFG.
-	  return PredBB;
+        const DetachInst *DI = cast<DetachInst>(PredBB->getTerminator());
+        if (DI->getDetached() == CurrBB)
+          // Return the entry of this detached sub-CFG.
+          return PredBB;
       }
 
       // Otherwise, add the predecessor block to the work list to
