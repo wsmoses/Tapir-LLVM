@@ -430,7 +430,7 @@ std::pair<PHINode*,Value*> getIndVar(Loop *L, BasicBlock* detacher, DominatorTre
         }
         assert( !isa<PHINode>(Inc->getOperand(1)) );
         if (!recursiveMoveBefore(Incoming->getTerminator(), Inc->getOperand(1), DT, "1")) return make_pair(nullptr, nullptr);
-        assert( !isa<PHINode>(PN->getIncomingValueForBlock(Incoming)) );
+        //assert( !isa<PHINode>(PN->getIncomingValueForBlock(Incoming)) );
         if (!recursiveMoveBefore(Incoming->getTerminator(), PN->getIncomingValueForBlock(Incoming), DT, "2")) return make_pair(nullptr, nullptr);
       } else {
         errs() << "no add found for:\n"; PN->dump(); Inc->dump();
@@ -898,7 +898,7 @@ bool Loop2Cilk::performDAC(Loop *L, LPPassManager &LPM) {
 
     syncer = continueToFindSync(syncer);
     if (!syncer) {
-      //errs() << "No sync found" << "\n";
+      errs() << "No sync found" << "\n";
       return false;
     }
 
