@@ -1080,12 +1080,14 @@ BranchInst *llvm::SerializeDetachedCFG(DetachInst *DI, DominatorTree *DT) {
 
   // Replace each reattach with branches to the continuation.
   for (ReattachInst *RI : Reattaches) {
-    BranchInst::Create(Continuation, RI->getParent()->getTerminator());
-    RI->getParent()->getTerminator()->eraseFromParent();
+    BranchInst *Replacement = BranchInst::Create(Continuation, RI);
+    Replacement->setDebugLoc(RI->getDebugLoc());
+    RI->eraseFromParent();
   }
 
   // Replace the new detach with a branch to the detached CFG.
   BranchInst *Replacement = BranchInst::Create(Detached, DI);
+  Replacement->setDebugLoc(DI->getDebugLoc());
   DI->eraseFromParent();
 
   // Update the dominator tree.
