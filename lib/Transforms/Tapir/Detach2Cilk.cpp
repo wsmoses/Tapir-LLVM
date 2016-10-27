@@ -1,4 +1,4 @@
-//===- Detach2Cilk.cpp - The -detach2cilk pass, a conversion to cilk runtime calls ----===//
+//===- Detach2Cilk.cpp - Convert Tapir into Cilk runtime calls ------------===//
 //
 //                     The LLVM Compiler Infrastructure
 //
@@ -7,12 +7,12 @@
 //
 //===----------------------------------------------------------------------===//
 //
-// This pass is a simple pass wrapper around the PromoteMemToReg function call
-// exposed by the Utils library.
+// This pass converts functions that include Tapir instructions to call out to
+// the Cilk runtime system.
 //
 //===----------------------------------------------------------------------===//
 
-#include "llvm/Transforms/Utils/CilkABI.h"
+#include "llvm/Transforms/Tapir/CilkABI.h"
 #include "llvm/IR/Verifier.h"
 #include "llvm/Transforms/Utils/Cloning.h"
 
@@ -23,22 +23,24 @@ using namespace llvm;
 namespace {
 
 struct CilkPass : public FunctionPass {
-	static char ID; // Pass identification, replacement for typeid
+  static char ID; // Pass identification, replacement for typeid
   bool DisablePostOpts;
   bool Instrument;
-	CilkPass(bool disablePostOpts=false, bool instrument=false) : FunctionPass(ID), DisablePostOpts(disablePostOpts), Instrument(instrument) {
-	}
+  CilkPass(bool disablePostOpts=false, bool instrument=false)
+      : FunctionPass(ID), DisablePostOpts(disablePostOpts),
+        Instrument(instrument) {
+  }
 
-	// runOnFunction - To run this pass, first we find appropriate instructions,
-	// then we promote each one.
-	//
-	bool runOnFunction(Function &F) override;
+  // runOnFunction - To run this pass, first we find appropriate instructions,
+  // then we promote each one.
+  //
+  bool runOnFunction(Function &F) override;
 
-	void getAnalysisUsage(AnalysisUsage &AU) const override {
-		AU.addRequired<DominatorTreeWrapperPass>();
-	}
+  void getAnalysisUsage(AnalysisUsage &AU) const override {
+    AU.addRequired<DominatorTreeWrapperPass>();
+  }
 };
-}  // end of anonymous namespace
+}  // End of anonymous namespace
 
 static cl::opt<bool>  ClInstrumentCilk(
     "instrument-cilk", cl::init(false),
@@ -72,10 +74,10 @@ bool CilkPass::runOnFunction(Function &F) {
   for (Function::iterator i = F.begin(), e = F.end(); i != e; ++i) {
     if (DetachInst* inst = llvm::dyn_cast_or_null<DetachInst>(i->getTerminator())) {
       auto cal = llvm::cilk::createDetach(*inst, DT, ClInstrumentCilk || Instrument);
-			if (Instrument) {
-				InlineFunctionInfo ifi;
-				InlineFunction(cal,ifi);
-			}
+      if (Instrument) {
+        InlineFunctionInfo ifi;
+        InlineFunction(cal,ifi);
+      }
       Changed = true;
     }
   }
@@ -109,7 +111,7 @@ bool CilkPass::runOnFunction(Function &F) {
           }
         }
       }
-		}
+    }
   }
 
   if (llvm::verifyFunction(F, &llvm::errs())) {
@@ -123,5 +125,5 @@ bool CilkPass::runOnFunction(Function &F) {
 // createPromoteDetachToCilkPass - Provide an entry point to create this pass.
 //
 FunctionPass *llvm::createPromoteDetachToCilkPass(bool DisablePostOpts, bool Instrument) {
-	return new CilkPass(DisablePostOpts, Instrument);
+  return new CilkPass(DisablePostOpts, Instrument);
 }

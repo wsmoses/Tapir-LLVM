@@ -14,8 +14,7 @@
 //
 //===----------------------------------------------------------------------===//
 
-// TODO: Move CilkABI to a more appropriate location.
-#include "llvm/Transforms/Utils/CilkABI.h"
+#include "llvm/Transforms/Tapir/CilkABI.h"
 
 using namespace llvm;
 
@@ -26,16 +25,21 @@ typedef llvm::TypeBuilder<__cilkrts_stack_frame, false> StackFrameBuilder;
 typedef llvm::TypeBuilder<__cilkrts_worker, false> WorkerBuilder;
 typedef llvm::TypeBuilder<__cilkrts_pedigree, false> PedigreeBuilder;
 
+/// Helper methods for storing to and loading from struct fields.
 static Value *GEP(IRBuilder<> &B, Value *Base, int field) {
+  // return B.CreateStructGEP(cast<PointerType>(Base->getType()),
+  //                          Base, field);
   return B.CreateConstInBoundsGEP2_32(nullptr, Base, 0, field);
 }
 
-static void StoreField(IRBuilder<> &B, Value *Val, Value *Dst, int field) {
-  B.CreateStore(Val, GEP(B, Dst, field));
+static void StoreField(IRBuilder<> &B, Value *Val, Value *Dst, int field,
+                       bool isVolatile = false) {
+  B.CreateStore(Val, GEP(B, Dst, field), isVolatile);
 }
 
-static Value *LoadField(IRBuilder<> &B, Value *Src, int field) {
-  return B.CreateLoad(GEP(B, Src, field));
+static Value *LoadField(IRBuilder<> &B, Value *Src, int field,
+                        bool isVolatile = false) {
+  return B.CreateLoad(GEP(B, Src, field), isVolatile);
 }
 
 /// \brief Emit inline assembly code to save the floating point
@@ -63,7 +67,8 @@ static void EmitSaveFloatingPointState(IRBuilder<> &B, Value *SF) {
 /// false, signifying that the caller needs to add the function body.
 template <typename T>
 static bool GetOrCreateFunction(const char *FnName, Module& M,
-                                Function *&Fn, Function::LinkageTypes Linkage =
+                                Function *&Fn,
+                                Function::LinkageTypes Linkage =
                                 Function::InternalLinkage,
                                 bool DoesNotThrow = true) {
   LLVMContext &Ctx = M.getContext();
@@ -76,7 +81,7 @@ static bool GetOrCreateFunction(const char *FnName, Module& M,
     return true;
 
   // Otherwise we have to create it
-  llvm::FunctionType *FTy = TypeBuilder<T, false>::get(Ctx);
+  FunctionType *FTy = TypeBuilder<T, false>::get(Ctx);
   Fn = Function::Create(FTy, Linkage, FnName, &M);
 
   // Set nounwind if it does not throw.
@@ -95,8 +100,8 @@ static CallInst *EmitCilkSetJmp(IRBuilder<> &B, Value *SF, Module& M) {
   // We always want to save the floating point state too
   EmitSaveFloatingPointState(B, SF);
 
-  llvm::Type *Int32Ty = llvm::Type::getInt32Ty(Ctx);
-  llvm::Type *Int8PtrTy = llvm::Type::getInt8PtrTy(Ctx);
+  Type *Int32Ty = Type::getInt32Ty(Ctx);
+  Type *Int8PtrTy = Type::getInt8PtrTy(Ctx);
 
   // Get the buffer to store program state
   // Buffer is a void**.
@@ -116,14 +121,13 @@ static CallInst *EmitCilkSetJmp(IRBuilder<> &B, Value *SF, Module& M) {
   Value *StackSaveSlot = GEP(B, Buf, 2);
   B.CreateStore(StackAddr, StackSaveSlot);
 
-  // Call LLVM's EH setjmp, which is lightweight.
-
-  AttrBuilder attrs;
-  attrs.addAttribute(Attribute::AttrKind::ReturnsTwice);
-
-  Value* F = Intrinsic::getDeclaration(&M, Intrinsic::eh_sjlj_setjmp);
+  // AttrBuilder attrs;
+  // attrs.addAttribute(Attribute::AttrKind::ReturnsTwice);
 
   Buf = B.CreateBitCast(Buf, Int8PtrTy);
+
+  // Call LLVM's EH setjmp, which is lightweight.
+  Value* F = Intrinsic::getDeclaration(&M, Intrinsic::eh_sjlj_setjmp);
 
   CallInst *SetjmpCall = B.CreateCall(F, Buf);
   SetjmpCall->setCanReturnTwice();
@@ -156,7 +160,8 @@ static Function *Get__cilkrts_pop_frame(Module &M) {
   // sf->worker->current_stack_frame = sf.call_parent;
   StoreField(B,
              LoadField(B, SF, StackFrameBuilder::call_parent),
-             LoadField(B, SF, StackFrameBuilder::worker),
+             LoadField(B, SF, StackFrameBuilder::worker,
+                       /*isVolatile=*/true),
              WorkerBuilder::current_stack_frame);
 
   // sf->call_parent = 0;
@@ -205,7 +210,8 @@ static Function *Get__cilkrts_detach(Module &M) {
   IRBuilder<> B(Entry);
 
   // struct __cilkrts_worker *w = sf->worker;
-  Value *W = LoadField(B, SF, StackFrameBuilder::worker);
+  Value *W = LoadField(B, SF, StackFrameBuilder::worker,
+                       /*isVolatile=*/true);
 
   // __cilkrts_stack_frame *volatile *tail = w->tail;
   Value *Tail = LoadField(B, W, WorkerBuilder::tail);
@@ -307,7 +313,8 @@ static Function *GetCilkSyncFn(Module &M, bool instrument = false) {
       B.CreateCall(CILK_CSI_FUNC(sync_begin, M), SF);
 
     // if (sf->flags & CILK_FRAME_UNSYNCHED)
-    Value *Flags = LoadField(B, SF, StackFrameBuilder::flags);
+    Value *Flags = LoadField(B, SF, StackFrameBuilder::flags,
+                             /*isVolatile=*/true);
     Flags = B.CreateAnd(Flags,
                         ConstantInt::get(Flags->getType(),
                                          CILK_FRAME_UNSYNCHED));
@@ -579,7 +586,8 @@ static Function *GetCilkParentEpilogue(Module &M, bool instrument = false) {
     B.CreateCall(CILKRTS_FUNC(pop_frame, M), SF);
 
     // if (sf->flags != CILK_FRAME_VERSION)
-    Value *Flags = LoadField(B, SF, StackFrameBuilder::flags);
+    Value *Flags = LoadField(B, SF, StackFrameBuilder::flags,
+                             /*isVolatile=*/true);
     Value *Cond = B.CreateICmpNE(Flags,
                                  ConstantInt::get(Flags->getType(), CILK_FRAME_VERSION));
     B.CreateCondBr(Cond, B1, Exit);
@@ -887,225 +895,6 @@ size_t llvm::cilk::getNumPred(BasicBlock* BB) {
     cnt++;
   }
   return cnt;
-}
-
-// Clone Blocks into NewFunc, transforming the old arguments into references to
-// VMap values.
-//
-/// TODO: Fix the std::vector part of the type of this function.
-void llvm::cilk::CloneIntoFunction(Function *NewFunc, const Function *OldFunc,
-				   std::vector<BasicBlock*> Blocks,
-				   ValueToValueMapTy &VMap,
-				   bool ModuleLevelChanges,
-				   SmallVectorImpl<ReturnInst*> &Returns,
-				   const char *NameSuffix,
-				   ClonedCodeInfo *CodeInfo,
-				   ValueMapTypeRemapper *TypeMapper,
-				   ValueMaterializer *Materializer) {
-  assert(NameSuffix && "NameSuffix cannot be null!");
-
-  // Loop over all of the basic blocks in the function, cloning them as
-  // appropriate.
-  //
-  for (const BasicBlock *BB : Blocks) {
-    // dbgs() << "Cloning basic block " << BB->getName() << "\n";
-    // Create a new basic block and copy instructions into it!
-    BasicBlock *CBB = CloneBasicBlock(BB, VMap, NameSuffix, NewFunc, CodeInfo);
-
-    // Add basic block mapping.
-    // dbgs() << "Mapping " << BB->getName() << " to " << CBB->getName() << "\n";
-    VMap[BB] = CBB;
-
-    // It is only legal to clone a function if a block address within that
-    // function is never referenced outside of the function.  Given that, we
-    // want to map block addresses from the old function to block addresses in
-    // the clone. (This is different from the generic ValueMapper
-    // implementation, which generates an invalid blockaddress when
-    // cloning a function.)
-    if (BB->hasAddressTaken()) {
-      Constant *OldBBAddr = BlockAddress::get(const_cast<Function*>(OldFunc),
-                                              const_cast<BasicBlock*>(BB));
-      VMap[OldBBAddr] = BlockAddress::get(NewFunc, CBB);
-    }
-
-    // Note return instructions for the caller.
-    if (ReturnInst *RI = dyn_cast<ReturnInst>(CBB->getTerminator()))
-      Returns.push_back(RI);
-  }
-  
-  // Loop over all of the instructions in the function, fixing up operand
-  // references as we go.  This uses VMap to do all the hard work.
-  for (const BasicBlock *BB : Blocks) {
-    BasicBlock *CBB = cast<BasicBlock>(VMap[BB]);
-    // dbgs() << "Remapping instructions in cloned BB:" << *CBB;
-    // Loop over all instructions, fixing each one as we find it...
-    for (Instruction &II : *CBB) {
-      RemapInstruction(&II, VMap,
-                       ModuleLevelChanges ? RF_None : RF_NoModuleLevelChanges,
-                       TypeMapper, Materializer);
-      // dbgs() << "Remapping instruction:" << II << "\n";
-    }
-  }
-}
-
-/// Create a helper function whose signature is based on Inputs and
-/// Outputs as follows: f(in0, ..., inN, out0, ..., outN)
-///
-/// TODO: Fix the std::vector part of the type of this function.
-Function* llvm::cilk::CreateHelper(const SetVector<Value *> &Inputs,
-				   const SetVector<Value *> &Outputs,
-				   std::vector<BasicBlock*> Blocks,
-				   const BasicBlock *Header,
-				   const BasicBlock *OldEntry,
-				   const BasicBlock *OldExit,
-				   ValueToValueMapTy &VMap,
-				   Module *DestM,
-				   bool ModuleLevelChanges,
-				   SmallVectorImpl<ReturnInst*> &Returns,
-				   const char *NameSuffix,
-				   ClonedCodeInfo *CodeInfo,
-				   ValueMapTypeRemapper *TypeMapper,
-				   ValueMaterializer *Materializer) {
-  DEBUG(dbgs() << "inputs: " << Inputs.size() << "\n");
-  DEBUG(dbgs() << "outputs: " << Outputs.size() << "\n");
-
-  const Function *OldFunc = Header->getParent();
-  Type *RetTy = Type::getVoidTy(Header->getContext());
-
-  std::vector<Type*> paramTy;
-
-  // Add the types of the input values to the function's argument list
-  for (Value *value : Inputs) {
-    DEBUG(dbgs() << "value used in func: " << *value << "\n");
-    paramTy.push_back(value->getType());
-  }
-
-  // Add the types of the output values to the function's argument list.
-  for (Value *output : Outputs) {
-    DEBUG(dbgs() << "instr used in func: " << *output << "\n");
-    paramTy.push_back(PointerType::getUnqual(output->getType()));
-  }
-
-  DEBUG({
-      dbgs() << "Function type: " << *RetTy << " f(";
-      for (Type *i : paramTy)
-	dbgs() << *i << ", ";
-      dbgs() << ")\n";
-    });
-
-  FunctionType *FTy = FunctionType::get(RetTy, paramTy, false);
-
-  // Create the new function
-  Function *NewFunc = Function::Create(FTy,
-				       GlobalValue::InternalLinkage,
-				       OldFunc->getName() + "_" +
-				       Header->getName(), DestM);
-  // // If the old function is no-throw, so is the new one.
-  // if (OldFunc->doesNotThrow())
-  //   NewFunc->setDoesNotThrow();
-
-  // // Inherit the uwtable attribute if we need to.
-  // if (OldFunc->hasUWTable())
-  //   NewFunc->setHasUWTable();
-
-  // Copy all attributes other than those stored in the AttributeSet.  We need
-  // to remap the parameter indices of the AttributeSet.
-  AttributeSet NewAttrs = NewFunc->getAttributes();
-  NewFunc->copyAttributesFrom(OldFunc);
-  NewFunc->setAttributes(NewAttrs);
-
-  // Fix up the personality function that got copied over.
-  if (OldFunc->hasPersonalityFn())
-    NewFunc->setPersonalityFn(
-        MapValue(OldFunc->getPersonalityFn(), VMap,
-                 ModuleLevelChanges ? RF_None : RF_NoModuleLevelChanges,
-                 TypeMapper, Materializer));
-
-  AttributeSet OldAttrs = OldFunc->getAttributes();
-  // // Clone any argument attributes that are present in the VMap.
-  // for (const Argument &OldArg : OldFunc->args())
-  //   if (Argument *NewArg = dyn_cast<Argument>(VMap[&OldArg])) {
-  //     AttributeSet attrs =
-  //         OldAttrs.getParamAttributes(OldArg.getArgNo() + 1);
-  //     if (attrs.getNumSlots() > 0)
-  //       NewArg->addAttr(attrs);
-  //   }
-
-  NewFunc->setAttributes(
-      NewFunc->getAttributes()
-          .addAttributes(NewFunc->getContext(), AttributeSet::ReturnIndex,
-                         OldAttrs.getRetAttributes())
-          .addAttributes(NewFunc->getContext(), AttributeSet::FunctionIndex,
-                         OldAttrs.getFnAttributes()));
-
-  SmallVector<std::pair<unsigned, MDNode *>, 1> MDs;
-  OldFunc->getAllMetadata(MDs);
-  for (auto MD : MDs)
-    NewFunc->addMetadata(
-        MD.first,
-        *MapMetadata(MD.second, VMap,
-                     ModuleLevelChanges ? RF_None : RF_NoModuleLevelChanges,
-                     TypeMapper, Materializer));
-
-  // We assume that the Helper reads and writes its arguments.  If the parent
-  // function had stronger attributes on memory access -- specifically, if the
-  // parent is marked as only reading memory -- we must replace this attribute
-  // with an appropriate weaker form.
-  if (OldFunc->onlyReadsMemory()) {
-    NewFunc->removeFnAttr(Attribute::ReadNone);
-    NewFunc->removeFnAttr(Attribute::ReadOnly);
-    NewFunc->setOnlyAccessesArgMemory();
-  }
-
-  // // Inherit the calling convention from the parent.
-  // NewFunc->setCallingConv(OldFunc->getCallingConv());
-  
-  // Set names for input and output arguments.
-  Function::arg_iterator DestI = NewFunc->arg_begin();
-  for (Value *I : Inputs)
-    if (VMap.count(I) == 0) {       // Is this argument preserved?
-      DestI->setName(I->getName()+NameSuffix); // Copy the name over...
-      VMap[I] = &*DestI++;          // Add mapping to VMap
-    }
-  for (Value *I : Outputs)
-    if (VMap.count(I) == 0) {              // Is this argument preserved?
-      DestI->setName(I->getName()+NameSuffix); // Copy the name over...
-      VMap[I] = &*DestI++;                 // Add mapping to VMap
-    }
-
-  // The new function needs a root node because other nodes can branch to the
-  // head of the region, but the entry node of a function cannot have preds.
-  BasicBlock *NewEntry = BasicBlock::Create(Header->getContext(),
-					    OldEntry->getName()+NameSuffix);
-  NewFunc->getBasicBlockList().push_back(NewEntry);
-
-  BasicBlock *NewExit = BasicBlock::Create(Header->getContext(),
-					   OldExit->getName()+NameSuffix);
-  NewFunc->getBasicBlockList().push_back(NewExit);
-
-  // Add a mapping to the NewFuncRoot.
-  VMap[OldEntry] = NewEntry;
-  VMap[OldExit] = NewExit;
-
-  // Clone Blocks into the new function.
-  CloneIntoFunction(NewFunc, OldFunc, Blocks, VMap, ModuleLevelChanges,
-		    Returns, NameSuffix, CodeInfo, TypeMapper, Materializer);
-
-  // Add a branch in the new function to the cloned Header.
-  NewEntry->getInstList().push_back(BranchInst::Create(cast<BasicBlock>(VMap[Header])));
-  NewExit->getInstList().push_back(ReturnInst::Create(Header->getContext()));
-
-  // // Remap NewFuncRoot to point to newly cloned blocks.
-  // dbgs() << "Remapping instructions in NewFuncRoot: " << *NewFuncRoot;
-  // // Loop over all instructions, fixing each one as we find it...
-  // for (Instruction &II : *NewFuncRoot) {
-  //   RemapInstruction(&II, VMap,
-  // 		     ModuleLevelChanges ? RF_None : RF_NoModuleLevelChanges,
-  // 		     TypeMapper, Materializer);
-  //   dbgs() << "Remapping instruction:" << II << "\n";
-  // }
-  
-  return NewFunc;
 }
 
 bool llvm::cilk::populateDetachedCFG(const DetachInst& detach, DominatorTree& DT,

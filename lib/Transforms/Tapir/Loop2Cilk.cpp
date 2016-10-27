@@ -16,6 +16,7 @@
 #include "llvm/ADT/Statistic.h"
 #include "llvm/Analysis/LoopInfo.h"
 #include "llvm/Analysis/LoopPass.h"
+#include "llvm/Analysis/OptimizationDiagnosticInfo.h"
 #include "llvm/Analysis/ScalarEvolutionExpander.h"
 #include "llvm/Analysis/TargetLibraryInfo.h"
 #include "llvm/Analysis/TargetTransformInfo.h"
@@ -37,16 +38,15 @@
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include "llvm/Transforms/Utils/Local.h"
-//#include "llvm/Transforms/Utils/SimplifyIndVar.h"
 #include "llvm/Transforms/Scalar.h"
 #include "llvm/Transforms/Scalar/IndVarSimplify.h"
 #include "llvm/Transforms/Scalar/SimplifyCFG.h"
 #include "llvm/Transforms/Scalar/LoopDeletion.h"
-#include "llvm/Transforms/Utils/CilkABI.h"
+#include "llvm/Transforms/Tapir/CilkABI.h"
+#include "llvm/Transforms/Tapir/TapirOutline.h"
 #include "llvm/Transforms/Utils/PromoteMemToReg.h"
 #include "llvm/Transforms/Utils/LoopUtils.h"
 #include "llvm/Transforms/Utils/ValueMapper.h"
-#include "llvm/Transforms/Utils/PromoteMemToReg.h"
 
 #include <utility>
 using std::make_pair;
@@ -58,6 +58,21 @@ using namespace llvm;
 STATISTIC(LoopsConvertedToDAC,
           "Number of Tapir loops converted to divide-and-conquer iteration spawning");
 STATISTIC(LoopsAnalyzed, "Number of Tapir loops analyzed for conversion");
+
+// /// \brief This modifies LoopAccessReport to initialize message with
+// /// tapir-loop-specific part.
+// class TapirLoopReport : public LoopAccessReport {
+// public:
+//   TapirLoopReport(Instruction *I = nullptr)
+//       : LoopAccessReport("Tapir loop not converted: ", I) {}
+
+//   /// \brief This allows promotion of the loop-access analysis report into the
+//   /// tapir-loop report.  It modifies the message to add the tapir-loop-specific
+//   /// part of the message.
+//   explicit TapirLoopReport(const LoopAccessReport &R)
+//       : LoopAccessReport(Twine("Tapir loop not converted: ") + R.str(),
+//                          R.getInstr()) {}
+// };
 
 namespace {
   class Loop2Cilk : public LoopPass {
@@ -122,6 +137,9 @@ Pass *llvm::createLoop2CilkPass() {
 /// appropriately simple -- essentially, a straight sequence of basic blocks
 /// that unconditionally branch to the sync.  Return false if this process
 /// fails, indicating that this loop is not a simple loop for conversion.
+///
+/// This method only checks the structure of the loop exit, rather than modify
+/// it, to preserve analyses.
 bool Loop2Cilk::verifyLoopExit(const Loop *L) {
   BasicBlock *LoopExit = L->getExitBlock();
   SmallPtrSet<BasicBlock *, 8> Visited;
@@ -131,7 +149,7 @@ bool Loop2Cilk::verifyLoopExit(const Loop *L) {
   // aside from a sync.
   do {
     // LoopExit = L->getExitBlock();
-    dbgs() << "verifyLoopExit: Checking block " << *LoopExit;
+    // dbgs() << "verifyLoopExit: Checking block " << *LoopExit;
     // // Fail if the loop exit has multiple predecessors.
     // if (!LoopExit->getUniquePredecessor()) {
     //   dbgs() << "L2C loop exit does not have a unique predecessor.\n";
@@ -179,7 +197,7 @@ bool Loop2Cilk::verifyLoopStructureForConversion(const Loop *L) {
   const BasicBlock *Latch = L->getLoopLatch();
   const BasicBlock *Exit = L->getExitBlock();
 
-  // dbgs() << "verifying structure of " << *L;
+  // dbgs() << "L2C checking structure of " << *L;
 
   // Header must be terminated by a detach.
   if (!isa<DetachInst>(Header->getTerminator())) {
@@ -236,10 +254,12 @@ PHINode* Loop2Cilk::canonicalizeIVs(Loop *L, Type *Ty, ScalarEvolution &SE, Domi
   BasicBlock *Latch = L->getLoopLatch();
   DEBUG(dbgs() << "L2C Latch:" << *Latch);
 
+  DEBUG(dbgs() << "L2C exiting block:" << *(L->getExitingBlock()));
+
   // dbgs() << "L2C SE trip count: " << SE->getSmallConstantTripCount(L, L->getExitingBlock()) << "\n";
   // dbgs() << "L2C SE trip multiple: " << SE->getSmallConstantTripMultiple(L, L->getExitingBlock()) << "\n";
   DEBUG(dbgs() << "L2C SE backedge taken count: " << *(SE.getBackedgeTakenCount(L)) << "\n");
-  // dbgs() << "L2C SE max backedge taken count: " << *(SE.getMaxBackedgeTakenCount(L)) << "\n";
+  DEBUG(dbgs() << "L2C SE max backedge taken count: " << *(SE.getMaxBackedgeTakenCount(L)) << "\n");
   DEBUG(dbgs() << "L2C SE exit count: " << *(SE.getExitCount(L, L->getExitingBlock())) << "\n");
 
   SCEVExpander Exp(SE, M->getDataLayout(), "l2c");
@@ -505,11 +525,35 @@ void Loop2Cilk::implementDACIterSpawnOnHelper(Function *Helper,
   }
 }
 
+/// Recursive routine to remove a loop and all of its subloops.
+static void removeLoopAndAllSubloops(Loop *L, LoopInfo &LoopInfo) {
+  for (Loop *SL : L->getSubLoops())
+    removeLoopAndAllSubloops(SL, LoopInfo);
+
+  dbgs() << "Removing " << *L << "\n";
+
+  SmallPtrSet<BasicBlock *, 8> Blocks;
+  Blocks.insert(L->block_begin(), L->block_end());
+  for (BasicBlock *BB : Blocks)
+    LoopInfo.removeBlock(BB);
+
+  LoopInfo.markAsRemoved(L);
+}
+
+// Recursive routine to traverse the subloops of a loop and push all 
+static void collectLoopAndAllSubLoops(Loop *L,
+                                      SetVector<Loop*> &SubLoops) {
+  for (Loop *SL : L->getSubLoops())
+    collectLoopAndAllSubLoops(SL, SubLoops);
+  SubLoops.insert(L);
+}
+
 /// Recursive routine to mark a loop and all of its subloops as removed.
 static void markLoopAndAllSubloopsAsRemoved(Loop *L, LoopInfo &LoopInfo) {
   for (Loop *SL : L->getSubLoops())
     markLoopAndAllSubloopsAsRemoved(SL, LoopInfo);
 
+  dbgs() << "Marking as removed:" << *L << "\n";
   LoopInfo.markAsRemoved(L);
 }
 
@@ -533,7 +577,7 @@ void Loop2Cilk::eraseLoop(Loop *L, ScalarEvolution &SE,
     Preheader->getTerminator()->replaceUsesOfWith(L->getHeader(),
                                                   ExitBlock);
     
-    // Rewrite phis in the exit block to get their inputs from
+    // Rewrite phis in the exit block cto get their inputs from
     // the preheader instead of the exiting block.
     BasicBlock::iterator BI = ExitBlock->begin();
     while (PHINode *P = dyn_cast<PHINode>(BI)) {
@@ -575,6 +619,9 @@ void Loop2Cilk::eraseLoop(Loop *L, ScalarEvolution &SE,
   // Finally, the blocks from loopinfo.  This has to happen late because
   // otherwise our loop iterators won't work.
 
+  SetVector<Loop *> SubLoops;
+  collectLoopAndAllSubLoops(L, SubLoops);
+  
   SmallPtrSet<BasicBlock *, 8> Blocks;
   Blocks.insert(L->block_begin(), L->block_end());
   for (BasicBlock *BB : Blocks)
@@ -584,7 +631,10 @@ void Loop2Cilk::eraseLoop(Loop *L, ScalarEvolution &SE,
   // for (Loop *SL : L->getSubLoops())
   //   LoopInfo.markAsRemoved(SL);
   // LoopInfo.markAsRemoved(L);
-  markLoopAndAllSubloopsAsRemoved(L, LoopInfo);
+  // markLoopAndAllSubloopsAsRemoved(L, LoopInfo);
+  // removeLoopAndAllSubloops(L, LoopInfo);
+  for (Loop *SL : SubLoops)
+    LoopInfo.markAsRemoved(SL);
 }
 
 /// Top-level call to convert loop to spawn its iterations in a
@@ -604,10 +654,23 @@ Function* Loop2Cilk::convertLoopToDACIterSpawn(Loop *L, ScalarEvolution &SE,
   BasicBlock *Latch = L->getLoopLatch();
   Module* M = Header->getParent()->getParent();
 
+  DEBUG(dbgs() << "L2C loop header:" << *Header);
+  DEBUG(dbgs() << "L2C loop latch:" << *Latch);
+  DEBUG(dbgs() << "L2C exiting block:" << *(L->getExitingBlock()));
+
+  // dbgs() << "L2C SE trip count: " << SE->getSmallConstantTripCount(L, L->getExitingBlock()) << "\n";
+  // dbgs() << "L2C SE trip multiple: " << SE->getSmallConstantTripMultiple(L, L->getExitingBlock()) << "\n";
+  DEBUG(dbgs() << "L2C SE backedge taken count: " << *(SE.getBackedgeTakenCount(L)) << "\n");
+  DEBUG(dbgs() << "L2C SE max backedge taken count: " << *(SE.getMaxBackedgeTakenCount(L)) << "\n");
+  DEBUG(dbgs() << "L2C SE exit count: " << *(SE.getExitCount(L, L->getExitingBlock())) << "\n");
+
   /// Get loop limit.
   const SCEV *Limit = SE.getBackedgeTakenCount(L);
   // const SCEV *Limit = SE.getAddExpr(BETC, SE.getOne(BETC->getType()));
   DEBUG(dbgs() << "L2C Loop limit: " << *Limit << "\n");
+  // PredicatedScalarEvolution PSE(SE, *L);
+  // const SCEV *PLimit = PSE.getBackedgeTakenCount();
+  // DEBUG(dbgs() << "L2C predicated loop limit: " << *PLimit << "\n");
   if (SE.getCouldNotCompute() == Limit) {
     DEBUG(dbgs() << "SE could not compute loop limit.  Quitting extractLoop.\n");
     return nullptr;
@@ -775,7 +838,15 @@ Function* Loop2Cilk::convertLoopToDACIterSpawn(Loop *L, ScalarEvolution &SE,
     }
 
     // Add argument for grainsize.
-    Inputs.insert(GrainVar);
+    // Inputs.insert(GrainVar);
+    if (isa<Constant>(GrainVar)) {
+      Argument *GrainArg = new Argument(GrainVar->getType(), "grainsize");
+      Inputs.insert(GrainArg);
+      InputMap[GrainVar] = GrainArg;
+    } else {
+      Inputs.insert(GrainVar);
+      InputMap[GrainVar] = GrainVar;
+    }
 
     // Put all of the inputs together, and clear redundant inputs from
     // the set for the loop body.
@@ -797,26 +868,61 @@ Function* Loop2Cilk::convertLoopToDACIterSpawn(Loop *L, ScalarEvolution &SE,
       //        dbgs() << "EL output: " << *V << "\n";
     });
 
+
   Function *Helper;
   {
     SmallVector<ReturnInst *, 4> Returns;  // Ignore returns cloned.
-    Helper = llvm::cilk::CreateHelper(Inputs, Outputs, L->getBlocks(),
-                                      Header, Preheader, L->getExitBlock(),
-                                      VMap, Header->getParent()->getParent(),
-                                      /*ModuleLevelChanges=*/true, Returns, ".l2c",
-                                      nullptr, nullptr, nullptr);
+  
+    // LowerDbgDeclare(*(Header->getParent()));
+
+    if (DISubprogram *SP = Header->getParent()->getSubprogram()) {
+      // If we have debug info, add mapping for the metadata nodes that should not
+      // be cloned by CloneFunctionInto.
+      auto &MD = VMap.MD();
+      // dbgs() << "SP: " << *SP << "\n";
+      // dbgs() << "MD:\n";
+      // for (auto &Tmp : MD) {
+      //   dbgs() << *(Tmp.first) << " -> " << *(Tmp.second) << "\n";
+      // }
+      MD[SP->getUnit()].reset(SP->getUnit());
+      MD[SP->getType()].reset(SP->getType());
+      MD[SP->getFile()].reset(SP->getFile());
+    }
+    // {
+    //   dbgs() << "L2C TEST CLONE\n";
+    //   ValueToValueMapTy VMap2;
+    //   if (DISubprogram *SP = Header->getParent()->getSubprogram()) {
+    //     // If we have debug info, add mapping for the metadata nodes that should not
+    //     // be cloned by CloneFunctionInto.
+    //     auto &MD = VMap2.MD();
+    //     dbgs() << "SP: " << *SP << "\n";
+    //     for (auto &Tmp : MD) {
+    //       dbgs() << *(Tmp.first) << " -> " << *(Tmp.second) << "\n";
+    //     }
+    //     MD[SP->getUnit()].reset(SP->getUnit());
+    //     MD[SP->getType()].reset(SP->getType());
+    //     MD[SP->getFile()].reset(SP->getFile());
+    //   }
+    //   Function *TestFunc = CloneFunction(Header->getParent(), VMap2, nullptr);
+    // }
+
+    Helper = CreateHelper(Inputs, Outputs, L->getBlocks(),
+                          Header, Preheader, L->getExitBlock(),
+                          VMap, Header->getParent()->getParent(),
+                          /*ModuleLevelChanges=*/false, Returns, ".l2c",
+                          nullptr, nullptr, nullptr);
 
     assert(Returns.empty() && "Returns cloned when cloning loop.");
 
-    // If we have debug info, update it.  "ModuleLevelChanges = true"
-    // above does the heavy lifting, we just need to repoint
-    // subprogram at the same DICompileUnit as the original function.
-    //
-    // TODO: Cleanup the template parameters in
-    // Helper->getSubprogram() to reflect the variables used in the
-    // helper.
-    if (DISubprogram *SP = Header->getParent()->getSubprogram())
-      Helper->getSubprogram()->replaceUnit(SP->getUnit());
+    // // If we have debug info, update it.  "ModuleLevelChanges = true"
+    // // above does the heavy lifting, we just need to repoint
+    // // subprogram at the same DICompileUnit as the original function.
+    // //
+    // // TODO: Cleanup the template parameters in
+    // // Helper->getSubprogram() to reflect the variables used in the
+    // // helper.
+    // if (DISubprogram *SP = Header->getParent()->getSubprogram())
+    //   Helper->getSubprogram()->replaceUnit(SP->getUnit());
 
     // Use a fast calling convention for the helper.
     Helper->setCallingConv(CallingConv::Fast);
@@ -923,7 +1029,7 @@ Function* Loop2Cilk::convertLoopToDACIterSpawn(Loop *L, ScalarEvolution &SE,
                                 cast<BasicBlock>(VMap[Header]),
                                 cast<PHINode>(VMap[CanonicalIV]),
                                 cast<Argument>(VMap[InputMap[LimitVar]]),
-                                cast<Argument>(VMap[GrainVar]),
+                                cast<Argument>(VMap[InputMap[GrainVar]]),
                                 /*DT=*/nullptr, /*LI=*/nullptr,
                                 CanonicalSCEV->getNoWrapFlags(SCEV::FlagNUW),
                                 CanonicalSCEV->getNoWrapFlags(SCEV::FlagNSW));
@@ -955,7 +1061,7 @@ Function* Loop2Cilk::convertLoopToDACIterSpawn(Loop *L, ScalarEvolution &SE,
     // Use a fast calling convention for the helper.
     TopCall->setCallingConv(CallingConv::Fast);
     // TopCall->setCallingConv(Helper->getCallingConv());
-    TopCall->setDebugLoc(Preheader->getTerminator()->getDebugLoc());
+    TopCall->setDebugLoc(Header->getTerminator()->getDebugLoc());
   }
   
   ++LoopsConvertedToDAC;
@@ -1742,6 +1848,8 @@ bool Loop2Cilk::performDAC(Loop *L, LPPassManager &LPM) {
   // Verify that we can extract loop.
   if (!verifyLoopStructureForConversion(L))
     return false;
+
+  // PredicatedScalarEvolution PSE(SE, *L);
 
   if (convertLoopToDACIterSpawn(L, SE, DT, LI)) {
     // Erase the old loop.

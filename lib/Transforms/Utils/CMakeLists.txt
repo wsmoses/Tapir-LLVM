@@ -5,14 +5,12 @@ add_llvm_library(LLVMTransformUtils
   BreakCriticalEdges.cpp
   BuildLibCalls.cpp
   BypassSlowDivision.cpp
-  CilkABI.cpp
   CloneFunction.cpp
   CloneModule.cpp
   CmpInstAnalysis.cpp
   CodeExtractor.cpp
   CtorUtils.cpp
   DemoteRegToStack.cpp
-  Detach2Cilk.cpp
   Evaluator.cpp
   FlattenCFG.cpp
   FunctionImportUtils.cpp
@@ -23,7 +21,6 @@ add_llvm_library(LLVMTransformUtils
   IntegerDivision.cpp
   LCSSA.cpp
   Local.cpp
-  Loop2Cilk.cpp
   LoopSimplify.cpp
   LoopUnroll.cpp
   LoopUnrollRuntime.cpp
