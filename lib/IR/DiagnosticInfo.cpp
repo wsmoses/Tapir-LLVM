@@ -262,3 +262,9 @@ void llvm::emitLoopInterleaveWarning(LLVMContext &Ctx, const Function &Fn,
   Ctx.diagnose(DiagnosticInfoOptimizationFailure(
       Fn, DLoc, Twine("loop not interleaved: " + Msg)));
 }
+
+void llvm::emitLoopSpawningWarning(LLVMContext &Ctx, const Function &Fn,
+                                   const DebugLoc &DLoc, const Twine &Msg) {
+  Ctx.diagnose(DiagnosticInfoOptimizationFailure(
+      Fn, DLoc, Twine("Tapir loop not transformed: " + Msg)));
+}

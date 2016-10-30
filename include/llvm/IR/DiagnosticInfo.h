@@ -703,6 +703,12 @@ void emitLoopVectorizeWarning(LLVMContext &Ctx, const Function &Fn,
 void emitLoopInterleaveWarning(LLVMContext &Ctx, const Function &Fn,
                                const DebugLoc &DLoc, const Twine &Msg);
 
+/// Emit a warning when a loop-iteration-spawning strategy is specified but
+/// fails.  \p Fn is the function triggering the warning, \p DLoc is the debug
+/// location where the diagnostic is generated. \p Msg is the message string to
+/// use.
+void emitLoopSpawningWarning(LLVMContext &Ctx, const Function &Fn,
+                             const DebugLoc &DLoc, const Twine &Msg);
 } // end namespace llvm
 
 #endif // LLVM_IR_DIAGNOSTICINFO_H
