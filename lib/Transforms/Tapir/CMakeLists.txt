@@ -1,7 +1,8 @@
 add_llvm_library(LLVMTapirOpts
   CilkABI.cpp
   Detach2Cilk.cpp
-  Loop2Cilk.cpp
+  LoopSpawning.cpp
+  Tapir.cpp
   TapirOutline.cpp
 
   ADDITIONAL_HEADER_DIRS

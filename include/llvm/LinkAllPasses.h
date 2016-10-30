@@ -45,6 +45,7 @@
 #include "llvm/Transforms/ObjCARC.h"
 #include "llvm/Transforms/Scalar.h"
 #include "llvm/Transforms/Scalar/GVN.h"
+#include "llvm/Transforms/Tapir.h"
 #include "llvm/Transforms/Utils/SymbolRewriter.h"
 #include "llvm/Transforms/Utils/UnifyFunctionExitNodes.h"
 #include "llvm/Transforms/Vectorize.h"
@@ -107,7 +108,7 @@ namespace {
       (void) llvm::createIPSCCPPass();
       (void) llvm::createInductiveRangeCheckEliminationPass();
       (void) llvm::createIndVarSimplifyPass();
-      (void) llvm::createLoop2CilkPass();
+      (void) llvm::createLoopSpawningPass();
       (void) llvm::createInstructionCombiningPass();
       (void) llvm::createInternalizePass();
       (void) llvm::createLCSSAPass();

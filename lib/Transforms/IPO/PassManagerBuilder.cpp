@@ -39,6 +39,7 @@
 #include "llvm/Transforms/Instrumentation.h"
 #include "llvm/Transforms/Scalar.h"
 #include "llvm/Transforms/Scalar/GVN.h"
+#include "llvm/Transforms/Tapir.h"
 #include "llvm/Transforms/Vectorize.h"
 
 using namespace llvm;
@@ -652,9 +653,10 @@ void PassManagerBuilder::populateModulePassManager(legacy::PassManagerBase& MPM)
     // on the rotated form. Disable header duplication at -Oz.
     MPM.add(createLoopRotatePass(SizeLevel == 2 ? 0 : -1));
 
-    MPM.add(createLoop2CilkPass());
+    MPM.add(createLoopSpawningPass());
 
     // The Loop2Cilk pass may leave cruft around.  Clean it up.
+    // MPM.add(createLoopDeletionPass());
     MPM.add(createCFGSimplificationPass());
     addInstructionCombiningPass(MPM);
     addExtensionsToPM(EP_Peephole, MPM);

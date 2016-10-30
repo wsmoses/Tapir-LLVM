@@ -58,9 +58,8 @@ void initializeGlobalISel(PassRegistry &Registry);
 /// Initialize all passes linked into the CodeGen library.
 void initializeTarget(PassRegistry&);
 
-/// Initialize tapir passes
-void initializeLoop2CilkPass(PassRegistry&);
-void initializeCilkPassPass(PassRegistry&);
+/// Initialize all passes linked into the TapirOpts library.
+void initializeTapirOpts(PassRegistry&);
 
 void initializeAAEvalLegacyPassPass(PassRegistry&);
 void initializeAAResultsWrapperPassPass(PassRegistry &);
@@ -95,6 +94,7 @@ void initializeCallGraphDOTPrinterPass(PassRegistry&);
 void initializeCallGraphPrinterLegacyPassPass(PassRegistry&);
 void initializeCallGraphViewerPass(PassRegistry&);
 void initializeCallGraphWrapperPassPass(PassRegistry &);
+void initializeCilkPassPass(PassRegistry&);
 void initializeCodeGenPreparePass(PassRegistry&);
 void initializeConstantHoistingLegacyPassPass(PassRegistry&);
 void initializeConstantMergeLegacyPassPass(PassRegistry &);
@@ -199,6 +199,7 @@ void initializeLoopRerollPass(PassRegistry&);
 void initializeLoopRotateLegacyPassPass(PassRegistry&);
 void initializeLoopSimplifyCFGLegacyPassPass(PassRegistry&);
 void initializeLoopSimplifyPass(PassRegistry&);
+void initializeLoopSpawningPass(PassRegistry&);
 void initializeLoopStrengthReducePass(PassRegistry&);
 void initializeLoopUnrollPass(PassRegistry&);
 void initializeLoopUnswitchPass(PassRegistry&);

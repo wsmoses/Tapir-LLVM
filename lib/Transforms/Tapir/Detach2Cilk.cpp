@@ -15,6 +15,7 @@
 #include "llvm/Transforms/Tapir/CilkABI.h"
 #include "llvm/IR/Verifier.h"
 #include "llvm/Transforms/Utils/Cloning.h"
+#include "llvm/Transforms/Tapir.h"
 
 #define DEBUG_TYPE "detach2cilk"
 
@@ -51,7 +52,7 @@ cl::opt<bool>  fastCilk(
     cl::desc("Attempt faster cilk call implementation"), cl::Hidden);
 
 char CilkPass::ID = 0;
-static RegisterPass<CilkPass> X("detach2cilk", "Promote Detach to Cilk Runtime", false, false);
+// static RegisterPass<CilkPass> X("detach2cilk", "Promote Detach to Cilk Runtime", false, false);
 INITIALIZE_PASS_BEGIN(CilkPass, "detach2cilk", "Promote Detach to Cilk Runtime", false, false)
 INITIALIZE_PASS_DEPENDENCY(DominatorTreeWrapperPass)
 INITIALIZE_PASS_END(CilkPass, "detach2cilk", "Promote Detach to Cilk Runtime",   false, false)
