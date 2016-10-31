@@ -212,14 +212,14 @@ Function *llvm::CreateHelper(const SetVector<Value *> &Inputs,
   // The new function needs a root node because other nodes can branch to the
   // head of the region, but the entry node of a function cannot have preds.
   BasicBlock *NewEntry = BasicBlock::Create(Header->getContext(),
-					    OldEntry->getName()+NameSuffix);
-  NewFunc->getBasicBlockList().push_back(NewEntry);
-  
+					    OldEntry->getName()+NameSuffix,
+                                            NewFunc);
+  // The new function also needs an exit node.
   BasicBlock *NewExit = BasicBlock::Create(Header->getContext(),
-					   OldExit->getName()+NameSuffix);
-  NewFunc->getBasicBlockList().push_back(NewExit);
+					   OldExit->getName()+NameSuffix,
+                                           NewFunc);
 
-  // Add a mapping to the NewFuncRoot.
+  // Add mappings to the NewEntry and NewExit.
   VMap[OldEntry] = NewEntry;
   VMap[OldExit] = NewExit;
 
@@ -228,8 +228,9 @@ Function *llvm::CreateHelper(const SetVector<Value *> &Inputs,
 		    Returns, NameSuffix, CodeInfo, TypeMapper, Materializer);
 
   // Add a branch in the new function to the cloned Header.
-  NewEntry->getInstList().push_back(BranchInst::Create(cast<BasicBlock>(VMap[Header])));
-  NewExit->getInstList().push_back(ReturnInst::Create(Header->getContext()));
+  BranchInst::Create(cast<BasicBlock>(VMap[Header]), NewEntry);
+  // Add a return in the new function.
+  ReturnInst::Create(Header->getContext(), NewExit);
   
   return NewFunc;
 }
