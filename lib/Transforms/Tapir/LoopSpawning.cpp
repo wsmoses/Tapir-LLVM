@@ -322,11 +322,9 @@ public:
   virtual ~DACLoopSpawning() {}
 
 protected:
-    // bool verifyLoopExit(const Loop *L);
-    // bool verifyLoopStructureForConversion(const Loop *L);
-    PHINode* canonicalizeIVs(Loop *L, Type *Ty);
-    Value* canonicalizeLoopLatch(Loop *L, PHINode *IV, Value *Limit);
-    Value* computeGrainsize(Loop *L, Value *Limit);
+    PHINode* canonicalizeIVs(Type *Ty);
+    Value* canonicalizeLoopLatch(PHINode *IV, Value *Limit);
+    Value* computeGrainsize(Value *Limit);
     void implementDACIterSpawnOnHelper(Function *Helper,
                                        BasicBlock *Preheader,
                                        BasicBlock *Header,
@@ -337,9 +335,7 @@ protected:
                                        LoopInfo *LI,
                                        bool CanonicalIVFlagNUW = false,
                                        bool CanonicalIVFlagNSW = false);
-    void eraseLoop(Loop *L);
-    // Function* convertLoopToDACIterSpawn(Loop *L, ScalarEvolution &SE,
-    //                                     DominatorTree &DT, LoopInfo &LI);
+    void unlinkLoop();
 
   /// The original loop.
   Loop *OrigLoop;
@@ -413,135 +409,21 @@ struct LoopSpawning : public FunctionPass {
 
 } // end anonymous namespace
 
-
-// /// Verify that the CFG between the loop exit and the subsequent sync is
-// /// appropriately simple -- essentially, a straight sequence of basic blocks
-// /// that unconditionally branch to the sync.  Return false if this process
-// /// fails, indicating that this loop is not a simple loop for conversion.
-// ///
-// /// This method only checks the structure of the loop exit, rather than modify
-// /// it, to preserve analyses.
-// bool DACLoopSpawning::verifyLoopExit(const Loop *L) {
-//   BasicBlock *LoopExit = L->getExitBlock();
-//   SmallPtrSet<BasicBlock *, 8> Visited;
-//   Visited.insert(LoopExit);
-//   // Attempt to remove empty blocks terminated by unconditional
-//   // branches that follow the loop exit until the loop exit is empty
-//   // aside from a sync.
-//   do {
-//     // LoopExit = L->getExitBlock();
-//     // dbgs() << "verifyLoopExit: Checking block " << *LoopExit;
-//     // // Fail if the loop exit has multiple predecessors.
-//     // if (!LoopExit->getUniquePredecessor()) {
-//     //   dbgs() << "LS loop exit does not have a unique predecessor.\n";
-//     //   return false;
-//     // }
-
-//     // Fail if the loop exit contains non-terminator instructions
-//     // other than PHI nodes or debug instructions.
-//     if (LoopExit->getFirstNonPHIOrDbg() != LoopExit->getTerminator()) {
-//       dbgs() << "LS loop exit contains non-terminator instructions other than PHI nodes and debug instructions.\n";
-//       return false;
-//     }
-
-//     // If the loop exit is terminated by a sync, we're done.
-//     if (isa<SyncInst>(LoopExit->getTerminator()))
-//       return true;
-
-//     // Check if the loop exit is terminated by an unconditional branch.
-//     if (BranchInst *Br = dyn_cast_or_null<BranchInst>(LoopExit->getTerminator())) {
-//       if (Br->isConditional()) {
-//         dbgs() << "LS loop exit is terminated by a conditional branch.\n";
-//         return false;
-//       }
-//     } else {
-//       dbgs() << "LS loop exit is not terminated by a branch.\n";
-//       return false;
-//     }
-//     LoopExit = LoopExit->getTerminator()->getSuccessor(0);
-//   } while (Visited.insert(LoopExit).second);
-//   // } while (TryToSimplifyUncondBranchFromEmptyBlock(LoopExit));
-
-//   dbgs() << "LS could not confirm simple exit to sync.\n";
-//   return false;
-// }
-
-// /// Verify assumptions on the structure of the Loop:
-// /// 1) Loop has a single preheader, latch, and exit.
-// /// 2) Loop header is terminated by a detach.
-// /// 3) Continuation of detach in header is the latch.
-// /// 4) All other predecessors of the latch are terminated by reattach
-// /// instructions.
-// bool DACLoopSpawning::verifyLoopStructureForConversion(const Loop *L) {
-//   const BasicBlock *Header = L->getHeader();
-//   const BasicBlock *Preheader = L->getLoopPreheader();
-//   const BasicBlock *Latch = L->getLoopLatch();
-//   const BasicBlock *Exit = L->getExitBlock();
-
-//   // dbgs() << "LS checking structure of " << *L;
-
-//   // Header must be terminated by a detach.
-//   if (!isa<DetachInst>(Header->getTerminator())) {
-//     DEBUG(dbgs() << "LS Loop header is not terminated by a detach.\n");
-//     return false;
-//   }
-
-//   // Loop must have a single preheader.
-//   if (nullptr == Preheader) {
-//     DEBUG(dbgs() << "LS Loop preheader not found.\n");
-//     return false;
-//   }
-
-//   // Loop must have a unique latch.
-//   if (nullptr == Latch) {
-//     DEBUG(dbgs() << "LS Loop does not have a unique latch.\n");
-//     return false;
-//   }
-
-//   // Loop must have a unique exit block.
-//   if (nullptr == Exit) {
-//     DEBUG(dbgs() << "LS Loop does not have a unique exit block.\n");
-//     return false;
-//   }
-
-//   // Continuation of header terminator must be the latch.
-//   const DetachInst *HeaderDetach = cast<DetachInst>(Header->getTerminator());
-//   const BasicBlock *Continuation = HeaderDetach->getContinue();
-//   if (Continuation != Latch) {
-//     DEBUG(dbgs() << "LS Continuation of detach in header is not the latch.\n");
-//     return false;
-//   }
-
-//   // All other predecessors of Latch are terminated by reattach instructions.
-//   for (auto PI = pred_begin(Latch), PE = pred_end(Latch);  PI != PE; ++PI) {
-//     const BasicBlock *Pred = *PI;
-//     if (Header == Pred) continue;
-//     if (!isa<ReattachInst>(Pred->getTerminator())) {
-//       DEBUG(dbgs() << "LS Latch has a predecessor that is not terminated by a reattach.\n");
-//       return false;
-//     }
-//   }
-
-//   return verifyLoopExit(L);
-// }
-
-/// Canonicalize the induction variables in the loop L.  Return the canonical
+/// Canonicalize the induction variables in the loop.  Return the canonical
 /// induction variable created or inserted by the scalar evolution expander.
-PHINode* DACLoopSpawning::canonicalizeIVs(Loop *L, Type *Ty) {
+PHINode* DACLoopSpawning::canonicalizeIVs(Type *Ty) {
+  Loop *L = OrigLoop;
+
   BasicBlock* Header = L->getHeader();
   Module* M = Header->getParent()->getParent();
-
-  DEBUG(dbgs() << "LS Header:" << *Header);
   BasicBlock *Latch = L->getLoopLatch();
-  DEBUG(dbgs() << "LS Latch:" << *Latch);
-
-  DEBUG(dbgs() << "LS exiting block:" << *(L->getExitingBlock()));
+  assert(L->getExitingBlock() == Latch);
 
   // dbgs() << "LS SE trip count: " << SE->getSmallConstantTripCount(L, L->getExitingBlock()) << "\n";
   // dbgs() << "LS SE trip multiple: " << SE->getSmallConstantTripMultiple(L, L->getExitingBlock()) << "\n";
   DEBUG(dbgs() << "LS SE backedge taken count: " << *(SE.getBackedgeTakenCount(L)) << "\n");
   DEBUG(dbgs() << "LS SE max backedge taken count: " << *(SE.getMaxBackedgeTakenCount(L)) << "\n");
-  DEBUG(dbgs() << "LS SE exit count: " << *(SE.getExitCount(L, L->getExitingBlock())) << "\n");
+  DEBUG(dbgs() << "LS SE exit count: " << *(SE.getExitCount(L, Latch)) << "\n");
 
   SCEVExpander Exp(SE, M->getDataLayout(), "ls");
 
@@ -561,12 +443,14 @@ PHINode* DACLoopSpawning::canonicalizeIVs(Loop *L, Type *Ty) {
   return CanonicalIV;
 }
 
-/// \brief Replace the Latch of Loop L to check that IV is always less
-/// than or equal to Limit.
+/// \brief Replace the latch of the loop to check that IV is always less than or
+/// equal to the limit.
 ///
-/// This method assumes that L has a single loop latch and a single
-/// exit block.
-Value* DACLoopSpawning::canonicalizeLoopLatch(Loop *L, PHINode *IV, Value *Limit) {
+/// This method assumes that the loop has a single loop latch and a single exit
+/// block.
+Value* DACLoopSpawning::canonicalizeLoopLatch(PHINode *IV, Value *Limit) {
+  Loop *L = OrigLoop;
+
   Value *NewCondition;
   BasicBlock *Header = L->getHeader();
   BasicBlock *Latch = L->getLoopLatch();
@@ -594,17 +478,19 @@ Value* DACLoopSpawning::canonicalizeLoopLatch(Loop *L, PHINode *IV, Value *Limit
   return NewCondition;
 }
 
-/// \brief Compute the grainsize of Loop L, based on Limit.
+/// \brief Compute the grainsize of the loop, based on the limit.
 ///
 /// The grainsize is computed by the following equation:
 ///
 ///     Grainsize = min(2048, ceil(Limit / (8 * workers)))
 ///
-/// This computation is inserted into the Preheader of the Loop L.
+/// This computation is inserted into the preheader of the loop.
 ///
 /// TODO: This method is the only method that depends on the CilkABI.
 /// Generalize this method for other grainsize calculations and to query TLI.
-Value* DACLoopSpawning::computeGrainsize(Loop *L, Value *Limit) {
+Value* DACLoopSpawning::computeGrainsize(Value *Limit) {
+  Loop *L = OrigLoop;
+
   Value *Grainsize;
   BasicBlock *Preheader = L->getLoopPreheader();
   assert(Preheader && "No Preheader found for loop.");
@@ -841,10 +727,14 @@ void DACLoopSpawning::implementDACIterSpawnOnHelper(Function *Helper,
 //   LoopInfo.markAsRemoved(L);
 // }
 
-/// Erase the specified loop, and update analysis accordingly.
+/// Unlink the specified loop, and update analysis accordingly.  The heavy
+/// lifting of deleting the loop is carried out by a run of LoopDeletion after
+/// this pass.
 ///
 /// TODO: Depracate this method in favor of using LoopDeletion pass.
-void DACLoopSpawning::eraseLoop(Loop *L) {
+void DACLoopSpawning::unlinkLoop() {
+  Loop *L = OrigLoop;
+
   // Get components of the old loop.
   BasicBlock *Preheader = L->getLoopPreheader();
   assert(Preheader && "Loop does not have a unique preheader.");
@@ -873,8 +763,13 @@ void DACLoopSpawning::eraseLoop(Loop *L) {
     ++BI;
   }
 
-  // The heavy-lifting of deleting this loop is dealt with by a run of
-  // LoopDeletion.
+  // Rewrite phis in the header block to not receive an input from
+  // the preheader.
+  BI = L->getHeader()->begin();
+  while (PHINode *P = dyn_cast<PHINode>(BI)) {
+    P->removeIncomingValue(Preheader);
+    ++BI;
+  }
 
   // // Update the dominator tree and remove the instructions and blocks that will
   // // be deleted from the reference counting scheme.
@@ -928,11 +823,6 @@ void DACLoopSpawning::eraseLoop(Loop *L) {
 /// Top-level call to convert loop to spawn its iterations in a
 /// divide-and-conquer fashion.
 bool DACLoopSpawning::convertLoop() {
-
-  // // Verify the exit of this loop.
-  // if (!verifyLoopExit(OrigLoop))
-  //   return false;
-  
   Loop *L = OrigLoop;
 
   BasicBlock *Header = L->getHeader();
@@ -967,7 +857,7 @@ bool DACLoopSpawning::convertLoop() {
   }
 
   /// Clean up the loop's induction variables.
-  PHINode *CanonicalIV = canonicalizeIVs(L, Limit->getType());
+  PHINode *CanonicalIV = canonicalizeIVs(Limit->getType());
   if (!CanonicalIV) {
     DEBUG(dbgs() << "Could not get canonical IV.\n");
     emitAnalysis(LoopSpawningReport()
@@ -1022,9 +912,6 @@ bool DACLoopSpawning::convertLoop() {
     for (PHINode *PN : IVsToRemove)
       PN->eraseFromParent();
   }
-  // dbgs() << "EL Preheader after IV removal:" << *Preheader;
-  // dbgs() << "EL Header after IV removal:" << *Header;
-  // dbgs() << "EL Latch after IV removal:" << *Latch;
 
   // All remaining IV's should be canonical.  Collect them.
   //
@@ -1064,12 +951,12 @@ bool DACLoopSpawning::convertLoop() {
   //    ": " << SE.isLoopBackedgeGuardedByCond(L, ICmpInst::ICMP_ULT, SE.getSCEV(CanonicalIV), Limit) << "\n";
   assert(SE.isLoopBackedgeGuardedByCond(L, ICmpInst::ICMP_ULT, SE.getSCEV(CanonicalIV), Limit) &&
          "Loop backedge is not guarded by canonical comparison with limit.");
-  Value *NewCond = canonicalizeLoopLatch(L, CanonicalIV, LimitVar);
+  Value *NewCond = canonicalizeLoopLatch(CanonicalIV, LimitVar);
 
   // Insert computation of grainsize into the Preheader.
   // For debugging:
-  Value *GrainVar = ConstantInt::get(Limit->getType(), 2);
-  // Value *GrainVar = computeGrainsize(L, LimitVar);
+  // Value *GrainVar = ConstantInt::get(Limit->getType(), 2);
+  Value *GrainVar = computeGrainsize(LimitVar);
   emitAnalysis(LoopSpawningReport()
                << "grainsize value " << *GrainVar << "\n");
   DEBUG(dbgs() << "GrainVar: " << *GrainVar << "\n");
@@ -1196,12 +1083,10 @@ bool DACLoopSpawning::convertLoop() {
                                            DT, LI);
     IRBuilder<> Builder(&(HelperExit->front()));
     SyncInst *NewSync = Builder.CreateSync(NewHelperExit);
-    // Set debug info of new sync.
-    if (isa<SyncInst>(L->getExitBlock()->getTerminator()))
-      NewSync->setDebugLoc(L->getExitBlock()->getTerminator()->getDebugLoc());
-    else
-      DEBUG(dbgs() << "Sync not found in loop exit block.\n");
-    RemapInstruction(NewSync, VMap, RF_None | RF_IgnoreMissingLocals);
+    // Set debug info of new sync to match that of terminator of the header of
+    // the cloned loop.
+    BasicBlock *HelperHeader = cast<BasicBlock>(VMap[Header]);
+    NewSync->setDebugLoc(HelperHeader->getTerminator()->getDebugLoc());
     HelperExit->getTerminator()->eraseFromParent();
   }
 
@@ -1307,8 +1192,15 @@ bool DACLoopSpawning::convertLoop() {
     // TopCall->setCallingConv(Helper->getCallingConv());
     TopCall->setDebugLoc(Header->getTerminator()->getDebugLoc());
   }
-  
+
   ++LoopsConvertedToDAC;
+
+  // Report the decision.
+  ORE->emitOptimizationRemark(
+      LS_NAME, L,
+      Twine("spawning iterations using divide-and-conquer"));
+
+  unlinkLoop();
 
   return Helper;
 }
@@ -1326,7 +1218,7 @@ bool LoopSpawningPass::isTapirLoop(const Loop *L) {
   const BasicBlock *Latch = L->getLoopLatch();
   const BasicBlock *Exit = L->getExitBlock();
 
-  // dbgs() << "LS checking structure of " << *L;
+  DEBUG(dbgs() << "LS checking if Tapir loop: " << *L);
 
   // Header must be terminated by a detach.
   if (!isa<DetachInst>(Header->getTerminator())) {
@@ -1413,7 +1305,7 @@ bool LoopSpawningPass::processLoop(Loop *L) {
 
   DEBUG(dbgs() << "\nLS: Checking a Tapir loop in \""
                << L->getHeader()->getParent()->getName() << "\" from "
-               << DebugLocStr << "\n");
+        << DebugLocStr << ": " << *L << "\n");
 
   LoopSpawningHints Hints(L, *ORE);
 
@@ -1439,11 +1331,11 @@ bool LoopSpawningPass::processLoop(Loop *L) {
     DEBUG(dbgs() << "LS: Loop lacks a preheader.\n");
   }
   if (isa<SyncInst>(Preheader->getTerminator())) {
+    DEBUG(dbgs() << "LS: Splitting preheader terminated by a sync.\n");
     BasicBlock *Header = L->getHeader();
     SplitEdge(Preheader, Header, DT, LI);
-    // Report a change, and let a subsequent run of this pass deal with the
-    // conversion itself.
-    return true;
+    // Unsure if it's completely safe to proceed here without necessarily
+    // recomputing ScalarEvolution, but tests are passing so far.
   }
   if (!isa<BranchInst>(Preheader->getTerminator())) {
     DEBUG(dbgs() << "LS: Loop preheader is not terminated by a branch.\n");
@@ -1467,13 +1359,8 @@ bool LoopSpawningPass::processLoop(Loop *L) {
               return false;
             }
           });
-        // Report the decision.
-        ORE->emitOptimizationRemark(
-            LS_NAME, L,
-            Twine("spawning iterations using divide-and-conquer"));
         return true;
       } else {
-        dbgs() << "LS: Attempt to implement DAC spawning failed.\n";
         emitMissedWarning(F, L, Hints, ORE);
         return false;
       }
