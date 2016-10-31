@@ -649,14 +649,14 @@ void PassManagerBuilder::populateModulePassManager(legacy::PassManagerBase& MPM)
     MPM.add(createIndVarSimplifyPass());
 
     // Re-rotate loops in all our loop nests. These may have fallout out of
-    // rotated form due to GVN or other transformations, and the vectorizer relies
-    // on the rotated form. Disable header duplication at -Oz.
+    // rotated form due to GVN or other transformations, and loop spawning
+    // relies on the rotated form.  Disable header duplication at -Oz.
     MPM.add(createLoopRotatePass(SizeLevel == 2 ? 0 : -1));
 
     MPM.add(createLoopSpawningPass());
 
-    // The Loop2Cilk pass may leave cruft around.  Clean it up.
-    // MPM.add(createLoopDeletionPass());
+    // The LoopSpawning pass may leave cruft around.  Clean it up.
+    MPM.add(createLoopDeletionPass());
     MPM.add(createCFGSimplificationPass());
     addInstructionCombiningPass(MPM);
     addExtensionsToPM(EP_Peephole, MPM);
