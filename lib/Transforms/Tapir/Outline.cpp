@@ -12,7 +12,7 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "llvm/Transforms/Tapir/TapirOutline.h"
+#include "llvm/Transforms/Tapir/Outline.h"
 #include "llvm/IR/DebugInfo.h"
 #include "llvm/IR/IntrinsicInst.h"
 #include "llvm/Transforms/Utils/Cloning.h"
@@ -25,10 +25,10 @@ using namespace llvm;
 //
 /// TODO: Fix the std::vector part of the type of this function.
 void llvm::CloneIntoFunction(Function *NewFunc, const Function *OldFunc,
-                             std::vector<BasicBlock*> Blocks,
+                             std::vector<BasicBlock *> Blocks,
                              ValueToValueMapTy &VMap,
                              bool ModuleLevelChanges,
-                             SmallVectorImpl<ReturnInst*> &Returns,
+                             SmallVectorImpl<ReturnInst *> &Returns,
                              const char *NameSuffix,
                              ClonedCodeInfo *CodeInfo,
                              ValueMapTypeRemapper *TypeMapper,
@@ -68,14 +68,8 @@ void llvm::CloneIntoFunction(Function *NewFunc, const Function *OldFunc,
   // references as we go.  This uses VMap to do all the hard work.
   for (const BasicBlock *BB : Blocks) {
     BasicBlock *CBB = cast<BasicBlock>(VMap[BB]);
-    // dbgs() << "Remapping instructions in cloned BB:" << *CBB;
     // Loop over all instructions, fixing each one as we find it...
     for (Instruction &II : *CBB) {
-      // dbgs() << "Inst " << II;
-      // if (VMap[&II])
-      //   dbgs() << " -> " << *(VMap[&II]);
-      // dbgs() << "\n";
-      // dbgs() << "Remapping instruction:" << II << "\n";
       RemapInstruction(&II, VMap,
                        ModuleLevelChanges ? RF_None : RF_NoModuleLevelChanges,
                        TypeMapper, Materializer);
@@ -90,14 +84,14 @@ void llvm::CloneIntoFunction(Function *NewFunc, const Function *OldFunc,
 /// TODO: Fix the std::vector part of the type of this function.
 Function *llvm::CreateHelper(const SetVector<Value *> &Inputs,
                              const SetVector<Value *> &Outputs,
-                             std::vector<BasicBlock*> Blocks,
+                             std::vector<BasicBlock *> Blocks,
                              BasicBlock *Header,
                              const BasicBlock *OldEntry,
                              const BasicBlock *OldExit,
                              ValueToValueMapTy &VMap,
                              Module *DestM,
                              bool ModuleLevelChanges,
-                             SmallVectorImpl<ReturnInst*> &Returns,
+                             SmallVectorImpl<ReturnInst *> &Returns,
                              const char *NameSuffix,
                              ClonedCodeInfo *CodeInfo,
                              ValueMapTypeRemapper *TypeMapper,
@@ -142,13 +136,11 @@ Function *llvm::CreateHelper(const SetVector<Value *> &Inputs,
   for (Value *I : Inputs)
     if (VMap.count(I) == 0) {       // Is this argument preserved?
       DestI->setName(I->getName()+NameSuffix); // Copy the name over...
-      // dbgs() << "Mapping input " << *I << " to dest " << *DestI << "\n";
       VMap[I] = &*DestI++;          // Add mapping to VMap
     }
   for (Value *I : Outputs)
     if (VMap.count(I) == 0) {              // Is this argument preserved?
       DestI->setName(I->getName()+NameSuffix); // Copy the name over...
-      // dbgs() << "Mapping output " << *I << " to dest " << *DestI << "\n";
       VMap[I] = &*DestI++;                 // Add mapping to VMap
     }
 
@@ -176,20 +168,10 @@ Function *llvm::CreateHelper(const SetVector<Value *> &Inputs,
   AttributeSet OldAttrs = OldFunc->getAttributes();
   // Clone any argument attributes
   for (Argument &OldArg : OldFunc->args()) {
-    // dbgs() << "OldArg " << OldArg;
-    // if (VMap[&OldArg])
-    //   dbgs() << " maps to " << *(VMap[&OldArg]);
-    // dbgs() << "\n";
-    // if (Argument *NewArg = dyn_cast_or_null<Argument>(VMap[&OldArg])) {
-
     // Check if we're passing this argument to the helper.  We check Inputs here
     // instead of the VMap to avoid potentially populating the VMap with a null
     // entry for the old argument.
     if (Inputs.count(&OldArg) || Outputs.count(&OldArg)) {
-      dbgs() << "OldArg " << OldArg;
-      if (VMap[&OldArg])
-        dbgs() << " maps to " << *(VMap[&OldArg]);
-      dbgs() << "\n";
       Argument *NewArg = dyn_cast_or_null<Argument>(VMap[&OldArg]);
       AttributeSet attrs =
         OldAttrs.getParamAttributes(OldArg.getArgNo() + 1);
@@ -206,10 +188,8 @@ Function *llvm::CreateHelper(const SetVector<Value *> &Inputs,
                      OldAttrs.getFnAttributes()));
 
   SmallVector<std::pair<unsigned, MDNode *>, 1> MDs;
-  // dbgs() << "Cloning function metadata\n";
   OldFunc->getAllMetadata(MDs);
   for (auto MD : MDs) {
-    // dbgs() << "MD: " << *(MD.second) << "\n";
     NewFunc->addMetadata(
         MD.first,
         *MapMetadata(MD.second, VMap,
@@ -250,16 +230,6 @@ Function *llvm::CreateHelper(const SetVector<Value *> &Inputs,
   // Add a branch in the new function to the cloned Header.
   NewEntry->getInstList().push_back(BranchInst::Create(cast<BasicBlock>(VMap[Header])));
   NewExit->getInstList().push_back(ReturnInst::Create(Header->getContext()));
-
-  // // Remap NewFuncRoot to point to newly cloned blocks.
-  // dbgs() << "Remapping instructions in NewFuncRoot: " << *NewFuncRoot;
-  // // Loop over all instructions, fixing each one as we find it...
-  // for (Instruction &II : *NewFuncRoot) {
-  //   RemapInstruction(&II, VMap,
-  // 		     ModuleLevelChanges ? RF_None : RF_NoModuleLevelChanges,
-  // 		     TypeMapper, Materializer);
-  //   dbgs() << "Remapping instruction:" << II << "\n";
-  // }
   
   return NewFunc;
 }

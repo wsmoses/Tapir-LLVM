@@ -1,4 +1,4 @@
-//===- llvm/Transforms/Tapir/Outlining.h - Outlining for Tapir -*- C++ -*--===//
+//===- llvm/Transforms/Tapir/Outline.h - Outlining for Tapir -*- C++ -*--===//
 //
 //                     The LLVM Compiler Infrastructure
 //
@@ -11,30 +11,16 @@
 // Tapir instructions.
 //
 //===----------------------------------------------------------------------===//
-#ifndef LLVM_TRANSFORMS_TAPIR_OUTLINING_H
-#define LLVM_TRANSFORMS_TAPIR_OUTLINING_H
+#ifndef LLVM_TRANSFORMS_OUTLINE_H
+#define LLVM_TRANSFORMS_OUTLINE_H
 
-#include "llvm/Transforms/Scalar.h"
-#include "llvm/ADT/SmallPtrSet.h"
+#include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/SmallVector.h"
-#include "llvm/ADT/Statistic.h"
-#include "llvm/Analysis/AssumptionCache.h"
-#include "llvm/IR/Constants.h"
-#include "llvm/IR/Dominators.h"
 #include "llvm/IR/Function.h"
-#include "llvm/IR/Module.h"
-#include "llvm/IR/Intrinsics.h"
 #include "llvm/IR/Instructions.h"
-#include "llvm/Transforms/Utils/UnifyFunctionExitNodes.h"
-#include "llvm/Transforms/Utils/BasicBlockUtils.h"
-
+#include "llvm/IR/Module.h"
 #include "llvm/Transforms/Utils/Cloning.h"
-#include "llvm/Transforms/Utils/CodeExtractor.h"
 #include "llvm/Transforms/Utils/ValueMapper.h"
-#include "llvm/IR/IRBuilder.h"
-
-#include "llvm/IR/InstIterator.h"
-#include "llvm/Support/Debug.h"
 
 namespace llvm {
 
@@ -43,10 +29,10 @@ namespace llvm {
 //
 /// TODO: Fix the std::vector part of the type of this function.
 void CloneIntoFunction(Function *NewFunc, const Function *OldFunc,
-                       std::vector<BasicBlock*> Blocks,
+                       std::vector<BasicBlock *> Blocks,
                        ValueToValueMapTy &VMap,
                        bool ModuleLevelChanges,
-                       SmallVectorImpl<ReturnInst*> &Returns,
+                       SmallVectorImpl<ReturnInst *> &Returns,
                        const char *NameSuffix,
                        ClonedCodeInfo *CodeInfo = nullptr,
                        ValueMapTypeRemapper *TypeMapper = nullptr,
@@ -59,14 +45,14 @@ void CloneIntoFunction(Function *NewFunc, const Function *OldFunc,
 /// TODO: Fix the std::vector part of the type of this function.
 Function *CreateHelper(const SetVector<Value *> &Inputs,
                        const SetVector<Value *> &Outputs,
-                       std::vector<BasicBlock*> Blocks,
+                       std::vector<BasicBlock *> Blocks,
                        BasicBlock *Header,
                        const BasicBlock *OldEntry,
                        const BasicBlock *OldExit,
                        ValueToValueMapTy &VMap,
                        Module *DestM,
                        bool ModuleLevelChanges,
-                       SmallVectorImpl<ReturnInst*> &Returns,
+                       SmallVectorImpl<ReturnInst *> &Returns,
                        const char *NameSuffix,
                        ClonedCodeInfo *CodeInfo = nullptr,
                        ValueMapTypeRemapper *TypeMapper = nullptr,
