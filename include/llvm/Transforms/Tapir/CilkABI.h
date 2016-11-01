@@ -336,49 +336,13 @@ namespace cilk {
   bool verifyDetachedCFG(const DetachInst& detach, bool error = true);
   size_t getNumPred(BasicBlock* BB);
 
-  // Clone Blocks into NewFunc, transforming the old arguments into references to
-  // VMap values.
-  //
-  /// TODO: Fix the std::vector part of the type of this function.
-  void CloneIntoFunction(Function *NewFunc, const Function *OldFunc,
-			 std::vector<BasicBlock*> Blocks,
-			 ValueToValueMapTy &VMap,
-			 bool ModuleLevelChanges,
-			 SmallVectorImpl<ReturnInst*> &Returns,
-			 const char *NameSuffix,
-			 ClonedCodeInfo *CodeInfo = nullptr,
-			 ValueMapTypeRemapper *TypeMapper = nullptr,
-			 ValueMaterializer *Materializer = nullptr);
-
-  
-  /// Create a helper function whose signature is based on Inputs and
-  /// Outputs as follows: f(in0, ..., inN, out0, ..., outN)
-  ///
-  /// TODO: Fix the std::vector part of the type of this function.
-  Function *CreateHelper(const SetVector<Value *> &Inputs,
-			 const SetVector<Value *> &Outputs,
-			 std::vector<BasicBlock*> Blocks,
-			 const BasicBlock *Header,
-			 const BasicBlock *OldEntry,
-			 const BasicBlock *OldExit,
-			 ValueToValueMapTy &VMap,
-			 Module *DestM,
-			 bool ModuleLevelChanges,
-			 SmallVectorImpl<ReturnInst*> &Returns,
-			 const char *NameSuffix,
-			 ClonedCodeInfo *CodeInfo = nullptr,
-			 ValueMapTypeRemapper *TypeMapper = nullptr,
-			 ValueMaterializer *Materializer = nullptr);
-
-  bool populateDetachedCFG(const DetachInst& detach, DominatorTree& DT,
-			   SmallPtrSet<BasicBlock*,32>& functionPieces,
-			   SmallVector<BasicBlock*, 32 >& reattachB,
+  bool populateDetachedCFG(const DetachInst &detach, DominatorTree &DT,
+			   SmallPtrSetImpl<BasicBlock *> &functionPieces,
+			   SmallVectorImpl<BasicBlock *> &reattachB,
 			   bool replace, bool error = true);
 
   Function* extractDetachBodyToFunction(DetachInst& detach, DominatorTree& DT,
-					llvm::CallInst** call = nullptr,
-					llvm::Value* closure = nullptr,
-					std::vector<Value*> *ext_args = nullptr);
+					llvm::CallInst** call = nullptr);
 
   CallInst* createDetach(DetachInst& detach, DominatorTree& DT,
 			 bool instrument = false);

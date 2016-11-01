@@ -15,7 +15,8 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/Transforms/Tapir/CilkABI.h"
-
+#include "llvm/IR/DebugInfoMetadata.h"
+#include "llvm/Transforms/Tapir/Outline.h"
 using namespace llvm;
 
 #define DEBUG_TYPE "cilkabi"
@@ -897,14 +898,14 @@ size_t llvm::cilk::getNumPred(BasicBlock* BB) {
   return cnt;
 }
 
-bool llvm::cilk::populateDetachedCFG(const DetachInst& detach, DominatorTree& DT,
-				     SmallPtrSet<BasicBlock*,32>& functionPieces,
-				     SmallVector<BasicBlock*, 32 >& reattachB,
+bool llvm::cilk::populateDetachedCFG(const DetachInst &detach, DominatorTree &DT,
+				     SmallPtrSetImpl<BasicBlock *> &functionPieces,
+				     SmallVectorImpl<BasicBlock *> &reattachB,
 				     bool replace, bool error) {
   SmallVector<BasicBlock *, 32> todo;
 
-  BasicBlock* Spawned  = detach.getSuccessor(0);
-  BasicBlock* Continue = detach.getSuccessor(1);
+  BasicBlock* Spawned  = detach.getDetached();
+  BasicBlock* Continue = detach.getContinue();
   todo.push_back(Spawned);
 
   while (todo.size() > 0) {
@@ -917,9 +918,9 @@ bool llvm::cilk::populateDetachedCFG(const DetachInst& detach, DominatorTree& DT
     if (term == nullptr) return false;
     if (isa<ReattachInst>(term)) {
       //only analyze reattaches going to the same continuation
-      if (term->getSuccessor(0) != Continue ) continue;
+      if (term->getSuccessor(0) != Continue) continue;
       if (replace) {
-        BranchInst* toReplace = BranchInst::Create( Continue );
+        BranchInst* toReplace = BranchInst::Create(Continue);
         ReplaceInstWithInst(term, toReplace);
         reattachB.push_back(BB);
       }
@@ -972,149 +973,139 @@ bool llvm::cilk::populateDetachedCFG(const DetachInst& detach, DominatorTree& DT
 
 //Returns true if success
 Function* llvm::cilk::extractDetachBodyToFunction(DetachInst& detach, DominatorTree& DT,
-						  llvm::CallInst** call, llvm::Value* closure,
-						  std::vector<Value*> *ext_args) {
-  llvm::BasicBlock* detB = detach.getParent();
-  Function& F = *(detB->getParent());
+						  llvm::CallInst** call) {
+  BasicBlock* Detacher = detach.getParent();
+  Function& F = *(Detacher->getParent());
 
-  BasicBlock* Spawned  = detach.getSuccessor(0);
-  BasicBlock* Continue = detach.getSuccessor(1);
+  BasicBlock* Spawned  = detach.getDetached();
+  BasicBlock* Continue = detach.getContinue();
 
   SmallPtrSet<BasicBlock *, 32> functionPieces;
-  SmallVector<BasicBlock*, 32 > reattachB;
+  SmallVector<BasicBlock *, 32 > reattachB;
 
-  if (getNumPred(Spawned) > 1) {
-    BasicBlock* ts = BasicBlock::Create(Spawned->getContext(), Spawned->getName()+".fx", Spawned->getParent(), detach.getParent());
-    IRBuilder<> b(ts);
-    b.CreateBr(Spawned);
-    detach.setSuccessor(0,ts);
-    llvm::BasicBlock::iterator i = Spawned->begin();
-    while (auto phi = llvm::dyn_cast<llvm::PHINode>(i)) {
-      int idx = phi->getBasicBlockIndex(detach.getParent());
-      phi->setIncomingBlock(idx, ts);
-      ++i;
-    }
-    Spawned = ts;
-  }
+  assert(Spawned->getUniquePredecessor() &&
+         "Entry block of detached CFG has multiple predecessors.");
+  assert(Spawned->getUniquePredecessor() == Detacher &&
+         "Broken CFG.");
+  // if (getNumPred(Spawned) > 1) {
+  //   dbgs() << "Found multiple predecessors to a detached-CFG entry block "
+  //          << Spawned->getName() << ".\n";
+  //   BasicBlock* ts = BasicBlock::Create(Spawned->getContext(), Spawned->getName()+".fx", &F, Detacher);
+  //   IRBuilder<> b(ts);
+  //   b.CreateBr(Spawned);
+  //   detach.setSuccessor(0,ts);
+  //   llvm::BasicBlock::iterator i = Spawned->begin();
+  //   while (auto phi = llvm::dyn_cast<llvm::PHINode>(i)) {
+  //     int idx = phi->getBasicBlockIndex(detach.getParent());
+  //     phi->setIncomingBlock(idx, ts);
+  //     ++i;
+  //   }
+  //   Spawned = ts;
+  // }
 
   if (!populateDetachedCFG(detach, DT, functionPieces, reattachB, true)) return nullptr;
 
   functionPieces.erase(Spawned);
-  std::vector<BasicBlock*> blocks( functionPieces.begin(), functionPieces.end() );
+  std::vector<BasicBlock*> blocks(functionPieces.begin(), functionPieces.end());
   blocks.insert( blocks.begin(), Spawned );
   functionPieces.insert(Spawned);
 
   for (BasicBlock* BB: blocks) {
-      int detached_count = 0;
-      for (pred_iterator PI = pred_begin(BB), E = pred_end(BB); PI != E; ++PI) {
-        BasicBlock *Pred = *PI;
-        if (detached_count == 0 && BB == Spawned && Pred == detach.getParent()) {
-          detached_count = 1;
-          continue;
-        }
-        assert(functionPieces.count(Pred) &&
-               "Block inside of detached context branched into from outside branch context");
+    int detached_count = 0;
+    for (pred_iterator PI = pred_begin(BB), E = pred_end(BB); PI != E; ++PI) {
+      BasicBlock *Pred = *PI;
+      if (detached_count == 0 && BB == Spawned && Pred == detach.getParent()) {
+        detached_count = 1;
+        continue;
       }
-  }
-
-  PHINode *rstart = 0, *rend = 0, *grain;
-  Instruction *inst = 0, *inst0 = 0;
-  Instruction* add = 0;
-  std::vector<Instruction*> moveToFront;
-  if (closure) {
-
-    IRBuilder<> inspawn(Spawned->getFirstNonPHI());
-    IRBuilder<> builder(&detach);
-    rend   = PHINode::Create( closure->getType(), 2, "rend", &detB->front() );
-    rstart = PHINode::Create( closure->getType(), 2, "rstart", &detB->front() );
-    grain  = PHINode::Create( closure->getType(), 2, "rgrain", &detB->front() );
-
-    // force it to be used, in right order
-    add  = dyn_cast<Instruction>(inspawn.CreateAdd(rstart, rstart));
-    assert( add );
-    inst = dyn_cast<Instruction>(inspawn.CreateAdd(rend,   rend));
-    assert( inst);
-    inst0 = dyn_cast<Instruction>(inspawn.CreateAdd(grain, grain));
-    assert( inst0);
-    BasicBlock* lp = Spawned->splitBasicBlock(Spawned->getTerminator());
-
-    PHINode* idx = PHINode::Create( closure->getType(), 2, "", &Spawned->front() );
-    idx->addIncoming( rstart, detB );
-
-    functionPieces.insert(lp);
-    blocks.push_back(lp);
-
-    BasicBlock* next = BasicBlock::Create( lp->getContext(), "next", &F );
-    blocks.push_back(next);
-    functionPieces.insert(next);
-
-    for( auto a : reattachB ) {
-      if( a == Spawned ) {
-        a = lp;
-      }
-      ((BranchInst*) a->getTerminator() )->setSuccessor(0, next);
+      assert(functionPieces.count(Pred) &&
+             "Block inside of detached context branched into from outside branch context");
     }
-
-    IRBuilder<> nextB(next);
-    auto p1 = nextB.CreateAdd(idx, ConstantInt::get(idx->getType(), 1, false) );
-    nextB.CreateCondBr( nextB.CreateICmpEQ( p1, rend ), Continue, Spawned );
-    idx->addIncoming( p1, next );
-
-    replaceInList( closure, idx, functionPieces );
   }
+
+  // Instruction *inst = 0, *inst0 = 0;
+  // Instruction* add = 0;
+  // std::vector<Instruction*> moveToFront;
 
   CodeExtractor extractor(ArrayRef<BasicBlock*>(blocks), &DT);
   if (!extractor.isEligible()) {
     for(auto& a : blocks)a->dump();
-    assert(0 && "Code not able to be extracted!" );
+    assert(0 && "Code not able to be extracted!");
   }
 
-  if (closure) {
-    SetVector<Value*> Inputs, Outputs;
-    extractor.findInputsOutputs(Inputs, Outputs);
-    assert( Outputs.size() == 0 );
-    assert( Inputs[0] == rstart );
-    assert( Inputs[1] == rend );
-    assert( Inputs[2] == grain );
-  }
+  // Get the inputs and outputs for the detached CFG.
+  SetVector<Value*> Inputs, Outputs;
+  extractor.findInputsOutputs(Inputs, Outputs);
+  assert(Outputs.empty() &&
+         "All results from detached CFG should be passed by memory already.");
 
-  Function* extracted = extractor.extractCodeRegion();
-  assert( extracted && "could not extract code" );
-  extracted->addFnAttr(Attribute::AttrKind::NoInline);
-  if (F.hasFnAttribute(Attribute::AttrKind::SanitizeThread))
-     extracted->addFnAttr(Attribute::AttrKind::SanitizeThread);
-  if (F.hasFnAttribute(Attribute::AttrKind::SanitizeAddress))
-     extracted->addFnAttr(Attribute::AttrKind::SanitizeAddress);
-  if (F.hasFnAttribute(Attribute::AttrKind::SanitizeMemory))
-     extracted->addFnAttr(Attribute::AttrKind::SanitizeMemory);
+  // Clone the detached CFG into a helper function.
+  ValueToValueMapTy VMap;
+  Function *extracted;
+  {
+    SmallVector<ReturnInst *, 4> Returns;  // Ignore returns cloned.
 
-  Instruction* last = extracted->getEntryBlock().getFirstNonPHI();
-  for (int i=moveToFront.size()-1; i>=0; i--) {
-    moveToFront[i]->moveBefore( last );
-    last = moveToFront[i];
-  }
-
-  TerminatorInst* bi = llvm::dyn_cast<TerminatorInst>(detB->getTerminator() );
-  assert( bi );
-  Spawned = (detach.getSuccessor(0) == Continue)?detach.getSuccessor(1):detach.getSuccessor(0);
-  CallInst* cal = llvm::dyn_cast<CallInst>(Spawned->getFirstNonPHI());
-  assert(cal);
-  if( call ) *call = cal;
-
-
-  if (closure) {
-    for (unsigned i=0; i<cal->getNumArgOperands(); i++) {
-      ext_args->push_back(cal->getArgOperand(i));
+    if (DISubprogram *SP = F.getSubprogram()) {
+      // If we have debug info, add mapping for the metadata nodes that should not
+      // be cloned by CloneFunctionInto.
+      auto &MD = VMap.MD();
+      MD[SP->getUnit()].reset(SP->getUnit());
+      MD[SP->getType()].reset(SP->getType());
+      MD[SP->getFile()].reset(SP->getFile());
     }
-    cal->eraseFromParent();
-    rstart->eraseFromParent();
-    rend->eraseFromParent();
-    grain->eraseFromParent();
-    inst0->eraseFromParent();
-    inst->eraseFromParent();
-    add->eraseFromParent();
+
+    extracted = CreateHelper(Inputs, Outputs, blocks,
+                             Spawned, Detacher, Continue,
+                             VMap, F.getParent(),
+                             /*ModuleLevelChanges=*/false, Returns, ".d2c",
+                             nullptr, nullptr, nullptr);
+
+    assert(Returns.empty() && "Returns cloned when cloning detached CFG.");
+
+    // Use a fast calling convention for the helper.
+    extracted->setCallingConv(CallingConv::Fast);
   }
 
+  // Add call to new helper function in original function.
+  CallInst *TopCall;
+  {
+    // Create call instruction.
+    IRBuilder<> Builder(&detach);
+    TopCall = Builder.CreateCall(extracted, Inputs.getArrayRef());
+    // Use a fast calling convention for the helper.
+    TopCall->setCallingConv(CallingConv::Fast);
+    // TopCall->setCallingConv(Helper->getCallingConv());
+    TopCall->setDebugLoc(detach.getDebugLoc());
+  }
+  if (call)
+    *call = TopCall;
+
+  // Function* extracted = extractor.extractCodeRegion();
+  // assert( extracted && "could not extract code" );
+  // extracted->addFnAttr(Attribute::AttrKind::NoInline);
+  // if (F.hasFnAttribute(Attribute::AttrKind::SanitizeThread))
+  //    extracted->addFnAttr(Attribute::AttrKind::SanitizeThread);
+  // if (F.hasFnAttribute(Attribute::AttrKind::SanitizeAddress))
+  //    extracted->addFnAttr(Attribute::AttrKind::SanitizeAddress);
+  // if (F.hasFnAttribute(Attribute::AttrKind::SanitizeMemory))
+  //    extracted->addFnAttr(Attribute::AttrKind::SanitizeMemory);
+
+  // Instruction* last = extracted->getEntryBlock().getFirstNonPHI();
+  // for (int i=moveToFront.size()-1; i>=0; i--) {
+  //   moveToFront[i]->moveBefore( last );
+  //   last = moveToFront[i];
+  // }
+
+  // TerminatorInst* bi = llvm::dyn_cast<TerminatorInst>(&detach);
+  // assert( bi );
+  // Spawned = (detach.getSuccessor(0) == Continue)?detach.getSuccessor(1):detach.getSuccessor(0);
+  // CallInst* cal = llvm::dyn_cast<CallInst>(Spawned->getFirstNonPHI());
+  // assert(cal);
+  // if( call ) *call = cal;
+
+  
+  // Move allocas in the newly cloned detached CFG to the entry block of the
+  // helper.
   std::vector<AllocaInst*> Allocas;
 
   SmallPtrSet<BasicBlock*, 32> blocksInDetachedScope;
@@ -1156,8 +1147,8 @@ CallInst* llvm::cilk::createDetach(DetachInst& detach, DominatorTree& DT,
   BasicBlock* detB = detach.getParent();
   Function& F = *(detB->getParent());
 
-  BasicBlock* Spawned  = detach.getSuccessor(0);
-  BasicBlock* Continue = detach.getSuccessor(1);
+  BasicBlock* Spawned  = detach.getDetached();
+  BasicBlock* Continue = detach.getContinue();
 
   Module* M = F.getParent();
   //replace with branch to succesor
@@ -1165,33 +1156,53 @@ CallInst* llvm::cilk::createDetach(DetachInst& detach, DominatorTree& DT,
   Value *SF = GetOrInitStackFrame( F, /*isFast*/ false, instrument );
   assert(SF && "null stack frame unexpected");
 
-  llvm::CallInst* cal = nullptr;
+  CallInst* cal = nullptr;
   Function* extracted = extractDetachBodyToFunction(detach, DT, &cal);
 
-  TerminatorInst* bi = llvm::dyn_cast<TerminatorInst>(detB->getTerminator() );
-  assert( bi );
-  Spawned = (detach.getSuccessor(0) == Continue)?detach.getSuccessor(1):detach.getSuccessor(0);
+  assert(extracted && "could not extract detach body to function");
 
-  assert( extracted && "could not extract detach body to function" );
+  // Unlink the detached CFG in the original function.  The heavy lifting of
+  // removing the outlined detached-CFG is left to subsequent DCE.
+  BranchInst *ContinueBr;
+  {
+    // Crate a new branch to the continuation.
+    IRBuilder<> Builder(&detach);
+    ContinueBr = Builder.CreateBr(Continue);
+    ContinueBr->setDebugLoc(detach.getDebugLoc());
+    // Erase the old detach instruction.
+    detach.eraseFromParent();
+  }
 
+  // TerminatorInst* bi = llvm::dyn_cast<TerminatorInst>(detB->getTerminator() );
+  // assert(bi);
+  // Spawned = (detach.getSuccessor(0) == Continue)?detach.getSuccessor(1):detach.getSuccessor(0);
 
-  IRBuilder<> B(bi);
+  Value *SetJmpRes;
+  {
+    IRBuilder<> B(cal);
 
-  if (instrument)
-    // cilk_spawn_prepare
-    B.CreateCall(CILK_CSI_FUNC(spawn_prepare, *M), SF);
+    if (instrument)
+      // cilk_spawn_prepare
+      B.CreateCall(CILK_CSI_FUNC(spawn_prepare, *M), SF);
 
-  // Need to save state before spawning
-  Value *C = EmitCilkSetJmp(B, SF, *M);
+    // Need to save state before spawning
+    SetJmpRes = EmitCilkSetJmp(B, SF, *M);
 
-  if (instrument)
-    // cilk_spawn_or_continue
-    B.CreateCall(CILK_CSI_FUNC(spawn_or_continue, *M), C);
+    if (instrument)
+      // cilk_spawn_or_continue
+      B.CreateCall(CILK_CSI_FUNC(spawn_or_continue, *M), SetJmpRes);
+  }
 
-  C = B.CreateICmpEQ(C, ConstantInt::get(C->getType(), 0));
-  B.CreateCondBr(C, Spawned, Continue);
-
-  detach.eraseFromParent();
+  // Conditionally call the new helper function based on the result of the
+  // setjmp.
+  {
+    BasicBlock *CallBlock = SplitBlock(detB, cal, &DT);
+    IRBuilder<> B(detB->getTerminator());
+    SetJmpRes = B.CreateICmpEQ(SetJmpRes,
+                               ConstantInt::get(SetJmpRes->getType(), 0));
+    B.CreateCondBr(SetJmpRes, CallBlock, Continue);
+    detB->getTerminator()->eraseFromParent();
+  }
 
   makeFunctionDetachable( *extracted, instrument );
 

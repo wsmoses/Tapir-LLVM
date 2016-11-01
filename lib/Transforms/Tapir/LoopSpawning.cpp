@@ -686,11 +686,13 @@ void DACLoopSpawning::implementDACIterSpawnOnHelper(Function *Helper,
   {
     IRBuilder<> Builder(RecurHead->getTerminator());
     // Create the detach.
-    Builder.CreateDetach(RecurDet, RecurCont);
+    DetachInst *DI = Builder.CreateDetach(RecurDet, RecurCont);
+    DI->setDebugLoc(Header->getTerminator()->getDebugLoc());
     RecurHead->getTerminator()->eraseFromParent();
     // Create the reattach.
     Builder.SetInsertPoint(RecurDet->getTerminator());
-    Builder.CreateReattach(RecurCont);
+    ReattachInst *RI = Builder.CreateReattach(RecurCont);
+    RI->setDebugLoc(Header->getTerminator()->getDebugLoc());
     RecurDet->getTerminator()->eraseFromParent();
   }
 }
