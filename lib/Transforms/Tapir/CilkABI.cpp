@@ -1079,30 +1079,6 @@ Function* llvm::cilk::extractDetachBodyToFunction(DetachInst& detach, DominatorT
   }
   if (call)
     *call = TopCall;
-
-  // Function* extracted = extractor.extractCodeRegion();
-  // assert( extracted && "could not extract code" );
-  // extracted->addFnAttr(Attribute::AttrKind::NoInline);
-  // if (F.hasFnAttribute(Attribute::AttrKind::SanitizeThread))
-  //    extracted->addFnAttr(Attribute::AttrKind::SanitizeThread);
-  // if (F.hasFnAttribute(Attribute::AttrKind::SanitizeAddress))
-  //    extracted->addFnAttr(Attribute::AttrKind::SanitizeAddress);
-  // if (F.hasFnAttribute(Attribute::AttrKind::SanitizeMemory))
-  //    extracted->addFnAttr(Attribute::AttrKind::SanitizeMemory);
-
-  // Instruction* last = extracted->getEntryBlock().getFirstNonPHI();
-  // for (int i=moveToFront.size()-1; i>=0; i--) {
-  //   moveToFront[i]->moveBefore( last );
-  //   last = moveToFront[i];
-  // }
-
-  // TerminatorInst* bi = llvm::dyn_cast<TerminatorInst>(&detach);
-  // assert( bi );
-  // Spawned = (detach.getSuccessor(0) == Continue)?detach.getSuccessor(1):detach.getSuccessor(0);
-  // CallInst* cal = llvm::dyn_cast<CallInst>(Spawned->getFirstNonPHI());
-  // assert(cal);
-  // if( call ) *call = cal;
-
   
   // Move allocas in the newly cloned detached CFG to the entry block of the
   // helper.
@@ -1147,7 +1123,7 @@ CallInst* llvm::cilk::createDetach(DetachInst& detach, DominatorTree& DT,
   BasicBlock* detB = detach.getParent();
   Function& F = *(detB->getParent());
 
-  BasicBlock* Spawned  = detach.getDetached();
+  // BasicBlock* Spawned  = detach.getDetached();
   BasicBlock* Continue = detach.getContinue();
 
   Module* M = F.getParent();
@@ -1173,10 +1149,6 @@ CallInst* llvm::cilk::createDetach(DetachInst& detach, DominatorTree& DT,
     detach.eraseFromParent();
   }
 
-  // TerminatorInst* bi = llvm::dyn_cast<TerminatorInst>(detB->getTerminator() );
-  // assert(bi);
-  // Spawned = (detach.getSuccessor(0) == Continue)?detach.getSuccessor(1):detach.getSuccessor(0);
-
   Value *SetJmpRes;
   {
     IRBuilder<> B(cal);
@@ -1197,10 +1169,12 @@ CallInst* llvm::cilk::createDetach(DetachInst& detach, DominatorTree& DT,
   // setjmp.
   {
     BasicBlock *CallBlock = SplitBlock(detB, cal, &DT);
+    BasicBlock *CallCont = SplitBlock(CallBlock,
+                                      CallBlock->getTerminator(), &DT);
     IRBuilder<> B(detB->getTerminator());
     SetJmpRes = B.CreateICmpEQ(SetJmpRes,
                                ConstantInt::get(SetJmpRes->getType(), 0));
-    B.CreateCondBr(SetJmpRes, CallBlock, Continue);
+    B.CreateCondBr(SetJmpRes, CallBlock, CallCont);
     detB->getTerminator()->eraseFromParent();
   }
 
