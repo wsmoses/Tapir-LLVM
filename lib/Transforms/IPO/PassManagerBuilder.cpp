@@ -663,6 +663,8 @@ void PassManagerBuilder::populateModulePassManager(legacy::PassManagerBase& MPM)
 
     if (ParallelLevel != 3) MPM.add(createInferFunctionAttrsLegacyPass());
     MPM.add(createPromoteDetachToCilkPass(ParallelLevel == 2, InstrumentCilk));
+    // The Detach2Cilk pass may leave cruft around.  Clean it up.
+    MPM.add(createCFGSimplificationPass());
     if (ParallelLevel != 3) MPM.add(createInferFunctionAttrsLegacyPass());
     if (OptLevel != 0) MPM.add(createMergeFunctionsPass());
     MPM.add(createBarrierNoopPass());
