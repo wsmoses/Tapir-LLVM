@@ -1220,23 +1220,23 @@ bool LoopSpawningPass::isTapirLoop(const Loop *L) {
   const BasicBlock *Latch = L->getLoopLatch();
   const BasicBlock *Exit = L->getExitBlock();
 
-  DEBUG(dbgs() << "LS checking if Tapir loop: " << *L);
+  // DEBUG(dbgs() << "LS checking if Tapir loop: " << *L);
 
   // Header must be terminated by a detach.
   if (!isa<DetachInst>(Header->getTerminator())) {
-    DEBUG(dbgs() << "LS Loop header is not terminated by a detach.\n");
+    DEBUG(dbgs() << "LS loop header is not terminated by a detach: " << *L << "\n");
     return false;
   }
 
   // Loop must have a unique latch.
   if (nullptr == Latch) {
-    DEBUG(dbgs() << "LS Loop does not have a unique latch.\n");
+    DEBUG(dbgs() << "LS loop does not have a unique latch: " << *L << "\n");
     return false;
   }
 
   // Loop must have a unique exit block.
   if (nullptr == Exit) {
-    DEBUG(dbgs() << "LS Loop does not have a unique exit block.\n");
+    DEBUG(dbgs() << "LS loop does not have a unique exit block: " << *L << "\n");
     return false;
   }
 
@@ -1244,7 +1244,8 @@ bool LoopSpawningPass::isTapirLoop(const Loop *L) {
   const DetachInst *HeaderDetach = cast<DetachInst>(Header->getTerminator());
   const BasicBlock *Continuation = HeaderDetach->getContinue();
   if (Continuation != Latch) {
-    DEBUG(dbgs() << "LS Continuation of detach in header is not the latch.\n");
+    DEBUG(dbgs() << "LS continuation of detach in header is not the latch: "
+                 << *L << "\n");
     return false;
   }
 
@@ -1254,7 +1255,7 @@ bool LoopSpawningPass::isTapirLoop(const Loop *L) {
     if (Header == Pred) continue;
     if (!isa<ReattachInst>(Pred->getTerminator())) {
       DEBUG(dbgs() << "LS Latch has a predecessor that is not terminated "
-                   << "by a reattach.\n");
+                   << "by a reattach: " << *L << "\n");
       return false;
     }
   }
@@ -1266,7 +1267,7 @@ bool LoopSpawningPass::isTapirLoop(const Loop *L) {
       continue;
     if (Header != Pred && Latch != Pred) {
       DEBUG(dbgs() << "LS Loop branches to exit block from a block "
-                   << "other than the header or latch.\n");
+                   << "other than the header or latch" << *L << "\n");
       return false;
     }
   }
@@ -1423,10 +1424,9 @@ PreservedAnalyses LoopSpawningPass::run(Function &F,
 
     bool Changed =
         runImpl(F, SE, LI, TTI, DT, TLI, AA, AC, ORE);
-    if (!Changed)
-      return PreservedAnalyses::all();
-    PreservedAnalyses PA;
-    return PA;
+    if (Changed)
+      return PreservedAnalyses::none();
+    return PreservedAnalyses::all();
 }
 
 char LoopSpawning::ID = 0;
