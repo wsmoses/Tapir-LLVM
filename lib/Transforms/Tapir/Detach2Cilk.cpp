@@ -27,7 +27,7 @@ struct CilkPass : public FunctionPass {
   static char ID; // Pass identification, replacement for typeid
   bool DisablePostOpts;
   bool Instrument;
-  CilkPass(bool disablePostOpts=false, bool instrument=false)
+  CilkPass(bool disablePostOpts = false, bool instrument = false)
       : FunctionPass(ID), DisablePostOpts(disablePostOpts),
         Instrument(instrument) {
   }
@@ -52,13 +52,12 @@ cl::opt<bool>  fastCilk(
     cl::desc("Attempt faster cilk call implementation"), cl::Hidden);
 
 char CilkPass::ID = 0;
-// static RegisterPass<CilkPass> X("detach2cilk", "Promote Detach to Cilk Runtime", false, false);
-INITIALIZE_PASS_BEGIN(CilkPass, "detach2cilk", "Promote Detach to Cilk Runtime", false, false)
+INITIALIZE_PASS_BEGIN(CilkPass, "detach2cilk", "Lower Tapir to Cilk runtime", false, false)
 INITIALIZE_PASS_DEPENDENCY(DominatorTreeWrapperPass)
-INITIALIZE_PASS_END(CilkPass, "detach2cilk", "Promote Detach to Cilk Runtime",   false, false)
+INITIALIZE_PASS_END(CilkPass, "detach2cilk", "Lower Tapir to Cilk runtime",   false, false)
 
 bool CilkPass::runOnFunction(Function &F) {
-  if (llvm::verifyFunction(F, &llvm::errs())) {
+  if (verifyFunction(F, &errs())) {
     F.dump();
     assert(0);
   }
@@ -73,24 +72,24 @@ bool CilkPass::runOnFunction(Function &F) {
 
   DominatorTree &DT = getAnalysis<DominatorTreeWrapperPass>().getDomTree();
   for (Function::iterator i = F.begin(), e = F.end(); i != e; ++i) {
-    if (DetachInst* inst = llvm::dyn_cast_or_null<DetachInst>(i->getTerminator())) {
-      auto cal = llvm::cilk::createDetach(*inst, DT, ClInstrumentCilk || Instrument);
-      if (Instrument) {
-        InlineFunctionInfo ifi;
-        InlineFunction(cal,ifi);
-      }
+    if (DetachInst* inst = dyn_cast_or_null<DetachInst>(i->getTerminator())) {
+      auto cal = cilk::createDetach(*inst, DT, ClInstrumentCilk || Instrument);
+      // if (Instrument) {
+      //   InlineFunctionInfo ifi;
+      //   InlineFunction(cal,ifi);
+      // }
       Changed = true;
     }
   }
 
   for (Function::iterator i = F.begin(), e = F.end(); i != e; ++i) {
-    if (SyncInst* inst = llvm::dyn_cast_or_null<SyncInst>(i->getTerminator())) {
-      llvm::cilk::createSync(*inst, ClInstrumentCilk || Instrument);
+    if (SyncInst* inst = dyn_cast_or_null<SyncInst>(i->getTerminator())) {
+      cilk::createSync(*inst, ClInstrumentCilk || Instrument);
       Changed = true;
     }
   }
 
-  if (llvm::verifyFunction(F, &llvm::errs())) {
+  if (verifyFunction(F, &errs())) {
     F.dump();
     assert(0);
   }
@@ -115,7 +114,7 @@ bool CilkPass::runOnFunction(Function &F) {
     }
   }
 
-  if (llvm::verifyFunction(F, &llvm::errs())) {
+  if (verifyFunction(F, &errs())) {
     F.dump();
     assert(0);
   }
