@@ -898,13 +898,13 @@ bool Loop2Cilk::performDAC(Loop *L, LPPassManager &LPM) {
 
     syncer = continueToFindSync(syncer);
     if (!syncer) {
-      errs() << "No sync found" << "\n";
+      //errs() << "No sync found" << "\n";
       return false;
     }
 
     BasicBlock* done = getTrueExit(L);
     if (!done) {
-      errs() << "no unique exit block\n";
+      //errs() << "no unique exit block\n";
       return false;
     }
 
@@ -946,7 +946,7 @@ bool Loop2Cilk::performDAC(Loop *L, LPPassManager &LPM) {
       for (Instruction &I : *BB) {
         if (CallInst* ca = dyn_cast<CallInst>(&I)) {
           if (ca->getCalledFunction() == Header->getParent()) {
-            errs() << "Selecting successive spawn in place of DAC for recursive cilk_for in function " << Header->getParent()->getName() << "|" << Header->getName() << "\n";
+            //errs() << "Selecting successive spawn in place of DAC for recursive cilk_for in function " << Header->getParent()->getName() << "|" << Header->getName() << "\n";
             return false;
           }
         }
