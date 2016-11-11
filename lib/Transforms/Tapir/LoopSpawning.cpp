@@ -945,7 +945,7 @@ bool DACLoopSpawning::convertLoop() {
 
   // Insert the computation for the loop limit into the Preheader.
   Value *LimitVar = Exp.expandCodeFor(Limit, Limit->getType(),
-                                      &(Preheader->front()));
+                                      Preheader->getTerminator());
   DEBUG(dbgs() << "LimitVar: " << *LimitVar << "\n");
 
   // Canonicalize the loop latch.
