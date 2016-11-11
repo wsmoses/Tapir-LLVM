@@ -105,6 +105,10 @@ public:
     /// passes at the end of the main CallGraphSCC passes and before any
     /// function simplification passes run by CGPassManager.
     EP_CGSCCOptimizerLate,
+
+    /// EP_TapirLate - This extension point allows adding passes just before
+    /// Tapir instructions are lowered to calls into a parallel runtime system.
+    EP_TapirLate,
   };
 
   /// Whether the Cilk Calls should be instrumented

@@ -628,7 +628,7 @@ void PassManagerBuilder::prepopulateModulePassManager(
   if (MergeFunctions)
     MPM.add(createMergeFunctionsPass());
 
-  addExtensionsToPM(EP_OptimizerLast, MPM);
+  // addExtensionsToPM(EP_OptimizerLast, MPM);
 }
 
 void PassManagerBuilder::populateModulePassManager(legacy::PassManagerBase& MPM) {
@@ -637,6 +637,7 @@ void PassManagerBuilder::populateModulePassManager(legacy::PassManagerBase& MPM)
       case 1: //fcilkplus
       case 2: //ftapir
         prepopulateModulePassManager(MPM);
+        addExtensionsToPM(EP_TapirLate, MPM);
         break;
       case 3: //fdetach
         break;
@@ -659,6 +660,9 @@ void PassManagerBuilder::populateModulePassManager(legacy::PassManagerBase& MPM)
     MPM.add(createBarrierNoopPass());
   }
   prepopulateModulePassManager(MPM);
+  if (ParallelLevel == 0 || ParallelLevel == 3)
+    addExtensionsToPM(EP_TapirLate, MPM);
+  addExtensionsToPM(EP_OptimizerLast, MPM);
 }
 
 void PassManagerBuilder::addLTOOptimizationPasses(legacy::PassManagerBase &PM) {
