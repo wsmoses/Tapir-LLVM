@@ -204,7 +204,7 @@ bool attemptRecursiveMoveHelper(Instruction* toMoveAfter, Instruction* toCheck, 
   if (DT.dominates(toMoveAfter, toCheck)) return true;
 
   if (toCheck->mayHaveSideEffects()) {
-    llvm::errs() << "invalid move\n"; toCheck->dump();
+    //llvm::errs() << "invalid move\n"; toCheck->dump();
     return false;
   }
 
@@ -260,13 +260,13 @@ bool recursiveMoveBefore(Instruction* toMoveBefore, Value* toMoveVal, DominatorT
           //if (isa<Instruction>(v)) { llvm::errs()<<"for "; inst->dump(); v->dump(); }
         }
         if (inst->mayHaveSideEffects()) {
-          errs() << "something side fx\n";
+          //errs() << "something side fx\n";
           return false;
         }
         if (isa<PHINode>(inst)) {
-          errs() << "some weird phi stuff trying to move, move before:" << nm << "\n";
-          inst->dump();
-          toMoveBefore->dump();
+          //errs() << "some weird phi stuff trying to move, move before:" << nm << "\n";
+          //inst->dump();
+          //toMoveBefore->dump();
           return false;
         }
         inst->moveBefore(pi);
@@ -310,7 +310,7 @@ std::pair<PHINode*,Value*> getIndVar(Loop *L, BasicBlock* detacher, DominatorTre
     if (!brnch->isConditional()) goto cmp_error;
     cmp = dyn_cast<CmpInst>(brnch->getCondition());
     if (cmp == nullptr) {
-      errs() << "no comparison inst from backedge\n";
+      //errs() << "no comparison inst from backedge\n";
       cmpNode->getTerminator()->dump();
       return make_pair(nullptr,nullptr);
     }
@@ -327,10 +327,10 @@ std::pair<PHINode*,Value*> getIndVar(Loop *L, BasicBlock* detacher, DominatorTre
     }
   } else {
     cmp_error:
-    errs() << "<no comparison from backedge>\n";
-    cmpNode->getTerminator()->dump();
-    cmpNode->getParent()->dump();
-    errs() << "</no comparison from backedge>\n";
+    //errs() << "<no comparison from backedge>\n";
+    //cmpNode->getTerminator()->dump();
+    //cmpNode->getParent()->dump();
+    //errs() << "</no comparison from backedge>\n";
     return make_pair(nullptr,nullptr);
   }
 
@@ -378,18 +378,18 @@ std::pair<PHINode*,Value*> getIndVar(Loop *L, BasicBlock* detacher, DominatorTre
           ld2->eraseFromParent();
           continue;
         } else {
-          llvm::errs() << "phinode cmp uses odd load with diff values\n";
-          ld->dump();
-          ld2->dump();
-          H->getParent()->dump();
+          //llvm::errs() << "phinode cmp uses odd load with diff values\n";
+          //ld->dump();
+          //ld2->dump();
+          //H->getParent()->dump();
         }
       }
     }
 
     if( !PN->getType()->isIntegerTy() ) {
-      errs() << "phinode uses non-int type\n";
-      PN->dump();
-      H->getParent()->dump();
+      //errs() << "phinode uses non-int type\n";
+      //PN->dump();
+      //H->getParent()->dump();
       return make_pair(nullptr,nullptr);
     }
     if (BinaryOperator* Inc = dyn_cast<BinaryOperator>(PN->getIncomingValueForBlock(Backedge))) {
@@ -433,25 +433,25 @@ std::pair<PHINode*,Value*> getIndVar(Loop *L, BasicBlock* detacher, DominatorTre
         //assert( !isa<PHINode>(PN->getIncomingValueForBlock(Incoming)) );
         if (!recursiveMoveBefore(Incoming->getTerminator(), PN->getIncomingValueForBlock(Incoming), DT, "2")) return make_pair(nullptr, nullptr);
       } else {
-        errs() << "no add found for:\n"; PN->dump(); Inc->dump();
-        H->getParent()->dump();
+        //errs() << "no add found for:\n"; PN->dump(); Inc->dump();
+        //H->getParent()->dump();
         return make_pair(nullptr,nullptr);
       }
     } else {
-      errs() << "no inc found for:\n"; PN->dump(); PN->getParent()->getParent()->dump();
+      //errs() << "no inc found for:\n"; PN->dump(); PN->getParent()->getParent()->dump();
       return make_pair(nullptr, nullptr);
     }
     ++I;
   }
 
   if (RPN == 0) {
-    errs() << "<no RPN>\n";
-    cmp->dump();
-    errs() << "<---->\n";
-    H->dump();
-    errs() << "<---->\n";
-    for( auto a : others ) { std::get<0>(a)->dump(); }
-    errs() << "</no RPN>\n";
+    //errs() << "<no RPN>\n";
+    //cmp->dump();
+    //errs() << "<---->\n";
+    //H->dump();
+    //errs() << "<---->\n";
+    //for( auto a : others ) { std::get<0>(a)->dump(); }
+    //errs() << "</no RPN>\n";
     return make_pair(nullptr,nullptr);
   }
 
@@ -504,11 +504,11 @@ std::pair<PHINode*,Value*> getIndVar(Loop *L, BasicBlock* detacher, DominatorTre
         if (user == std::get<1>(a)) continue;
 
         if (!attemptRecursiveMoveAfter(ival, user, DT)) {
-          val->dump();
-          user->dump();
-          std::get<0>(a)->dump();
-          H->getParent()->dump();
-          llvm::errs() << "FAILED TO MOVE\n";
+          //val->dump();
+          //user->dump();
+          //std::get<0>(a)->dump();
+          //H->getParent()->dump();
+          //llvm::errs() << "FAILED TO MOVE\n";
           return make_pair(nullptr, nullptr);
         }
         assert(DT.dominates(ival, user));
@@ -543,7 +543,7 @@ std::pair<PHINode*,Value*> getIndVar(Loop *L, BasicBlock* detacher, DominatorTre
       Instruction* ival = cast<Instruction>(newV);
       assert( isa<Instruction>(U.getUser()) );
       if (!attemptRecursiveMoveAfter(ival, cast<Instruction>(U.getUser()), DT)) {
-        llvm::errs() << "newV: ";
+/*        llvm::errs() << "newV: ";
         newV->dump();
         llvm::errs() << "U: ";
         U->dump();
@@ -557,6 +557,7 @@ std::pair<PHINode*,Value*> getIndVar(Loop *L, BasicBlock* detacher, DominatorTre
         RPN->dump();
         H->getParent()->dump();
         llvm::errs() << "FAILED TO MOVE2\n";
+*/
         return make_pair(nullptr, nullptr);
       }
       assert( DT.dominates((Instruction*) newV, U) );
@@ -853,7 +854,7 @@ bool Loop2Cilk::performDAC(Loop *L, LPPassManager &LPM) {
       NewPreheader->getTerminator()->eraseFromParent();
       Header = NewPreheader;
     } else {
-      llvm::errs() << "Loop not entered via branch instance\n";
+      //llvm::errs() << "Loop not entered via branch instance\n";
       T->dump();
       Preheader->dump();
       Header->dump();
@@ -898,13 +899,13 @@ bool Loop2Cilk::performDAC(Loop *L, LPPassManager &LPM) {
 
     syncer = continueToFindSync(syncer);
     if (!syncer) {
-      errs() << "No sync found" << "\n";
+      //errs() << "No sync found" << "\n";
       return false;
     }
 
     BasicBlock* done = getTrueExit(L);
     if (!done) {
-      errs() << "no unique exit block\n";
+      //errs() << "no unique exit block\n";
       return false;
     }
 
@@ -946,7 +947,7 @@ bool Loop2Cilk::performDAC(Loop *L, LPPassManager &LPM) {
       for (Instruction &I : *BB) {
         if (CallInst* ca = dyn_cast<CallInst>(&I)) {
           if (ca->getCalledFunction() == Header->getParent()) {
-            errs() << "Selecting successive spawn in place of DAC for recursive cilk_for in function " << Header->getParent()->getName() << "|" << Header->getName() << "\n";
+            //errs() << "Selecting successive spawn in place of DAC for recursive cilk_for in function " << Header->getParent()->getName() << "|" << Header->getName() << "\n";
             return false;
           }
         }
@@ -961,8 +962,8 @@ bool Loop2Cilk::performDAC(Loop *L, LPPassManager &LPM) {
       bool dominated = true;
       for (const Use &U : badInst->uses()) {
         if (!DT.dominates(BasicBlockEdge(detacher, det->getSuccessor(0) ), U) ) {
-          errs() << "use not dominated:\n";
-          U->dump();
+          //errs() << "use not dominated:\n";
+          //U->dump();
           dominated = false;
           break;
         }
@@ -971,10 +972,11 @@ bool Loop2Cilk::performDAC(Loop *L, LPPassManager &LPM) {
         badInst->moveBefore( getFirstPostPHI(det->getSuccessor(0)) );
         continue;
       }
-    } else
-      errs() << "mayWrite:\n";
-    errs() << "invalid detach size of " << getNonPhiSize(detacher) << "|" << detacher->size() << "\n";
-    detacher->dump();
+    } else{
+     // errs() << "mayWrite:\n";
+    }
+    //errs() << "invalid detach size of " << getNonPhiSize(detacher) << "|" << detacher->size() << "\n";
+    //detacher->dump();
     return false;
   }
 
@@ -984,8 +986,8 @@ bool Loop2Cilk::performDAC(Loop *L, LPPassManager &LPM) {
     if (!badInst->mayWriteToMemory()) {
       badInst->moveBefore( getFirstPostPHI(syncer->getTerminator()->getSuccessor(0)) );
     } else {
-      errs() << "invalid sync size" << "\n";
-      syncer->dump();
+      //errs() << "invalid sync size" << "\n";
+      //syncer->dump();
       return false;
     }
   }
@@ -995,7 +997,7 @@ bool Loop2Cilk::performDAC(Loop *L, LPPassManager &LPM) {
     assert( isa<PHINode>(&syncer->front()) );
     PHINode* pn = cast<PHINode>(&syncer->front());
     if (pn->getNumIncomingValues() != 1 ) {
-      errs() << "invalid phi for sync\n";
+      //errs() << "invalid phi for sync\n";
       return false;
     }
     pn->replaceAllUsesWith(pn->getIncomingValue(0));
@@ -1008,7 +1010,7 @@ bool Loop2Cilk::performDAC(Loop *L, LPPassManager &LPM) {
 
   //oldvar guarenteed to be canonical (start at 0, inc by 1, end at ...)
   if (!oldvar) {
-      errs() << "no induction var\n";
+      //errs() << "no induction var\n";
       return false;
   }
 
@@ -1037,8 +1039,8 @@ bool Loop2Cilk::performDAC(Loop *L, LPPassManager &LPM) {
   llvm::CallInst* call = 0;
 
   if (!recursiveMoveBefore(Header->getTerminator(), cmp, DT, "3")) {
-    errs() << "cmp not moved\n"; cmp->dump();
-    L->getHeader()->getParent()->dump();
+    //errs() << "cmp not moved\n"; cmp->dump();
+    //L->getHeader()->getParent()->dump();
     return false;
   }
 
@@ -1046,7 +1048,7 @@ bool Loop2Cilk::performDAC(Loop *L, LPPassManager &LPM) {
   Function* extracted = llvm::cilk::extractDetachBodyToFunction(*det, DT, &call, /*closure*/ oldvar, &ext_args);
 
   if (!extracted) {
-    errs() << "not extracted\n";
+    //errs() << "not extracted\n";
     return false;
   }
 
