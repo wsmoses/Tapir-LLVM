@@ -196,10 +196,11 @@ void DWARFUnit::extractDIEsToVector(
   uint32_t DIEOffset = Offset + getHeaderSize();
   uint32_t NextCUOffset = getNextUnitOffset();
   DWARFDebugInfoEntryMinimal DIE;
+  DataExtractor DebugInfoData = getDebugInfoExtractor();
   uint32_t Depth = 0;
   bool IsCUDie = true;
 
-  while (DIEOffset < NextCUOffset && DIE.extractFast(this, &DIEOffset)) {
+  while (DIE.extractFast(*this, &DIEOffset, DebugInfoData, NextCUOffset)) {
     if (IsCUDie) {
       if (AppendCUDie)
         Dies.push_back(DIE);
@@ -257,7 +258,7 @@ size_t DWARFUnit::extractDIEsIfNeeded(bool CUDieOnly) {
     AddrOffsetSectionBase = DieArray[0].getAttributeValueAsSectionOffset(
         this, DW_AT_GNU_addr_base, 0);
     RangeSectionBase = DieArray[0].getAttributeValueAsSectionOffset(
-        this, DW_AT_ranges_base, 0);
+        this, DW_AT_rnglists_base, 0);
     // Don't fall back to DW_AT_GNU_ranges_base: it should be ignored for
     // skeleton CU DIE, so that DWARF users not aware of it are not broken.
   }

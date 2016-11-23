@@ -83,10 +83,6 @@ enum NodeType : unsigned {
   // base of the dynamically-allocatable area.
   ADJDYNALLOC,
 
-  // Extracts the value of a 32-bit access register.  Operand 0 is
-  // the number of the register.
-  EXTRACT_ACCESS,
-
   // Count number of bits set in operand 0 per byte.
   POPCNT,
 
@@ -382,7 +378,7 @@ public:
     //
     // (c) there are no multiplication instructions for the widest integer
     //     type (v2i64).
-    if (VT.getVectorElementType().getSizeInBits() % 8 == 0)
+    if (VT.getScalarSizeInBits() % 8 == 0)
       return TypeWidenVector;
     return TargetLoweringBase::getPreferredVectorAction(VT);
   }

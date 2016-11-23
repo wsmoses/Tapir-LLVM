@@ -81,6 +81,8 @@ private:
 
   TypeID   ID : 8;            // The current base type of this type.
   unsigned SubclassData : 24; // Space for subclasses to store data.
+                              // Note that this should be synchronized with
+                              // MAX_INT_BITS value in IntegerType class.
 
 protected:
   friend class LLVMContextImpl;
@@ -342,12 +344,21 @@ public:
   }
 
   inline uint64_t getArrayNumElements() const;
-  Type *getArrayElementType() const { return getSequentialElementType(); }
+  Type *getArrayElementType() const {
+    assert(getTypeID() == ArrayTyID);
+    return ContainedTys[0];
+  }
 
   inline unsigned getVectorNumElements() const;
-  Type *getVectorElementType() const { return getSequentialElementType(); }
+  Type *getVectorElementType() const {
+    assert(getTypeID() == VectorTyID);
+    return ContainedTys[0];
+  }
 
-  Type *getPointerElementType() const { return getSequentialElementType(); }
+  Type *getPointerElementType() const {
+    assert(getTypeID() == PointerTyID);
+    return ContainedTys[0];
+  }
 
   /// Get the address space of this pointer or pointer vector type.
   inline unsigned getPointerAddressSpace() const;
@@ -429,31 +440,21 @@ template <> struct isa_impl<PointerType, Type> {
 // graph of sub types.
 
 template <> struct GraphTraits<Type *> {
-  typedef Type NodeType;
   typedef Type *NodeRef;
   typedef Type::subtype_iterator ChildIteratorType;
 
-  static inline NodeType *getEntryNode(Type *T) { return T; }
-  static inline ChildIteratorType child_begin(NodeType *N) {
-    return N->subtype_begin();
-  }
-  static inline ChildIteratorType child_end(NodeType *N) {
-    return N->subtype_end();
-  }
+  static NodeRef getEntryNode(Type *T) { return T; }
+  static ChildIteratorType child_begin(NodeRef N) { return N->subtype_begin(); }
+  static ChildIteratorType child_end(NodeRef N) { return N->subtype_end(); }
 };
 
 template <> struct GraphTraits<const Type*> {
-  typedef const Type NodeType;
   typedef const Type *NodeRef;
   typedef Type::subtype_iterator ChildIteratorType;
 
-  static inline NodeType *getEntryNode(NodeType *T) { return T; }
-  static inline ChildIteratorType child_begin(NodeType *N) {
-    return N->subtype_begin();
-  }
-  static inline ChildIteratorType child_end(NodeType *N) {
-    return N->subtype_end();
-  }
+  static NodeRef getEntryNode(NodeRef T) { return T; }
+  static ChildIteratorType child_begin(NodeRef N) { return N->subtype_begin(); }
+  static ChildIteratorType child_end(NodeRef N) { return N->subtype_end(); }
 };
 
 // Create wrappers for C Binding types (see CBindingWrapping.h).

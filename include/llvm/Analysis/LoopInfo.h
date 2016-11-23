@@ -367,6 +367,27 @@ extern template class LoopBase<BasicBlock, Loop>;
 /// in the CFG are neccessarily loops.
 class Loop : public LoopBase<BasicBlock, Loop> {
 public:
+  /// \brief A range representing the start and end location of a loop.
+  class LocRange {
+    DebugLoc Start;
+    DebugLoc End;
+
+  public:
+    LocRange() {}
+    LocRange(DebugLoc Start) : Start(std::move(Start)), End(std::move(Start)) {}
+    LocRange(DebugLoc Start, DebugLoc End) : Start(std::move(Start)),
+                                             End(std::move(End)) {}
+
+    const DebugLoc &getStart() const { return Start; }
+    const DebugLoc &getEnd() const { return End; }
+
+    /// \brief Check for null.
+    ///
+    explicit operator bool() const {
+      return Start && End;
+    }
+  };
+
   Loop() {}
 
   /// Return true if the specified value is loop invariant.
@@ -412,7 +433,7 @@ public:
   bool isLCSSAForm(DominatorTree &DT) const;
 
   /// Return true if this Loop and all inner subloops are in LCSSA form.
-  bool isRecursivelyLCSSAForm(DominatorTree &DT) const;
+  bool isRecursivelyLCSSAForm(DominatorTree &DT, const LoopInfo &LI) const;
 
   /// Return true if the Loop is in the form that the LoopSimplify form
   /// transforms loops to, which is sometimes called normal form.
@@ -473,6 +494,9 @@ public:
   /// cannot find a terminating instruction with location information,
   /// it returns an unknown location.
   DebugLoc getStartLoc() const;
+
+  /// Return the source code span of the loop.
+  LocRange getLocRange() const;
 
   StringRef getName() const {
     if (BasicBlock *Header = getHeader())
@@ -635,7 +659,7 @@ public:
   // Debugging
   void print(raw_ostream &OS) const;
 
-  void verify() const;
+  void verify(const DominatorTreeBase<BlockT> &DomTree) const;
 };
 
 // Implementation in LoopInfoImpl.h
@@ -761,31 +785,21 @@ public:
 
 // Allow clients to walk the list of nested loops...
 template <> struct GraphTraits<const Loop*> {
-  typedef const Loop NodeType;
   typedef const Loop *NodeRef;
   typedef LoopInfo::iterator ChildIteratorType;
 
-  static NodeType *getEntryNode(const Loop *L) { return L; }
-  static inline ChildIteratorType child_begin(NodeType *N) {
-    return N->begin();
-  }
-  static inline ChildIteratorType child_end(NodeType *N) {
-    return N->end();
-  }
+  static NodeRef getEntryNode(const Loop *L) { return L; }
+  static ChildIteratorType child_begin(NodeRef N) { return N->begin(); }
+  static ChildIteratorType child_end(NodeRef N) { return N->end(); }
 };
 
 template <> struct GraphTraits<Loop*> {
-  typedef Loop NodeType;
   typedef Loop *NodeRef;
   typedef LoopInfo::iterator ChildIteratorType;
 
-  static NodeType *getEntryNode(Loop *L) { return L; }
-  static inline ChildIteratorType child_begin(NodeType *N) {
-    return N->begin();
-  }
-  static inline ChildIteratorType child_end(NodeType *N) {
-    return N->end();
-  }
+  static NodeRef getEntryNode(Loop *L) { return L; }
+  static ChildIteratorType child_begin(NodeRef N) { return N->begin(); }
+  static ChildIteratorType child_end(NodeRef N) { return N->end(); }
 };
 
 /// \brief Analysis pass that exposes the \c LoopInfo for a function.

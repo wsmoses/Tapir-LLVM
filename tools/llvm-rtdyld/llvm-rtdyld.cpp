@@ -66,8 +66,7 @@ Action(cl::desc("Action to perform:"),
                   clEnumValN(AC_PrintObjectLineInfo, "printobjline",
                              "Like -printlineinfo but does not load the object first"),
                   clEnumValN(AC_Verify, "verify",
-                             "Load, link and verify the resulting memory image."),
-                  clEnumValEnd));
+                             "Load, link and verify the resulting memory image.")));
 
 static cl::opt<std::string>
 EntryPoint("entry",
@@ -533,7 +532,7 @@ applySpecificSectionMappings(RuntimeDyldChecker &Checker) {
 // Remaps section addresses for -verify mode. The following command line options
 // can be used to customize the layout of the memory within the phony target's
 // address space:
-// -target-addr-start <s> -- Specify where the phony target addres range starts.
+// -target-addr-start <s> -- Specify where the phony target address range starts.
 // -target-addr-end   <e> -- Specify where the phony target address range ends.
 // -target-section-sep <d> -- Specify how big a gap should be left between the
 //                            end of one section and the start of the next.

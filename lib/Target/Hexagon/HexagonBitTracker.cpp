@@ -84,12 +84,14 @@ BT::BitMask HexagonEvaluator::mask(unsigned Reg, unsigned Sub) const {
   const TargetRegisterClass *RC = MRI.getRegClass(Reg);
   unsigned ID = RC->getID();
   uint16_t RW = getRegBitWidth(RegisterRef(Reg, Sub));
+  auto &HRI = static_cast<const HexagonRegisterInfo&>(TRI);
+  bool IsSubLo = (Sub == HRI.getHexagonSubRegIndex(RC, Hexagon::ps_sub_lo));
   switch (ID) {
     case DoubleRegsRegClassID:
     case VecDblRegsRegClassID:
     case VecDblRegs128BRegClassID:
-      return (Sub == subreg_loreg) ? BT::BitMask(0, RW-1)
-                                   : BT::BitMask(RW, 2*RW-1);
+      return IsSubLo ? BT::BitMask(0, RW-1)
+                     : BT::BitMask(RW, 2*RW-1);
     default:
       break;
   }
@@ -895,17 +897,19 @@ bool HexagonEvaluator::evaluate(const MachineInstr &BI,
                                 const CellMapType &Inputs,
                                 BranchTargetList &Targets,
                                 bool &FallsThru) const {
-  // We need to evaluate one branch at a time. TII::AnalyzeBranch checks
+  // We need to evaluate one branch at a time. TII::analyzeBranch checks
   // all the branches in a basic block at once, so we cannot use it.
   unsigned Opc = BI.getOpcode();
   bool SimpleBranch = false;
   bool Negated = false;
   switch (Opc) {
     case Hexagon::J2_jumpf:
+    case Hexagon::J2_jumpfpt:
     case Hexagon::J2_jumpfnew:
     case Hexagon::J2_jumpfnewpt:
       Negated = true;
     case Hexagon::J2_jumpt:
+    case Hexagon::J2_jumptpt:
     case Hexagon::J2_jumptnew:
     case Hexagon::J2_jumptnewpt:
       // Simple branch:  if([!]Pn) jump ...
@@ -997,7 +1001,7 @@ bool HexagonEvaluator::evaluateLoad(const MachineInstr &MI,
     case L2_loadrb_pci:
     case L2_loadrb_pcr:
     case L2_loadrb_pi:
-    case L4_loadrb_abs:
+    case PS_loadrbabs:
     case L4_loadrb_ap:
     case L4_loadrb_rr:
     case L4_loadrb_ur:
@@ -1011,7 +1015,7 @@ bool HexagonEvaluator::evaluateLoad(const MachineInstr &MI,
     case L2_loadrub_pci:
     case L2_loadrub_pcr:
     case L2_loadrub_pi:
-    case L4_loadrub_abs:
+    case PS_loadrubabs:
     case L4_loadrub_ap:
     case L4_loadrub_rr:
     case L4_loadrub_ur:
@@ -1025,7 +1029,7 @@ bool HexagonEvaluator::evaluateLoad(const MachineInstr &MI,
     case L2_loadrh_pci:
     case L2_loadrh_pcr:
     case L2_loadrh_pi:
-    case L4_loadrh_abs:
+    case PS_loadrhabs:
     case L4_loadrh_ap:
     case L4_loadrh_rr:
     case L4_loadrh_ur:
@@ -1040,7 +1044,7 @@ bool HexagonEvaluator::evaluateLoad(const MachineInstr &MI,
     case L2_loadruh_pcr:
     case L2_loadruh_pi:
     case L4_loadruh_rr:
-    case L4_loadruh_abs:
+    case PS_loadruhabs:
     case L4_loadruh_ap:
     case L4_loadruh_ur:
       BitNum = 16;
@@ -1054,7 +1058,7 @@ bool HexagonEvaluator::evaluateLoad(const MachineInstr &MI,
     case L2_loadri_pcr:
     case L2_loadri_pi:
     case L2_loadw_locked:
-    case L4_loadri_abs:
+    case PS_loadriabs:
     case L4_loadri_ap:
     case L4_loadri_rr:
     case L4_loadri_ur:
@@ -1070,7 +1074,7 @@ bool HexagonEvaluator::evaluateLoad(const MachineInstr &MI,
     case L2_loadrd_pcr:
     case L2_loadrd_pi:
     case L4_loadd_locked:
-    case L4_loadrd_abs:
+    case PS_loadrdabs:
     case L4_loadrd_ap:
     case L4_loadrd_rr:
     case L4_loadrd_ur:

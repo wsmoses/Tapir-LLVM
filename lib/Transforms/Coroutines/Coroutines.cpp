@@ -107,7 +107,7 @@ static bool isCoroutineIntrinsicName(StringRef Name) {
       "llvm.coro.done",    "llvm.coro.end",     "llvm.coro.frame",
       "llvm.coro.free",    "llvm.coro.id",      "llvm.coro.param",
       "llvm.coro.promise", "llvm.coro.resume",  "llvm.coro.save",
-      "llvm.coro.size",    "llvm.coro.suspend",
+      "llvm.coro.size",    "llvm.coro.subfn.addr", "llvm.coro.suspend",
   };
   return Intrinsic::lookupLLVMIntrinsicByName(CoroIntrinsics, Name) != -1;
 }
@@ -125,6 +125,27 @@ bool coro::declaresIntrinsics(Module &M,
   }
 
   return false;
+}
+
+// Replace all coro.frees associated with the provided CoroId either with 'null'
+// if Elide is true and with its frame parameter otherwise.
+void coro::replaceCoroFree(CoroIdInst *CoroId, bool Elide) {
+  SmallVector<CoroFreeInst *, 4> CoroFrees;
+  for (User *U : CoroId->users())
+    if (auto CF = dyn_cast<CoroFreeInst>(U))
+      CoroFrees.push_back(CF);
+
+  if (CoroFrees.empty())
+    return;
+
+  Value *Replacement =
+      Elide ? ConstantPointerNull::get(Type::getInt8PtrTy(CoroId->getContext()))
+            : CoroFrees.front()->getFrame();
+
+  for (CoroFreeInst *CF : CoroFrees) {
+    CF->replaceAllUsesWith(Replacement);
+    CF->eraseFromParent();
+  }
 }
 
 // FIXME: This code is stolen from CallGraph::addToCallGraph(Function *F), which
@@ -177,6 +198,7 @@ static void clear(coro::Shape &Shape) {
   Shape.FramePtr = nullptr;
   Shape.AllocaSpillBlock = nullptr;
   Shape.ResumeSwitch = nullptr;
+  Shape.PromiseAlloca = nullptr;
   Shape.HasFinalSuspend = false;
 }
 
@@ -193,6 +215,7 @@ static CoroSaveInst *createCoroSave(CoroBeginInst *CoroBegin,
 
 // Collect "interesting" coroutine intrinsics.
 void coro::Shape::buildFrom(Function &F) {
+  size_t FinalSuspendIndex = 0;
   clear(*this);
   SmallVector<CoroFrameInst *, 8> CoroFrames;
   for (Instruction &I : instructions(F)) {
@@ -208,16 +231,12 @@ void coro::Shape::buildFrom(Function &F) {
         break;
       case Intrinsic::coro_suspend:
         CoroSuspends.push_back(cast<CoroSuspendInst>(II));
-        // Make sure that the final suspend is the first suspend point in the
-        // CoroSuspends vector.
         if (CoroSuspends.back()->isFinal()) {
+          if (HasFinalSuspend)
+            report_fatal_error(
+              "Only one suspend point can be marked as final");
           HasFinalSuspend = true;
-          if (CoroSuspends.size() > 1) {
-            if (CoroSuspends.front()->isFinal())
-              report_fatal_error(
-                  "Only one suspend point can be marked as final");
-            std::swap(CoroSuspends.front(), CoroSuspends.back());
-          }
+          FinalSuspendIndex = CoroSuspends.size() - 1;
         }
         break;
       case Intrinsic::coro_begin: {
@@ -286,5 +305,10 @@ void coro::Shape::buildFrom(Function &F) {
   // Canonicalize coro.suspend by inserting a coro.save if needed.
   for (CoroSuspendInst *CS : CoroSuspends)
     if (!CS->getCoroSave())
-      createCoroSave(CoroBegin, CoroSuspends.back());
+      createCoroSave(CoroBegin, CS);
+
+  // Move final suspend to be the last element in the CoroSuspends vector.
+  if (HasFinalSuspend &&
+      FinalSuspendIndex != CoroSuspends.size() - 1)
+    std::swap(CoroSuspends[FinalSuspendIndex], CoroSuspends.back());
 }

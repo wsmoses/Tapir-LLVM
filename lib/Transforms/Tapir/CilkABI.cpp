@@ -621,7 +621,7 @@ static const char *stack_frame_name = "__cilkrts_sf";
 static const char *worker8_name = "__cilkrts_wc8";
 
 static llvm::Value *LookupStackFrame(Function &F) {
-  return F.getValueSymbolTable().lookup(stack_frame_name);
+  return F.getValueSymbolTable()->lookup(stack_frame_name);
 }
 
 /// \brief Create the __cilkrts_stack_frame for the spawning function.
@@ -815,7 +815,7 @@ static inline bool makeFunctionDetachable( Function& extracted, bool instrument 
 
 /// \brief Get/Create the worker count for the spawning function.
 Value* llvm::cilk::GetOrCreateWorker8(Function &F) {
-  Value* W8 = F.getValueSymbolTable().lookup(worker8_name);
+  Value* W8 = F.getValueSymbolTable()->lookup(worker8_name);
   if (W8) return W8;
   IRBuilder<> b(F.getEntryBlock().getFirstNonPHIOrDbgOrLifetime());
   Value* P0 = b.CreateCall(CILKRTS_FUNC(get_nworkers, *F.getParent()));

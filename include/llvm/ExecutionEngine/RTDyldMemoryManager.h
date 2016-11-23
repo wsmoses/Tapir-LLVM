@@ -14,22 +14,24 @@
 #ifndef LLVM_EXECUTIONENGINE_RTDYLDMEMORYMANAGER_H
 #define LLVM_EXECUTIONENGINE_RTDYLDMEMORYMANAGER_H
 
-#include "RuntimeDyld.h"
-#include "llvm-c/ExecutionEngine.h"
+#include "llvm/ExecutionEngine/JITSymbol.h"
+#include "llvm/ExecutionEngine/RuntimeDyld.h"
 #include "llvm/Support/CBindingWrapping.h"
-#include "llvm/Support/Memory.h"
+#include "llvm-c/ExecutionEngine.h"
+#include <cstddef>
+#include <cstdint>
+#include <string>
 
 namespace llvm {
 
 class ExecutionEngine;
 
-  namespace object {
-    class ObjectFile;
-  }
+namespace object {
+  class ObjectFile;
+} // end namespace object
 
 class MCJITMemoryManager : public RuntimeDyld::MemoryManager {
 public:
-
   // Don't hide the notifyObjectLoaded method from RuntimeDyld::MemoryManager.
   using RuntimeDyld::MemoryManager::notifyObjectLoaded;
 
@@ -55,10 +57,10 @@ public:
 //        for the varying types of objects to be allocated.
 class RTDyldMemoryManager : public MCJITMemoryManager,
                             public JITSymbolResolver {
+public:
+  RTDyldMemoryManager() = default;
   RTDyldMemoryManager(const RTDyldMemoryManager&) = delete;
   void operator=(const RTDyldMemoryManager&) = delete;
-public:
-  RTDyldMemoryManager() {}
   ~RTDyldMemoryManager() override;
 
   /// Register EH frames in the current process.
@@ -72,7 +74,7 @@ public:
   }
 
   void deregisterEHFrames(uint8_t *Addr, uint64_t LoadAddr, size_t Size) override {
-    registerEHFramesInProcess(Addr, Size);
+    deregisterEHFramesInProcess(Addr, Size);
   }
 
   /// This method returns the address of the specified function or variable in
@@ -143,7 +145,6 @@ public:
 DEFINE_SIMPLE_CONVERSION_FUNCTIONS(
     RTDyldMemoryManager, LLVMMCJITMemoryManagerRef)
 
-} // namespace llvm
+} // end namespace llvm
 
-
-#endif
+#endif // LLVM_EXECUTIONENGINE_RTDYLDMEMORYMANAGER_H

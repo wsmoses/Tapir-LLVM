@@ -325,7 +325,7 @@ static void DoInitialMatch(const SCEV *S, Loop *L,
 
   // Look at addrec operands.
   if (const SCEVAddRecExpr *AR = dyn_cast<SCEVAddRecExpr>(S))
-    if (!AR->getStart()->isZero()) {
+    if (!AR->getStart()->isZero() && AR->isAffine()) {
       DoInitialMatch(AR->getStart(), L, Good, Bad, SE);
       DoInitialMatch(SE.getAddRecExpr(SE.getConstant(AR->getType(), 0),
                                       AR->getStepRecurrence(SE),
@@ -568,7 +568,7 @@ static const SCEV *getExactSDiv(const SCEV *LHS, const SCEV *RHS,
 
   // Distribute the sdiv over addrec operands, if the addrec doesn't overflow.
   if (const SCEVAddRecExpr *AR = dyn_cast<SCEVAddRecExpr>(LHS)) {
-    if (IgnoreSignificantBits || isAddRecSExtable(AR, SE)) {
+    if ((IgnoreSignificantBits || isAddRecSExtable(AR, SE)) && AR->isAffine()) {
       const SCEV *Step = getExactSDiv(AR->getStepRecurrence(SE), RHS, SE,
                                       IgnoreSignificantBits);
       if (!Step) return nullptr;
@@ -1646,7 +1646,12 @@ class LSRInstance {
   Instruction *IVIncInsertPos;
 
   /// Interesting factors between use strides.
-  SmallSetVector<int64_t, 8> Factors;
+  ///
+  /// We explicitly use a SetVector which contains a SmallSet, instead of the
+  /// default, a SmallDenseSet, because we need to use the full range of
+  /// int64_ts, and there's currently no good way of doing that with
+  /// SmallDenseSet.
+  SetVector<int64_t, SmallVector<int64_t, 8>, SmallSet<int64_t, 8>> Factors;
 
   /// Interesting use types, to facilitate truncation reuse.
   SmallSetVector<Type *, 4> Types;
@@ -2810,7 +2815,7 @@ void LSRInstance::FinalizeChain(IVChain &Chain) {
   DEBUG(dbgs() << "Final Chain: " << *Chain.Incs[0].UserInst << "\n");
 
   for (const IVInc &Inc : Chain) {
-    DEBUG(dbgs() << "        Inc: " << Inc.UserInst << "\n");
+    DEBUG(dbgs() << "        Inc: " << *Inc.UserInst << "\n");
     auto UseI = find(Inc.UserInst->operands(), Inc.IVOperand);
     assert(UseI != Inc.UserInst->op_end() && "cannot find IV operand");
     IVIncSet.insert(UseI);
@@ -3191,7 +3196,7 @@ static const SCEV *CollectSubexprs(const SCEV *S, const SCEVConstant *C,
     return nullptr;
   } else if (const SCEVAddRecExpr *AR = dyn_cast<SCEVAddRecExpr>(S)) {
     // Split a non-zero base out of an addrec.
-    if (AR->getStart()->isZero())
+    if (AR->getStart()->isZero() || !AR->isAffine())
       return S;
 
     const SCEV *Remainder = CollectSubexprs(AR->getStart(),

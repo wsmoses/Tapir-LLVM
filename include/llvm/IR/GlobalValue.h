@@ -21,11 +21,12 @@
 #include "llvm/IR/Constant.h"
 #include "llvm/IR/DerivedTypes.h"
 #include "llvm/Support/MD5.h"
-#include <system_error>
 
 namespace llvm {
 
 class Comdat;
+class Error;
+class GlobalObject;
 class PointerType;
 class Module;
 
@@ -139,6 +140,12 @@ protected:
   }
 
   Module *Parent;             // The containing module.
+
+  // Used by SymbolTableListTraits.
+  void setParent(Module *parent) {
+    Parent = parent;
+  }
+
 public:
   enum ThreadLocalMode {
     NotThreadLocal = 0,
@@ -460,10 +467,8 @@ public:
   /// function has been read in yet or not.
   bool isMaterializable() const;
 
-  /// Make sure this GlobalValue is fully read. If the module is corrupt, this
-  /// returns true and fills in the optional string with information about the
-  /// problem.  If successful, this returns false.
-  std::error_code materialize();
+  /// Make sure this GlobalValue is fully read.
+  Error materialize();
 
 /// @}
 
@@ -491,6 +496,11 @@ public:
   // Returns true if the alignment of the value can be unilaterally
   // increased.
   bool canIncreaseAlignment() const;
+
+  const GlobalObject *getBaseObject() const {
+    return const_cast<GlobalValue *>(this)->getBaseObject();
+  }
+  GlobalObject *getBaseObject();
 
   /// This method unlinks 'this' from the containing module, but does not delete
   /// it.

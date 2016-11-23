@@ -61,10 +61,6 @@ def FeatureReserveX18 : SubtargetFeature<"reserve-x18", "ReserveX18", "true",
                                          "Reserve X18, making it unavailable "
                                          "as a GPR">;
 
-def FeatureMergeNarrowLd : SubtargetFeature<"merge-narrow-ld",
-                                            "MergeNarrowLoads", "true",
-                                            "Merge narrow load instructions">;
-
 def FeatureUseAA : SubtargetFeature<"use-aa", "UseAA", "true",
                                     "Use alias analysis during codegen">;
 
@@ -94,16 +90,21 @@ def FeatureAlternateSExtLoadCVTF32Pattern : SubtargetFeature<
     "alternate-sextload-cvt-f32-pattern", "UseAlternateSExtLoadCVTF32Pattern",
     "true", "Use alternative pattern for sextload convert to f32">;
 
-def FeatureMacroOpFusion : SubtargetFeature<
-    "macroop-fusion", "HasMacroOpFusion", "true",
-    "CPU supports macro op fusion">;
+def FeatureArithmeticBccFusion : SubtargetFeature<
+    "arith-bcc-fusion", "HasArithmeticBccFusion", "true",
+    "CPU fuses arithmetic+bcc operations">;
+
+def FeatureArithmeticCbzFusion : SubtargetFeature<
+    "arith-cbz-fusion", "HasArithmeticCbzFusion", "true",
+    "CPU fuses arithmetic + cbz/cbnz operations">;
 
 def FeatureDisableLatencySchedHeuristic : SubtargetFeature<
     "disable-latency-sched-heuristic", "DisableLatencySchedHeuristic", "true",
     "Disable latency scheduling heuristic">;
 
 def FeatureUseRSqrt : SubtargetFeature<
-    "use-reverse-square-root", "UseRSqrt", "true", "Use reverse square root">;
+    "use-reciprocal-square-root", "UseRSqrt", "true",
+    "Use the reciprocal square root approximation">;
 
 //===----------------------------------------------------------------------===//
 // Architectures.
@@ -176,7 +177,6 @@ def ProcA57     : SubtargetFeature<"a57", "ARMProcFamily", "CortexA57",
                                    FeatureCrypto,
                                    FeatureCustomCheapAsMoveHandling,
                                    FeatureFPARMv8,
-                                   FeatureMergeNarrowLd,
                                    FeatureNEON,
                                    FeaturePerfMon,
                                    FeaturePostRAScheduler,
@@ -207,7 +207,8 @@ def ProcCyclone : SubtargetFeature<"cyclone", "ARMProcFamily", "Cyclone",
                                    FeatureCrypto,
                                    FeatureDisableLatencySchedHeuristic,
                                    FeatureFPARMv8,
-                                   FeatureMacroOpFusion,
+                                   FeatureArithmeticBccFusion,
+                                   FeatureArithmeticCbzFusion,
                                    FeatureNEON,
                                    FeaturePerfMon,
                                    FeatureSlowMisaligned128Store,
@@ -216,17 +217,29 @@ def ProcCyclone : SubtargetFeature<"cyclone", "ARMProcFamily", "Cyclone",
                                    ]>;
 
 def ProcExynosM1 : SubtargetFeature<"exynosm1", "ARMProcFamily", "ExynosM1",
-                                    "Samsung Exynos-M1 processors", [
-                                    FeatureAvoidQuadLdStPairs,
-                                    FeatureCRC,
-                                    FeatureCrypto,
-                                    FeatureCustomCheapAsMoveHandling,
-                                    FeatureFPARMv8,
-                                    FeatureNEON,
-                                    FeaturePerfMon,
-                                    FeaturePostRAScheduler,
-                                    FeatureUseRSqrt
-                                    ]>;
+                                    "Samsung Exynos-M1 processors",
+                                    [FeatureAvoidQuadLdStPairs,
+                                     FeatureCRC,
+                                     FeatureCrypto,
+                                     FeatureCustomCheapAsMoveHandling,
+                                     FeatureFPARMv8,
+                                     FeatureNEON,
+                                     FeaturePerfMon,
+                                     FeaturePostRAScheduler,
+                                     FeatureUseRSqrt,
+                                     FeatureZCZeroing]>;
+
+def ProcExynosM2 : SubtargetFeature<"exynosm2", "ARMProcFamily", "ExynosM1",
+                                    "Samsung Exynos-M2 processors",
+                                    [FeatureAvoidQuadLdStPairs,
+                                     FeatureCRC,
+                                     FeatureCrypto,
+                                     FeatureCustomCheapAsMoveHandling,
+                                     FeatureFPARMv8,
+                                     FeatureNEON,
+                                     FeaturePerfMon,
+                                     FeaturePostRAScheduler,
+                                     FeatureZCZeroing]>;
 
 def ProcKryo    : SubtargetFeature<"kryo", "ARMProcFamily", "Kryo",
                                    "Qualcomm Kryo processors", [
@@ -234,7 +247,6 @@ def ProcKryo    : SubtargetFeature<"kryo", "ARMProcFamily", "Kryo",
                                    FeatureCrypto,
                                    FeatureCustomCheapAsMoveHandling,
                                    FeatureFPARMv8,
-                                   FeatureMergeNarrowLd,
                                    FeatureNEON,
                                    FeaturePerfMon,
                                    FeaturePostRAScheduler,
@@ -242,12 +254,21 @@ def ProcKryo    : SubtargetFeature<"kryo", "ARMProcFamily", "Kryo",
                                    FeatureZCZeroing
                                    ]>;
 
+def ProcFalkor  : SubtargetFeature<"falkor", "ARMProcFamily", "Falkor",
+                                   "Qualcomm Falkor processors", [
+                                   FeatureCRC,
+                                   FeatureCrypto,
+                                   FeatureFPARMv8,
+                                   FeatureNEON,
+                                   FeaturePerfMon
+                                   ]>;
+
 def ProcVulcan  : SubtargetFeature<"vulcan", "ARMProcFamily", "Vulcan",
                                    "Broadcom Vulcan processors", [
                                    FeatureCRC,
                                    FeatureCrypto,
                                    FeatureFPARMv8,
-                                   FeatureMacroOpFusion,
+                                   FeatureArithmeticBccFusion,
                                    FeatureNEON,
                                    FeaturePostRAScheduler,
                                    FeaturePredictableSelectIsExpensive,
@@ -270,7 +291,8 @@ def : ProcessorModel<"cortex-a72", CortexA57Model, [ProcA72]>;
 def : ProcessorModel<"cortex-a73", CortexA57Model, [ProcA73]>;
 def : ProcessorModel<"cyclone", CycloneModel, [ProcCyclone]>;
 def : ProcessorModel<"exynos-m1", ExynosM1Model, [ProcExynosM1]>;
-def : ProcessorModel<"exynos-m2", ExynosM1Model, [ProcExynosM1]>;
+def : ProcessorModel<"exynos-m2", ExynosM1Model, [ProcExynosM2]>;
+def : ProcessorModel<"falkor", NoSchedModel, [ProcFalkor]>;
 def : ProcessorModel<"kryo", KryoModel, [ProcKryo]>;
 def : ProcessorModel<"vulcan", VulcanModel, [ProcVulcan]>;
 

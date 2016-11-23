@@ -56,7 +56,7 @@ cl::opt<OutputFormatTy> OutputFormat(
     "format", cl::desc("Specify output format"),
     cl::values(clEnumVal(bsd, "BSD format"), clEnumVal(sysv, "System V format"),
                clEnumVal(posix, "POSIX.2 format"),
-               clEnumVal(darwin, "Darwin -m format"), clEnumValEnd),
+               clEnumVal(darwin, "Darwin -m format")),
     cl::init(bsd));
 cl::alias OutputFormat2("f", cl::desc("Alias for --format"),
                         cl::aliasopt(OutputFormat));
@@ -143,7 +143,7 @@ enum Radix { d, o, x };
 cl::opt<Radix>
     AddressRadix("radix", cl::desc("Radix (o/d/x) for printing symbol Values"),
                  cl::values(clEnumVal(d, "decimal"), clEnumVal(o, "octal"),
-                            clEnumVal(x, "hexadecimal"), clEnumValEnd),
+                            clEnumVal(x, "hexadecimal")),
                  cl::init(x));
 cl::alias RadixAlias("t", cl::desc("Alias for --radix"),
                      cl::aliasopt(AddressRadix));
@@ -1051,9 +1051,9 @@ dumpSymbolNamesFromObject(SymbolicFile &Obj, bool printName,
 // architectures was specificed.  If not then an error is generated and this
 // routine returns false.  Else it returns true.
 static bool checkMachOAndArchFlags(SymbolicFile *O, std::string &Filename) {
-  MachOObjectFile *MachO = dyn_cast<MachOObjectFile>(O);
+  auto *MachO = dyn_cast<MachOObjectFile>(O);
 
-  if (!MachO || ArchAll || ArchFlags.size() == 0)
+  if (!MachO || ArchAll || ArchFlags.empty())
     return true;
 
   MachO::mach_header H;
@@ -1113,7 +1113,7 @@ static void dumpSymbolNamesFromFile(std::string &Filename) {
     }
 
     {
-      Error Err;
+      Error Err = Error::success();
       for (auto &C : A->children(Err)) {
         Expected<std::unique_ptr<Binary>> ChildOrErr = C.getAsBinary(&Context);
         if (!ChildOrErr) {
@@ -1178,7 +1178,7 @@ static void dumpSymbolNamesFromFile(std::string &Filename) {
             } else if (Expected<std::unique_ptr<Archive>> AOrErr =
                            I->getAsArchive()) {
               std::unique_ptr<Archive> &A = *AOrErr;
-              Error Err;
+              Error Err = Error::success();
               for (auto &C : A->children(Err)) {
                 Expected<std::unique_ptr<Binary>> ChildOrErr =
                     C.getAsBinary(&Context);
@@ -1249,7 +1249,7 @@ static void dumpSymbolNamesFromFile(std::string &Filename) {
           } else if (Expected<std::unique_ptr<Archive>> AOrErr =
                          I->getAsArchive()) {
             std::unique_ptr<Archive> &A = *AOrErr;
-            Error Err;
+            Error Err = Error::success();
             for (auto &C : A->children(Err)) {
               Expected<std::unique_ptr<Binary>> ChildOrErr =
                   C.getAsBinary(&Context);
@@ -1316,7 +1316,7 @@ static void dumpSymbolNamesFromFile(std::string &Filename) {
       } else if (Expected<std::unique_ptr<Archive>> AOrErr =
                   I->getAsArchive()) {
         std::unique_ptr<Archive> &A = *AOrErr;
-        Error Err;
+        Error Err = Error::success();
         for (auto &C : A->children(Err)) {
           Expected<std::unique_ptr<Binary>> ChildOrErr =
             C.getAsBinary(&Context);

@@ -948,25 +948,17 @@ void SCCPSolver::visitBinaryOperator(Instruction &I) {
       NonOverdefVal = &V2State;
 
     if (NonOverdefVal) {
-      if (NonOverdefVal->isUnknown()) {
-        // Could annihilate value.
-        if (I.getOpcode() == Instruction::And)
-          markConstant(IV, &I, Constant::getNullValue(I.getType()));
-        else if (VectorType *PT = dyn_cast<VectorType>(I.getType()))
-          markConstant(IV, &I, Constant::getAllOnesValue(PT));
-        else
-          markConstant(IV, &I,
-                       Constant::getAllOnesValue(I.getType()));
+      if (NonOverdefVal->isUnknown())
         return;
-      }
 
       if (I.getOpcode() == Instruction::And) {
         // X and 0 = 0
         if (NonOverdefVal->getConstant()->isNullValue())
           return markConstant(IV, &I, NonOverdefVal->getConstant());
       } else {
+        // X or -1 = -1
         if (ConstantInt *CI = NonOverdefVal->getConstantInt())
-          if (CI->isAllOnesValue())     // X or -1 = -1
+          if (CI->isAllOnesValue())
             return markConstant(IV, &I, NonOverdefVal->getConstant());
       }
     }
@@ -1579,17 +1571,6 @@ static bool tryToReplaceWithConstant(SCCPSolver &Solver, Value *V) {
   return true;
 }
 
-static bool tryToReplaceInstWithConstant(SCCPSolver &Solver, Instruction *Inst,
-                                         bool shouldEraseFromParent) {
-  if (!tryToReplaceWithConstant(Solver, Inst))
-    return false;
-
-  // Delete the instruction.
-  if (shouldEraseFromParent)
-    Inst->eraseFromParent();
-  return true;
-}
-
 // runSCCP() - Run the Sparse Conditional Constant Propagation algorithm,
 // and return true if the function was modified.
 //
@@ -1638,8 +1619,9 @@ static bool runSCCP(Function &F, const DataLayout &DL,
       if (Inst->getType()->isVoidTy() || isa<TerminatorInst>(Inst))
         continue;
 
-      if (tryToReplaceInstWithConstant(Solver, Inst,
-                                       true /* shouldEraseFromParent */)) {
+      if (tryToReplaceWithConstant(Solver, Inst)) {
+        if (isInstructionTriviallyDead(Inst))
+          Inst->eraseFromParent();
         // Hey, we just changed something!
         MadeChanges = true;
         ++NumInstRemoved;
@@ -1843,10 +1825,9 @@ static bool runIPSCCP(Module &M, const DataLayout &DL,
         Instruction *Inst = &*BI++;
         if (Inst->getType()->isVoidTy())
           continue;
-        if (tryToReplaceInstWithConstant(
-                Solver, Inst,
-                !isa<CallInst>(Inst) &&
-                    !isa<TerminatorInst>(Inst) /* shouldEraseFromParent */)) {
+        if (tryToReplaceWithConstant(Solver, Inst)) {
+          if (!isa<CallInst>(Inst) && !isa<TerminatorInst>(Inst))
+            Inst->eraseFromParent();
           // Hey, we just changed something!
           MadeChanges = true;
           ++IPNumInstRemoved;

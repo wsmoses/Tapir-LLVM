@@ -133,6 +133,13 @@ class BDLMode<string type, string bitsize, string dispsize, string suffix,
                         !cast<Immediate>("disp"##dispsize##"imm"##bitsize),
                         !cast<Immediate>("imm"##bitsize))>;
 
+// A BDMode paired with a register length operand.
+class BDRMode<string type, string bitsize, string dispsize, string suffix>
+  : AddressingMode<type, bitsize, dispsize, suffix, "", 3, "BDRAddr",
+                   (ops !cast<RegisterOperand>("ADDR"##bitsize),
+                        !cast<Immediate>("disp"##dispsize##"imm"##bitsize),
+                        !cast<RegisterOperand>("GR"##bitsize))>;
+
 // An addressing mode with a base, displacement and a vector index.
 class BDVMode<string bitsize, string dispsize>
   : AddressOperand<bitsize, dispsize, "", "BDVAddr",
@@ -509,6 +516,7 @@ def BDAddr64Disp20      : AddressAsmOperand<"BDAddr",   "64", "20">;
 def BDXAddr64Disp12     : AddressAsmOperand<"BDXAddr",  "64", "12">;
 def BDXAddr64Disp20     : AddressAsmOperand<"BDXAddr",  "64", "20">;
 def BDLAddr64Disp12Len8 : AddressAsmOperand<"BDLAddr",  "64", "12", "Len8">;
+def BDRAddr64Disp12     : AddressAsmOperand<"BDRAddr",  "64", "12">;
 def BDVAddr64Disp12     : AddressAsmOperand<"BDVAddr",  "64", "12">;
 
 // DAG patterns and operands for addressing modes.  Each mode has
@@ -555,22 +563,12 @@ def dynalloc12only    : BDXMode<"DynAlloc", "64", "12", "Only">;
 def laaddr12pair      : BDXMode<"LAAddr",   "64", "12", "Pair">;
 def laaddr20pair      : BDXMode<"LAAddr",   "64", "20", "Pair">;
 def bdladdr12onlylen8 : BDLMode<"BDLAddr",  "64", "12", "Only", "8">;
+def bdraddr12only     : BDRMode<"BDRAddr",  "64", "12", "Only">;
 def bdvaddr12only     : BDVMode<            "64", "12">;
 
 //===----------------------------------------------------------------------===//
 // Miscellaneous
 //===----------------------------------------------------------------------===//
-
-// Access registers.  At present we just use them for accessing the thread
-// pointer, so we don't expose them as register to LLVM.
-def AccessReg : AsmOperandClass {
-  let Name = "AccessReg";
-  let ParserMethod = "parseAccessReg";
-}
-def access_reg : Immediate<i32, [{ return N->getZExtValue() < 16; }],
-                           NOOP_SDNodeXForm, "AccessReg"> {
-  let ParserMatchClass = AccessReg;
-}
 
 // A 4-bit condition-code mask.
 def cond4 : PatLeaf<(i32 imm), [{ return (N->getZExtValue() < 16); }]>,

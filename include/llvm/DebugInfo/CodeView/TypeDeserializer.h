@@ -10,92 +10,127 @@
 #ifndef LLVM_DEBUGINFO_CODEVIEW_TYPEDESERIALIZER_H
 #define LLVM_DEBUGINFO_CODEVIEW_TYPEDESERIALIZER_H
 
+#include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/STLExtras.h"
+#include "llvm/DebugInfo/CodeView/CodeView.h"
+#include "llvm/DebugInfo/CodeView/TypeRecord.h"
+#include "llvm/DebugInfo/CodeView/TypeRecordMapping.h"
 #include "llvm/DebugInfo/CodeView/TypeVisitorCallbacks.h"
+#include "llvm/DebugInfo/MSF/ByteStream.h"
+#include "llvm/DebugInfo/MSF/StreamReader.h"
 #include "llvm/Support/Error.h"
+#include <cassert>
+#include <cstdint>
+#include <memory>
 
 namespace llvm {
 namespace codeview {
-class TypeDeserializerBase : public TypeVisitorCallbacks {
-public:
-  explicit TypeDeserializerBase(TypeVisitorCallbacks &Recipient)
-      : Recipient(Recipient) {}
 
-  Error visitTypeBegin(const CVRecord<TypeLeafKind> &Record) override {
-    return Recipient.visitTypeBegin(Record);
+class TypeDeserializer : public TypeVisitorCallbacks {
+  struct MappingInfo {
+    explicit MappingInfo(ArrayRef<uint8_t> RecordData)
+        : Stream(RecordData), Reader(Stream), Mapping(Reader) {}
+
+    msf::ByteStream Stream;
+    msf::StreamReader Reader;
+    TypeRecordMapping Mapping;
+  };
+
+public:
+  TypeDeserializer() = default;
+
+  Error visitTypeBegin(CVType &Record) override {
+    assert(!Mapping && "Already in a type mapping!");
+    Mapping = llvm::make_unique<MappingInfo>(Record.content());
+    return Mapping->Mapping.visitTypeBegin(Record);
   }
 
-  Error visitTypeEnd(const CVRecord<TypeLeafKind> &Record) override {
-    return Recipient.visitTypeEnd(Record);
+  Error visitTypeEnd(CVType &Record) override {
+    assert(Mapping && "Not in a type mapping!");
+    auto EC = Mapping->Mapping.visitTypeEnd(Record);
+    Mapping.reset();
+    return EC;
   }
 
 #define TYPE_RECORD(EnumName, EnumVal, Name)                                   \
-  Error visitKnownRecord(const CVRecord<TypeLeafKind> &CVR,                    \
-                         Name##Record &Record) override {                      \
-    return defaultVisitKnownRecord(CVR, Record);                               \
+  Error visitKnownRecord(CVType &CVR, Name##Record &Record) override {         \
+    return visitKnownRecordImpl<Name##Record>(CVR, Record);                    \
   }
-#define MEMBER_RECORD(EnumName, EnumVal, Name)                                 \
-  TYPE_RECORD(EnumName, EnumVal, Name)
+#define MEMBER_RECORD(EnumName, EnumVal, Name)
 #define TYPE_RECORD_ALIAS(EnumName, EnumVal, Name, AliasName)
 #define MEMBER_RECORD_ALIAS(EnumName, EnumVal, Name, AliasName)
 #include "TypeRecords.def"
 
-protected:
-  TypeVisitorCallbacks &Recipient;
+private:
+  template <typename RecordType>
+  Error visitKnownRecordImpl(CVType &CVR, RecordType &Record) {
+    return Mapping->Mapping.visitKnownRecord(CVR, Record);
+  }
 
-  template <typename T>
-  Error deserializeRecord(ArrayRef<uint8_t> &Data, TypeLeafKind Kind,
-                          T &Record) const {
-    TypeRecordKind RK = static_cast<TypeRecordKind>(Kind);
-    auto ExpectedRecord = T::deserialize(RK, Data);
-    if (!ExpectedRecord)
-      return ExpectedRecord.takeError();
-    Record = std::move(*ExpectedRecord);
+  std::unique_ptr<MappingInfo> Mapping;
+};
+
+class FieldListDeserializer : public TypeVisitorCallbacks {
+  struct MappingInfo {
+    explicit MappingInfo(msf::StreamReader &R)
+        : Reader(R), Mapping(Reader), StartOffset(0) {}
+
+    msf::StreamReader &Reader;
+    TypeRecordMapping Mapping;
+    uint32_t StartOffset;
+  };
+
+public:
+  explicit FieldListDeserializer(msf::StreamReader &Reader) : Mapping(Reader) {
+    CVType FieldList;
+    FieldList.Type = TypeLeafKind::LF_FIELDLIST;
+    consumeError(Mapping.Mapping.visitTypeBegin(FieldList));
+  }
+
+  ~FieldListDeserializer() override {
+    CVType FieldList;
+    FieldList.Type = TypeLeafKind::LF_FIELDLIST;
+    consumeError(Mapping.Mapping.visitTypeEnd(FieldList));
+  }
+
+  Error visitMemberBegin(CVMemberRecord &Record) override {
+    Mapping.StartOffset = Mapping.Reader.getOffset();
+    return Mapping.Mapping.visitMemberBegin(Record);
+  }
+
+  Error visitMemberEnd(CVMemberRecord &Record) override {
+    if (auto EC = Mapping.Mapping.visitMemberEnd(Record))
+      return EC;
     return Error::success();
   }
 
-private:
-  template <typename T>
-  Error defaultVisitKnownRecord(const CVRecord<TypeLeafKind> &CVR, T &Record) {
-    ArrayRef<uint8_t> RD = CVR.Data;
-    if (auto EC = deserializeRecord(RD, CVR.Type, Record))
-      return EC;
-    return Recipient.visitKnownRecord(CVR, Record);
+#define TYPE_RECORD(EnumName, EnumVal, Name)
+#define MEMBER_RECORD(EnumName, EnumVal, Name)                                 \
+  Error visitKnownMember(CVMemberRecord &CVR, Name##Record &Record) override { \
+    return visitKnownMemberImpl<Name##Record>(CVR, Record);                    \
   }
-};
-
-class TypeDeserializer : public TypeDeserializerBase {
-public:
-  explicit TypeDeserializer(TypeVisitorCallbacks &Recipient)
-      : TypeDeserializerBase(Recipient) {}
-
-  /// FieldList records need special handling.  For starters, they do not
-  /// describe their own length, so a different extraction algorithm is
-  /// necessary.  Secondly, a single FieldList record will result in the
-  /// deserialization of many records.  So even though the top level visitor
-  /// calls visitFieldBegin() on a single record, multiple records get visited
-  /// through the callback interface.
-  Error visitKnownRecord(const CVRecord<TypeLeafKind> &CVR,
-                         FieldListRecord &Record) override;
+#define TYPE_RECORD_ALIAS(EnumName, EnumVal, Name, AliasName)
+#define MEMBER_RECORD_ALIAS(EnumName, EnumVal, Name, AliasName)
+#include "TypeRecords.def"
 
 private:
-  template <typename T>
-  Error visitKnownMember(ArrayRef<uint8_t> &Data, TypeLeafKind Kind,
-                         T &Record) {
-    ArrayRef<uint8_t> OldData = Data;
-    if (auto EC = deserializeRecord(Data, Kind, Record))
+  template <typename RecordType>
+  Error visitKnownMemberImpl(CVMemberRecord &CVR, RecordType &Record) {
+    if (auto EC = Mapping.Mapping.visitKnownMember(CVR, Record))
       return EC;
-    assert(Data.size() < OldData.size());
 
-    CVRecord<TypeLeafKind> CVR;
-    CVR.Length = OldData.size() - Data.size();
-    CVR.Data = OldData.slice(0, CVR.Length);
-    CVR.RawData = CVR.Data;
-    return Recipient.visitKnownRecord(CVR, Record);
+    uint32_t EndOffset = Mapping.Reader.getOffset();
+    uint32_t RecordLength = EndOffset - Mapping.StartOffset;
+    Mapping.Reader.setOffset(Mapping.StartOffset);
+    if (auto EC = Mapping.Reader.readBytes(CVR.Data, RecordLength))
+      return EC;
+    assert(Mapping.Reader.getOffset() == EndOffset);
+    return Error::success();
   }
-
-  Error skipPadding(ArrayRef<uint8_t> &Data);
+  MappingInfo Mapping;
 };
-}
-}
 
-#endif
+} // end namespace codeview
+} // end namespace llvm
+
+#endif // LLVM_DEBUGINFO_CODEVIEW_TYPEDESERIALIZER_H

@@ -191,10 +191,23 @@ public:
   uint32_t getNextUnitOffset() const { return Offset + Length + 4; }
   uint32_t getLength() const { return Length; }
   uint16_t getVersion() const { return Version; }
+  dwarf::DwarfFormat getFormat() const {
+    return dwarf::DwarfFormat::DWARF32; // FIXME: Support DWARF64.
+  }
   const DWARFAbbreviationDeclarationSet *getAbbreviations() const {
     return Abbrevs;
   }
   uint8_t getAddressByteSize() const { return AddrSize; }
+  uint8_t getRefAddrByteSize() const {
+    if (Version == 2)
+      return AddrSize;
+    return getDwarfOffsetByteSize();
+  }
+  uint8_t getDwarfOffsetByteSize() const {
+    if (getFormat() == dwarf::DwarfFormat::DWARF64)
+      return 8;
+    return 4;
+  }
   uint64_t getBaseAddress() const { return BaseAddr; }
 
   void setBaseAddress(uint64_t base_addr) {
@@ -248,7 +261,8 @@ public:
   /// unit's DIE vector.
   ///
   /// The unit needs to have its DIEs extracted for this method to work.
-  const DWARFDebugInfoEntryMinimal *getDIEForOffset(uint32_t Offset) const {
+  const DWARFDebugInfoEntryMinimal *getDIEForOffset(uint32_t Offset) {
+    extractDIEsIfNeeded(false);
     assert(!DieArray.empty());
     auto it = std::lower_bound(
         DieArray.begin(), DieArray.end(), Offset,

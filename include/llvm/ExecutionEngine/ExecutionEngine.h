@@ -198,19 +198,23 @@ public:
 
   const DataLayout &getDataLayout() const { return DL; }
 
-  /// removeModule - Remove a Module from the list of modules.  Returns true if
-  /// M is found.
+  /// removeModule - Removes a Module from the list of modules, but does not
+  /// free the module's memory. Returns true if M is found, in which case the
+  /// caller assumes responsibility for deleting the module.
+  //
+  // FIXME: This stealth ownership transfer is horrible. This will probably be
+  //        fixed by deleting ExecutionEngine.
   virtual bool removeModule(Module *M);
 
   /// FindFunctionNamed - Search all of the active modules to find the function that
   /// defines FnName.  This is very slow operation and shouldn't be used for
   /// general code.
-  virtual Function *FindFunctionNamed(const char *FnName);
+  virtual Function *FindFunctionNamed(StringRef FnName);
 
   /// FindGlobalVariableNamed - Search all of the active modules to find the global variable
   /// that defines Name.  This is very slow operation and shouldn't be used for
   /// general code.
-  virtual GlobalVariable *FindGlobalVariableNamed(const char *Name, bool AllowInternal = false);
+  virtual GlobalVariable *FindGlobalVariableNamed(StringRef Name, bool AllowInternal = false);
 
   /// runFunction - Execute the specified function with the specified arguments,
   /// and return the result.

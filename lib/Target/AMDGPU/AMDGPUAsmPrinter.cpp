@@ -39,9 +39,7 @@
 #include "llvm/Support/MathExtras.h"
 #include "llvm/Support/TargetRegistry.h"
 #include "llvm/Target/TargetLoweringObjectFile.h"
-#include "AMDGPURuntimeMetadata.h"
 
-using namespace ::AMDGPU;
 using namespace llvm;
 
 // TODO: This should get the default rounding mode from the kernel. We just set
@@ -87,15 +85,17 @@ createAMDGPUAsmPrinterPass(TargetMachine &tm,
 }
 
 extern "C" void LLVMInitializeAMDGPUAsmPrinter() {
-  TargetRegistry::RegisterAsmPrinter(TheAMDGPUTarget, createAMDGPUAsmPrinterPass);
-  TargetRegistry::RegisterAsmPrinter(TheGCNTarget, createAMDGPUAsmPrinterPass);
+  TargetRegistry::RegisterAsmPrinter(getTheAMDGPUTarget(),
+                                     createAMDGPUAsmPrinterPass);
+  TargetRegistry::RegisterAsmPrinter(getTheGCNTarget(),
+                                     createAMDGPUAsmPrinterPass);
 }
 
 AMDGPUAsmPrinter::AMDGPUAsmPrinter(TargetMachine &TM,
                                    std::unique_ptr<MCStreamer> Streamer)
-    : AsmPrinter(TM, std::move(Streamer)) {}
+  : AsmPrinter(TM, std::move(Streamer)) {}
 
-const char *AMDGPUAsmPrinter::getPassName() const  {
+StringRef AMDGPUAsmPrinter::getPassName() const {
   return "AMDGPU Assembly Printer";
 }
 
@@ -117,13 +117,30 @@ void AMDGPUAsmPrinter::EmitStartOfAsmFile(Module &M) {
   AMDGPU::IsaVersion ISA = AMDGPU::getIsaVersion(STI->getFeatureBits());
   TS->EmitDirectiveHSACodeObjectISA(ISA.Major, ISA.Minor, ISA.Stepping,
                                     "AMD", "AMDGPU");
-  emitStartOfRuntimeMetadata(M);
+
+  // Emit runtime metadata.
+  TS->emitRuntimeMetadataAsNoteElement(M);
 }
+
+bool AMDGPUAsmPrinter::isBlockOnlyReachableByFallthrough(
+  const MachineBasicBlock *MBB) const {
+  if (!AsmPrinter::isBlockOnlyReachableByFallthrough(MBB))
+    return false;
+
+  if (MBB->empty())
+    return true;
+
+  // If this is a block implementing a long branch, an expression relative to
+  // the start of the block is needed.  to the start of the block.
+  // XXX - Is there a smarter way to check this?
+  return (MBB->back().getOpcode() != AMDGPU::S_SETPC_B64);
+}
+
 
 void AMDGPUAsmPrinter::EmitFunctionBodyStart() {
   const AMDGPUSubtarget &STM = MF->getSubtarget<AMDGPUSubtarget>();
   SIProgramInfo KernelInfo;
-  if (STM.isAmdHsaOS()) {
+  if (STM.isAmdCodeObjectV2()) {
     getSIProgramInfo(KernelInfo, *MF);
     EmitAmdKernelCodeT(*MF, KernelInfo);
   }
@@ -132,11 +149,12 @@ void AMDGPUAsmPrinter::EmitFunctionBodyStart() {
 void AMDGPUAsmPrinter::EmitFunctionEntryLabel() {
   const SIMachineFunctionInfo *MFI = MF->getInfo<SIMachineFunctionInfo>();
   const AMDGPUSubtarget &STM = MF->getSubtarget<AMDGPUSubtarget>();
-  if (MFI->isKernel() && STM.isAmdHsaOS()) {
+  if (MFI->isKernel() && STM.isAmdCodeObjectV2()) {
     AMDGPUTargetStreamer *TS =
         static_cast<AMDGPUTargetStreamer *>(OutStreamer->getTargetStreamer());
-    TS->EmitAMDGPUSymbolType(CurrentFnSym->getName(),
-                             ELF::STT_AMDGPU_HSA_KERNEL);
+    SmallString<128> SymbolName;
+    getNameWithPrefix(SymbolName, MF->getFunction()),
+    TS->EmitAMDGPUSymbolType(SymbolName, ELF::STT_AMDGPU_HSA_KERNEL);
   }
 
   AsmPrinter::EmitFunctionEntryLabel();
@@ -202,6 +220,16 @@ bool AMDGPUAsmPrinter::runOnMachineFunction(MachineFunction &MF) {
       OutStreamer->emitRawComment(" LDSByteSize: " + Twine(KernelInfo.LDSSize) +
                                   " bytes/workgroup (compile time only)", false);
 
+      OutStreamer->emitRawComment(" SGPRBlocks: " +
+                                  Twine(KernelInfo.SGPRBlocks), false);
+      OutStreamer->emitRawComment(" VGPRBlocks: " +
+                                  Twine(KernelInfo.VGPRBlocks), false);
+
+      OutStreamer->emitRawComment(" NumSGPRsForWavesPerEU: " +
+                                  Twine(KernelInfo.NumSGPRsForWavesPerEU), false);
+      OutStreamer->emitRawComment(" NumVGPRsForWavesPerEU: " +
+                                  Twine(KernelInfo.NumVGPRsForWavesPerEU), false);
+
       OutStreamer->emitRawComment(" ReservedVGPRFirst: " + Twine(KernelInfo.ReservedVGPRFirst),
                                   false);
       OutStreamer->emitRawComment(" ReservedVGPRCount: " + Twine(KernelInfo.ReservedVGPRCount),
@@ -250,8 +278,6 @@ bool AMDGPUAsmPrinter::runOnMachineFunction(MachineFunction &MF) {
       OutStreamer->EmitBytes(StringRef(Comment));
     }
   }
-
-  emitRuntimeMetadata(*MF.getFunction());
 
   return false;
 }
@@ -335,7 +361,8 @@ void AMDGPUAsmPrinter::getSIProgramInfo(SIProgramInfo &ProgInfo,
       if (MI.isDebugValue())
         continue;
 
-      CodeSize += TII->getInstSizeInBytes(MI);
+      if (isVerbose())
+        CodeSize += TII->getInstSizeInBytes(MI);
 
       unsigned numOperands = MI.getNumOperands();
       for (unsigned op_idx = 0; op_idx < numOperands; op_idx++) {
@@ -446,20 +473,15 @@ void AMDGPUAsmPrinter::getSIProgramInfo(SIProgramInfo &ProgInfo,
       ExtraSGPRs = 6;
   }
 
-  MaxSGPR += ExtraSGPRs;
-
   // Record first reserved register and reserved register count fields, and
   // update max register counts if "amdgpu-debugger-reserve-regs" attribute was
-  // specified.
-  if (STM.debuggerReserveRegs()) {
-    ProgInfo.ReservedVGPRFirst = MaxVGPR + 1;
-    ProgInfo.ReservedVGPRCount = MFI->getDebuggerReservedVGPRCount();
-    MaxVGPR += MFI->getDebuggerReservedVGPRCount();
-  }
+  // requested.
+  ProgInfo.ReservedVGPRFirst = STM.debuggerReserveRegs() ? MaxVGPR + 1 : 0;
+  ProgInfo.ReservedVGPRCount = RI->getNumDebuggerReservedVGPRs(STM);
 
   // Update DebuggerWavefrontPrivateSegmentOffsetSGPR and
   // DebuggerPrivateSegmentBufferSGPR fields if "amdgpu-debugger-emit-prologue"
-  // attribute was specified.
+  // attribute was requested.
   if (STM.debuggerEmitPrologue()) {
     ProgInfo.DebuggerWavefrontPrivateSegmentOffsetSGPR =
       RI->getHWRegIndex(MFI->getScratchWaveOffsetReg());
@@ -467,21 +489,40 @@ void AMDGPUAsmPrinter::getSIProgramInfo(SIProgramInfo &ProgInfo,
       RI->getHWRegIndex(MFI->getScratchRSrcReg());
   }
 
+  // Account for extra SGPRs and VGPRs reserved for debugger use.
+  MaxSGPR += ExtraSGPRs;
+  MaxVGPR += RI->getNumDebuggerReservedVGPRs(STM);
+
   // We found the maximum register index. They start at 0, so add one to get the
   // number of registers.
   ProgInfo.NumVGPR = MaxVGPR + 1;
   ProgInfo.NumSGPR = MaxSGPR + 1;
 
-  if (STM.hasSGPRInitBug()) {
-    if (ProgInfo.NumSGPR > SISubtarget::FIXED_SGPR_COUNT_FOR_INIT_BUG) {
-      LLVMContext &Ctx = MF.getFunction()->getContext();
-      DiagnosticInfoResourceLimit Diag(*MF.getFunction(),
-                                       "SGPRs with SGPR init bug",
-                                       ProgInfo.NumSGPR, DS_Error);
-      Ctx.diagnose(Diag);
-    }
+  // Adjust number of registers used to meet default/requested minimum/maximum
+  // number of waves per execution unit request.
+  ProgInfo.NumSGPRsForWavesPerEU = std::max(
+    ProgInfo.NumSGPR, RI->getMinNumSGPRs(STM, MFI->getMaxWavesPerEU()));
+  ProgInfo.NumVGPRsForWavesPerEU = std::max(
+    ProgInfo.NumVGPR, RI->getMinNumVGPRs(MFI->getMaxWavesPerEU()));
 
+  unsigned MaxNumSGPRs = STM.getMaxNumSGPRs();
+  if (ProgInfo.NumSGPR > MaxNumSGPRs) {
+    // This can happen due to a compiler bug or when using inline asm to use the
+    // registers which are usually reserved for vcc etc.
+
+    LLVMContext &Ctx = MF.getFunction()->getContext();
+    DiagnosticInfoResourceLimit Diag(*MF.getFunction(),
+                                     "scalar registers",
+                                     ProgInfo.NumSGPR, DS_Error,
+                                     DK_ResourceLimit, MaxNumSGPRs);
+    Ctx.diagnose(Diag);
+    ProgInfo.NumSGPR = MaxNumSGPRs;
+    ProgInfo.NumSGPRsForWavesPerEU = MaxNumSGPRs;
+  }
+
+  if (STM.hasSGPRInitBug()) {
     ProgInfo.NumSGPR = SISubtarget::FIXED_SGPR_COUNT_FOR_INIT_BUG;
+    ProgInfo.NumSGPRsForWavesPerEU = SISubtarget::FIXED_SGPR_COUNT_FOR_INIT_BUG;
   }
 
   if (MFI->NumUserSGPRs > STM.getMaxNumUserSGPRs()) {
@@ -498,13 +539,21 @@ void AMDGPUAsmPrinter::getSIProgramInfo(SIProgramInfo &ProgInfo,
     Ctx.diagnose(Diag);
   }
 
-  ProgInfo.VGPRBlocks = (ProgInfo.NumVGPR - 1) / 4;
-  ProgInfo.SGPRBlocks = (ProgInfo.NumSGPR - 1) / 8;
+  // SGPRBlocks is actual number of SGPR blocks minus 1.
+  ProgInfo.SGPRBlocks = alignTo(ProgInfo.NumSGPRsForWavesPerEU,
+                                RI->getSGPRAllocGranule());
+  ProgInfo.SGPRBlocks = ProgInfo.SGPRBlocks / RI->getSGPRAllocGranule() - 1;
+
+  // VGPRBlocks is actual number of VGPR blocks minus 1.
+  ProgInfo.VGPRBlocks = alignTo(ProgInfo.NumVGPRsForWavesPerEU,
+                                RI->getVGPRAllocGranule());
+  ProgInfo.VGPRBlocks = ProgInfo.VGPRBlocks / RI->getVGPRAllocGranule() - 1;
+
   // Set the value to initialize FP_ROUND and FP_DENORM parts of the mode
   // register.
   ProgInfo.FloatMode = getFPMode(MF);
 
-  ProgInfo.IEEEMode = 0;
+  ProgInfo.IEEEMode = STM.enableIEEEBit(MF);
 
   // Make clamp modifier on NaN input returns 0.
   ProgInfo.DX10Clamp = 1;
@@ -525,8 +574,8 @@ void AMDGPUAsmPrinter::getSIProgramInfo(SIProgramInfo &ProgInfo,
     LDSAlignShift = 9;
   }
 
-  unsigned LDSSpillSize = MFI->LDSWaveSpillSize *
-                          MFI->getMaximumWorkGroupSize(MF);
+  unsigned LDSSpillSize =
+    MFI->LDSWaveSpillSize * MFI->getMaxFlatWorkGroupSize();
 
   ProgInfo.LDSSize = MFI->getLDSSize() + LDSSpillSize;
   ProgInfo.LDSBlocks =
@@ -705,7 +754,8 @@ void AMDGPUAsmPrinter::EmitAmdKernelCodeT(const MachineFunction &MF,
     header.code_properties |= AMD_CODE_PROPERTY_IS_XNACK_SUPPORTED;
 
   // FIXME: Should use getKernArgSize
-  header.kernarg_segment_byte_size = MFI->getABIArgOffset();
+  header.kernarg_segment_byte_size =
+      STM.getKernArgSegmentSize(MFI->getABIArgOffset());
   header.wavefront_sgpr_count = KernelInfo.NumSGPR;
   header.workitem_vgpr_count = KernelInfo.NumVGPR;
   header.workitem_private_segment_byte_size = KernelInfo.ScratchSize;
@@ -748,238 +798,3 @@ bool AMDGPUAsmPrinter::PrintAsmOperand(const MachineInstr *MI, unsigned OpNo,
   return false;
 }
 
-// Emit a key and an integer value for runtime metadata.
-static void emitRuntimeMDIntValue(MCStreamer &Streamer,
-                                  RuntimeMD::Key K, uint64_t V,
-                                  unsigned Size) {
-  Streamer.EmitIntValue(K, 1);
-  Streamer.EmitIntValue(V, Size);
-}
-
-// Emit a key and a string value for runtime metadata.
-static void emitRuntimeMDStringValue(MCStreamer &Streamer,
-                                     RuntimeMD::Key K, StringRef S) {
-  Streamer.EmitIntValue(K, 1);
-  Streamer.EmitIntValue(S.size(), 4);
-  Streamer.EmitBytes(S);
-}
-
-// Emit a key and three integer values for runtime metadata.
-// The three integer values are obtained from MDNode \p Node;
-static void emitRuntimeMDThreeIntValues(MCStreamer &Streamer,
-                                        RuntimeMD::Key K, MDNode *Node,
-                                        unsigned Size) {
-  assert(Node->getNumOperands() == 3);
-
-  Streamer.EmitIntValue(K, 1);
-  for (const MDOperand &Op : Node->operands()) {
-    const ConstantInt *CI = mdconst::extract<ConstantInt>(Op);
-    Streamer.EmitIntValue(CI->getZExtValue(), Size);
-  }
-}
-
-void AMDGPUAsmPrinter::emitStartOfRuntimeMetadata(const Module &M) {
-  OutStreamer->SwitchSection(getObjFileLowering().getContext()
-    .getELFSection(RuntimeMD::SectionName, ELF::SHT_PROGBITS, 0));
-
-  emitRuntimeMDIntValue(*OutStreamer, RuntimeMD::KeyMDVersion,
-                        RuntimeMD::MDVersion << 8 | RuntimeMD::MDRevision, 2);
-  if (auto MD = M.getNamedMetadata("opencl.ocl.version")) {
-    if (MD->getNumOperands() != 0) {
-      auto Node = MD->getOperand(0);
-      if (Node->getNumOperands() > 1) {
-        emitRuntimeMDIntValue(*OutStreamer, RuntimeMD::KeyLanguage,
-                              RuntimeMD::OpenCL_C, 1);
-        uint16_t Major = mdconst::extract<ConstantInt>(Node->getOperand(0))
-                         ->getZExtValue();
-        uint16_t Minor = mdconst::extract<ConstantInt>(Node->getOperand(1))
-                         ->getZExtValue();
-        emitRuntimeMDIntValue(*OutStreamer, RuntimeMD::KeyLanguageVersion,
-                              Major * 100 + Minor * 10, 2);
-      }
-    }
-  }
-}
-
-static std::string getOCLTypeName(Type *Ty, bool Signed) {
-  switch (Ty->getTypeID()) {
-  case Type::HalfTyID:
-    return "half";
-  case Type::FloatTyID:
-    return "float";
-  case Type::DoubleTyID:
-    return "double";
-  case Type::IntegerTyID: {
-    if (!Signed)
-      return (Twine('u') + getOCLTypeName(Ty, true)).str();
-    unsigned BW = Ty->getIntegerBitWidth();
-    switch (BW) {
-    case 8:
-      return "char";
-    case 16:
-      return "short";
-    case 32:
-      return "int";
-    case 64:
-      return "long";
-    default:
-      return (Twine('i') + Twine(BW)).str();
-    }
-  }
-  case Type::VectorTyID: {
-    VectorType *VecTy = cast<VectorType>(Ty);
-    Type *EleTy = VecTy->getElementType();
-    unsigned Size = VecTy->getVectorNumElements();
-    return (Twine(getOCLTypeName(EleTy, Signed)) + Twine(Size)).str();
-  }
-  default:
-    return "unknown";
-  }
-}
-
-static RuntimeMD::KernelArg::ValueType getRuntimeMDValueType(
-  Type *Ty, StringRef TypeName) {
-  switch (Ty->getTypeID()) {
-  case Type::HalfTyID:
-    return RuntimeMD::KernelArg::F16;
-  case Type::FloatTyID:
-    return RuntimeMD::KernelArg::F32;
-  case Type::DoubleTyID:
-    return RuntimeMD::KernelArg::F64;
-  case Type::IntegerTyID: {
-    bool Signed = !TypeName.startswith("u");
-    switch (Ty->getIntegerBitWidth()) {
-    case 8:
-      return Signed ? RuntimeMD::KernelArg::I8 : RuntimeMD::KernelArg::U8;
-    case 16:
-      return Signed ? RuntimeMD::KernelArg::I16 : RuntimeMD::KernelArg::U16;
-    case 32:
-      return Signed ? RuntimeMD::KernelArg::I32 : RuntimeMD::KernelArg::U32;
-    case 64:
-      return Signed ? RuntimeMD::KernelArg::I64 : RuntimeMD::KernelArg::U64;
-    default:
-      // Runtime does not recognize other integer types. Report as struct type.
-      return RuntimeMD::KernelArg::Struct;
-    }
-  }
-  case Type::VectorTyID:
-    return getRuntimeMDValueType(Ty->getVectorElementType(), TypeName);
-  case Type::PointerTyID:
-    return getRuntimeMDValueType(Ty->getPointerElementType(), TypeName);
-  default:
-    return RuntimeMD::KernelArg::Struct;
-  }
-}
-
-void AMDGPUAsmPrinter::emitRuntimeMetadata(const Function &F) {
-  if (!F.getMetadata("kernel_arg_type"))
-    return;
-
-  MCContext &Context = getObjFileLowering().getContext();
-  OutStreamer->SwitchSection(
-      Context.getELFSection(RuntimeMD::SectionName, ELF::SHT_PROGBITS, 0));
-  OutStreamer->EmitIntValue(RuntimeMD::KeyKernelBegin, 1);
-  emitRuntimeMDStringValue(*OutStreamer, RuntimeMD::KeyKernelName, F.getName());
-
-  for (auto &Arg : F.args()) {
-    // Emit KeyArgBegin.
-    unsigned I = Arg.getArgNo();
-    OutStreamer->EmitIntValue(RuntimeMD::KeyArgBegin, 1);
-
-    // Emit KeyArgSize and KeyArgAlign.
-    Type *T = Arg.getType();
-    const DataLayout &DL = F.getParent()->getDataLayout();
-    emitRuntimeMDIntValue(*OutStreamer, RuntimeMD::KeyArgSize,
-                          DL.getTypeAllocSize(T), 4);
-    emitRuntimeMDIntValue(*OutStreamer, RuntimeMD::KeyArgAlign,
-                          DL.getABITypeAlignment(T), 4);
-
-    // Emit KeyArgTypeName.
-    auto TypeName = dyn_cast<MDString>(F.getMetadata(
-      "kernel_arg_type")->getOperand(I))->getString();
-    emitRuntimeMDStringValue(*OutStreamer, RuntimeMD::KeyArgTypeName, TypeName);
-
-    // Emit KeyArgName.
-    if (auto ArgNameMD = F.getMetadata("kernel_arg_name")) {
-      auto ArgName = cast<MDString>(ArgNameMD->getOperand(I))->getString();
-      emitRuntimeMDStringValue(*OutStreamer, RuntimeMD::KeyArgName, ArgName);
-    }
-
-    // Emit KeyArgIsVolatile, KeyArgIsRestrict, KeyArgIsConst and KeyArgIsPipe.
-    auto TypeQual = cast<MDString>(F.getMetadata(
-      "kernel_arg_type_qual")->getOperand(I))->getString();
-    SmallVector<StringRef, 1> SplitQ;
-    TypeQual.split(SplitQ, " ", -1, false /* Drop empty entry */);
-
-    for (StringRef KeyName : SplitQ) {
-      auto Key = StringSwitch<RuntimeMD::Key>(KeyName)
-        .Case("volatile", RuntimeMD::KeyArgIsVolatile)
-        .Case("restrict", RuntimeMD::KeyArgIsRestrict)
-        .Case("const",    RuntimeMD::KeyArgIsConst)
-        .Case("pipe",     RuntimeMD::KeyArgIsPipe)
-        .Default(RuntimeMD::KeyNull);
-      OutStreamer->EmitIntValue(Key, 1);
-    }
-
-    // Emit KeyArgTypeKind.
-    auto BaseTypeName = cast<MDString>(
-      F.getMetadata("kernel_arg_base_type")->getOperand(I))->getString();
-    auto TypeKind = StringSwitch<RuntimeMD::KernelArg::TypeKind>(BaseTypeName)
-      .Case("sampler_t", RuntimeMD::KernelArg::Sampler)
-      .Case("queue_t",   RuntimeMD::KernelArg::Queue)
-      .Cases("image1d_t", "image1d_array_t", "image1d_buffer_t",
-             "image2d_t" , "image2d_array_t",  RuntimeMD::KernelArg::Image)
-      .Cases("image2d_depth_t", "image2d_array_depth_t",
-             "image2d_msaa_t", "image2d_array_msaa_t",
-             "image2d_msaa_depth_t",  RuntimeMD::KernelArg::Image)
-      .Cases("image2d_array_msaa_depth_t", "image3d_t",
-             RuntimeMD::KernelArg::Image)
-      .Default(isa<PointerType>(T) ? RuntimeMD::KernelArg::Pointer :
-               RuntimeMD::KernelArg::Value);
-    emitRuntimeMDIntValue(*OutStreamer, RuntimeMD::KeyArgTypeKind, TypeKind, 1);
-
-    // Emit KeyArgValueType.
-    emitRuntimeMDIntValue(*OutStreamer, RuntimeMD::KeyArgValueType,
-                          getRuntimeMDValueType(T, BaseTypeName), 2);
-
-    // Emit KeyArgAccQual.
-    auto AccQual = cast<MDString>(F.getMetadata(
-      "kernel_arg_access_qual")->getOperand(I))->getString();
-    auto AQ = StringSwitch<RuntimeMD::KernelArg::AccessQualifer>(AccQual)
-      .Case("read_only",  RuntimeMD::KernelArg::ReadOnly)
-      .Case("write_only", RuntimeMD::KernelArg::WriteOnly)
-      .Case("read_write", RuntimeMD::KernelArg::ReadWrite)
-      .Default(RuntimeMD::KernelArg::None);
-    emitRuntimeMDIntValue(*OutStreamer, RuntimeMD::KeyArgAccQual, AQ, 1);
-
-    // Emit KeyArgAddrQual.
-    if (auto *PT = dyn_cast<PointerType>(T)) {
-      emitRuntimeMDIntValue(*OutStreamer, RuntimeMD::KeyArgAddrQual,
-                            PT->getAddressSpace(), 1);
-    }
-
-    // Emit KeyArgEnd
-    OutStreamer->EmitIntValue(RuntimeMD::KeyArgEnd, 1);
-  }
-
-  // Emit KeyReqdWorkGroupSize, KeyWorkGroupSizeHint, and KeyVecTypeHint.
-  if (auto RWGS = F.getMetadata("reqd_work_group_size")) {
-    emitRuntimeMDThreeIntValues(*OutStreamer, RuntimeMD::KeyReqdWorkGroupSize,
-                                RWGS, 4);
-  }
-
-  if (auto WGSH = F.getMetadata("work_group_size_hint")) {
-    emitRuntimeMDThreeIntValues(*OutStreamer, RuntimeMD::KeyWorkGroupSizeHint,
-                                WGSH, 4);
-  }
-
-  if (auto VTH = F.getMetadata("vec_type_hint")) {
-    auto TypeName = getOCLTypeName(cast<ValueAsMetadata>(
-      VTH->getOperand(0))->getType(), mdconst::extract<ConstantInt>(
-      VTH->getOperand(1))->getZExtValue());
-    emitRuntimeMDStringValue(*OutStreamer, RuntimeMD::KeyVecTypeHint, TypeName);
-  }
-
-  // Emit KeyKernelEnd
-  OutStreamer->EmitIntValue(RuntimeMD::KeyKernelEnd, 1);
-}

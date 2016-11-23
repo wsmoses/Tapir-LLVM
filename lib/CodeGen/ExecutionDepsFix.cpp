@@ -172,12 +172,10 @@ public:
 
   MachineFunctionProperties getRequiredProperties() const override {
     return MachineFunctionProperties().set(
-        MachineFunctionProperties::Property::AllVRegsAllocated);
+        MachineFunctionProperties::Property::NoVRegs);
   }
 
-  const char *getPassName() const override {
-    return "Execution dependency fix";
-  }
+  StringRef getPassName() const override { return "Execution dependency fix"; }
 
 private:
   iterator_range<SmallVectorImpl<int>::const_iterator>

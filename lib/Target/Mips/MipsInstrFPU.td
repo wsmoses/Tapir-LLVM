@@ -284,6 +284,16 @@ defm CEIL_W  : ROUND_M<"ceil.w.d", II_CEIL>, ABSS_FM<0xe, 17>, ISA_MIPS2;
 defm FLOOR_W : ROUND_M<"floor.w.d", II_FLOOR>, ABSS_FM<0xf, 17>, ISA_MIPS2;
 defm CVT_W   : ROUND_M<"cvt.w.d", II_CVT>, ABSS_FM<0x24, 17>;
 
+let AdditionalPredicates = [NotInMicroMips] in {
+  def RECIP_S : MMRel, ABSS_FT<"recip.s", FGR32Opnd, FGR32Opnd, II_RECIP_S>,
+                ABSS_FM<0b010101, 0x10>, INSN_MIPS4_32R2;
+  def RECIP_D : MMRel, ABSS_FT<"recip.d", FGR64Opnd, FGR64Opnd, II_RECIP_D>,
+                ABSS_FM<0b010101, 0x11>, INSN_MIPS4_32R2;
+  def RSQRT_S : MMRel, ABSS_FT<"rsqrt.s", FGR32Opnd, FGR32Opnd, II_RSQRT_S>,
+                ABSS_FM<0b010110, 0x10>, INSN_MIPS4_32R2;
+  def RSQRT_D : MMRel, ABSS_FT<"rsqrt.d", FGR64Opnd, FGR64Opnd, II_RSQRT_D>,
+                ABSS_FM<0b010110, 0x11>, INSN_MIPS4_32R2;
+}
 let DecoderNamespace = "Mips64" in {
   let AdditionalPredicates = [NotInMicroMips] in {
   def ROUND_L_S : ABSS_FT<"round.l.s", FGR64Opnd, FGR32Opnd, II_ROUND>,
@@ -635,9 +645,9 @@ def : MipsPat<(f64 (sint_to_fp GPR32Opnd:$src)),
               (PseudoCVT_D32_W GPR32Opnd:$src)>, FGR_32;
 def : MipsPat<(MipsTruncIntFP AFGR64Opnd:$src),
               (TRUNC_W_D32 AFGR64Opnd:$src)>, FGR_32;
-def : MipsPat<(f32 (fround AFGR64Opnd:$src)),
+def : MipsPat<(f32 (fpround AFGR64Opnd:$src)),
               (CVT_S_D32 AFGR64Opnd:$src)>, FGR_32;
-def : MipsPat<(f64 (fextend FGR32Opnd:$src)),
+def : MipsPat<(f64 (fpextend FGR32Opnd:$src)),
               (CVT_D32_S FGR32Opnd:$src)>, FGR_32;
 
 def : MipsPat<(f64 fpimm0), (DMTC1 ZERO_64)>, FGR_64;
@@ -657,9 +667,9 @@ def : MipsPat<(MipsTruncIntFP FGR32Opnd:$src),
 def : MipsPat<(MipsTruncIntFP FGR64Opnd:$src),
               (TRUNC_L_D64 FGR64Opnd:$src)>, FGR_64;
 
-def : MipsPat<(f32 (fround FGR64Opnd:$src)),
+def : MipsPat<(f32 (fpround FGR64Opnd:$src)),
               (CVT_S_D64 FGR64Opnd:$src)>, FGR_64;
-def : MipsPat<(f64 (fextend FGR32Opnd:$src)),
+def : MipsPat<(f64 (fpextend FGR32Opnd:$src)),
               (CVT_D64_S FGR32Opnd:$src)>, FGR_64;
 
 // Patterns for loads/stores with a reg+imm operand.

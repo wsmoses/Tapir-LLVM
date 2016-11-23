@@ -47,7 +47,7 @@ public:
       : SelectionDAGISel(tm, OptLevel), Subtarget(nullptr),
         ForCodeSize(false) {}
 
-  const char *getPassName() const override {
+  StringRef getPassName() const override {
     return "AArch64 Instruction Selection";
   }
 
@@ -349,7 +349,7 @@ bool AArch64DAGToDAGISel::SelectShiftedRegister(SDValue N, bool AllowROR,
     return false;
 
   if (ConstantSDNode *RHS = dyn_cast<ConstantSDNode>(N.getOperand(1))) {
-    unsigned BitSize = N.getValueType().getSizeInBits();
+    unsigned BitSize = N.getValueSizeInBits();
     unsigned Val = RHS->getZExtValue() & (BitSize - 1);
     unsigned ShVal = AArch64_AM::getShifterImm(ShType, Val);
 
@@ -586,6 +586,11 @@ bool AArch64DAGToDAGISel::SelectArithExtendedRegister(SDValue N, SDValue &Reg,
       return false;
 
     Reg = N.getOperand(0);
+
+    // Don't match if free 32-bit -> 64-bit zext can be used instead.
+    if (Ext == AArch64_AM::UXTW &&
+        Reg->getValueType(0).getSizeInBits() == 32 && isDef32(*Reg.getNode()))
+      return false;
   }
 
   // AArch64 mandates that the RHS of the operation must use the smallest
@@ -1149,6 +1154,12 @@ void AArch64DAGToDAGISel::SelectLoad(SDNode *N, unsigned NumVecs, unsigned Opc,
         CurDAG->getTargetExtractSubreg(SubRegIdx + i, dl, VT, SuperReg));
 
   ReplaceUses(SDValue(N, NumVecs), SDValue(Ld, 1));
+
+  // Transfer memoperands.
+  MachineSDNode::mmo_iterator MemOp = MF->allocateMemRefsArray(1);
+  MemOp[0] = cast<MemIntrinsicSDNode>(N)->getMemOperand();
+  cast<MachineSDNode>(Ld)->setMemRefs(MemOp, MemOp + 1);
+
   CurDAG->RemoveDeadNode(N);
 }
 
@@ -1196,6 +1207,11 @@ void AArch64DAGToDAGISel::SelectStore(SDNode *N, unsigned NumVecs,
 
   SDValue Ops[] = {RegSeq, N->getOperand(NumVecs + 2), N->getOperand(0)};
   SDNode *St = CurDAG->getMachineNode(Opc, dl, N->getValueType(0), Ops);
+
+  // Transfer memoperands.
+  MachineSDNode::mmo_iterator MemOp = MF->allocateMemRefsArray(1);
+  MemOp[0] = cast<MemIntrinsicSDNode>(N)->getMemOperand();
+  cast<MachineSDNode>(St)->setMemRefs(MemOp, MemOp + 1);
 
   ReplaceNode(N, St);
 }
@@ -1931,7 +1947,7 @@ static void getUsefulBits(SDValue Op, APInt &UsefulBits, unsigned Depth) {
     return;
   // Initialize UsefulBits
   if (!Depth) {
-    unsigned Bitwidth = Op.getValueType().getScalarType().getSizeInBits();
+    unsigned Bitwidth = Op.getScalarValueSizeInBits();
     // At the beginning, assume every produced bits is useful
     UsefulBits = APInt(Bitwidth, 0);
     UsefulBits.flipAllBits();

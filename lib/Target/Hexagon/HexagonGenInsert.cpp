@@ -467,7 +467,7 @@ namespace {
     HexagonGenInsert() : MachineFunctionPass(ID), HII(0), HRI(0) {
       initializeHexagonGenInsertPass(*PassRegistry::getPassRegistry());
     }
-    virtual const char *getPassName() const {
+    virtual StringRef getPassName() const {
       return "Hexagon generate \"insert\" instructions";
     }
     virtual void getAnalysisUsage(AnalysisUsage &AU) const {
@@ -757,7 +757,7 @@ unsigned HexagonGenInsert::distance(MachineBasicBlock::const_iterator FromI,
 bool HexagonGenInsert::findRecordInsertForms(unsigned VR,
       OrderedRegisterList &AVs) {
   if (isDebug()) {
-    dbgs() << LLVM_FUNCTION_NAME << ": " << PrintReg(VR, HRI)
+    dbgs() << __func__ << ": " << PrintReg(VR, HRI)
            << "  AVs: " << PrintORL(AVs, HRI) << "\n";
   }
   if (AVs.size() == 0)
@@ -1387,9 +1387,9 @@ bool HexagonGenInsert::generateInserts() {
     unsigned Wdh = IF.Wdh, Off = IF.Off;
     unsigned InsS = 0;
     if (R32 && MRI->getRegClass(IF.InsR) == &Hexagon::DoubleRegsRegClass) {
-      InsS = Hexagon::subreg_loreg;
+      InsS = Hexagon::isub_lo;
       if (Off >= 32) {
-        InsS = Hexagon::subreg_hireg;
+        InsS = Hexagon::isub_hi;
         Off -= 32;
       }
     }
@@ -1444,10 +1444,10 @@ bool HexagonGenInsert::removeDeadCode(MachineDomTreeNode *N) {
 
     bool AllDead = true;
     SmallVector<unsigned,2> Regs;
-    for (ConstMIOperands Op(*MI); Op.isValid(); ++Op) {
-      if (!Op->isReg() || !Op->isDef())
+    for (const MachineOperand &MO : MI->operands()) {
+      if (!MO.isReg() || !MO.isDef())
         continue;
-      unsigned R = Op->getReg();
+      unsigned R = MO.getReg();
       if (!TargetRegisterInfo::isVirtualRegister(R) ||
           !MRI->use_nodbg_empty(R)) {
         AllDead = false;
@@ -1474,8 +1474,6 @@ bool HexagonGenInsert::runOnMachineFunction(MachineFunction &MF) {
 
   bool Timing = OptTiming, TimingDetail = Timing && OptTimingDetail;
   bool Changed = false;
-  TimerGroup __G("hexinsert");
-  NamedRegionTimer __T("hexinsert", Timing && !TimingDetail);
 
   // Sanity check: one, but not both.
   assert(!OptSelectAll0 || !OptSelectHas0);
@@ -1521,8 +1519,12 @@ bool HexagonGenInsert::runOnMachineFunction(MachineFunction &MF) {
   MachineBasicBlock *RootB = MDT->getRoot();
   OrderedRegisterList AvailR(CellOrd);
 
+  const char *const TGName = "hexinsert";
+  const char *const TGDesc = "Generate Insert Instructions";
+
   {
-    NamedRegionTimer _T("collection", "hexinsert", TimingDetail);
+    NamedRegionTimer _T("collection", "collection", TGName, TGDesc,
+                        TimingDetail);
     collectInBlock(RootB, AvailR);
     // Complete the information gathered in IFMap.
     computeRemovableRegisters();
@@ -1537,7 +1539,7 @@ bool HexagonGenInsert::runOnMachineFunction(MachineFunction &MF) {
     return Changed;
 
   {
-    NamedRegionTimer _T("pruning", "hexinsert", TimingDetail);
+    NamedRegionTimer _T("pruning", "pruning", TGName, TGDesc, TimingDetail);
     pruneCandidates();
   }
 
@@ -1550,7 +1552,7 @@ bool HexagonGenInsert::runOnMachineFunction(MachineFunction &MF) {
     return Changed;
 
   {
-    NamedRegionTimer _T("selection", "hexinsert", TimingDetail);
+    NamedRegionTimer _T("selection", "selection", TGName, TGDesc, TimingDetail);
     selectCandidates();
   }
 
@@ -1576,7 +1578,8 @@ bool HexagonGenInsert::runOnMachineFunction(MachineFunction &MF) {
     return Changed;
 
   {
-    NamedRegionTimer _T("generation", "hexinsert", TimingDetail);
+    NamedRegionTimer _T("generation", "generation", TGName, TGDesc,
+                        TimingDetail);
     generateInserts();
   }
 

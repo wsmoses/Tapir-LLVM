@@ -143,42 +143,48 @@ PHINode *Loop::getCanonicalInductionVariable() const {
   return nullptr;
 }
 
-bool Loop::isLCSSAForm(DominatorTree &DT) const {
-  for (BasicBlock *BB : this->blocks()) {
-    for (Instruction &I : *BB) {
-      // Tokens can't be used in PHI nodes and live-out tokens prevent loop
-      // optimizations, so for the purposes of considered LCSSA form, we
-      // can ignore them.
-      if (I.getType()->isTokenTy())
-        continue;
+// Check that 'BB' doesn't have any uses outside of the 'L'
+static bool isBlockInLCSSAForm(const Loop &L, const BasicBlock &BB,
+                               DominatorTree &DT) {
+  for (const Instruction &I : BB) {
+    // Tokens can't be used in PHI nodes and live-out tokens prevent loop
+    // optimizations, so for the purposes of considered LCSSA form, we
+    // can ignore them.
+    if (I.getType()->isTokenTy())
+      continue;
 
-      for (Use &U : I.uses()) {
-        Instruction *UI = cast<Instruction>(U.getUser());
-        BasicBlock *UserBB = UI->getParent();
-        if (PHINode *P = dyn_cast<PHINode>(UI))
-          UserBB = P->getIncomingBlock(U);
+    for (const Use &U : I.uses()) {
+      const Instruction *UI = cast<Instruction>(U.getUser());
+      const BasicBlock *UserBB = UI->getParent();
+      if (const PHINode *P = dyn_cast<PHINode>(UI))
+        UserBB = P->getIncomingBlock(U);
 
-        // Check the current block, as a fast-path, before checking whether
-        // the use is anywhere in the loop.  Most values are used in the same
-        // block they are defined in.  Also, blocks not reachable from the
-        // entry are special; uses in them don't need to go through PHIs.
-        if (UserBB != BB &&
-            !contains(UserBB) &&
-            DT.isReachableFromEntry(UserBB))
-          return false;
-      }
+      // Check the current block, as a fast-path, before checking whether
+      // the use is anywhere in the loop.  Most values are used in the same
+      // block they are defined in.  Also, blocks not reachable from the
+      // entry are special; uses in them don't need to go through PHIs.
+      if (UserBB != &BB && !L.contains(UserBB) &&
+          DT.isReachableFromEntry(UserBB))
+        return false;
     }
   }
-
   return true;
 }
 
-bool Loop::isRecursivelyLCSSAForm(DominatorTree &DT) const {
-  if (!isLCSSAForm(DT))
-    return false;
+bool Loop::isLCSSAForm(DominatorTree &DT) const {
+  // For each block we check that it doesn't have any uses outside of this loop.
+  return all_of(this->blocks(), [&](const BasicBlock *BB) {
+    return isBlockInLCSSAForm(*this, *BB, DT);
+  });
+}
 
-  return all_of(*this,
-                [&](const Loop *L) { return L->isRecursivelyLCSSAForm(DT); });
+bool Loop::isRecursivelyLCSSAForm(DominatorTree &DT, const LoopInfo &LI) const {
+  // For each block we check that it doesn't have any uses outside of it's
+  // innermost loop. This process will transitivelly guarntee that current loop 
+  // and all of the nested loops are in the LCSSA form.
+  return all_of(this->blocks(), [&](const BasicBlock *BB) {
+    return isBlockInLCSSAForm(*LI.getLoopFor(BB), *BB, DT);
+  });
 }
 
 bool Loop::isLoopSimplifyForm() const {
@@ -299,23 +305,40 @@ bool Loop::isAnnotatedParallel() const {
 }
 
 DebugLoc Loop::getStartLoc() const {
+  return getLocRange().getStart();
+}
+
+Loop::LocRange Loop::getLocRange() const {
   // If we have a debug location in the loop ID, then use it.
-  if (MDNode *LoopID = getLoopID())
-    for (unsigned i = 1, ie = LoopID->getNumOperands(); i < ie; ++i)
-      if (DILocation *L = dyn_cast<DILocation>(LoopID->getOperand(i)))
-        return DebugLoc(L);
+  if (MDNode *LoopID = getLoopID()) {
+    DebugLoc Start;
+    // We use the first DebugLoc in the header as the start location of the loop
+    // and if there is a second DebugLoc in the header we use it as end location
+    // of the loop.
+    for (unsigned i = 1, ie = LoopID->getNumOperands(); i < ie; ++i) {
+      if (DILocation *L = dyn_cast<DILocation>(LoopID->getOperand(i))) {
+        if (!Start)
+          Start = DebugLoc(L);
+        else
+          return LocRange(Start, DebugLoc(L));
+      }
+    }
+
+    if (Start)
+      return LocRange(Start);
+  }
 
   // Try the pre-header first.
   if (BasicBlock *PHeadBB = getLoopPreheader())
     if (DebugLoc DL = PHeadBB->getTerminator()->getDebugLoc())
-      return DL;
+      return LocRange(DL);
 
   // If we have no pre-header or there are no instructions with debug
   // info in it, try the header.
   if (BasicBlock *HeadBB = getHeader())
-    return HeadBB->getTerminator()->getDebugLoc();
+    return LocRange(HeadBB->getTerminator()->getDebugLoc());
 
-  return DebugLoc();
+  return LocRange();
 }
 
 bool Loop::hasDedicatedExits() const {
@@ -703,8 +726,10 @@ void LoopInfoWrapperPass::verifyAnalysis() const {
   // -verify-loop-info option can enable this. In order to perform some
   // checking by default, LoopPass has been taught to call verifyLoop manually
   // during loop pass sequences.
-  if (VerifyLoopInfo)
-    LI.verify();
+  if (VerifyLoopInfo) {
+    auto &DT = getAnalysis<DominatorTreeWrapperPass>().getDomTree();
+    LI.verify(DT);
+  }
 }
 
 void LoopInfoWrapperPass::getAnalysisUsage(AnalysisUsage &AU) const {
@@ -719,7 +744,8 @@ void LoopInfoWrapperPass::print(raw_ostream &OS, const Module *) const {
 PreservedAnalyses LoopVerifierPass::run(Function &F,
                                         FunctionAnalysisManager &AM) {
   LoopInfo &LI = AM.getResult<LoopAnalysis>(F);
-  LI.verify();
+  auto &DT = AM.getResult<DominatorTreeAnalysis>(F);
+  LI.verify(DT);
   return PreservedAnalyses::all();
 }
 

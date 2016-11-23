@@ -177,11 +177,10 @@ static bool simplifyAssocCastAssoc(BinaryOperator *BinOp1) {
     return false;
 
   // TODO: Enhance logic for other BinOps and remove this check.
-  auto AssocOpcode = BinOp1->getOpcode();
-  if (AssocOpcode != Instruction::Xor && AssocOpcode != Instruction::And &&
-      AssocOpcode != Instruction::Or)
+  if (!BinOp1->isBitwiseLogicOp())
     return false;
 
+  auto AssocOpcode = BinOp1->getOpcode();
   auto *BinOp2 = dyn_cast<BinaryOperator>(Cast->getOperand(0));
   if (!BinOp2 || !BinOp2->hasOneUse() || BinOp2->getOpcode() != AssocOpcode)
     return false;
@@ -741,17 +740,18 @@ Value *InstCombiner::dyn_castFNegVal(Value *V, bool IgnoreZeroSign) const {
   return nullptr;
 }
 
-static Value *FoldOperationIntoSelectOperand(Instruction &I, Value *SO,
+static Value *foldOperationIntoSelectOperand(Instruction &I, Value *SO,
                                              InstCombiner *IC) {
-  if (CastInst *CI = dyn_cast<CastInst>(&I)) {
-    return IC->Builder->CreateCast(CI->getOpcode(), SO, I.getType());
-  }
+  if (auto *Cast = dyn_cast<CastInst>(&I))
+    return IC->Builder->CreateCast(Cast->getOpcode(), SO, I.getType());
+
+  assert(I.isBinaryOp() && "Unexpected opcode for select folding");
 
   // Figure out if the constant is the left or the right argument.
   bool ConstIsRHS = isa<Constant>(I.getOperand(1));
   Constant *ConstOperand = cast<Constant>(I.getOperand(ConstIsRHS));
 
-  if (Constant *SOC = dyn_cast<Constant>(SO)) {
+  if (auto *SOC = dyn_cast<Constant>(SO)) {
     if (ConstIsRHS)
       return ConstantExpr::get(I.getOpcode(), SOC, ConstOperand);
     return ConstantExpr::get(I.getOpcode(), ConstOperand, SOC);
@@ -761,21 +761,13 @@ static Value *FoldOperationIntoSelectOperand(Instruction &I, Value *SO,
   if (!ConstIsRHS)
     std::swap(Op0, Op1);
 
-  if (BinaryOperator *BO = dyn_cast<BinaryOperator>(&I)) {
-    Value *RI = IC->Builder->CreateBinOp(BO->getOpcode(), Op0, Op1,
-                                    SO->getName()+".op");
-    Instruction *FPInst = dyn_cast<Instruction>(RI);
-    if (FPInst && isa<FPMathOperator>(FPInst))
-      FPInst->copyFastMathFlags(BO);
-    return RI;
-  }
-  if (ICmpInst *CI = dyn_cast<ICmpInst>(&I))
-    return IC->Builder->CreateICmp(CI->getPredicate(), Op0, Op1,
-                                   SO->getName()+".cmp");
-  if (FCmpInst *CI = dyn_cast<FCmpInst>(&I))
-    return IC->Builder->CreateICmp(CI->getPredicate(), Op0, Op1,
-                                   SO->getName()+".cmp");
-  llvm_unreachable("Unknown binary instruction type!");
+  auto *BO = cast<BinaryOperator>(&I);
+  Value *RI = IC->Builder->CreateBinOp(BO->getOpcode(), Op0, Op1,
+                                       SO->getName() + ".op");
+  auto *FPInst = dyn_cast<Instruction>(RI);
+  if (FPInst && isa<FPMathOperator>(FPInst))
+    FPInst->copyFastMathFlags(BO);
+  return RI;
 }
 
 /// Given an instruction with a select as one operand and a constant as the
@@ -783,51 +775,53 @@ static Value *FoldOperationIntoSelectOperand(Instruction &I, Value *SO,
 /// This also works for Cast instructions, which obviously do not have a second
 /// operand.
 Instruction *InstCombiner::FoldOpIntoSelect(Instruction &Op, SelectInst *SI) {
-  // Don't modify shared select instructions
-  if (!SI->hasOneUse()) return nullptr;
-  Value *TV = SI->getOperand(1);
-  Value *FV = SI->getOperand(2);
+  // Don't modify shared select instructions.
+  if (!SI->hasOneUse())
+    return nullptr;
 
-  if (isa<Constant>(TV) || isa<Constant>(FV)) {
-    // Bool selects with constant operands can be folded to logical ops.
-    if (SI->getType()->getScalarType()->isIntegerTy(1)) return nullptr;
+  Value *TV = SI->getTrueValue();
+  Value *FV = SI->getFalseValue();
+  if (!(isa<Constant>(TV) || isa<Constant>(FV)))
+    return nullptr;
 
-    // If it's a bitcast involving vectors, make sure it has the same number of
-    // elements on both sides.
-    if (BitCastInst *BC = dyn_cast<BitCastInst>(&Op)) {
-      VectorType *DestTy = dyn_cast<VectorType>(BC->getDestTy());
-      VectorType *SrcTy = dyn_cast<VectorType>(BC->getSrcTy());
+  // Bool selects with constant operands can be folded to logical ops.
+  if (SI->getType()->getScalarType()->isIntegerTy(1))
+    return nullptr;
 
-      // Verify that either both or neither are vectors.
-      if ((SrcTy == nullptr) != (DestTy == nullptr)) return nullptr;
-      // If vectors, verify that they have the same number of elements.
-      if (SrcTy && SrcTy->getNumElements() != DestTy->getNumElements())
+  // If it's a bitcast involving vectors, make sure it has the same number of
+  // elements on both sides.
+  if (auto *BC = dyn_cast<BitCastInst>(&Op)) {
+    VectorType *DestTy = dyn_cast<VectorType>(BC->getDestTy());
+    VectorType *SrcTy = dyn_cast<VectorType>(BC->getSrcTy());
+
+    // Verify that either both or neither are vectors.
+    if ((SrcTy == nullptr) != (DestTy == nullptr))
+      return nullptr;
+
+    // If vectors, verify that they have the same number of elements.
+    if (SrcTy && SrcTy->getNumElements() != DestTy->getNumElements())
+      return nullptr;
+  }
+
+  // Test if a CmpInst instruction is used exclusively by a select as
+  // part of a minimum or maximum operation. If so, refrain from doing
+  // any other folding. This helps out other analyses which understand
+  // non-obfuscated minimum and maximum idioms, such as ScalarEvolution
+  // and CodeGen. And in this case, at least one of the comparison
+  // operands has at least one user besides the compare (the select),
+  // which would often largely negate the benefit of folding anyway.
+  if (auto *CI = dyn_cast<CmpInst>(SI->getCondition())) {
+    if (CI->hasOneUse()) {
+      Value *Op0 = CI->getOperand(0), *Op1 = CI->getOperand(1);
+      if ((SI->getOperand(1) == Op0 && SI->getOperand(2) == Op1) ||
+          (SI->getOperand(2) == Op0 && SI->getOperand(1) == Op1))
         return nullptr;
     }
-
-    // Test if a CmpInst instruction is used exclusively by a select as
-    // part of a minimum or maximum operation. If so, refrain from doing
-    // any other folding. This helps out other analyses which understand
-    // non-obfuscated minimum and maximum idioms, such as ScalarEvolution
-    // and CodeGen. And in this case, at least one of the comparison
-    // operands has at least one user besides the compare (the select),
-    // which would often largely negate the benefit of folding anyway.
-    if (auto *CI = dyn_cast<CmpInst>(SI->getCondition())) {
-      if (CI->hasOneUse()) {
-        Value *Op0 = CI->getOperand(0), *Op1 = CI->getOperand(1);
-        if ((SI->getOperand(1) == Op0 && SI->getOperand(2) == Op1) ||
-            (SI->getOperand(2) == Op0 && SI->getOperand(1) == Op1))
-          return nullptr;
-      }
-    }
-
-    Value *SelectTrueVal = FoldOperationIntoSelectOperand(Op, TV, this);
-    Value *SelectFalseVal = FoldOperationIntoSelectOperand(Op, FV, this);
-
-    return SelectInst::Create(SI->getCondition(),
-                              SelectTrueVal, SelectFalseVal);
   }
-  return nullptr;
+
+  Value *SelectTVal = foldOperationIntoSelectOperand(Op, TV, this);
+  Value *SelectFVal = foldOperationIntoSelectOperand(Op, FV, this);
+  return SelectInst::Create(SI->getCondition(), SelectTVal, SelectFVal);
 }
 
 /// Given a binary operator, cast instruction, or select which has a PHI node as
@@ -2271,9 +2265,9 @@ Instruction *InstCombiner::visitSwitchInst(SwitchInst &SI) {
           SI.getContext(), C.getCaseValue()->getValue().trunc(NewWidth)));
   }
 
+  Value *Op0 = nullptr;
   ConstantInt *AddRHS = nullptr;
-  if (match(Cond, m_Add(m_Value(), m_ConstantInt(AddRHS)))) {
-    Instruction *I = cast<Instruction>(Cond);
+  if (match(Cond, m_Add(m_Value(Op0), m_ConstantInt(AddRHS)))) {
     // Change 'switch (X+4) case 1:' into 'switch (X) case -3'.
     for (SwitchInst::CaseIt i = SI.case_begin(), e = SI.case_end(); i != e;
          ++i) {
@@ -2289,8 +2283,9 @@ Instruction *InstCombiner::visitSwitchInst(SwitchInst &SI) {
              "Result of expression should be constant");
       i.setValue(cast<ConstantInt>(NewCaseVal));
     }
-    SI.setCondition(I->getOperand(0));
-    Worklist.Add(I);
+    SI.setCondition(Op0);
+    if (auto *CondI = dyn_cast<Instruction>(Cond))
+      Worklist.Add(CondI);
     return &SI;
   }
 
@@ -2580,7 +2575,7 @@ Instruction *InstCombiner::visitLandingPadInst(LandingPadInst &LI) {
           // remove it from the filter.  An unexpected type handler may be
           // set up for a call site which throws an exception of the same
           // type caught.  In order for the exception thrown by the unexpected
-          // handler to propogate correctly, the filter must be correctly
+          // handler to propagate correctly, the filter must be correctly
           // described for the call site.
           //
           // Example:
@@ -2859,13 +2854,14 @@ bool InstCombiner::run() {
 
     // In general, it is possible for computeKnownBits to determine all bits in
     // a value even when the operands are not all constants.
-    if (ExpensiveCombines && !I->use_empty() && I->getType()->isIntegerTy()) {
-      unsigned BitWidth = I->getType()->getScalarSizeInBits();
+    Type *Ty = I->getType();
+    if (ExpensiveCombines && !I->use_empty() && Ty->isIntOrIntVectorTy()) {
+      unsigned BitWidth = Ty->getScalarSizeInBits();
       APInt KnownZero(BitWidth, 0);
       APInt KnownOne(BitWidth, 0);
       computeKnownBits(I, KnownZero, KnownOne, /*Depth*/0, I);
       if ((KnownZero | KnownOne).isAllOnesValue()) {
-        Constant *C = ConstantInt::get(I->getContext(), KnownOne);
+        Constant *C = ConstantInt::get(Ty, KnownOne);
         DEBUG(dbgs() << "IC: ConstFold (all bits known) to: " << *C <<
                         " from: " << *I << '\n');
 
@@ -2900,12 +2896,11 @@ bool InstCombiner::run() {
             break;
           }
 
-        // If the user is one of our immediate successors, and if that
-        // successor only has us as a predecessors (we'd have to split
-        // the critical edge otherwise), we can keep going.  Don't do
-        // this if the successor follows through a sync instruction,
-        // because that's a pessimization.
-        if (UserIsSuccessor && UserParent->getSinglePredecessor() &&
+        // If the user is one of our immediate successors, and if that successor
+        // only has us as a predecessors (we'd have to split the critical edge
+        // otherwise), we can keep going.  Don't do this if the successor
+        // follows through a sync instruction, because that's a pessimization.
+        if (UserIsSuccessor && UserParent->getUniquePredecessor() &&
             !isa<SyncInst>(BB->getTerminator())) {
           // Okay, the CFG is simple enough, try to sink this instruction.
           if (TryToSinkInstruction(I, UserParent)) {

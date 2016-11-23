@@ -336,6 +336,14 @@ LLVM-specific variables
   will not be used.  If the variable for an external project does not point
   to a valid path, then that project will not be built.
 
+**LLVM_ENABLE_PROJECTS**:STRING
+  Semicolon-separated list of projects to build, or *all* for building all
+  (clang, libcxx, libcxxabi, lldb, compiler-rt, lld, polly) projects.
+  This flag assumes that projects are checked out side-by-side and not nested,
+  i.e. clang needs to be in parallel of llvm instead of nested in `llvm/tools`.
+  This feature allows to have one build for only LLVM and another for clang+llvm
+  using the same source checkout.
+
 **LLVM_EXTERNAL_PROJECTS**:STRING
   Semicolon-separated list of additional external projects to build as part of
   llvm. For each project LLVM_EXTERNAL_<NAME>_SOURCE_DIR have to be specified
@@ -431,6 +439,11 @@ LLVM-specific variables
   Uses .svg files instead of .png files for graphs in the Doxygen output.
   Defaults to OFF.
 
+**LLVM_INSTALL_DOXYGEN_HTML_DIR**:STRING
+  The path to install Doxygen-generated HTML documentation to. This path can
+  either be absolute or relative to the CMAKE_INSTALL_PREFIX. Defaults to
+  `share/doc/llvm/doxygen-html`.
+
 **LLVM_ENABLE_SPHINX**:BOOL
   If specified, CMake will search for the ``sphinx-build`` executable and will make
   the ``SPHINX_OUTPUT_HTML`` and ``SPHINX_OUTPUT_MAN`` CMake options available.
@@ -455,6 +468,16 @@ LLVM-specific variables
 **SPHINX_WARNINGS_AS_ERRORS**:BOOL
   If enabled then sphinx documentation warnings will be treated as
   errors. Defaults to ON.
+
+**LLVM_INSTALL_SPHINX_HTML_DIR**:STRING
+  The path to install Sphinx-generated HTML documentation to. This path can
+  either be absolute or relative to the CMAKE_INSTALL_PREFIX. Defaults to
+  `share/doc/llvm/html`.
+
+**LLVM_INSTALL_OCAMLDOC_HTML_DIR**:STRING
+  The path to install OCamldoc-generated HTML documentation to. This path can
+  either be absolute or relative to the CMAKE_INSTALL_PREFIX. Defaults to
+  `share/doc/llvm/ocaml-html`.
 
 **LLVM_CREATE_XCODE_TOOLCHAIN**:BOOL
   OS X Only: If enabled CMake will generate a target named

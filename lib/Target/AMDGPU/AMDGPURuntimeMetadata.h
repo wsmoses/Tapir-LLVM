@@ -13,11 +13,11 @@
 ///
 /// Runtime requests certain information (metadata) about kernels to be able
 /// to execute the kernels and answer the queries about the kernels.
-/// The metadata is represented as a byte stream in an ELF section of a
-/// binary (code object). The byte stream consists of key-value pairs.
-/// Each key is an 8 bit unsigned integer. Each value can be an integer,
-/// a string, or a stream of key-value pairs. There are 3 levels of key-value
-/// pair streams. At the beginning of the ELF section is the top level
+/// The metadata is represented as a note element in the .note ELF section of a
+/// binary (code object). The desc field of the note element consists of
+/// key-value pairs. Each key is an 8 bit unsigned integer. Each value can be
+/// an integer, a string, or a stream of key-value pairs. There are 3 levels of
+/// key-value pair streams. At the beginning of the ELF section is the top level
 /// key-value pair stream. A kernel-level key-value pair stream starts after
 /// encountering KeyKernelBegin and ends immediately before encountering
 /// KeyKernelEnd. A kernel-argument-level key-value pair stream starts
@@ -37,8 +37,6 @@
 #ifndef LLVM_LIB_TARGET_AMDGPU_AMDGPURUNTIMEMETADATA_H
 #define LLVM_LIB_TARGET_AMDGPU_AMDGPURUNTIMEMETADATA_H
 
-#include <stdint.h>
-
 namespace AMDGPU {
 
 namespace RuntimeMD {
@@ -46,9 +44,6 @@ namespace RuntimeMD {
   // Version and revision of runtime metadata
   const unsigned char MDVersion   = 1;
   const unsigned char MDRevision  = 0;
-
-  // ELF section name containing runtime metadata
-  const char SectionName[] = ".AMDGPU.runtime_metadata";
 
   // Enumeration values of keys in runtime metadata.
   enum Key {
@@ -65,7 +60,7 @@ namespace RuntimeMD {
     KeyArgAlign                 = 10, // Kernel arg alignment
     KeyArgTypeName              = 11, // Kernel type name
     KeyArgName                  = 12, // Kernel name
-    KeyArgTypeKind              = 13, // Kernel argument type kind
+    KeyArgKind                  = 13, // Kernel argument kind
     KeyArgValueType             = 14, // Kernel argument value type
     KeyArgAddrQual              = 15, // Kernel argument address qualifier
     KeyArgAccQual               = 16, // Kernel argument access qualifier
@@ -77,13 +72,14 @@ namespace RuntimeMD {
     KeyWorkGroupSizeHint        = 22, // Work group size hint
     KeyVecTypeHint              = 23, // Vector type hint
     KeyKernelIndex              = 24, // Kernel index for device enqueue
-    KeySGPRs                    = 25, // Number of SGPRs
-    KeyVGPRs                    = 26, // Number of VGPRs
-    KeyMinWavesPerSIMD          = 27, // Minimum number of waves per SIMD
-    KeyMaxWavesPerSIMD          = 28, // Maximum number of waves per SIMD
-    KeyFlatWorkGroupSizeLimits  = 29, // Flat work group size limits
-    KeyMaxWorkGroupSize         = 30, // Maximum work group size
-    KeyNoPartialWorkGroups      = 31, // No partial work groups
+    KeyMinWavesPerSIMD          = 25, // Minimum number of waves per SIMD
+    KeyMaxWavesPerSIMD          = 26, // Maximum number of waves per SIMD
+    KeyFlatWorkGroupSizeLimits  = 27, // Flat work group size limits
+    KeyMaxWorkGroupSize         = 28, // Maximum work group size
+    KeyNoPartialWorkGroups      = 29, // No partial work groups
+    KeyPrintfInfo               = 30, // Prinf function call information
+    KeyArgActualAcc             = 31, // The actual kernel argument access qualifier
+    KeyArgPointeeAlign          = 32, // Alignment of pointee type
   };
 
   enum Language : uint8_t {
@@ -102,12 +98,21 @@ namespace RuntimeMD {
   };
 
   namespace KernelArg {
-    enum TypeKind : uint8_t {
-      Value     = 0,
-      Pointer   = 1,
-      Image     = 2,
-      Sampler   = 3,
-      Queue     = 4,
+    enum Kind : uint8_t {
+      ByValue                 = 0,
+      GlobalBuffer            = 1,
+      DynamicSharedPointer    = 2,
+      Sampler                 = 3,
+      Image                   = 4,
+      Pipe                    = 5,
+      Queue                   = 6,
+      HiddenGlobalOffsetX     = 7,
+      HiddenGlobalOffsetY     = 8,
+      HiddenGlobalOffsetZ     = 9,
+      HiddenNone              = 10,
+      HiddenPrintfBuffer      = 11,
+      HiddenDefaultQueue      = 12,
+      HiddenCompletionAction  = 13,
     };
 
     enum ValueType : uint16_t {
@@ -137,6 +142,8 @@ namespace RuntimeMD {
       Global     = 1,
       Constant   = 2,
       Local      = 3,
+      Generic    = 4,
+      Region     = 5,
     };
   } // namespace KernelArg
 } // namespace RuntimeMD
