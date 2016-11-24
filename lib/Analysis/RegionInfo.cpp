@@ -54,8 +54,7 @@ static cl::opt<Region::PrintStyle, true> printStyleX("print-region-style",
     clEnumValN(Region::PrintBB, "bb",
                "print regions in detail with block_iterator"),
     clEnumValN(Region::PrintRN, "rn",
-               "print regions in detail with element_iterator"),
-    clEnumValEnd));
+               "print regions in detail with element_iterator")));
 
 
 //===----------------------------------------------------------------------===//
@@ -182,7 +181,7 @@ namespace llvm {
 // RegionInfoAnalysis implementation
 //
 
-char RegionInfoAnalysis::PassID;
+AnalysisKey RegionInfoAnalysis::Key;
 
 RegionInfo RegionInfoAnalysis::run(Function &F, FunctionAnalysisManager &AM) {
   RegionInfo RI;

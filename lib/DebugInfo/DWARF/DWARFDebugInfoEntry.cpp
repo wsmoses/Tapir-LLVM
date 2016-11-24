@@ -30,7 +30,7 @@ static const DWARFUnit *findUnitAndExtractFast(DWARFDebugInfoEntryMinimal &DIE,
                                                const DWARFUnit *Unit,
                                                uint32_t *Offset) {
   Unit = Unit->getUnitSection().getUnitForOffset(*Offset);
-  return (Unit && DIE.extractFast(Unit, Offset)) ? Unit : nullptr;
+  return (Unit && DIE.extractFast(*Unit, Offset)) ? Unit : nullptr;
 }
 
 void DWARFDebugInfoEntryMinimal::dump(raw_ostream &OS, DWARFUnit *u,
@@ -45,12 +45,12 @@ void DWARFDebugInfoEntryMinimal::dump(raw_ostream &OS, DWARFUnit *u,
 
     if (abbrCode) {
       if (AbbrevDecl) {
-          const char *tagString = TagString(getTag());
-          if (tagString)
-            WithColor(OS, syntax::Tag).get().indent(indent) << tagString;
-          else
-            WithColor(OS, syntax::Tag).get().indent(indent) <<
-              format("DW_TAG_Unknown_%x", getTag());
+        auto tagString = TagString(getTag());
+        if (!tagString.empty())
+          WithColor(OS, syntax::Tag).get().indent(indent) << tagString;
+        else
+          WithColor(OS, syntax::Tag).get().indent(indent)
+              << format("DW_TAG_Unknown_%x", getTag());
 
         OS << format(" [%u] %c\n", abbrCode,
                      AbbrevDecl->hasChildren() ? '*' : ' ');
@@ -83,7 +83,8 @@ static void dumpApplePropertyAttribute(raw_ostream &OS, uint64_t Val) {
     uint64_t Shift = countTrailingZeros(Val);
     assert(Shift < 64 && "undefined behavior");
     uint64_t Bit = 1ULL << Shift;
-    if (const char *PropName = ApplePropertyString(Bit))
+    auto PropName = ApplePropertyString(Bit);
+    if (!PropName.empty())
       OS << PropName;
     else
       OS << format("DW_APPLE_PROPERTY_0x%" PRIx64, Bit);
@@ -111,19 +112,20 @@ static void dumpRanges(raw_ostream &OS, const DWARFAddressRangesVector& Ranges,
 void DWARFDebugInfoEntryMinimal::dumpAttribute(raw_ostream &OS,
                                                DWARFUnit *u,
                                                uint32_t *offset_ptr,
-                                               uint16_t attr, uint16_t form,
+                                               dwarf::Attribute attr, 
+                                               dwarf::Form form,
                                                unsigned indent) const {
   const char BaseIndent[] = "            ";
   OS << BaseIndent;
   OS.indent(indent+2);
-  const char *attrString = AttributeString(attr);
-  if (attrString)
+  auto attrString = AttributeString(attr);
+  if (!attrString.empty())
     WithColor(OS, syntax::Attribute) << attrString;
   else
     WithColor(OS, syntax::Attribute).get() << format("DW_AT_Unknown_%x", attr);
 
-  const char *formString = FormEncodingString(form);
-  if (formString)
+  auto formString = FormEncodingString(form);
+  if (!formString.empty())
     OS << " [" << formString << ']';
   else
     OS << format(" [DW_FORM_Unknown_%x]", form);
@@ -134,8 +136,8 @@ void DWARFDebugInfoEntryMinimal::dumpAttribute(raw_ostream &OS,
     return;
 
   OS << "\t(";
-  
-  const char *Name = nullptr;
+
+  StringRef Name;
   std::string File;
   auto Color = syntax::Enumerator;
   if (attr == DW_AT_decl_file || attr == DW_AT_call_file) {
@@ -146,23 +148,23 @@ void DWARFDebugInfoEntryMinimal::dumpAttribute(raw_ostream &OS,
              u->getCompilationDir(),
              DILineInfoSpecifier::FileLineInfoKind::AbsoluteFilePath, File)) {
         File = '"' + File + '"';
-        Name = File.c_str();
+        Name = File;
       }
   } else if (Optional<uint64_t> Val = formValue.getAsUnsignedConstant())
     Name = AttributeValueString(attr, *Val);
 
-  if (Name)
+  if (!Name.empty())
     WithColor(OS, Color) << Name;
   else if (attr == DW_AT_decl_line || attr == DW_AT_call_line)
     OS << *formValue.getAsUnsignedConstant();
   else
-    formValue.dump(OS, u);
+    formValue.dump(OS);
 
   // We have dumped the attribute raw value. For some attributes
   // having both the raw value and the pretty-printed value is
   // interesting. These attributes are handled below.
   if (attr == DW_AT_specification || attr == DW_AT_abstract_origin) {
-    Optional<uint64_t> Ref = formValue.getAsReference(u);
+    Optional<uint64_t> Ref = formValue.getAsReference();
     if (Ref.hasValue()) {
       uint32_t RefOffset = Ref.getValue();
       DWARFDebugInfoEntryMinimal DIE;
@@ -181,11 +183,17 @@ void DWARFDebugInfoEntryMinimal::dumpAttribute(raw_ostream &OS,
   OS << ")\n";
 }
 
-bool DWARFDebugInfoEntryMinimal::extractFast(const DWARFUnit *U,
+bool DWARFDebugInfoEntryMinimal::extractFast(const DWARFUnit &U,
                                              uint32_t *OffsetPtr) {
+  DataExtractor DebugInfoData = U.getDebugInfoExtractor();
+  const uint32_t UEndOffset = U.getNextUnitOffset();
+  return extractFast(U, OffsetPtr, DebugInfoData, UEndOffset);
+}
+bool DWARFDebugInfoEntryMinimal::extractFast(const DWARFUnit &U,
+                                             uint32_t *OffsetPtr,
+                                             const DataExtractor &DebugInfoData,
+                                             uint32_t UEndOffset) {
   Offset = *OffsetPtr;
-  DataExtractor DebugInfoData = U->getDebugInfoExtractor();
-  uint32_t UEndOffset = U->getNextUnitOffset();
   if (Offset >= UEndOffset || !DebugInfoData.isValidOffset(Offset))
     return false;
   uint64_t AbbrCode = DebugInfoData.getULEB128(OffsetPtr);
@@ -194,26 +202,29 @@ bool DWARFDebugInfoEntryMinimal::extractFast(const DWARFUnit *U,
     AbbrevDecl = nullptr;
     return true;
   }
-  AbbrevDecl = U->getAbbreviations()->getAbbreviationDeclaration(AbbrCode);
+  AbbrevDecl = U.getAbbreviations()->getAbbreviationDeclaration(AbbrCode);
   if (nullptr == AbbrevDecl) {
     // Restore the original offset.
     *OffsetPtr = Offset;
     return false;
   }
-  ArrayRef<uint8_t> FixedFormSizes = DWARFFormValue::getFixedFormSizes(
-      U->getAddressByteSize(), U->getVersion());
-  assert(FixedFormSizes.size() > 0);
+  // See if all attributes in this DIE have fixed byte sizes. If so, we can
+  // just add this size to the offset to skip to the next DIE.
+  if (Optional<size_t> FixedSize = AbbrevDecl->getFixedAttributesByteSize(U)) {
+    *OffsetPtr += *FixedSize;
+    return true;
+  }
 
   // Skip all data in the .debug_info for the attributes
   for (const auto &AttrSpec : AbbrevDecl->attributes()) {
-    uint16_t Form = AttrSpec.Form;
-
-    uint8_t FixedFormSize =
-        (Form < FixedFormSizes.size()) ? FixedFormSizes[Form] : 0;
-    if (FixedFormSize)
-      *OffsetPtr += FixedFormSize;
-    else if (!DWARFFormValue::skipValue(Form, DebugInfoData, OffsetPtr, U)) {
-      // Restore the original offset.
+    // Check if this attribute has a fixed byte size.
+    if (Optional<uint8_t> FixedSize = AttrSpec.getByteSize(U)) {
+      // Attribute byte size if fixed, just add the size to the offset.
+      *OffsetPtr += *FixedSize;
+    } else if (!DWARFFormValue::skipValue(AttrSpec.Form, DebugInfoData,
+                                          OffsetPtr, &U)) {
+      // We failed to skip this attribute's value, restore the original offset
+      // and return the failure status.
       *OffsetPtr = Offset;
       return false;
     }
@@ -231,51 +242,36 @@ bool DWARFDebugInfoEntryMinimal::isSubroutineDIE() const {
          Tag == DW_TAG_inlined_subroutine;
 }
 
-bool DWARFDebugInfoEntryMinimal::getAttributeValue(
-    const DWARFUnit *U, const uint16_t Attr, DWARFFormValue &FormValue) const {
-  if (!AbbrevDecl)
+bool DWARFDebugInfoEntryMinimal::getAttributeValue(const DWARFUnit *U, 
+    dwarf::Attribute Attr, DWARFFormValue &FormValue) const {
+  if (!AbbrevDecl || !U)
     return false;
-
-  uint32_t AttrIdx = AbbrevDecl->findAttributeIndex(Attr);
-  if (AttrIdx == -1U)
-    return false;
-
-  DataExtractor DebugInfoData = U->getDebugInfoExtractor();
-  uint32_t DebugInfoOffset = getOffset();
-
-  // Skip the abbreviation code so we are at the data for the attributes
-  DebugInfoData.getULEB128(&DebugInfoOffset);
-
-  // Skip preceding attribute values.
-  for (uint32_t i = 0; i < AttrIdx; ++i) {
-    DWARFFormValue::skipValue(AbbrevDecl->getFormByIndex(i),
-                              DebugInfoData, &DebugInfoOffset, U);
-  }
-
-  FormValue = DWARFFormValue(AbbrevDecl->getFormByIndex(AttrIdx));
-  return FormValue.extractValue(DebugInfoData, &DebugInfoOffset, U);
+  return AbbrevDecl->getAttributeValue(Offset, Attr, *U, FormValue);
 }
 
 const char *DWARFDebugInfoEntryMinimal::getAttributeValueAsString(
-    const DWARFUnit *U, const uint16_t Attr, const char *FailValue) const {
+    const DWARFUnit *U, dwarf::Attribute Attr, 
+    const char *FailValue) const {
   DWARFFormValue FormValue;
   if (!getAttributeValue(U, Attr, FormValue))
     return FailValue;
-  Optional<const char *> Result = FormValue.getAsCString(U);
+  Optional<const char *> Result = FormValue.getAsCString();
   return Result.hasValue() ? Result.getValue() : FailValue;
 }
 
 uint64_t DWARFDebugInfoEntryMinimal::getAttributeValueAsAddress(
-    const DWARFUnit *U, const uint16_t Attr, uint64_t FailValue) const {
+    const DWARFUnit *U, dwarf::Attribute Attr, 
+    uint64_t FailValue) const {
   DWARFFormValue FormValue;
   if (!getAttributeValue(U, Attr, FormValue))
     return FailValue;
-  Optional<uint64_t> Result = FormValue.getAsAddress(U);
+  Optional<uint64_t> Result = FormValue.getAsAddress();
   return Result.hasValue() ? Result.getValue() : FailValue;
 }
 
 uint64_t DWARFDebugInfoEntryMinimal::getAttributeValueAsUnsignedConstant(
-    const DWARFUnit *U, const uint16_t Attr, uint64_t FailValue) const {
+    const DWARFUnit *U, dwarf::Attribute Attr, 
+    uint64_t FailValue) const {
   DWARFFormValue FormValue;
   if (!getAttributeValue(U, Attr, FormValue))
     return FailValue;
@@ -284,16 +280,18 @@ uint64_t DWARFDebugInfoEntryMinimal::getAttributeValueAsUnsignedConstant(
 }
 
 uint64_t DWARFDebugInfoEntryMinimal::getAttributeValueAsReference(
-    const DWARFUnit *U, const uint16_t Attr, uint64_t FailValue) const {
+    const DWARFUnit *U, dwarf::Attribute Attr, 
+    uint64_t FailValue) const {
   DWARFFormValue FormValue;
   if (!getAttributeValue(U, Attr, FormValue))
     return FailValue;
-  Optional<uint64_t> Result = FormValue.getAsReference(U);
+  Optional<uint64_t> Result = FormValue.getAsReference();
   return Result.hasValue() ? Result.getValue() : FailValue;
 }
 
 uint64_t DWARFDebugInfoEntryMinimal::getAttributeValueAsSectionOffset(
-    const DWARFUnit *U, const uint16_t Attr, uint64_t FailValue) const {
+    const DWARFUnit *U, dwarf::Attribute Attr, 
+    uint64_t FailValue) const {
   DWARFFormValue FormValue;
   if (!getAttributeValue(U, Attr, FormValue))
     return FailValue;
@@ -305,7 +303,7 @@ uint64_t
 DWARFDebugInfoEntryMinimal::getRangesBaseAttribute(const DWARFUnit *U,
                                                    uint64_t FailValue) const {
   uint64_t Result =
-      getAttributeValueAsSectionOffset(U, DW_AT_ranges_base, -1ULL);
+      getAttributeValueAsSectionOffset(U, DW_AT_rnglists_base, -1ULL);
   if (Result != -1ULL)
     return Result;
   return getAttributeValueAsSectionOffset(U, DW_AT_GNU_ranges_base, FailValue);

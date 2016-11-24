@@ -31,8 +31,10 @@
 
 #include "llvm/ADT/SparseSet.h"
 #include "llvm/CodeGen/MachineBasicBlock.h"
+#include "llvm/MC/MCRegisterInfo.h"
 #include "llvm/Target/TargetRegisterInfo.h"
 #include <cassert>
+#include <utility>
 
 namespace llvm {
 
@@ -41,14 +43,15 @@ class MachineInstr;
 /// \brief A set of live physical registers with functions to track liveness
 /// when walking backward/forward through a basic block.
 class LivePhysRegs {
-  const TargetRegisterInfo *TRI;
+  const TargetRegisterInfo *TRI = nullptr;
   SparseSet<unsigned> LiveRegs;
 
   LivePhysRegs(const LivePhysRegs&) = delete;
   LivePhysRegs &operator=(const LivePhysRegs&) = delete;
+
 public:
   /// \brief Constructs a new empty LivePhysRegs set.
-  LivePhysRegs() : TRI(nullptr), LiveRegs() {}
+  LivePhysRegs() = default;
 
   /// \brief Constructs and initialize an empty LivePhysRegs set.
   LivePhysRegs(const TargetRegisterInfo *TRI) : TRI(TRI) {
@@ -141,6 +144,11 @@ public:
 
   /// \brief Dumps the currently live registers to the debug output.
   void dump() const;
+
+private:
+  /// Adds live-in registers from basic block @p MBB, taking associated
+  /// lane masks into consideration.
+  void addBlockLiveIns(const MachineBasicBlock &MBB);
 };
 
 inline raw_ostream &operator<<(raw_ostream &OS, const LivePhysRegs& LR) {
@@ -148,6 +156,6 @@ inline raw_ostream &operator<<(raw_ostream &OS, const LivePhysRegs& LR) {
   return OS;
 }
 
-} // namespace llvm
+} // end namespace llvm
 
-#endif
+#endif // LLVM_CODEGEN_LIVEPHYSREGS_H

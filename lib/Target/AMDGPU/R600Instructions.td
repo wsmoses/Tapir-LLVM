@@ -242,20 +242,6 @@ def TEX_SHADOW_ARRAY : PatLeaf<
   }]
 >;
 
-def TEX_MSAA : PatLeaf<
-  (imm),
-  [{uint32_t TType = (uint32_t)N->getZExtValue();
-    return TType == 14;
-  }]
->;
-
-def TEX_ARRAY_MSAA : PatLeaf<
-  (imm),
-  [{uint32_t TType = (uint32_t)N->getZExtValue();
-    return TType == 15;
-  }]
->;
-
 class EG_CF_RAT <bits <8> cfinst, bits <6> ratinst, bits<4> ratid, bits<4> mask,
                  dag outs, dag ins, string asm, list<dag> pattern> :
     InstR600ISA <outs, ins, asm, pattern>,
@@ -1073,18 +1059,27 @@ class LSHL_Common <bits<11> inst> : R600_2OP_Helper <inst, "LSHL", shl>;
 class LSHR_Common <bits<11> inst> : R600_2OP_Helper <inst, "LSHR", srl>;
 class ASHR_Common <bits<11> inst> : R600_2OP_Helper <inst, "ASHR", sra>;
 class MULHI_INT_Common <bits<11> inst> : R600_2OP_Helper <
-  inst, "MULHI_INT", mulhs
-> {
+  inst, "MULHI_INT", mulhs> {
   let Itinerary = TransALU;
 }
+
+class MULHI_INT24_Common <bits<11> inst> : R600_2OP_Helper <
+  inst, "MULHI_INT24", AMDGPUmulhi_i24> {
+  let Itinerary = VecALU;
+}
+
 class MULHI_UINT_Common <bits<11> inst> : R600_2OP_Helper <
-  inst, "MULHI", mulhu
-> {
+  inst, "MULHI", mulhu> {
   let Itinerary = TransALU;
 }
+
+class MULHI_UINT24_Common <bits<11> inst> : R600_2OP_Helper <
+  inst, "MULHI_UINT24", AMDGPUmulhi_u24> {
+  let Itinerary = VecALU;
+}
+
 class MULLO_INT_Common <bits<11> inst> : R600_2OP_Helper <
-  inst, "MULLO_INT", mul
-> {
+  inst, "MULLO_INT", mul> {
   let Itinerary = TransALU;
 }
 class MULLO_UINT_Common <bits<11> inst> : R600_2OP <inst, "MULLO_UINT", []> {

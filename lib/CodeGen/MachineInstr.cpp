@@ -93,6 +93,8 @@ void MachineOperand::substPhysReg(unsigned Reg, const TargetRegisterInfo &TRI) {
     // Note that getSubReg() may return 0 if the sub-register doesn't exist.
     // That won't happen in legal code.
     setSubReg(0);
+    if (isDef())
+      setIsUndef(false);
   }
   setReg(Reg);
 }
@@ -171,6 +173,16 @@ void MachineOperand::ChangeToMCSymbol(MCSymbol *Sym) {
 
   OpKind = MO_MCSymbol;
   Contents.Sym = Sym;
+}
+
+void MachineOperand::ChangeToFrameIndex(int Idx) {
+  assert((!isReg() || !isTied()) &&
+         "Cannot change a tied operand into a FrameIndex");
+
+  removeRegFromUses();
+
+  OpKind = MO_FrameIndex;
+  setIndex(Idx);
 }
 
 /// ChangeToRegister - Replace this operand with a new register operand of
@@ -468,9 +480,9 @@ void MachineOperand::print(raw_ostream &OS, ModuleSlotTracker &MST,
   case MachineOperand::MO_IntrinsicID: {
     Intrinsic::ID ID = getIntrinsicID();
     if (ID < Intrinsic::num_intrinsics)
-      OS << "<intrinsic:@" << Intrinsic::getName(ID) << ')';
+      OS << "<intrinsic:@" << Intrinsic::getName(ID, None) << '>';
     else if (IntrinsicInfo)
-      OS << "<intrinsic:@" << IntrinsicInfo->getName(ID) << ')';
+      OS << "<intrinsic:@" << IntrinsicInfo->getName(ID) << '>';
     else
       OS << "<intrinsic:" << ID << '>';
     break;
@@ -484,6 +496,12 @@ void MachineOperand::print(raw_ostream &OS, ModuleSlotTracker &MST,
   if (unsigned TF = getTargetFlags())
     OS << "[TF=" << TF << ']';
 }
+
+#if !defined(NDEBUG) || defined(LLVM_ENABLE_DUMP)
+LLVM_DUMP_METHOD void MachineOperand::dump() const {
+  dbgs() << *this << '\n';
+}
+#endif
 
 //===----------------------------------------------------------------------===//
 // MachineMemOperand Implementation
@@ -525,7 +543,10 @@ MachinePointerInfo MachinePointerInfo::getStack(MachineFunction &MF,
 MachineMemOperand::MachineMemOperand(MachinePointerInfo ptrinfo, Flags f,
                                      uint64_t s, unsigned int a,
                                      const AAMDNodes &AAInfo,
-                                     const MDNode *Ranges)
+                                     const MDNode *Ranges,
+                                     SynchronizationScope SynchScope,
+                                     AtomicOrdering Ordering,
+                                     AtomicOrdering FailureOrdering)
     : PtrInfo(ptrinfo), Size(s), FlagVals(f), BaseAlignLog2(Log2_32(a) + 1),
       AAInfo(AAInfo), Ranges(Ranges) {
   assert((PtrInfo.V.isNull() || PtrInfo.V.is<const PseudoSourceValue*>() ||
@@ -533,6 +554,13 @@ MachineMemOperand::MachineMemOperand(MachinePointerInfo ptrinfo, Flags f,
          "invalid pointer value");
   assert(getBaseAlignment() == a && "Alignment is not a power of 2!");
   assert((isLoad() || isStore()) && "Not a load/store!");
+
+  AtomicInfo.SynchScope = static_cast<unsigned>(SynchScope);
+  assert(getSynchScope() == SynchScope && "Value truncated");
+  AtomicInfo.Ordering = static_cast<unsigned>(Ordering);
+  assert(getOrdering() == Ordering && "Value truncated");
+  AtomicInfo.FailureOrdering = static_cast<unsigned>(FailureOrdering);
+  assert(getFailureOrdering() == FailureOrdering && "Value truncated");
 }
 
 /// Profile - Gather unique data for the object.
@@ -648,10 +676,10 @@ void MachineMemOperand::print(raw_ostream &OS, ModuleSlotTracker &MST) const {
     OS << ")";
   }
 
-  // Print nontemporal info.
   if (isNonTemporal())
     OS << "(nontemporal)";
-
+  if (isDereferenceable())
+    OS << "(dereferenceable)";
   if (isInvariant())
     OS << "(invariant)";
 }
@@ -678,12 +706,7 @@ MachineInstr::MachineInstr(MachineFunction &MF, const MCInstrDesc &tid,
                            DebugLoc dl, bool NoImp)
     : MCID(&tid), Parent(nullptr), Operands(nullptr), NumOperands(0), Flags(0),
       AsmPrinterFlags(0), NumMemRefs(0), MemRefs(nullptr),
-      debugLoc(std::move(dl))
-#ifdef LLVM_BUILD_GLOBAL_ISEL
-      ,
-      Tys(0)
-#endif
-{
+      debugLoc(std::move(dl)) {
   assert(debugLoc.hasTrivialDestructor() && "Expected trivial destructor");
 
   // Reserve space for the expected number of operands.
@@ -702,12 +725,7 @@ MachineInstr::MachineInstr(MachineFunction &MF, const MCInstrDesc &tid,
 MachineInstr::MachineInstr(MachineFunction &MF, const MachineInstr &MI)
     : MCID(&MI.getDesc()), Parent(nullptr), Operands(nullptr), NumOperands(0),
       Flags(0), AsmPrinterFlags(0), NumMemRefs(MI.NumMemRefs),
-      MemRefs(MI.MemRefs), debugLoc(MI.getDebugLoc())
-#ifdef LLVM_BUILD_GLOBAL_ISEL
-      ,
-      Tys(0)
-#endif
-{
+      MemRefs(MI.MemRefs), debugLoc(MI.getDebugLoc()) {
   assert(debugLoc.hasTrivialDestructor() && "Expected trivial destructor");
 
   CapOperands = OperandCapacity::get(MI.getNumOperands());
@@ -729,37 +747,6 @@ MachineRegisterInfo *MachineInstr::getRegInfo() {
     return &MBB->getParent()->getRegInfo();
   return nullptr;
 }
-
-// Implement dummy setter and getter for type when
-// global-isel is not built.
-// The proper implementation is WIP and is tracked here:
-// PR26576.
-#ifndef LLVM_BUILD_GLOBAL_ISEL
-unsigned MachineInstr::getNumTypes() const { return 0; }
-
-void MachineInstr::setType(LLT Ty, unsigned Idx) {}
-
-LLT MachineInstr::getType(unsigned Idx) const { return LLT{}; }
-
-void MachineInstr::removeTypes() {}
-
-#else
-unsigned MachineInstr::getNumTypes() const { return Tys.size(); }
-
-void MachineInstr::setType(LLT Ty, unsigned Idx) {
-  assert((!Ty.isValid() || isPreISelGenericOpcode(getOpcode())) &&
-         "Non generic instructions are not supposed to be typed");
-  if (Tys.size() < Idx + 1)
-    Tys.resize(Idx+1);
-  Tys[Idx] = Ty;
-}
-
-LLT MachineInstr::getType(unsigned Idx) const { return Tys[Idx]; }
-
-void MachineInstr::removeTypes() {
-  Tys.clear();
-}
-#endif // LLVM_BUILD_GLOBAL_ISEL
 
 /// RemoveRegOperandsFromUseLists - Unlink all of the register operands in
 /// this instruction from their respective use lists.  This requires that the
@@ -1324,8 +1311,8 @@ bool MachineInstr::hasRegisterImplicitUseOperand(unsigned Reg) const {
 /// findRegisterUseOperandIdx() - Returns the MachineOperand that is a use of
 /// the specific register or -1 if it is not found. It further tightens
 /// the search criteria to a use that kills the register if isKill is true.
-int MachineInstr::findRegisterUseOperandIdx(unsigned Reg, bool isKill,
-                                          const TargetRegisterInfo *TRI) const {
+int MachineInstr::findRegisterUseOperandIdx(
+    unsigned Reg, bool isKill, const TargetRegisterInfo *TRI) const {
   for (unsigned i = 0, e = getNumOperands(); i != e; ++i) {
     const MachineOperand &MO = getOperand(i);
     if (!MO.isReg() || !MO.isUse())
@@ -1333,11 +1320,9 @@ int MachineInstr::findRegisterUseOperandIdx(unsigned Reg, bool isKill,
     unsigned MOReg = MO.getReg();
     if (!MOReg)
       continue;
-    if (MOReg == Reg ||
-        (TRI &&
-         TargetRegisterInfo::isPhysicalRegister(MOReg) &&
-         TargetRegisterInfo::isPhysicalRegister(Reg) &&
-         TRI->isSubRegister(MOReg, Reg)))
+    if (MOReg == Reg || (TRI && TargetRegisterInfo::isPhysicalRegister(MOReg) &&
+                         TargetRegisterInfo::isPhysicalRegister(Reg) &&
+                         TRI->isSubRegister(MOReg, Reg)))
       if (!isKill || MO.isKill())
         return i;
   }
@@ -1570,7 +1555,7 @@ bool MachineInstr::isSafeToMove(AliasAnalysis *AA, bool &SawStore) const {
   // destination. The check for isInvariantLoad gives the targe the chance to
   // classify the load as always returning a constant, e.g. a constant pool
   // load.
-  if (mayLoad() && !isInvariantLoad(AA))
+  if (mayLoad() && !isDereferenceableInvariantLoad(AA))
     // Otherwise, this is a real load.  If there is a store between the load and
     // end of block, we can't move it.
     return !SawStore;
@@ -1601,12 +1586,10 @@ bool MachineInstr::hasOrderedMemoryRef() const {
   });
 }
 
-/// isInvariantLoad - Return true if this instruction is loading from a
-/// location whose value is invariant across the function.  For example,
-/// loading a value from the constant pool or from the argument area
-/// of a function if it does not change.  This should only return true of
-/// *all* loads the instruction does are invariant (if it does multiple loads).
-bool MachineInstr::isInvariantLoad(AliasAnalysis *AA) const {
+/// isDereferenceableInvariantLoad - Return true if this instruction will never
+/// trap and is loading from a location whose value is invariant across a run of
+/// this function.
+bool MachineInstr::isDereferenceableInvariantLoad(AliasAnalysis *AA) const {
   // If the instruction doesn't load at all, it isn't an invariant load.
   if (!mayLoad())
     return false;
@@ -1621,7 +1604,8 @@ bool MachineInstr::isInvariantLoad(AliasAnalysis *AA) const {
   for (MachineMemOperand *MMO : memoperands()) {
     if (MMO->isVolatile()) return false;
     if (MMO->isStore()) return false;
-    if (MMO->isInvariant()) continue;
+    if (MMO->isInvariant() && MMO->isDereferenceable())
+      continue;
 
     // A load from a constant PseudoSourceValue is invariant.
     if (const PseudoSourceValue *PSV = MMO->getPseudoValue())
@@ -1749,9 +1733,9 @@ void MachineInstr::print(raw_ostream &OS, ModuleSlotTracker &MST,
     unsigned Reg = getOperand(StartOp).getReg();
     if (TargetRegisterInfo::isVirtualRegister(Reg)) {
       VirtRegs.push_back(Reg);
-      unsigned Size;
-      if (MRI && (Size = MRI->getSize(Reg)))
-        OS << '(' << Size << ')';
+      LLT Ty = MRI ? MRI->getType(Reg) : LLT{};
+      if (Ty.isValid())
+        OS << '(' << Ty << ')';
     }
   }
 
@@ -1763,16 +1747,6 @@ void MachineInstr::print(raw_ostream &OS, ModuleSlotTracker &MST,
     OS << TII->getName(getOpcode());
   else
     OS << "UNKNOWN";
-
-  if (getNumTypes() > 0) {
-    OS << " { ";
-    for (unsigned i = 0; i < getNumTypes(); ++i) {
-      getType(i).print(OS);
-      if (i + 1 != getNumTypes())
-        OS << ", ";
-    }
-    OS << " } ";
-  }
 
   if (SkipOpers)
     return;

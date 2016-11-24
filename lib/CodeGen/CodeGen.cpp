@@ -22,7 +22,9 @@ using namespace llvm;
 void llvm::initializeCodeGen(PassRegistry &Registry) {
   initializeAtomicExpandPass(Registry);
   initializeBranchFolderPassPass(Registry);
+  initializeBranchRelaxationPass(Registry);
   initializeCodeGenPreparePass(Registry);
+  initializeCountingFunctionInserterPass(Registry);
   initializeDeadMachineInstructionElimPass(Registry);
   initializeDetectDeadLanesPass(Registry);
   initializeDwarfEHPreparePass(Registry);
@@ -69,6 +71,7 @@ void llvm::initializeCodeGen(PassRegistry &Registry) {
   initializePostRASchedulerPass(Registry);
   initializePreISelIntrinsicLoweringLegacyPassPass(Registry);
   initializeProcessImplicitDefsPass(Registry);
+  initializeRAGreedyPass(Registry);
   initializeRegisterCoalescerPass(Registry);
   initializeRenameIndependentSubregsPass(Registry);
   initializeShrinkWrapPass(Registry);

@@ -43,6 +43,10 @@ ModulePass *createStripSymbolsPass(bool OnlyDebugInfo = false);
 //
 ModulePass *createStripNonDebugSymbolsPass();
 
+/// This function returns a new pass that downgrades the debug info in the
+/// module to line tables only.
+ModulePass *createStripNonLineTableDebugInfoPass();
+
 //===----------------------------------------------------------------------===//
 //
 // These pass removes llvm.dbg.declare intrinsics.
@@ -220,6 +224,10 @@ ModulePass *createCrossDSOCFIPass();
 /// \brief This pass implements whole-program devirtualization using type
 /// metadata.
 ModulePass *createWholeProgramDevirtPass();
+
+/// This pass splits globals into pieces for the benefit of whole-program
+/// devirtualization and control-flow integrity.
+ModulePass *createGlobalSplitPass();
 
 //===----------------------------------------------------------------------===//
 // SampleProfilePass - Loads sample profile data from disk and generates

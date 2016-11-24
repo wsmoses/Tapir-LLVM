@@ -58,7 +58,7 @@ public:
   SystemZElimCompare(const SystemZTargetMachine &tm)
     : MachineFunctionPass(ID), TII(nullptr), TRI(nullptr) {}
 
-  const char *getPassName() const override {
+  StringRef getPassName() const override {
     return "SystemZ Comparison Elimination";
   }
 
@@ -66,7 +66,7 @@ public:
   bool runOnMachineFunction(MachineFunction &F) override;
   MachineFunctionProperties getRequiredProperties() const override {
     return MachineFunctionProperties().set(
-        MachineFunctionProperties::Property::AllVRegsAllocated);
+        MachineFunctionProperties::Property::NoVRegs);
   }
 
 private:
@@ -403,6 +403,9 @@ bool SystemZElimCompare::fuseCompareOperations(
     return false;
 
   // Make sure that the operands are available at the branch.
+  // SrcReg2 is the register if the source operand is a register,
+  // 0 if the source operand is immediate, and the base register
+  // if the source operand is memory (index is not supported).
   unsigned SrcReg = Compare.getOperand(0).getReg();
   unsigned SrcReg2 =
       Compare.getOperand(1).isReg() ? Compare.getOperand(1).getReg() : 0;
@@ -435,11 +438,16 @@ bool SystemZElimCompare::fuseCompareOperations(
   Branch->RemoveOperand(0);
 
   // Rebuild Branch as a fused compare and branch.
+  // SrcNOps is the number of MI operands of the compare instruction
+  // that we need to copy over.
+  unsigned SrcNOps = 2;
+  if (FusedOpcode == SystemZ::CLT || FusedOpcode == SystemZ::CLGT)
+    SrcNOps = 3;
   Branch->setDesc(TII->get(FusedOpcode));
   MachineInstrBuilder MIB(*Branch->getParent()->getParent(), Branch);
-  MIB.addOperand(Compare.getOperand(0))
-      .addOperand(Compare.getOperand(1))
-      .addOperand(CCMask);
+  for (unsigned I = 0; I < SrcNOps; I++)
+    MIB.addOperand(Compare.getOperand(I));
+  MIB.addOperand(CCMask);
 
   if (Type == SystemZII::CompareAndBranch) {
     // Only conditional branches define CC, as they may be converted back

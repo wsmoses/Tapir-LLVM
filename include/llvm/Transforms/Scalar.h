@@ -147,6 +147,13 @@ Pass *createLICMPass();
 
 //===----------------------------------------------------------------------===//
 //
+// LoopSink - This pass sinks invariants from preheader to loop body where
+// frequency is lower than loop preheader.
+//
+Pass *createLoopSinkPass();
+
+//===----------------------------------------------------------------------===//
+//
 // LoopInterchange - This pass interchanges loops to provide a more
 // cache-friendly memory access patterns.
 //
@@ -176,8 +183,9 @@ Pass *createLoopInstSimplifyPass();
 // LoopUnroll - This pass is a simple loop unrolling pass.
 //
 Pass *createLoopUnrollPass(int Threshold = -1, int Count = -1,
-                           int AllowPartial = -1, int Runtime = -1);
-// Create an unrolling pass for full unrolling only.
+                           int AllowPartial = -1, int Runtime = -1,
+                           int UpperBound = -1);
+// Create an unrolling pass for full unrolling that uses exact trip count only.
 Pass *createSimpleLoopUnrollPass();
 
 //===----------------------------------------------------------------------===//
@@ -335,7 +343,7 @@ extern char &LCSSAID;
 // EarlyCSE - This pass performs a simple and fast CSE pass over the dominator
 // tree.
 //
-FunctionPass *createEarlyCSEPass();
+FunctionPass *createEarlyCSEPass(bool UseMemorySSA = false);
 
 //===----------------------------------------------------------------------===//
 //
@@ -484,6 +492,13 @@ ModulePass *createRewriteStatepointsForGCPass();
 
 //===----------------------------------------------------------------------===//
 //
+// StripGCRelocates - Remove GC relocates that have been inserted by
+// RewriteStatepointsForGC. The resulting IR is incorrect, but this is useful
+// for manual inspection.
+FunctionPass *createStripGCRelocatesPass();
+
+//===----------------------------------------------------------------------===//
+//
 // Float2Int - Demote floats to ints where possible.
 //
 FunctionPass *createFloat2IntPass();
@@ -529,8 +544,14 @@ FunctionPass *createLoopVersioningPass();
 FunctionPass *createLoopDataPrefetchPass();
 
 ///===---------------------------------------------------------------------===//
-ModulePass *createNameAnonFunctionPass();
+ModulePass *createNameAnonGlobalPass();
 
+//===----------------------------------------------------------------------===//
+//
+// LibCallsShrinkWrap - Shrink-wraps a call to function if the result is not
+// used.
+//
+FunctionPass *createLibCallsShrinkWrapPass();
 } // End llvm namespace
 
 #endif

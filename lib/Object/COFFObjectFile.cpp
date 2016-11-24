@@ -157,6 +157,13 @@ uint64_t COFFObjectFile::getSymbolValueImpl(DataRefImpl Ref) const {
   return getCOFFSymbol(Ref).getValue();
 }
 
+uint32_t COFFObjectFile::getSymbolAlignment(DataRefImpl Ref) const {
+  // MSVC/link.exe seems to align symbols to the next-power-of-2
+  // up to 32 bytes.
+  COFFSymbolRef Symb = getCOFFSymbol(Ref);
+  return std::min(uint64_t(32), PowerOf2Ceil(Symb.getValue()));
+}
+
 Expected<uint64_t> COFFObjectFile::getSymbolAddress(DataRefImpl Ref) const {
   uint64_t Result = getSymbolValue(Ref);
   COFFSymbolRef Symb = getCOFFSymbol(Ref);
@@ -729,8 +736,12 @@ COFFObjectFile::COFFObjectFile(MemoryBufferRef Object, std::error_code &EC)
 
   // Initialize the pointer to the symbol table.
   if (getPointerToSymbolTable() != 0) {
-    if ((EC = initSymbolTablePtr()))
-      return;
+    if ((EC = initSymbolTablePtr())) {
+      SymbolTable16 = nullptr;
+      SymbolTable32 = nullptr;
+      StringTable = nullptr;
+      StringTableSize = 0;
+    }
   } else {
     // We had better not have any symbols if we don't have a symbol table.
     if (getNumberOfSymbols() != 0) {
@@ -760,13 +771,13 @@ COFFObjectFile::COFFObjectFile(MemoryBufferRef Object, std::error_code &EC)
   EC = std::error_code();
 }
 
-basic_symbol_iterator COFFObjectFile::symbol_begin_impl() const {
+basic_symbol_iterator COFFObjectFile::symbol_begin() const {
   DataRefImpl Ret;
   Ret.p = getSymbolTable();
   return basic_symbol_iterator(SymbolRef(Ret, this));
 }
 
-basic_symbol_iterator COFFObjectFile::symbol_end_impl() const {
+basic_symbol_iterator COFFObjectFile::symbol_end() const {
   // The symbol table ends where the string table begins.
   DataRefImpl Ret;
   Ret.p = reinterpret_cast<uintptr_t>(StringTable);

@@ -97,12 +97,6 @@ protected:
   using TargetTransformInfoImplBase::DL;
 
 public:
-  // Provide value semantics. MSVC requires that we spell all of these out.
-  BasicTTIImplBase(const BasicTTIImplBase &Arg)
-      : BaseT(static_cast<const BaseT &>(Arg)) {}
-  BasicTTIImplBase(BasicTTIImplBase &&Arg)
-      : BaseT(std::move(static_cast<BaseT &>(Arg))) {}
-
   /// \name Scalar TTI Implementations
   /// @{
   bool allowsMisalignedMemoryAccesses(LLVMContext &Context,
@@ -284,8 +278,17 @@ public:
     }
 
     // Enable runtime and partial unrolling up to the specified size.
-    UP.Partial = UP.Runtime = true;
-    UP.PartialThreshold = UP.PartialOptSizeThreshold = MaxOps;
+    // Enable using trip count upper bound to unroll loops.
+    UP.Partial = UP.Runtime = UP.UpperBound = true;
+    UP.PartialThreshold = MaxOps;
+
+    // Avoid unrolling when optimizing for size.
+    UP.OptSizeThreshold = 0;
+    UP.PartialOptSizeThreshold = 0;
+
+    // Set number of instructions optimized when "back edge"
+    // becomes "fall through" to default value of 2.
+    UP.BEInsns = 2;
   }
 
   /// @}
@@ -956,13 +959,6 @@ class BasicTTIImpl : public BasicTTIImplBase<BasicTTIImpl> {
 
 public:
   explicit BasicTTIImpl(const TargetMachine *ST, const Function &F);
-
-  // Provide value semantics. MSVC requires that we spell all of these out.
-  BasicTTIImpl(const BasicTTIImpl &Arg)
-      : BaseT(static_cast<const BaseT &>(Arg)), ST(Arg.ST), TLI(Arg.TLI) {}
-  BasicTTIImpl(BasicTTIImpl &&Arg)
-      : BaseT(std::move(static_cast<BaseT &>(Arg))), ST(std::move(Arg.ST)),
-        TLI(std::move(Arg.TLI)) {}
 };
 
 }

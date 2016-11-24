@@ -189,9 +189,22 @@ define i1 @test18(i32 %A) {
 ;
   %B = icmp sge i32 %A, 100
   %C = icmp slt i32 %A, 50
-  ;; (A-50) >u 50
   %D = or i1 %B, %C
   ret i1 %D
+}
+
+; FIXME: Vectors should fold too.
+define <2 x i1> @test18vec(<2 x i32> %A) {
+; CHECK-LABEL: @test18vec(
+; CHECK-NEXT:    [[B:%.*]] = icmp sgt <2 x i32> %A, <i32 99, i32 99>
+; CHECK-NEXT:    [[C:%.*]] = icmp slt <2 x i32> %A, <i32 50, i32 50>
+; CHECK-NEXT:    [[D:%.*]] = or <2 x i1> [[B]], [[C]]
+; CHECK-NEXT:    ret <2 x i1> [[D]]
+;
+  %B = icmp sge <2 x i32> %A, <i32 100, i32 100>
+  %C = icmp slt <2 x i32> %A, <i32 50, i32 50>
+  %D = or <2 x i1> %B, %C
+  ret <2 x i1> %D
 }
 
 define i1 @test19(i32 %A) {
@@ -542,6 +555,8 @@ define i32 @test41(i32 %a, i32 %b) {
   ret i32 %or
 }
 
+; (~A ^ B) | (A & B) -> (~A ^ B)
+
 define i32 @test42(i32 %a, i32 %b) {
 ; CHECK-LABEL: @test42(
 ; CHECK-NEXT:    [[TMP1:%.*]] = xor i32 %a, -1
@@ -555,6 +570,42 @@ define i32 @test42(i32 %a, i32 %b) {
   ret i32 %or
 }
 
+; FIXME: We miss the fold because the pattern matching is inadequate.
+
+define i32 @test42_commuted_and(i32 %a, i32 %b) {
+; CHECK-LABEL: @test42_commuted_and(
+; CHECK-NEXT:    [[NEGA:%.*]] = xor i32 %a, -1
+; CHECK-NEXT:    [[XOR:%.*]] = xor i32 [[NEGA]], %b
+; CHECK-NEXT:    [[AND:%.*]] = and i32 %b, %a
+; CHECK-NEXT:    [[OR:%.*]] = or i32 [[XOR]], [[AND]]
+; CHECK-NEXT:    ret i32 [[OR]]
+;
+  %nega = xor i32 %a, -1
+  %xor = xor i32 %nega, %b
+  %and = and i32 %b, %a
+  %or = or i32 %xor, %and
+  ret i32 %or
+}
+
+; FIXME: We miss the fold because the pattern matching is inadequate.
+
+define i32 @test42_commuted_xor(i32 %a, i32 %b) {
+; CHECK-LABEL: @test42_commuted_xor(
+; CHECK-NEXT:    [[NEGA:%.*]] = xor i32 %a, -1
+; CHECK-NEXT:    [[XOR:%.*]] = xor i32 %b, [[NEGA]]
+; CHECK-NEXT:    [[AND:%.*]] = and i32 %a, %b
+; CHECK-NEXT:    [[OR:%.*]] = or i32 [[XOR]], [[AND]]
+; CHECK-NEXT:    ret i32 [[OR]]
+;
+  %nega = xor i32 %a, -1
+  %xor = xor i32 %b, %nega
+  %and = and i32 %a, %b
+  %or = or i32 %xor, %and
+  ret i32 %or
+}
+
+; Commute operands of the 'or'.
+
 define i32 @test43(i32 %a, i32 %b) {
 ; CHECK-LABEL: @test43(
 ; CHECK-NEXT:    [[OR:%.*]] = xor i32 %a, %b
@@ -562,6 +613,23 @@ define i32 @test43(i32 %a, i32 %b) {
 ;
   %neg = xor i32 %b, -1
   %and = and i32 %a, %neg
+  %xor = xor i32 %a, %b
+  %or = or i32 %and, %xor
+  ret i32 %or
+}
+
+; FIXME: We miss the fold because the pattern matching is inadequate.
+
+define i32 @test43_commuted_and(i32 %a, i32 %b) {
+; CHECK-LABEL: @test43_commuted_and(
+; CHECK-NEXT:    [[NEG:%.*]] = xor i32 %b, -1
+; CHECK-NEXT:    [[AND:%.*]] = and i32 [[NEG]], %a
+; CHECK-NEXT:    [[XOR:%.*]] = xor i32 %a, %b
+; CHECK-NEXT:    [[OR:%.*]] = or i32 [[AND]], [[XOR]]
+; CHECK-NEXT:    ret i32 [[OR]]
+;
+  %neg = xor i32 %b, -1
+  %and = and i32 %neg, %a
   %xor = xor i32 %a, %b
   %or = or i32 %and, %xor
   ret i32 %or

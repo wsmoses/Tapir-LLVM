@@ -196,7 +196,7 @@ struct ComprehensiveStaticInstrumentation : public ModulePass {
   static char ID;
 
   ComprehensiveStaticInstrumentation() : ModulePass(ID) {}
-  const char *getPassName() const override;
+  StringRef getPassName() const override;
   bool runOnModule(Module &M) override;
   void getAnalysisUsage(AnalysisUsage &AU) const override;
 
@@ -276,7 +276,7 @@ char ComprehensiveStaticInstrumentation::ID = 0;
 INITIALIZE_PASS(ComprehensiveStaticInstrumentation, "csi",
                 "ComprehensiveStaticInstrumentation pass", false, false)
 
-const char *ComprehensiveStaticInstrumentation::getPassName() const {
+StringRef ComprehensiveStaticInstrumentation::getPassName() const {
   return "ComprehensiveStaticInstrumentation";
 }
 

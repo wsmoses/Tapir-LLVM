@@ -73,13 +73,17 @@ MachOUniversalBinary::ObjectForArch::getAsObjectFile() const {
 
   StringRef ParentData = Parent->getData();
   StringRef ObjectData;
-  if (Parent->getMagic() == MachO::FAT_MAGIC)
+  uint32_t cputype;
+  if (Parent->getMagic() == MachO::FAT_MAGIC) {
     ObjectData = ParentData.substr(Header.offset, Header.size);
-  else // Parent->getMagic() == MachO::FAT_MAGIC_64
+    cputype = Header.cputype;
+  } else { // Parent->getMagic() == MachO::FAT_MAGIC_64
     ObjectData = ParentData.substr(Header64.offset, Header64.size);
+    cputype = Header64.cputype;
+  }
   StringRef ObjectName = Parent->getFileName();
   MemoryBufferRef ObjBuffer(ObjectData, ObjectName);
-  return ObjectFile::createMachOObjectFile(ObjBuffer);
+  return ObjectFile::createMachOObjectFile(ObjBuffer, cputype, Index);
 }
 
 Expected<std::unique_ptr<Archive>>
@@ -103,7 +107,7 @@ void MachOUniversalBinary::anchor() { }
 
 Expected<std::unique_ptr<MachOUniversalBinary>>
 MachOUniversalBinary::create(MemoryBufferRef Source) {
-  Error Err;
+  Error Err = Error::success();
   std::unique_ptr<MachOUniversalBinary> Ret(
       new MachOUniversalBinary(Source, Err));
   if (Err)
@@ -153,10 +157,9 @@ MachOUniversalBinary::getObjectForArch(StringRef ArchName) const {
                                               ArchName,
                                           object_error::arch_not_found);
 
-  for (object_iterator I = begin_objects(), E = end_objects(); I != E; ++I) {
-    if (I->getArchTypeName() == ArchName)
-      return I->getAsObjectFile();
-  }
+  for (auto &Obj : objects())
+    if (Obj.getArchTypeName() == ArchName)
+      return Obj.getAsObjectFile();
   return make_error<GenericBinaryError>("fat file does not "
                                         "contain " +
                                             ArchName,

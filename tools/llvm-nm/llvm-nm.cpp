@@ -56,7 +56,7 @@ cl::opt<OutputFormatTy> OutputFormat(
     "format", cl::desc("Specify output format"),
     cl::values(clEnumVal(bsd, "BSD format"), clEnumVal(sysv, "System V format"),
                clEnumVal(posix, "POSIX.2 format"),
-               clEnumVal(darwin, "Darwin -m format"), clEnumValEnd),
+               clEnumVal(darwin, "Darwin -m format")),
     cl::init(bsd));
 cl::alias OutputFormat2("f", cl::desc("Alias for --format"),
                         cl::aliasopt(OutputFormat));
@@ -143,7 +143,7 @@ enum Radix { d, o, x };
 cl::opt<Radix>
     AddressRadix("radix", cl::desc("Radix (o/d/x) for printing symbol Values"),
                  cl::values(clEnumVal(d, "decimal"), clEnumVal(o, "octal"),
-                            clEnumVal(x, "hexadecimal"), clEnumValEnd),
+                            clEnumVal(x, "hexadecimal")),
                  cl::init(x));
 cl::alias RadixAlias("t", cl::desc("Alias for --radix"),
                      cl::aliasopt(AddressRadix));
@@ -265,14 +265,8 @@ static bool compareSymbolName(const NMSymbol &A, const NMSymbol &B) {
 }
 
 static char isSymbolList64Bit(SymbolicFile &Obj) {
-  if (isa<IRObjectFile>(Obj)) {
-    IRObjectFile *IRobj = dyn_cast<IRObjectFile>(&Obj);
-    Module &M = IRobj->getModule();
-    if (M.getTargetTriple().empty())
-      return false;
-    Triple T(M.getTargetTriple());
-    return T.isArch64Bit();
-  }
+  if (auto *IRObj = dyn_cast<IRObjectFile>(&Obj))
+    return Triple(IRObj->getTargetTriple()).isArch64Bit();
   if (isa<COFFObjectFile>(Obj))
     return false;
   if (MachOObjectFile *MachO = dyn_cast<MachOObjectFile>(&Obj))
@@ -597,6 +591,10 @@ static void darwinPrintStab(MachOObjectFile *MachO, SymbolListT::iterator I) {
   outs() << Str;
 }
 
+static bool symbolIsDefined(const NMSymbol &Sym) {
+  return Sym.TypeChar != 'U' && Sym.TypeChar != 'w' && Sym.TypeChar != 'v';
+}
+
 static void sortAndPrintSymbolList(SymbolicFile &Obj, bool printName,
                                    const std::string &ArchiveName,
                                    const std::string &ArchitectureName) {
@@ -683,24 +681,28 @@ static void sortAndPrintSymbolList(SymbolicFile &Obj, bool printName,
     char SymbolAddrStr[18] = "";
     char SymbolSizeStr[18] = "";
 
-    if (OutputFormat == sysv || I->TypeChar == 'U') {
-      if (OutputFormat == posix)
+    // If the format is SysV or the symbol isn't defined, then print spaces.
+    if (OutputFormat == sysv || !symbolIsDefined(*I)) {
+      if (OutputFormat == posix) {
         format(printFormat, I->Address)
           .print(SymbolAddrStr, sizeof(SymbolAddrStr));
-      else
+        format(printFormat, I->Size)
+            .print(SymbolSizeStr, sizeof(SymbolSizeStr));
+      } else {
         strcpy(SymbolAddrStr, printBlanks);
+        strcpy(SymbolSizeStr, printBlanks);
+      }
     }
-    if (OutputFormat == sysv)
-      strcpy(SymbolSizeStr, printBlanks);
 
-    if (I->TypeChar != 'U') {
+    // Otherwise, print the symbol address and size.
+    if (symbolIsDefined(*I)) {
       if (Obj.isIR())
         strcpy(SymbolAddrStr, printDashes);
       else
         format(printFormat, I->Address)
           .print(SymbolAddrStr, sizeof(SymbolAddrStr));
+      format(printFormat, I->Size).print(SymbolSizeStr, sizeof(SymbolSizeStr));
     }
-    format(printFormat, I->Size).print(SymbolSizeStr, sizeof(SymbolSizeStr));
 
     // If OutputFormat is darwin or we are printing Mach-O symbols in hex and
     // we have a MachOObjectFile, call darwinPrintSymbol to print as darwin's
@@ -770,6 +772,9 @@ static char getSymbolNMTypeChar(ELFObjectFileBase &Obj,
       break;
     case ELF::SHT_NOBITS:
       return 'b';
+    case ELF::SHT_INIT_ARRAY:
+    case ELF::SHT_FINI_ARRAY:
+      return 't';
     }
   }
 
@@ -1051,9 +1056,9 @@ dumpSymbolNamesFromObject(SymbolicFile &Obj, bool printName,
 // architectures was specificed.  If not then an error is generated and this
 // routine returns false.  Else it returns true.
 static bool checkMachOAndArchFlags(SymbolicFile *O, std::string &Filename) {
-  MachOObjectFile *MachO = dyn_cast<MachOObjectFile>(O);
+  auto *MachO = dyn_cast<MachOObjectFile>(O);
 
-  if (!MachO || ArchAll || ArchFlags.size() == 0)
+  if (!MachO || ArchAll || ArchFlags.empty())
     return true;
 
   MachO::mach_header H;
@@ -1113,7 +1118,7 @@ static void dumpSymbolNamesFromFile(std::string &Filename) {
     }
 
     {
-      Error Err;
+      Error Err = Error::success();
       for (auto &C : A->children(Err)) {
         Expected<std::unique_ptr<Binary>> ChildOrErr = C.getAsBinary(&Context);
         if (!ChildOrErr) {
@@ -1178,7 +1183,7 @@ static void dumpSymbolNamesFromFile(std::string &Filename) {
             } else if (Expected<std::unique_ptr<Archive>> AOrErr =
                            I->getAsArchive()) {
               std::unique_ptr<Archive> &A = *AOrErr;
-              Error Err;
+              Error Err = Error::success();
               for (auto &C : A->children(Err)) {
                 Expected<std::unique_ptr<Binary>> ChildOrErr =
                     C.getAsBinary(&Context);
@@ -1249,7 +1254,7 @@ static void dumpSymbolNamesFromFile(std::string &Filename) {
           } else if (Expected<std::unique_ptr<Archive>> AOrErr =
                          I->getAsArchive()) {
             std::unique_ptr<Archive> &A = *AOrErr;
-            Error Err;
+            Error Err = Error::success();
             for (auto &C : A->children(Err)) {
               Expected<std::unique_ptr<Binary>> ChildOrErr =
                   C.getAsBinary(&Context);
@@ -1316,7 +1321,7 @@ static void dumpSymbolNamesFromFile(std::string &Filename) {
       } else if (Expected<std::unique_ptr<Archive>> AOrErr =
                   I->getAsArchive()) {
         std::unique_ptr<Archive> &A = *AOrErr;
-        Error Err;
+        Error Err = Error::success();
         for (auto &C : A->children(Err)) {
           Expected<std::unique_ptr<Binary>> ChildOrErr =
             C.getAsBinary(&Context);

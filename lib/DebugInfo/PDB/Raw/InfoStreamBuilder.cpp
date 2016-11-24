@@ -9,6 +9,7 @@
 
 #include "llvm/DebugInfo/PDB/Raw/InfoStreamBuilder.h"
 
+#include "llvm/DebugInfo/MSF/MSFBuilder.h"
 #include "llvm/DebugInfo/MSF/MappedBlockStream.h"
 #include "llvm/DebugInfo/MSF/StreamWriter.h"
 #include "llvm/DebugInfo/PDB/Raw/InfoStream.h"
@@ -20,8 +21,8 @@ using namespace llvm::codeview;
 using namespace llvm::msf;
 using namespace llvm::pdb;
 
-InfoStreamBuilder::InfoStreamBuilder()
-    : Ver(PdbRaw_ImplVer::PdbImplVC70), Sig(-1), Age(0) {}
+InfoStreamBuilder::InfoStreamBuilder(msf::MSFBuilder &Msf)
+    : Msf(Msf), Ver(PdbRaw_ImplVer::PdbImplVC70), Sig(-1), Age(0) {}
 
 void InfoStreamBuilder::setVersion(PdbRaw_ImplVer V) { Ver = V; }
 
@@ -39,20 +40,11 @@ uint32_t InfoStreamBuilder::calculateSerializedLength() const {
   return sizeof(InfoStreamHeader) + NamedStreams.calculateSerializedLength();
 }
 
-Expected<std::unique_ptr<InfoStream>>
-InfoStreamBuilder::build(PDBFile &File, const msf::WritableStream &Buffer) {
-  auto StreamData = MappedBlockStream::createIndexedStream(File.getMsfLayout(),
-                                                           Buffer, StreamPDB);
-  auto Info = llvm::make_unique<InfoStream>(std::move(StreamData));
-  Info->Version = Ver;
-  Info->Signature = Sig;
-  Info->Age = Age;
-  Info->Guid = Guid;
-  auto NS = NamedStreams.build();
-  if (!NS)
-    return NS.takeError();
-  Info->NamedStreams = **NS;
-  return std::move(Info);
+Error InfoStreamBuilder::finalizeMsfLayout() {
+  uint32_t Length = calculateSerializedLength();
+  if (auto EC = Msf.setStreamSize(StreamPDB, Length))
+    return EC;
+  return Error::success();
 }
 
 Error InfoStreamBuilder::commit(const msf::MSFLayout &Layout,

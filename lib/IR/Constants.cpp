@@ -347,10 +347,8 @@ static bool canTrapImpl(const Constant *C,
     return false;
   case Instruction::UDiv:
   case Instruction::SDiv:
-  case Instruction::FDiv:
   case Instruction::URem:
   case Instruction::SRem:
-  case Instruction::FRem:
     // Div and rem can trap if the RHS is not known to be non-zero.
     if (!isa<ConstantInt>(CE->getOperand(1)) ||CE->getOperand(1)->isNullValue())
       return true;
@@ -547,14 +545,14 @@ Constant *ConstantInt::getFalse(Type *Ty) {
 ConstantInt *ConstantInt::get(LLVMContext &Context, const APInt &V) {
   // get an existing value or the insertion position
   LLVMContextImpl *pImpl = Context.pImpl;
-  ConstantInt *&Slot = pImpl->IntConstants[V];
+  std::unique_ptr<ConstantInt> &Slot = pImpl->IntConstants[V];
   if (!Slot) {
     // Get the corresponding integer type for the bit width of the value.
     IntegerType *ITy = IntegerType::get(Context, V.getBitWidth());
-    Slot = new ConstantInt(ITy, V);
+    Slot.reset(new ConstantInt(ITy, V));
   }
   assert(Slot->getType() == IntegerType::get(Context, V.getBitWidth()));
-  return Slot;
+  return Slot.get();
 }
 
 Constant *ConstantInt::get(Type *Ty, uint64_t V, bool isSigned) {
@@ -687,7 +685,7 @@ Constant *ConstantFP::getZeroValueForNegation(Type *Ty) {
 ConstantFP* ConstantFP::get(LLVMContext &Context, const APFloat& V) {
   LLVMContextImpl* pImpl = Context.pImpl;
 
-  ConstantFP *&Slot = pImpl->FPConstants[V];
+  std::unique_ptr<ConstantFP> &Slot = pImpl->FPConstants[V];
 
   if (!Slot) {
     Type *Ty;
@@ -706,10 +704,10 @@ ConstantFP* ConstantFP::get(LLVMContext &Context, const APFloat& V) {
              "Unknown FP format");
       Ty = Type::getPPC_FP128Ty(Context);
     }
-    Slot = new ConstantFP(Ty, V);
+    Slot.reset(new ConstantFP(Ty, V));
   }
 
-  return Slot;
+  return Slot.get();
 }
 
 Constant *ConstantFP::getInfinity(Type *Ty, bool Negative) {
@@ -1169,7 +1167,7 @@ Constant *ConstantExpr::getWithOperands(ArrayRef<Constant *> Ops, Type *Ty,
     assert(SrcTy || (Ops[0]->getType() == getOperand(0)->getType()));
     return ConstantExpr::getGetElementPtr(
         SrcTy ? SrcTy : GEPO->getSourceElementType(), Ops[0], Ops.slice(1),
-        GEPO->isInBounds(), OnlyIfReducedTy);
+        GEPO->isInBounds(), GEPO->getInRangeIndex(), OnlyIfReducedTy);
   }
   case Instruction::ICmp:
   case Instruction::FCmp:
@@ -1261,12 +1259,13 @@ bool ConstantFP::isValueValidForType(Type *Ty, const APFloat& Val) {
 ConstantAggregateZero *ConstantAggregateZero::get(Type *Ty) {
   assert((Ty->isStructTy() || Ty->isArrayTy() || Ty->isVectorTy()) &&
          "Cannot create an aggregate zero of non-aggregate type!");
-  
-  ConstantAggregateZero *&Entry = Ty->getContext().pImpl->CAZConstants[Ty];
-  if (!Entry)
-    Entry = new ConstantAggregateZero(Ty);
 
-  return Entry;
+  std::unique_ptr<ConstantAggregateZero> &Entry =
+      Ty->getContext().pImpl->CAZConstants[Ty];
+  if (!Entry)
+    Entry.reset(new ConstantAggregateZero(Ty));
+
+  return Entry.get();
 }
 
 /// Remove the constant from the constant table.
@@ -1327,11 +1326,12 @@ const APInt &Constant::getUniqueInteger() const {
 //
 
 ConstantPointerNull *ConstantPointerNull::get(PointerType *Ty) {
-  ConstantPointerNull *&Entry = Ty->getContext().pImpl->CPNConstants[Ty];
+  std::unique_ptr<ConstantPointerNull> &Entry =
+      Ty->getContext().pImpl->CPNConstants[Ty];
   if (!Entry)
-    Entry = new ConstantPointerNull(Ty);
+    Entry.reset(new ConstantPointerNull(Ty));
 
-  return Entry;
+  return Entry.get();
 }
 
 /// Remove the constant from the constant table.
@@ -1340,11 +1340,11 @@ void ConstantPointerNull::destroyConstantImpl() {
 }
 
 UndefValue *UndefValue::get(Type *Ty) {
-  UndefValue *&Entry = Ty->getContext().pImpl->UVConstants[Ty];
+  std::unique_ptr<UndefValue> &Entry = Ty->getContext().pImpl->UVConstants[Ty];
   if (!Entry)
-    Entry = new UndefValue(Ty);
+    Entry.reset(new UndefValue(Ty));
 
-  return Entry;
+  return Entry.get();
 }
 
 /// Remove the constant from the constant table.
@@ -1893,6 +1893,7 @@ Constant *ConstantExpr::getSelect(Constant *C, Constant *V1, Constant *V2,
 
 Constant *ConstantExpr::getGetElementPtr(Type *Ty, Constant *C,
                                          ArrayRef<Value *> Idxs, bool InBounds,
+                                         Optional<unsigned> InRangeIndex,
                                          Type *OnlyIfReducedTy) {
   if (!Ty)
     Ty = cast<PointerType>(C->getType()->getScalarType())->getElementType();
@@ -1901,7 +1902,8 @@ Constant *ConstantExpr::getGetElementPtr(Type *Ty, Constant *C,
         Ty ==
         cast<PointerType>(C->getType()->getScalarType())->getContainedType(0u));
 
-  if (Constant *FC = ConstantFoldGetElementPtr(Ty, C, InBounds, Idxs))
+  if (Constant *FC =
+          ConstantFoldGetElementPtr(Ty, C, InBounds, InRangeIndex, Idxs))
     return FC;          // Fold a few common cases.
 
   // Get the result type of the getelementptr!
@@ -1937,9 +1939,12 @@ Constant *ConstantExpr::getGetElementPtr(Type *Ty, Constant *C,
       Idx = ConstantVector::getSplat(NumVecElts, Idx);
     ArgVec.push_back(Idx);
   }
+
+  unsigned SubClassOptionalData = InBounds ? GEPOperator::IsInBounds : 0;
+  if (InRangeIndex && *InRangeIndex < 63)
+    SubClassOptionalData |= (*InRangeIndex + 1) << 1;
   const ConstantExprKeyType Key(Instruction::GetElementPtr, ArgVec, 0,
-                                InBounds ? GEPOperator::IsInBounds : 0, None,
-                                Ty);
+                                SubClassOptionalData, None, Ty);
 
   LLVMContextImpl *pImpl = C->getContext().pImpl;
   return pImpl->ExprConstants.getOrCreate(ReqTy, Key);

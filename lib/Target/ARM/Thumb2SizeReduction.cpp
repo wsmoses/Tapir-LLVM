@@ -148,10 +148,10 @@ namespace {
 
     MachineFunctionProperties getRequiredProperties() const override {
       return MachineFunctionProperties().set(
-          MachineFunctionProperties::Property::AllVRegsAllocated);
+          MachineFunctionProperties::Property::NoVRegs);
     }
 
-    const char *getPassName() const override {
+    StringRef getPassName() const override {
       return "Thumb2 instruction size reduction pass";
     }
 
@@ -428,6 +428,10 @@ Thumb2SizeReduce::ReduceLoadStore(MachineBasicBlock &MBB, MachineInstr *MI,
   case ARM::t2LDR_POST:
   case ARM::t2STR_POST: {
     if (!MBB.getParent()->getFunction()->optForMinSize())
+      return false;
+
+    if (!MI->hasOneMemOperand() ||
+        (*MI->memoperands_begin())->getAlignment() < 4)
       return false;
 
     // We're creating a completely different type of load/store - LDM from LDR.

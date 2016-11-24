@@ -24,10 +24,9 @@ static cl::opt<TargetLibraryInfoImpl::VectorLibrary> ClVectorLibrary(
                clEnumValN(TargetLibraryInfoImpl::Accelerate, "Accelerate",
                           "Accelerate framework"),
                clEnumValN(TargetLibraryInfoImpl::SVML, "SVML",
-                          "Intel SVML library"),
-               clEnumValEnd));
+                          "Intel SVML library")));
 
-const char *const TargetLibraryInfoImpl::StandardNames[LibFunc::NumLibFuncs] = {
+StringRef const TargetLibraryInfoImpl::StandardNames[LibFunc::NumLibFuncs] = {
 #define TLI_DEFINE_STRING
 #include "llvm/Analysis/TargetLibraryInfo.def"
 };
@@ -54,13 +53,32 @@ static bool hasSinCosPiStret(const Triple &T) {
 /// specified target triple.  This should be carefully written so that a missing
 /// target triple gets a sane set of defaults.
 static void initialize(TargetLibraryInfoImpl &TLI, const Triple &T,
-                       ArrayRef<const char *> StandardNames) {
+                       ArrayRef<StringRef> StandardNames) {
   // Verify that the StandardNames array is in alphabetical order.
   assert(std::is_sorted(StandardNames.begin(), StandardNames.end(),
-                        [](const char *LHS, const char *RHS) {
-                          return strcmp(LHS, RHS) < 0;
+                        [](StringRef LHS, StringRef RHS) {
+                          return LHS < RHS;
                         }) &&
          "TargetLibraryInfoImpl function names must be sorted");
+
+  bool ShouldExtI32Param = false, ShouldExtI32Return = false,
+       ShouldSignExtI32Param = false;
+  // PowerPC64, Sparc64, SystemZ need signext/zeroext on i32 parameters and
+  // returns corresponding to C-level ints and unsigned ints.
+  if (T.getArch() == Triple::ppc64 || T.getArch() == Triple::ppc64le ||
+      T.getArch() == Triple::sparcv9 || T.getArch() == Triple::systemz) {
+    ShouldExtI32Param = true;
+    ShouldExtI32Return = true;
+  }
+  // Mips, on the other hand, needs signext on i32 parameters corresponding
+  // to both signed and unsigned ints.
+  if (T.getArch() == Triple::mips || T.getArch() == Triple::mipsel ||
+      T.getArch() == Triple::mips64 || T.getArch() == Triple::mips64el) {
+    ShouldSignExtI32Param = true;
+  }
+  TLI.setShouldExtI32Param(ShouldExtI32Param);
+  TLI.setShouldExtI32Return(ShouldExtI32Return);
+  TLI.setShouldSignExtI32Param(ShouldSignExtI32Param);
 
   if (T.getArch() == Triple::r600 ||
       T.getArch() == Triple::amdgcn) {
@@ -432,14 +450,19 @@ TargetLibraryInfoImpl::TargetLibraryInfoImpl(const Triple &T) {
 }
 
 TargetLibraryInfoImpl::TargetLibraryInfoImpl(const TargetLibraryInfoImpl &TLI)
-    : CustomNames(TLI.CustomNames) {
+    : CustomNames(TLI.CustomNames), ShouldExtI32Param(TLI.ShouldExtI32Param),
+      ShouldExtI32Return(TLI.ShouldExtI32Return),
+      ShouldSignExtI32Param(TLI.ShouldSignExtI32Param) {
   memcpy(AvailableArray, TLI.AvailableArray, sizeof(AvailableArray));
   VectorDescs = TLI.VectorDescs;
   ScalarDescs = TLI.ScalarDescs;
 }
 
 TargetLibraryInfoImpl::TargetLibraryInfoImpl(TargetLibraryInfoImpl &&TLI)
-    : CustomNames(std::move(TLI.CustomNames)) {
+    : CustomNames(std::move(TLI.CustomNames)),
+      ShouldExtI32Param(TLI.ShouldExtI32Param),
+      ShouldExtI32Return(TLI.ShouldExtI32Return),
+      ShouldSignExtI32Param(TLI.ShouldSignExtI32Param) {
   std::move(std::begin(TLI.AvailableArray), std::end(TLI.AvailableArray),
             AvailableArray);
   VectorDescs = TLI.VectorDescs;
@@ -448,12 +471,18 @@ TargetLibraryInfoImpl::TargetLibraryInfoImpl(TargetLibraryInfoImpl &&TLI)
 
 TargetLibraryInfoImpl &TargetLibraryInfoImpl::operator=(const TargetLibraryInfoImpl &TLI) {
   CustomNames = TLI.CustomNames;
+  ShouldExtI32Param = TLI.ShouldExtI32Param;
+  ShouldExtI32Return = TLI.ShouldExtI32Return;
+  ShouldSignExtI32Param = TLI.ShouldSignExtI32Param;
   memcpy(AvailableArray, TLI.AvailableArray, sizeof(AvailableArray));
   return *this;
 }
 
 TargetLibraryInfoImpl &TargetLibraryInfoImpl::operator=(TargetLibraryInfoImpl &&TLI) {
   CustomNames = std::move(TLI.CustomNames);
+  ShouldExtI32Param = TLI.ShouldExtI32Param;
+  ShouldExtI32Return = TLI.ShouldExtI32Return;
+  ShouldSignExtI32Param = TLI.ShouldSignExtI32Param;
   std::move(std::begin(TLI.AvailableArray), std::end(TLI.AvailableArray),
             AvailableArray);
   return *this;
@@ -472,16 +501,16 @@ static StringRef sanitizeFunctionName(StringRef funcName) {
 
 bool TargetLibraryInfoImpl::getLibFunc(StringRef funcName,
                                        LibFunc::Func &F) const {
-  const char *const *Start = &StandardNames[0];
-  const char *const *End = &StandardNames[LibFunc::NumLibFuncs];
+  StringRef const *Start = &StandardNames[0];
+  StringRef const *End = &StandardNames[LibFunc::NumLibFuncs];
 
   funcName = sanitizeFunctionName(funcName);
   if (funcName.empty())
     return false;
 
-  const char *const *I = std::lower_bound(
-      Start, End, funcName, [](const char *LHS, StringRef RHS) {
-        return std::strncmp(LHS, RHS.data(), RHS.size()) < 0;
+  StringRef const *I = std::lower_bound(
+      Start, End, funcName, [](StringRef LHS, StringRef RHS) {
+        return LHS < RHS;
       });
   if (I != End && *I == funcName) {
     F = (LibFunc::Func)(I - Start);
@@ -847,10 +876,10 @@ bool TargetLibraryInfoImpl::isValidProtoForLibFunc(const FunctionType &FTy,
   case LibFunc::stat64:
   case LibFunc::lstat64:
   case LibFunc::statvfs64:
-    return (NumParams >= 1 && FTy.getParamType(0)->isPointerTy() &&
+    return (NumParams == 2 && FTy.getParamType(0)->isPointerTy() &&
             FTy.getParamType(1)->isPointerTy());
   case LibFunc::dunder_isoc99_sscanf:
-    return (NumParams >= 1 && FTy.getParamType(0)->isPointerTy() &&
+    return (NumParams >= 2 && FTy.getParamType(0)->isPointerTy() &&
             FTy.getParamType(1)->isPointerTy());
   case LibFunc::fopen64:
     return (NumParams == 2 && FTy.getReturnType()->isPointerTy() &&
@@ -957,11 +986,14 @@ bool TargetLibraryInfoImpl::isValidProtoForLibFunc(const FunctionType &FTy,
   case LibFunc::ffs:
   case LibFunc::ffsl:
   case LibFunc::ffsll:
+    return (NumParams == 1 && FTy.getReturnType()->isIntegerTy(32) &&
+            FTy.getParamType(0)->isIntegerTy());
+
   case LibFunc::isdigit:
   case LibFunc::isascii:
   case LibFunc::toascii:
     return (NumParams == 1 && FTy.getReturnType()->isIntegerTy(32) &&
-            FTy.getParamType(0)->isIntegerTy());
+            FTy.getReturnType() == FTy.getParamType(0));
 
   case LibFunc::fls:
   case LibFunc::flsl:
@@ -1008,21 +1040,19 @@ void TargetLibraryInfoImpl::disableAllFunctions() {
 }
 
 static bool compareByScalarFnName(const VecDesc &LHS, const VecDesc &RHS) {
-  return std::strncmp(LHS.ScalarFnName, RHS.ScalarFnName,
-                      std::strlen(RHS.ScalarFnName)) < 0;
+  return LHS.ScalarFnName < RHS.ScalarFnName;
 }
 
 static bool compareByVectorFnName(const VecDesc &LHS, const VecDesc &RHS) {
-  return std::strncmp(LHS.VectorFnName, RHS.VectorFnName,
-                      std::strlen(RHS.VectorFnName)) < 0;
+  return LHS.VectorFnName < RHS.VectorFnName;
 }
 
 static bool compareWithScalarFnName(const VecDesc &LHS, StringRef S) {
-  return std::strncmp(LHS.ScalarFnName, S.data(), S.size()) < 0;
+  return LHS.ScalarFnName < S;
 }
 
 static bool compareWithVectorFnName(const VecDesc &LHS, StringRef S) {
-  return std::strncmp(LHS.VectorFnName, S.data(), S.size()) < 0;
+  return LHS.VectorFnName < S;
 }
 
 void TargetLibraryInfoImpl::addVectorizableFunctions(ArrayRef<VecDesc> Fns) {
@@ -1235,7 +1265,7 @@ TargetLibraryInfoWrapperPass::TargetLibraryInfoWrapperPass(
   initializeTargetLibraryInfoWrapperPassPass(*PassRegistry::getPassRegistry());
 }
 
-char TargetLibraryAnalysis::PassID;
+AnalysisKey TargetLibraryAnalysis::Key;
 
 // Register the basic pass.
 INITIALIZE_PASS(TargetLibraryInfoWrapperPass, "targetlibinfo",

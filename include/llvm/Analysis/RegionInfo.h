@@ -626,12 +626,14 @@ public:
   /// are direct children of this Region. It does not iterate over any
   /// RegionNodes that are also element of a subregion of this Region.
   //@{
-  typedef df_iterator<RegionNodeT *, SmallPtrSet<RegionNodeT *, 8>, false,
-                      GraphTraits<RegionNodeT *>> element_iterator;
+  typedef df_iterator<RegionNodeT *, df_iterator_default_set<RegionNodeT *>,
+                      false, GraphTraits<RegionNodeT *>>
+      element_iterator;
 
-  typedef df_iterator<const RegionNodeT *, SmallPtrSet<const RegionNodeT *, 8>,
-                      false,
-                      GraphTraits<const RegionNodeT *>> const_element_iterator;
+  typedef df_iterator<const RegionNodeT *,
+                      df_iterator_default_set<const RegionNodeT *>, false,
+                      GraphTraits<const RegionNodeT *>>
+      const_element_iterator;
 
   element_iterator element_begin();
   element_iterator element_end();
@@ -676,7 +678,6 @@ class RegionInfoBase {
   friend class MachineRegionInfo;
   typedef DenseMap<BlockT *, BlockT *> BBtoBBMap;
   typedef DenseMap<BlockT *, RegionT *> BBtoRegionMap;
-  typedef SmallPtrSet<RegionT *, 4> RegionSet;
 
   RegionInfoBase();
   virtual ~RegionInfoBase();
@@ -932,7 +933,7 @@ public:
 /// \brief Analysis pass that exposes the \c RegionInfo for a function.
 class RegionInfoAnalysis : public AnalysisInfoMixin<RegionInfoAnalysis> {
   friend AnalysisInfoMixin<RegionInfoAnalysis>;
-  static char PassID;
+  static AnalysisKey Key;
 
 public:
   typedef RegionInfo Result;

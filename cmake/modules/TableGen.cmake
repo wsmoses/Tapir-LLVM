@@ -2,6 +2,8 @@
 # Extra parameters for `tblgen' may come after `ofn' parameter.
 # Adds the name of the generated file to TABLEGEN_OUTPUT.
 
+include(LLVMExternalProjectUtils)
+
 function(tablegen project ofn)
   # Validate calling context.
   foreach(v
@@ -71,18 +73,15 @@ function(add_public_tablegen_target target)
 endfunction()
 
 if(LLVM_USE_HOST_TOOLS)
-  add_custom_command(OUTPUT LIB_LLVMSUPPORT
-      COMMAND ${CMAKE_COMMAND} --build . --target LLVMSupport --config Release
-      DEPENDS CONFIGURE_LLVM_NATIVE
-      WORKING_DIRECTORY ${LLVM_NATIVE_BUILD}
-      COMMENT "Building libLLVMSupport for native TableGen...")
-  add_custom_target(NATIVE_LIB_LLVMSUPPORT DEPENDS LIB_LLVMSUPPORT)
-
+  llvm_ExternalProject_BuildCmd(tblgen_build_cmd LLVMSupport
+    ${LLVM_NATIVE_BUILD}
+    CONFIGURATION Release)
   add_custom_command(OUTPUT LIB_LLVMTABLEGEN
-      COMMAND ${CMAKE_COMMAND} --build . --target LLVMTableGen --config Release
+      COMMAND ${tblgen_build_cmd}
       DEPENDS CONFIGURE_LLVM_NATIVE
       WORKING_DIRECTORY ${LLVM_NATIVE_BUILD}
-      COMMENT "Building libLLVMTableGen for native TableGen...")
+      COMMENT "Building libLLVMTableGen for native TableGen..."
+      USES_TERMINAL)
   add_custom_target(NATIVE_LIB_LLVMTABLEGEN DEPENDS LIB_LLVMTABLEGEN)
 endif(LLVM_USE_HOST_TOOLS)
 
@@ -123,24 +122,28 @@ macro(add_tablegen target project)
       endif()
       set(${project}_TABLEGEN_EXE ${${project}_TABLEGEN_EXE} PARENT_SCOPE)
 
+      llvm_ExternalProject_BuildCmd(tblgen_build_cmd ${target}
+                                    ${LLVM_NATIVE_BUILD}
+                                    CONFIGURATION Release)
       add_custom_command(OUTPUT ${${project}_TABLEGEN_EXE}
-        COMMAND ${CMAKE_COMMAND} --build . --target ${target} --config Release
-        DEPENDS ${target} NATIVE_LIB_LLVMSUPPORT NATIVE_LIB_LLVMTABLEGEN
+        COMMAND ${tblgen_build_cmd}
+        DEPENDS ${target} NATIVE_LIB_LLVMTABLEGEN
         WORKING_DIRECTORY ${LLVM_NATIVE_BUILD}
-        COMMENT "Building native TableGen...")
+        COMMENT "Building native TableGen..."
+        USES_TERMINAL)
       add_custom_target(${project}-tablegen-host DEPENDS ${${project}_TABLEGEN_EXE})
       set(${project}_TABLEGEN_TARGET ${project}-tablegen-host PARENT_SCOPE)
     endif()
   endif()
 
-  if( MINGW )
-    if(CMAKE_SIZEOF_VOID_P MATCHES "8")
-      set_target_properties(${target} PROPERTIES LINK_FLAGS -Wl,--stack,16777216)
-    endif(CMAKE_SIZEOF_VOID_P MATCHES "8")
-  endif( MINGW )
   if (${project} STREQUAL LLVM AND NOT LLVM_INSTALL_TOOLCHAIN_ONLY)
+    if(${target} IN_LIST LLVM_DISTRIBUTION_COMPONENTS OR
+        NOT LLVM_DISTRIBUTION_COMPONENTS)
+      set(export_to_llvmexports EXPORT LLVMExports)
+    endif()
+
     install(TARGETS ${target}
-            EXPORT LLVMExports
+            ${export_to_llvmexports}
             RUNTIME DESTINATION ${LLVM_TOOLS_INSTALL_DIR})
   endif()
   set_property(GLOBAL APPEND PROPERTY LLVM_EXPORTS ${target})

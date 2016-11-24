@@ -29,10 +29,6 @@ class MDNode;
 class BasicBlock;
 struct AAMDNodes;
 
-template <>
-struct SymbolTableListSentinelTraits<Instruction>
-    : public ilist_half_embedded_sentinel_traits<Instruction> {};
-
 class Instruction : public User,
                     public ilist_node_with_parent<Instruction, BasicBlock> {
   void operator=(const Instruction &) = delete;
@@ -138,6 +134,11 @@ public:
     return getOpcode() == AShr;
   }
 
+  /// Return true if this is and/or/xor.
+  inline bool isBitwiseLogicOp() const {
+    return getOpcode() == And || getOpcode() == Or || getOpcode() == Xor;
+  }
+
   /// Determine if the OpCode is one of the CastInst instructions.
   static inline bool isCast(unsigned OpCode) {
     return OpCode >= CastOpsBegin && OpCode < CastOpsEnd;
@@ -202,6 +203,17 @@ public:
   void setMetadata(unsigned KindID, MDNode *Node);
   void setMetadata(StringRef Kind, MDNode *Node);
 
+  /// Copy metadata from \p SrcInst to this instruction. \p WL, if not empty,
+  /// specifies the list of meta data that needs to be copied. If \p WL is
+  /// empty, all meta data will be copied.
+  void copyMetadata(const Instruction &SrcInst,
+                    ArrayRef<unsigned> WL = ArrayRef<unsigned>());
+
+  /// If the instruction has "branch_weights" MD_prof metadata and the MDNode
+  /// has three operands (including name string), swap the order of the
+  /// metadata.
+  void swapProfMetadata();
+
   /// Drop all unknown metadata except for debug locations.
   /// @{
   /// Passes are required to drop metadata they don't understand. This is a
@@ -225,12 +237,12 @@ public:
   /// Retrieve the raw weight values of a conditional branch or select.
   /// Returns true on success with profile weights filled in.
   /// Returns false if no metadata or invalid metadata was found.
-  bool extractProfMetadata(uint64_t &TrueVal, uint64_t &FalseVal);
+  bool extractProfMetadata(uint64_t &TrueVal, uint64_t &FalseVal) const;
 
   /// Retrieve total raw weight values of a branch.
   /// Returns true on success with profile total weights filled in.
   /// Returns false if no metadata was found.
-  bool extractProfTotalWeight(uint64_t &TotalVal);
+  bool extractProfTotalWeight(uint64_t &TotalVal) const;
 
   /// Set the debug location information for this instruction.
   void setDebugLoc(DebugLoc Loc) { DbgLoc = std::move(Loc); }
@@ -455,7 +467,7 @@ public:
   bool isIdenticalTo(const Instruction *I) const;
 
   /// This is like isIdenticalTo, except that it ignores the
-  /// SubclassOptionalData flags, which specify conditions under which the
+  /// SubclassOptionalData flags, which may specify conditions under which the
   /// instruction's result is undefined.
   bool isIdenticalToWhenDefined(const Instruction *I) const;
 

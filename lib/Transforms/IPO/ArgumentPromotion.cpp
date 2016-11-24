@@ -40,7 +40,6 @@
 #include "llvm/Analysis/CallGraphSCCPass.h"
 #include "llvm/Analysis/Loads.h"
 #include "llvm/Analysis/TargetLibraryInfo.h"
-#include "llvm/Analysis/ValueTracking.h"
 #include "llvm/IR/CFG.h"
 #include "llvm/IR/CallSite.h"
 #include "llvm/IR/Constants.h"
@@ -375,8 +374,8 @@ static bool AllCallersPassInValidPointerForArgument(Argument *Arg) {
 
   unsigned ArgNo = Arg->getArgNo();
 
-  // Look at all call sites of the function.  At this pointer we know we only
-  // have direct callees.
+  // Look at all call sites of the function.  At this point we know we only have
+  // direct callees.
   for (User *U : Callee->users()) {
     CallSite CS(U);
     assert(CS && "Should only have direct calls!");
@@ -600,7 +599,7 @@ static bool isSafeToPromoteArgument(Argument *Arg, bool isByValOrInAlloca,
 
   // Because there could be several/many load instructions, remember which
   // blocks we know to be transparent to the load.
-  SmallPtrSet<BasicBlock*, 16> TranspBlocks;
+  df_iterator_default_set<BasicBlock*, 16> TranspBlocks;
 
   for (LoadInst *Load : Loads) {
     // Check to see if the load is invalidated from the start of the block to

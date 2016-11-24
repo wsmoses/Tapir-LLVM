@@ -13,7 +13,7 @@
 
 #include "llvm/Bitcode/BitcodeWriterPass.h"
 #include "llvm/Analysis/ModuleSummaryAnalysis.h"
-#include "llvm/Bitcode/ReaderWriter.h"
+#include "llvm/Bitcode/BitcodeWriter.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/PassManager.h"
 #include "llvm/Pass.h"
@@ -48,7 +48,7 @@ namespace {
       initializeWriteBitcodePassPass(*PassRegistry::getPassRegistry());
     }
 
-    const char *getPassName() const override { return "Bitcode Writer"; }
+    StringRef getPassName() const override { return "Bitcode Writer"; }
 
     bool runOnModule(Module &M) override {
       const ModuleSummaryIndex *Index =

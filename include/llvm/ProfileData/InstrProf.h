@@ -55,6 +55,7 @@ inline StringRef getInstrProfNameSectionName(bool AddSegment) {
 /// data.
 inline StringRef getInstrProfDataSectionName(bool AddSegment) {
   return AddSegment ? "__DATA," INSTR_PROF_DATA_SECT_NAME_STR
+                      ",regular,live_support"
                     : INSTR_PROF_DATA_SECT_NAME_STR;
 }
 
@@ -81,7 +82,7 @@ inline StringRef getInstrProfValueProfFuncName() {
 /// Return the name of the section containing function coverage mapping
 /// data.
 inline StringRef getInstrProfCoverageSectionName(bool AddSegment) {
-  return AddSegment ? "__DATA," INSTR_PROF_COVMAP_SECT_NAME_STR
+  return AddSegment ? "__LLVM_COV," INSTR_PROF_COVMAP_SECT_NAME_STR
                     : INSTR_PROF_COVMAP_SECT_NAME_STR;
 }
 
@@ -225,7 +226,7 @@ Error collectPGOFuncNameStrings(const std::vector<GlobalVariable *> &NameVars,
                                 std::string &Result, bool doCompression = true);
 class InstrProfSymtab;
 /// \c NameStrings is a string composed of one of more sub-strings encoded in
-/// the format described above. The substrings are seperated by 0 or more zero
+/// the format described above. The substrings are separated by 0 or more zero
 /// bytes. This method decodes the string and populates the \c Symtab.
 Error readPGOFuncNameStrings(StringRef NameStrings, InstrProfSymtab &Symtab);
 
@@ -291,7 +292,8 @@ enum class instrprof_error {
   counter_overflow,
   value_site_count_mismatch,
   compress_failed,
-  uncompress_failed
+  uncompress_failed,
+  empty_raw_profile
 };
 
 inline std::error_code make_error_code(instrprof_error E) {

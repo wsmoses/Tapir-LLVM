@@ -87,7 +87,7 @@ public:
 
   /// Return the number of registers in this class.
   unsigned getNumRegs() const { return MC->getNumRegs(); }
-  
+
   iterator_range<SmallVectorImpl<MCPhysReg>::const_iterator>
   getRegisters() const {
     return make_range(MC->begin(), MC->end());
@@ -447,11 +447,6 @@ public:
   virtual const MCPhysReg*
   getCalleeSavedRegs(const MachineFunction *MF) const = 0;
 
-  virtual const MCPhysReg*
-  getCalleeSavedRegsViaCopy(const MachineFunction *MF) const {
-    return nullptr;
-  }
-
   /// Return a mask of call-preserved registers for the given calling convention
   /// on the current function. The mask should include all call-preserved
   /// aliases. This is used by the register allocator to determine which
@@ -495,6 +490,10 @@ public:
   /// used by register scavenger to determine what registers are free.
   virtual BitVector getReservedRegs(const MachineFunction &MF) const = 0;
 
+  /// Returns true if PhysReg is unallocatable and constant throughout the
+  /// function.  Used by MachineRegisterInfo::isConstantPhysReg().
+  virtual bool isConstantPhysReg(unsigned PhysReg) const { return false; }
+
   /// Prior to adding the live-out mask to a stackmap or patchpoint
   /// instruction, provide the target the opportunity to adjust it (mainly to
   /// remove pseudo-registers that should be ignored).
@@ -518,7 +517,7 @@ public:
 
   // For a copy-like instruction that defines a register of class DefRC with
   // subreg index DefSubReg, reading from another source with class SrcRC and
-  // subregister SrcSubReg return true if this is a preferrable copy
+  // subregister SrcSubReg return true if this is a preferable copy
   // instruction or an earlier use should be used.
   virtual bool shouldRewriteCopySrc(const TargetRegisterClass *DefRC,
                                     unsigned DefSubReg,
@@ -811,6 +810,13 @@ public:
   /// Returns true if the target requires post PEI scavenging of registers for
   /// materializing frame index constants.
   virtual bool requiresFrameIndexScavenging(const MachineFunction &MF) const {
+    return false;
+  }
+
+  /// Returns true if the target requires using the RegScavenger directly for
+  /// frame elimination despite using requiresFrameIndexScavenging.
+  virtual bool requiresFrameIndexReplacementScavenging(
+      const MachineFunction &MF) const {
     return false;
   }
 

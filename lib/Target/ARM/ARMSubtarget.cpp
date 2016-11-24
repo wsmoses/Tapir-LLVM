@@ -59,8 +59,7 @@ IT(cl::desc("IT block support"), cl::Hidden, cl::init(DefaultIT),
               clEnumValN(RestrictedIT, "arm-restrict-it",
                          "Disallow deprecated IT based on ARMv8"),
               clEnumValN(NoRestrictedIT, "arm-no-restrict-it",
-                         "Allow IT blocks based on ARMv7"),
-              clEnumValEnd));
+                         "Allow IT blocks based on ARMv7")));
 
 /// ForceFastISel - Use the fast-isel, even for subtargets where it is not
 /// currently supported (for testing only).
@@ -99,7 +98,32 @@ ARMSubtarget::ARMSubtarget(const Triple &TT, const std::string &CPU,
                     : !isThumb()
                           ? (ARMBaseInstrInfo *)new ARMInstrInfo(*this)
                           : (ARMBaseInstrInfo *)new Thumb2InstrInfo(*this)),
-      TLInfo(TM, *this) {}
+      TLInfo(TM, *this), GISel() {}
+
+const CallLowering *ARMSubtarget::getCallLowering() const {
+  assert(GISel && "Access to GlobalISel APIs not set");
+  return GISel->getCallLowering();
+}
+
+const InstructionSelector *ARMSubtarget::getInstructionSelector() const {
+  assert(GISel && "Access to GlobalISel APIs not set");
+  return GISel->getInstructionSelector();
+}
+
+const LegalizerInfo *ARMSubtarget::getLegalizerInfo() const {
+  assert(GISel && "Access to GlobalISel APIs not set");
+  return GISel->getLegalizerInfo();
+}
+
+const RegisterBankInfo *ARMSubtarget::getRegBankInfo() const {
+  assert(GISel && "Access to GlobalISel APIs not set");
+  return GISel->getRegBankInfo();
+}
+
+bool ARMSubtarget::isXRaySupported() const {
+  // We don't currently suppport Thumb, but Windows requires Thumb.
+  return hasV6Ops() && hasARMOps() && !isTargetWindows();
+}
 
 void ARMSubtarget::initializeEnvironment() {
   // MCAsmInfo isn't always present (e.g. in opt) so we can't initialize this
@@ -239,6 +263,7 @@ void ARMSubtarget::initSubtargetFeatures(StringRef CPU, StringRef FS) {
   case CortexR7:
   case CortexM3:
   case ExynosM1:
+  case CortexR52:
     break;
   case Krait:
     PreISelOperandLatencyAdjustment = 1;
@@ -282,7 +307,7 @@ bool ARMSubtarget::isGVIndirectSymbol(const GlobalValue *GV) const {
   // 32 bit macho has no relocation for a-b if a is undefined, even if b is in
   // the section that is being relocated. This means we have to use o load even
   // for GVs that are known to be local to the dso.
-  if (isTargetDarwin() && TM.isPositionIndependent() &&
+  if (isTargetMachO() && TM.isPositionIndependent() &&
       (GV->isDeclarationForLinker() || GV->hasCommonLinkage()))
     return true;
 
@@ -314,9 +339,7 @@ bool ARMSubtarget::enablePostRAScheduler() const {
   return (!isThumb() || hasThumb2());
 }
 
-bool ARMSubtarget::enableAtomicExpand() const {
-  return hasAnyDataBarrier() && (!isThumb() || hasV8MBaselineOps());
-}
+bool ARMSubtarget::enableAtomicExpand() const { return hasAnyDataBarrier(); }
 
 bool ARMSubtarget::useStride4VFPs(const MachineFunction &MF) const {
   // For general targets, the prologue can grow when VFPs are allocated with

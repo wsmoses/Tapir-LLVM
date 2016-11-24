@@ -151,6 +151,7 @@ BitVector HexagonRegisterInfo::getReservedRegs(const MachineFunction &MF)
   Reserved.set(Hexagon::CS0);
   Reserved.set(Hexagon::CS1);
   Reserved.set(Hexagon::CS);
+  Reserved.set(Hexagon::USR);
   return Reserved;
 }
 
@@ -233,6 +234,28 @@ unsigned HexagonRegisterInfo::getStackRegister() const {
   return Hexagon::R29;
 }
 
+
+unsigned HexagonRegisterInfo::getHexagonSubRegIndex(
+      const TargetRegisterClass *RC, unsigned GenIdx) const {
+  assert(GenIdx == Hexagon::ps_sub_lo || GenIdx == Hexagon::ps_sub_hi);
+
+  static const unsigned ISub[] = { Hexagon::isub_lo, Hexagon::isub_hi };
+  static const unsigned VSub[] = { Hexagon::vsub_lo, Hexagon::vsub_hi };
+
+  switch (RC->getID()) {
+    case Hexagon::CtrRegs64RegClassID:
+    case Hexagon::DoubleRegsRegClassID:
+      return ISub[GenIdx];
+    case Hexagon::VecDblRegsRegClassID:
+    case Hexagon::VecDblRegs128BRegClassID:
+      return VSub[GenIdx];
+  }
+
+  if (const TargetRegisterClass *SuperRC = *RC->getSuperClasses())
+    return getHexagonSubRegIndex(SuperRC, GenIdx);
+
+  llvm_unreachable("Invalid register class");
+}
 
 bool HexagonRegisterInfo::useFPForScavengingIndex(const MachineFunction &MF)
       const {

@@ -141,8 +141,8 @@ def FeatureVLX     : SubtargetFeature<"avx512vl", "HasVLX", "true",
                       "Enable AVX-512 Vector Length eXtensions",
                                       [FeatureAVX512]>;
 def FeatureVBMI     : SubtargetFeature<"avx512vbmi", "HasVBMI", "true",
-                      "Enable AVX-512 Vector Bit Manipulation Instructions",
-                                      [FeatureAVX512]>;
+                      "Enable AVX-512 Vector Byte Manipulation Instructions",
+                                      [FeatureBWI]>;
 def FeatureIFMA     : SubtargetFeature<"avx512ifma", "HasIFMA", "true",
                       "Enable AVX-512 Integer Fused Multiple-Add",
                                       [FeatureAVX512]>;
@@ -262,6 +262,12 @@ def FeatureFastScalarFSQRT
 def FeatureFastVectorFSQRT
     : SubtargetFeature<"fast-vector-fsqrt", "HasFastVectorFSQRT",
                        "true", "Vector SQRT is fast (disable Newton-Raphson)">;
+// If lzcnt has equivalent latency/throughput to most simple integer ops, it can
+// be used to replace test/set sequences.
+def FeatureFastLZCNT
+    : SubtargetFeature<
+          "fast-lzcnt", "HasFastLZCNT", "true",
+          "LZCNT instructions are as fast as most simple integer ops">;
 
 //===----------------------------------------------------------------------===//
 // X86 processors supported.
@@ -646,6 +652,7 @@ def : ProcessorModel<"btver2", BtVer2Model, [
   FeatureF16C,
   FeatureMOVBE,
   FeatureLZCNT,
+  FeatureFastLZCNT,
   FeaturePOPCNT,
   FeatureXSAVE,
   FeatureXSAVEOPT,

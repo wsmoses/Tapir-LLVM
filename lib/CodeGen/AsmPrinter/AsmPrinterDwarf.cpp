@@ -138,8 +138,7 @@ void AsmPrinter::EmitTTypeReference(const GlobalValue *GV,
     const TargetLoweringObjectFile &TLOF = getObjFileLowering();
 
     const MCExpr *Exp =
-        TLOF.getTTypeGlobalReference(GV, Encoding, *Mang, TM, MMI,
-                                     *OutStreamer);
+        TLOF.getTTypeGlobalReference(GV, Encoding, TM, MMI, *OutStreamer);
     OutStreamer->EmitValue(Exp, GetSizeOfEncodedValue(Encoding));
   } else
     OutStreamer->EmitIntValue(0, GetSizeOfEncodedValue(Encoding));
@@ -178,7 +177,7 @@ void AsmPrinter::emitDwarfStringOffset(DwarfStringPoolEntryRef S) const {
 /// EmitDwarfRegOp - Emit dwarf register operation.
 void AsmPrinter::EmitDwarfRegOp(ByteStreamer &Streamer,
                                 const MachineLocation &MLoc) const {
-  DebugLocDwarfExpression Expr(getDwarfDebug()->getDwarfVersion(), Streamer);
+  DebugLocDwarfExpression Expr(getDwarfVersion(), Streamer);
   const MCRegisterInfo *MRI = MMI->getContext().getRegisterInfo();
   int Reg = MRI->getDwarfRegNum(MLoc.getReg(), false);
   if (Reg < 0) {

@@ -350,12 +350,6 @@ void CallInst::addAttribute(unsigned i, Attribute::AttrKind Kind) {
   setAttributes(PAL);
 }
 
-void CallInst::addAttribute(unsigned i, StringRef Kind, StringRef Value) {
-  AttributeSet PAL = getAttributes();
-  PAL = PAL.addAttribute(getContext(), i, Kind, Value);
-  setAttributes(PAL);
-}
-
 void CallInst::addAttribute(unsigned i, Attribute Attr) {
   AttributeSet PAL = getAttributes();
   PAL = PAL.addAttribute(getContext(), i, Attr);
@@ -371,15 +365,6 @@ void CallInst::removeAttribute(unsigned i, Attribute::AttrKind Kind) {
 void CallInst::removeAttribute(unsigned i, StringRef Kind) {
   AttributeSet PAL = getAttributes();
   PAL = PAL.removeAttribute(getContext(), i, Kind);
-  setAttributes(PAL);
-}
-
-void CallInst::removeAttribute(unsigned i, Attribute Attr) {
-  AttributeSet PAL = getAttributes();
-  AttrBuilder B(Attr);
-  LLVMContext &Context = getContext();
-  PAL = PAL.removeAttributes(Context, i,
-                             AttributeSet::get(Context, i, B));
   setAttributes(PAL);
 }
 
@@ -403,14 +388,6 @@ bool CallInst::paramHasAttr(unsigned i, Attribute::AttrKind Kind) const {
   if (const Function *F = getCalledFunction())
     return F->getAttributes().hasAttribute(i, Kind);
   return false;
-}
-
-Attribute CallInst::getAttribute(unsigned i, Attribute::AttrKind Kind) const {
-  return getAttributes().getAttribute(i, Kind);
-}
-
-Attribute CallInst::getAttribute(unsigned i, StringRef Kind) const {
-  return getAttributes().getAttribute(i, Kind);
 }
 
 bool CallInst::dataOperandHasImpliedAttr(unsigned i,
@@ -764,23 +741,6 @@ void InvokeInst::removeAttribute(unsigned i, StringRef Kind) {
   AttributeSet PAL = getAttributes();
   PAL = PAL.removeAttribute(getContext(), i, Kind);
   setAttributes(PAL);
-}
-
-void InvokeInst::removeAttribute(unsigned i, Attribute Attr) {
-  AttributeSet PAL = getAttributes();
-  AttrBuilder B(Attr);
-  PAL = PAL.removeAttributes(getContext(), i,
-                             AttributeSet::get(getContext(), i, B));
-  setAttributes(PAL);
-}
-
-Attribute InvokeInst::getAttribute(unsigned i,
-                                   Attribute::AttrKind Kind) const {
-  return getAttributes().getAttribute(i, Kind);
-}
-
-Attribute InvokeInst::getAttribute(unsigned i, StringRef Kind) const {
-  return getAttributes().getAttribute(i, Kind);
 }
 
 void InvokeInst::addDereferenceableAttr(unsigned i, uint64_t Bytes) {
@@ -1376,15 +1336,7 @@ void BranchInst::swapSuccessors() {
 
   // Update profile metadata if present and it matches our structural
   // expectations.
-  MDNode *ProfileData = getMetadata(LLVMContext::MD_prof);
-  if (!ProfileData || ProfileData->getNumOperands() != 3)
-    return;
-
-  // The first operand is the name. Fetch them backwards and build a new one.
-  Metadata *Ops[] = {ProfileData->getOperand(0), ProfileData->getOperand(2),
-                     ProfileData->getOperand(1)};
-  setMetadata(LLVMContext::MD_prof,
-              MDNode::get(ProfileData->getContext(), Ops));
+  swapProfMetadata();
 }
 
 BasicBlock *BranchInst::getSuccessorV(unsigned idx) const {
@@ -2082,9 +2034,6 @@ bool ShuffleVectorInst::isValidOperands(const Value *V1, const Value *V2,
   return false;
 }
 
-/// getMaskValue - Return the index from the shuffle mask for the specified
-/// output result.  This is either -1 if the element is undef or a number less
-/// than 2*numelements.
 int ShuffleVectorInst::getMaskValue(Constant *Mask, unsigned i) {
   assert(i < Mask->getType()->getVectorNumElements() && "Index out of range");
   if (ConstantDataSequential *CDS =dyn_cast<ConstantDataSequential>(Mask))
@@ -2095,8 +2044,6 @@ int ShuffleVectorInst::getMaskValue(Constant *Mask, unsigned i) {
   return cast<ConstantInt>(C)->getZExtValue();
 }
 
-/// getShuffleMask - Return the full mask for this instruction, where each
-/// element is the element number and undef's are returned as -1.
 void ShuffleVectorInst::getShuffleMask(Constant *Mask,
                                        SmallVectorImpl<int> &Result) {
   unsigned NumElts = Mask->getType()->getVectorNumElements();
@@ -2455,11 +2402,10 @@ const Value *BinaryOperator::getNotArgument(const Value *BinOp) {
 }
 
 
-// swapOperands - Exchange the two operands to this instruction.  This
-// instruction is safe to use on any binary instruction and does not
-// modify the semantics of the instruction.  If the instruction is
-// order dependent (SetLT f.e.) the opcode is changed.
-//
+// Exchange the two operands to this instruction. This instruction is safe to
+// use on any binary instruction and does not modify the semantics of the
+// instruction. If the instruction is order-dependent (SetLT f.e.), the opcode
+// is changed.
 bool BinaryOperator::swapOperands() {
   if (!isCommutative())
     return true; // Can't commute operands
@@ -2472,9 +2418,6 @@ bool BinaryOperator::swapOperands() {
 //                             FPMathOperator Class
 //===----------------------------------------------------------------------===//
 
-/// getFPAccuracy - Get the maximum error permitted by this operation in ULPs.
-/// An accuracy of 0.0 means that the operation should be performed with the
-/// default precision.
 float FPMathOperator::getFPAccuracy() const {
   const MDNode *MD =
       cast<Instruction>(this)->getMetadata(LLVMContext::MD_fpmath);
@@ -2769,7 +2712,8 @@ unsigned CastInst::isEliminableCastPair(
     case 14:
       // bitcast, addrspacecast -> addrspacecast if the element type of
       // bitcast's source is the same as that of addrspacecast's destination.
-      if (SrcTy->getPointerElementType() == DstTy->getPointerElementType())
+      if (SrcTy->getScalarType()->getPointerElementType() ==
+          DstTy->getScalarType()->getPointerElementType())
         return Instruction::AddrSpaceCast;
       return 0;
 
@@ -3689,69 +3633,6 @@ ICmpInst::Predicate ICmpInst::getUnsignedPredicate(Predicate pred) {
     case ICMP_SGE: return ICMP_UGE;
     case ICMP_SLE: return ICMP_ULE;
   }
-}
-
-/// Initialize a set of values that all satisfy the condition with C.
-///
-ConstantRange 
-ICmpInst::makeConstantRange(Predicate pred, const APInt &C) {
-  APInt Lower(C);
-  APInt Upper(C);
-  uint32_t BitWidth = C.getBitWidth();
-  switch (pred) {
-  default: llvm_unreachable("Invalid ICmp opcode to ConstantRange ctor!");
-  case ICmpInst::ICMP_EQ: ++Upper; break;
-  case ICmpInst::ICMP_NE: ++Lower; break;
-  case ICmpInst::ICMP_ULT:
-    Lower = APInt::getMinValue(BitWidth);
-    // Check for an empty-set condition.
-    if (Lower == Upper)
-      return ConstantRange(BitWidth, /*isFullSet=*/false);
-    break;
-  case ICmpInst::ICMP_SLT:
-    Lower = APInt::getSignedMinValue(BitWidth);
-    // Check for an empty-set condition.
-    if (Lower == Upper)
-      return ConstantRange(BitWidth, /*isFullSet=*/false);
-    break;
-  case ICmpInst::ICMP_UGT: 
-    ++Lower; Upper = APInt::getMinValue(BitWidth);        // Min = Next(Max)
-    // Check for an empty-set condition.
-    if (Lower == Upper)
-      return ConstantRange(BitWidth, /*isFullSet=*/false);
-    break;
-  case ICmpInst::ICMP_SGT:
-    ++Lower; Upper = APInt::getSignedMinValue(BitWidth);  // Min = Next(Max)
-    // Check for an empty-set condition.
-    if (Lower == Upper)
-      return ConstantRange(BitWidth, /*isFullSet=*/false);
-    break;
-  case ICmpInst::ICMP_ULE: 
-    Lower = APInt::getMinValue(BitWidth); ++Upper; 
-    // Check for a full-set condition.
-    if (Lower == Upper)
-      return ConstantRange(BitWidth, /*isFullSet=*/true);
-    break;
-  case ICmpInst::ICMP_SLE: 
-    Lower = APInt::getSignedMinValue(BitWidth); ++Upper; 
-    // Check for a full-set condition.
-    if (Lower == Upper)
-      return ConstantRange(BitWidth, /*isFullSet=*/true);
-    break;
-  case ICmpInst::ICMP_UGE:
-    Upper = APInt::getMinValue(BitWidth);        // Min = Next(Max)
-    // Check for a full-set condition.
-    if (Lower == Upper)
-      return ConstantRange(BitWidth, /*isFullSet=*/true);
-    break;
-  case ICmpInst::ICMP_SGE:
-    Upper = APInt::getSignedMinValue(BitWidth);  // Min = Next(Max)
-    // Check for a full-set condition.
-    if (Lower == Upper)
-      return ConstantRange(BitWidth, /*isFullSet=*/true);
-    break;
-  }
-  return ConstantRange(Lower, Upper);
 }
 
 CmpInst::Predicate CmpInst::getSwappedPredicate(Predicate pred) {

@@ -366,7 +366,7 @@ static Loop *separateNestedLoop(Loop *L, BasicBlock *Preheader,
     // already be a use of an LCSSA phi node.
     formLCSSA(*L, *DT, LI, SE);
 
-    assert(NewOuter->isRecursivelyLCSSAForm(*DT) &&
+    assert(NewOuter->isRecursivelyLCSSAForm(*DT, *LI) &&
            "LCSSA is broken after separating nested loops!");
   }
 
@@ -470,13 +470,21 @@ static BasicBlock *insertUniqueBackedgeBlock(Loop *L, BasicBlock *Preheader,
   }
 
   // Now that all of the PHI nodes have been inserted and adjusted, modify the
-  // backedge blocks to just to the BEBlock instead of the header.
+  // backedge blocks to jump to the BEBlock instead of the header.
+  // If one of the backedges has llvm.loop metadata attached, we remove
+  // it from the backedge and add it to BEBlock.
+  unsigned LoopMDKind = BEBlock->getContext().getMDKindID("llvm.loop");
+  MDNode *LoopMD = nullptr;
   for (unsigned i = 0, e = BackedgeBlocks.size(); i != e; ++i) {
     TerminatorInst *TI = BackedgeBlocks[i]->getTerminator();
+    if (!LoopMD)
+      LoopMD = TI->getMetadata(LoopMDKind);
+    TI->setMetadata(LoopMDKind, nullptr);
     for (unsigned Op = 0, e = TI->getNumSuccessors(); Op != e; ++Op)
       if (TI->getSuccessor(Op) == Header)
         TI->setSuccessor(Op, BEBlock);
   }
+  BEBlock->getTerminator()->setMetadata(LoopMDKind, LoopMD);
 
   //===--- Update all analyses which we must preserve now -----------------===//
 
@@ -522,7 +530,7 @@ ReprocessLoop:
 
       // Zap the dead pred's terminator and replace it with unreachable.
       TerminatorInst *TI = P->getTerminator();
-      changeToUnreachable(TI, /*UseLLVMTrap=*/false);
+      changeToUnreachable(TI, /*UseLLVMTrap=*/false, PreserveLCSSA);
       Changed = true;
     }
   }
@@ -622,8 +630,10 @@ ReprocessLoop:
        (PN = dyn_cast<PHINode>(I++)); )
     if (Value *V = SimplifyInstruction(PN, DL, nullptr, DT, AC)) {
       if (SE) SE->forgetValue(PN);
-      PN->replaceAllUsesWith(V);
-      PN->eraseFromParent();
+      if (!PreserveLCSSA || LI->replacementPreservesLCSSAForm(PN, V)) {
+        PN->replaceAllUsesWith(V);
+        PN->eraseFromParent();
+      }
     }
 
   // If this loop has multiple exits and the exits all go to the same
@@ -808,8 +818,8 @@ bool LoopSimplify::runOnFunction(Function &F) {
   if (PreserveLCSSA) {
     assert(DT && "DT not available.");
     assert(LI && "LI not available.");
-    bool InLCSSA =
-        all_of(*LI, [&](Loop *L) { return L->isRecursivelyLCSSAForm(*DT); });
+    bool InLCSSA = all_of(
+        *LI, [&](Loop *L) { return L->isRecursivelyLCSSAForm(*DT, *LI); });
     assert(InLCSSA && "Requested to preserve LCSSA, but it's already broken.");
   }
 #endif
@@ -820,8 +830,8 @@ bool LoopSimplify::runOnFunction(Function &F) {
 
 #ifndef NDEBUG
   if (PreserveLCSSA) {
-    bool InLCSSA =
-        all_of(*LI, [&](Loop *L) { return L->isRecursivelyLCSSAForm(*DT); });
+    bool InLCSSA = all_of(
+        *LI, [&](Loop *L) { return L->isRecursivelyLCSSAForm(*DT, *LI); });
     assert(InLCSSA && "LCSSA is broken after loop-simplify.");
   }
 #endif

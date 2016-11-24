@@ -1037,17 +1037,21 @@ Value *InstCombiner::SimplifyDemandedVectorElts(Value *V, APInt DemandedElts,
       }
     }
 
-    APInt UndefElts4(LHSVWidth, 0);
+    APInt LHSUndefElts(LHSVWidth, 0);
     TmpV = SimplifyDemandedVectorElts(I->getOperand(0), LeftDemanded,
-                                      UndefElts4, Depth + 1);
+                                      LHSUndefElts, Depth + 1);
     if (TmpV) { I->setOperand(0, TmpV); MadeChange = true; }
 
-    APInt UndefElts3(LHSVWidth, 0);
+    APInt RHSUndefElts(LHSVWidth, 0);
     TmpV = SimplifyDemandedVectorElts(I->getOperand(1), RightDemanded,
-                                      UndefElts3, Depth + 1);
+                                      RHSUndefElts, Depth + 1);
     if (TmpV) { I->setOperand(1, TmpV); MadeChange = true; }
 
     bool NewUndefElts = false;
+    unsigned LHSIdx = -1u, LHSValIdx = -1u;
+    unsigned RHSIdx = -1u, RHSValIdx = -1u;
+    bool LHSUniform = true;
+    bool RHSUniform = true;
     for (unsigned i = 0; i < VWidth; i++) {
       unsigned MaskVal = Shuffle->getMaskValue(i);
       if (MaskVal == -1u) {
@@ -1056,18 +1060,59 @@ Value *InstCombiner::SimplifyDemandedVectorElts(Value *V, APInt DemandedElts,
         NewUndefElts = true;
         UndefElts.setBit(i);
       } else if (MaskVal < LHSVWidth) {
-        if (UndefElts4[MaskVal]) {
+        if (LHSUndefElts[MaskVal]) {
           NewUndefElts = true;
           UndefElts.setBit(i);
+        } else {
+          LHSIdx = LHSIdx == -1u ? i : LHSVWidth;
+          LHSValIdx = LHSValIdx == -1u ? MaskVal : LHSVWidth;
+          LHSUniform = LHSUniform && (MaskVal == i);
         }
       } else {
-        if (UndefElts3[MaskVal - LHSVWidth]) {
+        if (RHSUndefElts[MaskVal - LHSVWidth]) {
           NewUndefElts = true;
           UndefElts.setBit(i);
+        } else {
+          RHSIdx = RHSIdx == -1u ? i : LHSVWidth;
+          RHSValIdx = RHSValIdx == -1u ? MaskVal - LHSVWidth : LHSVWidth;
+          RHSUniform = RHSUniform && (MaskVal - LHSVWidth == i);
         }
       }
     }
 
+    // Try to transform shuffle with constant vector and single element from
+    // this constant vector to single insertelement instruction.
+    // shufflevector V, C, <v1, v2, .., ci, .., vm> ->
+    // insertelement V, C[ci], ci-n
+    if (LHSVWidth == Shuffle->getType()->getNumElements()) {
+      Value *Op = nullptr;
+      Constant *Value = nullptr;
+      unsigned Idx = -1u;
+
+      // Find constant vector wigth the single element in shuffle (LHS or RHS).
+      if (LHSIdx < LHSVWidth && RHSUniform) {
+        if (auto *CV = dyn_cast<ConstantVector>(Shuffle->getOperand(0))) {
+          Op = Shuffle->getOperand(1);
+          Value = CV->getOperand(LHSValIdx);
+          Idx = LHSIdx;
+        }
+      }
+      if (RHSIdx < LHSVWidth && LHSUniform) {
+        if (auto *CV = dyn_cast<ConstantVector>(Shuffle->getOperand(1))) {
+          Op = Shuffle->getOperand(0);
+          Value = CV->getOperand(RHSValIdx);
+          Idx = RHSIdx;
+        }
+      }
+      // Found constant vector with single element - convert to insertelement.
+      if (Op && Value) {
+        Instruction *New = InsertElementInst::Create(
+            Op, Value, ConstantInt::get(Type::getInt32Ty(I->getContext()), Idx),
+            Shuffle->getName());
+        InsertNewInstWith(New, *Shuffle);
+        return New;
+      }
+    }
     if (NewUndefElts) {
       // Add additional discovered undefs.
       SmallVector<Constant*, 16> Elts;
@@ -1229,17 +1274,9 @@ Value *InstCombiner::SimplifyDemandedVectorElts(Value *V, APInt DemandedElts,
 
     // Binary scalar-as-vector operations that work column-wise.  A dest element
     // is a function of the corresponding input elements from the two inputs.
-    case Intrinsic::x86_sse_add_ss:
-    case Intrinsic::x86_sse_sub_ss:
-    case Intrinsic::x86_sse_mul_ss:
-    case Intrinsic::x86_sse_div_ss:
     case Intrinsic::x86_sse_min_ss:
     case Intrinsic::x86_sse_max_ss:
     case Intrinsic::x86_sse_cmp_ss:
-    case Intrinsic::x86_sse2_add_sd:
-    case Intrinsic::x86_sse2_sub_sd:
-    case Intrinsic::x86_sse2_mul_sd:
-    case Intrinsic::x86_sse2_div_sd:
     case Intrinsic::x86_sse2_min_sd:
     case Intrinsic::x86_sse2_max_sd:
     case Intrinsic::x86_sse2_cmp_sd:
@@ -1251,62 +1288,6 @@ Value *InstCombiner::SimplifyDemandedVectorElts(Value *V, APInt DemandedElts,
       TmpV = SimplifyDemandedVectorElts(II->getArgOperand(1), DemandedElts,
                                         UndefElts2, Depth + 1);
       if (TmpV) { II->setArgOperand(1, TmpV); MadeChange = true; }
-
-      // If only the low elt is demanded and this is a scalarizable intrinsic,
-      // scalarize it now.
-      if (DemandedElts == 1) {
-        switch (II->getIntrinsicID()) {
-        default: break;
-        case Intrinsic::x86_sse_add_ss:
-        case Intrinsic::x86_sse_sub_ss:
-        case Intrinsic::x86_sse_mul_ss:
-        case Intrinsic::x86_sse_div_ss:
-        case Intrinsic::x86_sse2_add_sd:
-        case Intrinsic::x86_sse2_sub_sd:
-        case Intrinsic::x86_sse2_mul_sd:
-        case Intrinsic::x86_sse2_div_sd:
-          // TODO: Lower MIN/MAX/etc.
-          Value *LHS = II->getArgOperand(0);
-          Value *RHS = II->getArgOperand(1);
-          // Extract the element as scalars.
-          LHS = InsertNewInstWith(ExtractElementInst::Create(LHS,
-            ConstantInt::get(Type::getInt32Ty(I->getContext()), 0U)), *II);
-          RHS = InsertNewInstWith(ExtractElementInst::Create(RHS,
-            ConstantInt::get(Type::getInt32Ty(I->getContext()), 0U)), *II);
-
-          switch (II->getIntrinsicID()) {
-          default: llvm_unreachable("Case stmts out of sync!");
-          case Intrinsic::x86_sse_add_ss:
-          case Intrinsic::x86_sse2_add_sd:
-            TmpV = InsertNewInstWith(BinaryOperator::CreateFAdd(LHS, RHS,
-                                                        II->getName()), *II);
-            break;
-          case Intrinsic::x86_sse_sub_ss:
-          case Intrinsic::x86_sse2_sub_sd:
-            TmpV = InsertNewInstWith(BinaryOperator::CreateFSub(LHS, RHS,
-                                                        II->getName()), *II);
-            break;
-          case Intrinsic::x86_sse_mul_ss:
-          case Intrinsic::x86_sse2_mul_sd:
-            TmpV = InsertNewInstWith(BinaryOperator::CreateFMul(LHS, RHS,
-                                                         II->getName()), *II);
-            break;
-          case Intrinsic::x86_sse_div_ss:
-          case Intrinsic::x86_sse2_div_sd:
-            TmpV = InsertNewInstWith(BinaryOperator::CreateFDiv(LHS, RHS,
-                                                         II->getName()), *II);
-            break;
-          }
-
-          Instruction *New =
-            InsertElementInst::Create(
-              UndefValue::get(II->getType()), TmpV,
-              ConstantInt::get(Type::getInt32Ty(I->getContext()), 0U, false),
-                                      II->getName());
-          InsertNewInstWith(New, *II);
-          return New;
-        }
-      }
 
       // If lowest element of a scalar op isn't used then use Arg0.
       if (DemandedElts.getLoBits(1) != 1)

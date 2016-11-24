@@ -23,7 +23,6 @@
 using namespace llvm;
 
 #define GET_INSTRINFO_CTOR_DTOR
-#define GET_INSTRINFO_NAMED_OPS
 #define GET_INSTRMAP_INFO
 #include "AMDGPUGenInstrInfo.inc"
 
@@ -34,6 +33,10 @@ AMDGPUInstrInfo::AMDGPUInstrInfo(const AMDGPUSubtarget &ST)
   : AMDGPUGenInstrInfo(-1, -1), ST(ST) {}
 
 bool AMDGPUInstrInfo::enableClusterLoads() const {
+  return true;
+}
+
+bool AMDGPUInstrInfo::enableClusterStores() const {
   return true;
 }
 

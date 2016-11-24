@@ -21,6 +21,7 @@
 #include "llvm/Object/ArchiveWriter.h"
 #include "llvm/Object/MachO.h"
 #include "llvm/Object/ObjectFile.h"
+#include "llvm/Support/Chrono.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Errc.h"
 #include "llvm/Support/FileSystem.h"
@@ -93,7 +94,7 @@ static cl::opt<Format>
     FormatOpt("format", cl::desc("Archive format to create"),
               cl::values(clEnumValN(Default, "default", "default"),
                          clEnumValN(GNU, "gnu", "gnu"),
-                         clEnumValN(BSD, "bsd", "bsd"), clEnumValEnd));
+                         clEnumValN(BSD, "bsd", "bsd")));
 
 static std::string Options;
 
@@ -353,9 +354,9 @@ static void doDisplayTable(StringRef Name, const object::Archive::Child &C) {
     Expected<uint64_t> Size = C.getSize();
     failIfError(Size.takeError());
     outs() << ' ' << format("%6llu", Size.get());
-    Expected<sys::TimeValue> ModTimeOrErr = C.getLastModified();
+    auto ModTimeOrErr = C.getLastModified();
     failIfError(ModTimeOrErr.takeError());
-    outs() << ' ' << ModTimeOrErr.get().str();
+    outs() << ' ' << ModTimeOrErr.get();
     outs() << ' ';
   }
   outs() << Name << "\n";
@@ -387,7 +388,7 @@ static void doExtract(StringRef Name, const object::Archive::Child &C) {
   // If we're supposed to retain the original modification times, etc. do so
   // now.
   if (OriginalDates) {
-    Expected<sys::TimeValue> ModTimeOrErr = C.getLastModified();
+    auto ModTimeOrErr = C.getLastModified();
     failIfError(ModTimeOrErr.takeError());
     failIfError(
         sys::fs::setLastModificationAndAccessTime(FD, ModTimeOrErr.get()));
@@ -422,7 +423,7 @@ static void performReadOperation(ArchiveOperation Operation,
 
   bool Filter = !Members.empty();
   {
-    Error Err;
+    Error Err = Error::success();
     for (auto &C : OldArchive->children(Err)) {
       Expected<StringRef> NameOrErr = C.getName();
       failIfError(NameOrErr.takeError());
@@ -525,7 +526,7 @@ static InsertAction computeInsertAction(ArchiveOperation Operation,
     // operation.
     sys::fs::file_status Status;
     failIfError(sys::fs::status(*MI, Status), *MI);
-    Expected<sys::TimeValue> ModTimeOrErr = Member.getLastModified();
+    auto ModTimeOrErr = Member.getLastModified();
     failIfError(ModTimeOrErr.takeError());
     if (Status.getLastModificationTime() < ModTimeOrErr.get()) {
       if (PosName.empty())
@@ -550,7 +551,7 @@ computeNewArchiveMembers(ArchiveOperation Operation,
   int InsertPos = -1;
   StringRef PosName = sys::path::filename(RelPos);
   if (OldArchive) {
-    Error Err;
+    Error Err = Error::success();
     for (auto &Child : OldArchive->children(Err)) {
       int Pos = Ret.size();
       Expected<StringRef> NameOrErr = Child.getName();
@@ -722,7 +723,7 @@ static int performOperation(ArchiveOperation Operation,
     fail("error opening '" + ArchiveName + "': " + EC.message() + "!");
 
   if (!EC) {
-    Error Err;
+    Error Err = Error::success();
     object::Archive Archive(Buf.get()->getMemBufferRef(), Err);
     EC = errorToErrorCode(std::move(Err));
     failIfError(EC,
@@ -784,7 +785,7 @@ static void runMRIScript() {
       Archives.push_back(std::move(*LibOrErr));
       object::Archive &Lib = *Archives.back();
       {
-        Error Err;
+        Error Err = Error::success();
         for (auto &Member : Lib.children(Err))
           addMember(NewMembers, Member);
         failIfError(std::move(Err));

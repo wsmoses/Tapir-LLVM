@@ -268,7 +268,7 @@ MipsTargetLowering::MipsTargetLowering(const MipsTargetMachine &TM,
   AddPromotedToType(ISD::SETCC, MVT::i1, MVT::i32);
 
   // Mips Custom Operations
-  setOperationAction(ISD::BR_JT,              MVT::Other, Custom);
+  setOperationAction(ISD::BR_JT,              MVT::Other, Expand);
   setOperationAction(ISD::GlobalAddress,      MVT::i32,   Custom);
   setOperationAction(ISD::BlockAddress,       MVT::i32,   Custom);
   setOperationAction(ISD::GlobalTLSAddress,   MVT::i32,   Custom);
@@ -305,9 +305,9 @@ MipsTargetLowering::MipsTargetLowering(const MipsTargetMachine &TM,
     setOperationAction(ISD::SRL_PARTS,          MVT::i32,   Custom);
   }
 
-  setOperationAction(ISD::ADD,                MVT::i32,   Custom);
+  setOperationAction(ISD::EH_DWARF_CFA,         MVT::i32,   Custom);
   if (Subtarget.isGP64bit())
-    setOperationAction(ISD::ADD,                MVT::i64,   Custom);
+    setOperationAction(ISD::EH_DWARF_CFA,       MVT::i64,   Custom);
 
   setOperationAction(ISD::SDIV, MVT::i32, Expand);
   setOperationAction(ISD::SREM, MVT::i32, Expand);
@@ -426,6 +426,13 @@ MipsTargetLowering::MipsTargetLowering(const MipsTargetMachine &TM,
   setTargetDAGCombine(ISD::ADD);
   setTargetDAGCombine(ISD::AssertZext);
 
+  if (ABI.IsO32()) {
+    // These libcalls are not available in 32-bit.
+    setLibcallName(RTLIB::SHL_I128, nullptr);
+    setLibcallName(RTLIB::SRL_I128, nullptr);
+    setLibcallName(RTLIB::SRA_I128, nullptr);
+  }
+
   setMinFunctionAlignment(Subtarget.isGP64bit() ? 3 : 2);
 
   // The arguments on the stack are defined in terms of 4-byte slots on O32
@@ -451,9 +458,19 @@ const MipsTargetLowering *MipsTargetLowering::create(const MipsTargetMachine &TM
 FastISel *
 MipsTargetLowering::createFastISel(FunctionLoweringInfo &funcInfo,
                                   const TargetLibraryInfo *libInfo) const {
-  if (!funcInfo.MF->getTarget().Options.EnableFastISel)
-    return TargetLowering::createFastISel(funcInfo, libInfo);
-  return Mips::createFastISel(funcInfo, libInfo);
+  const MipsTargetMachine &TM =
+      static_cast<const MipsTargetMachine &>(funcInfo.MF->getTarget());
+
+  // We support only the standard encoding [MIPS32,MIPS32R5] ISAs.
+  bool UseFastISel = TM.Options.EnableFastISel && Subtarget.hasMips32() &&
+                     !Subtarget.hasMips32r6() && !Subtarget.inMips16Mode() &&
+                     !Subtarget.inMicroMipsMode();
+
+  // Disable if we don't generate PIC or the ABI isn't O32.
+  if (!TM.isPositionIndependent() || !TM.getABI().IsO32())
+    UseFastISel = false;
+
+  return UseFastISel ? Mips::createFastISel(funcInfo, libInfo) : nullptr;
 }
 
 EVT MipsTargetLowering::getSetCCResultType(const DataLayout &, LLVMContext &,
@@ -893,7 +910,6 @@ LowerOperation(SDValue Op, SelectionDAG &DAG) const
 {
   switch (Op.getOpcode())
   {
-  case ISD::BR_JT:              return lowerBR_JT(Op, DAG);
   case ISD::BRCOND:             return lowerBRCOND(Op, DAG);
   case ISD::ConstantPool:       return lowerConstantPool(Op, DAG);
   case ISD::GlobalAddress:      return lowerGlobalAddress(Op, DAG);
@@ -914,7 +930,7 @@ LowerOperation(SDValue Op, SelectionDAG &DAG) const
   case ISD::SRL_PARTS:          return lowerShiftRightParts(Op, DAG, false);
   case ISD::LOAD:               return lowerLOAD(Op, DAG);
   case ISD::STORE:              return lowerSTORE(Op, DAG);
-  case ISD::ADD:                return lowerADD(Op, DAG);
+  case ISD::EH_DWARF_CFA:       return lowerEH_DWARF_CFA(Op, DAG);
   case ISD::FP_TO_SINT:         return lowerFP_TO_SINT(Op, DAG);
   }
   return SDValue();
@@ -1659,40 +1675,6 @@ MachineBasicBlock *MipsTargetLowering::emitSEL_D(MachineInstr &MI,
   return BB;
 }
 
-//===----------------------------------------------------------------------===//
-//  Misc Lower Operation implementation
-//===----------------------------------------------------------------------===//
-SDValue MipsTargetLowering::lowerBR_JT(SDValue Op, SelectionDAG &DAG) const {
-  SDValue Chain = Op.getOperand(0);
-  SDValue Table = Op.getOperand(1);
-  SDValue Index = Op.getOperand(2);
-  SDLoc DL(Op);
-  auto &TD = DAG.getDataLayout();
-  EVT PTy = getPointerTy(TD);
-  unsigned EntrySize =
-      DAG.getMachineFunction().getJumpTableInfo()->getEntrySize(TD);
-
-  Index = DAG.getNode(ISD::MUL, DL, PTy, Index,
-                      DAG.getConstant(EntrySize, DL, PTy));
-  SDValue Addr = DAG.getNode(ISD::ADD, DL, PTy, Index, Table);
-
-  EVT MemVT = EVT::getIntegerVT(*DAG.getContext(), EntrySize * 8);
-  Addr = DAG.getExtLoad(
-      ISD::SEXTLOAD, DL, PTy, Chain, Addr,
-      MachinePointerInfo::getJumpTable(DAG.getMachineFunction()), MemVT);
-  Chain = Addr.getValue(1);
-
-  if (isPositionIndependent() || ABI.IsN64()) {
-    // For PIC, the sequence is:
-    // BRIND(load(Jumptable + index) + RelocBase)
-    // RelocBase can be JumpTable, GOT or some sort of global base.
-    Addr = DAG.getNode(ISD::ADD, DL, PTy, Addr,
-                       getPICJumpTableRelocBase(Table, DAG));
-  }
-
-  return DAG.getNode(ISD::BRIND, DL, MVT::Other, Chain, Addr);
-}
-
 SDValue MipsTargetLowering::lowerBRCOND(SDValue Op, SelectionDAG &DAG) const {
   // The first operand is the chain, the second is the condition, the third is
   // the block to branch to if the condition is true.
@@ -1755,7 +1737,8 @@ SDValue MipsTargetLowering::lowerGlobalAddress(SDValue Op,
     const MipsTargetObjectFile *TLOF =
         static_cast<const MipsTargetObjectFile *>(
             getTargetMachine().getObjFileLowering());
-    if (TLOF->IsGlobalInSmallSection(GV, getTargetMachine()))
+    const GlobalObject *GO = GV->getBaseObject();
+    if (GO && TLOF->IsGlobalInSmallSection(GO, getTargetMachine()))
       // %gp_rel relocation
       return getAddrGPRel(N, SDLoc(N), Ty, DAG);
 
@@ -2393,26 +2376,15 @@ SDValue MipsTargetLowering::lowerSTORE(SDValue Op, SelectionDAG &DAG) const {
   return lowerFP_TO_SINT_STORE(SD, DAG);
 }
 
-SDValue MipsTargetLowering::lowerADD(SDValue Op, SelectionDAG &DAG) const {
-  if (Op->getOperand(0).getOpcode() != ISD::FRAMEADDR
-      || cast<ConstantSDNode>
-        (Op->getOperand(0).getOperand(0))->getZExtValue() != 0
-      || Op->getOperand(1).getOpcode() != ISD::FRAME_TO_ARGS_OFFSET)
-    return SDValue();
+SDValue MipsTargetLowering::lowerEH_DWARF_CFA(SDValue Op,
+                                              SelectionDAG &DAG) const {
 
-  // The pattern
-  //   (add (frameaddr 0), (frame_to_args_offset))
-  // results from lowering llvm.eh.dwarf.cfa intrinsic. Transform it to
-  //   (add FrameObject, 0)
-  // where FrameObject is a fixed StackObject with offset 0 which points to
-  // the old stack pointer.
+  // Return a fixed StackObject with offset 0 which points to the old stack
+  // pointer.
   MachineFrameInfo &MFI = DAG.getMachineFunction().getFrameInfo();
   EVT ValTy = Op->getValueType(0);
   int FI = MFI.CreateFixedObject(Op.getValueSizeInBits() / 8, 0, false);
-  SDValue InArgsAddr = DAG.getFrameIndex(FI, ValTy);
-  SDLoc DL(Op);
-  return DAG.getNode(ISD::ADD, DL, ValTy, InArgsAddr,
-                     DAG.getConstant(0, DL, ValTy));
+  return DAG.getFrameIndex(FI, ValTy);
 }
 
 SDValue MipsTargetLowering::lowerFP_TO_SINT(SDValue Op,
@@ -2678,11 +2650,20 @@ MipsTargetLowering::LowerCall(TargetLowering::CallLoweringInfo &CLI,
   // Get a count of how many bytes are to be pushed on the stack.
   unsigned NextStackOffset = CCInfo.getNextStackOffset();
 
-  // Check if it's really possible to do a tail call.
-  if (IsTailCall)
+  // Check if it's really possible to do a tail call. Restrict it to functions
+  // that are part of this compilation unit.
+  bool InternalLinkage = false;
+  if (IsTailCall) {
     IsTailCall = isEligibleForTailCallOptimization(
         CCInfo, NextStackOffset, *MF.getInfo<MipsFunctionInfo>());
-
+     if (GlobalAddressSDNode *G = dyn_cast<GlobalAddressSDNode>(Callee)) {
+      InternalLinkage = G->getGlobal()->hasInternalLinkage();
+      IsTailCall &= (InternalLinkage || G->getGlobal()->hasLocalLinkage() ||
+                     G->getGlobal()->hasPrivateLinkage() ||
+                     G->getGlobal()->hasHiddenVisibility() ||
+                     G->getGlobal()->hasProtectedVisibility());
+     }
+  }
   if (!IsTailCall && CLI.CS && CLI.CS->isMustTailCall())
     report_fatal_error("failed to perform tail call elimination on a call "
                        "site marked musttail");
@@ -2817,9 +2798,9 @@ MipsTargetLowering::LowerCall(TargetLowering::CallLoweringInfo &CLI,
   // node so that legalize doesn't hack it.
   bool IsPICCall = (ABI.IsN64() || IsPIC); // true if calls are translated to
                                            // jalr $25
-  bool GlobalOrExternal = false, InternalLinkage = false, IsCallReloc = false;
   SDValue CalleeLo;
   EVT Ty = Callee.getValueType();
+  bool GlobalOrExternal = false, IsCallReloc = false;
 
   if (GlobalAddressSDNode *G = dyn_cast<GlobalAddressSDNode>(Callee)) {
     if (IsPICCall) {
@@ -2870,8 +2851,10 @@ MipsTargetLowering::LowerCall(TargetLowering::CallLoweringInfo &CLI,
   getOpndList(Ops, RegsToPass, IsPICCall, GlobalOrExternal, InternalLinkage,
               IsCallReloc, CLI, Callee, Chain);
 
-  if (IsTailCall)
+  if (IsTailCall) {
+    MF.getFrameInfo().setHasTailCall();
     return DAG.getNode(MipsISD::TailCall, DL, MVT::Other, Ops);
+  }
 
   Chain = DAG.getNode(MipsISD::JmpLink, DL, NodeTys, Ops);
   SDValue InFlag = Chain.getValue(1);

@@ -246,7 +246,7 @@ private:
   RecurrenceKind Kind;
   // If this a min/max recurrence the kind of recurrence.
   MinMaxRecurrenceKind MinMaxKind;
-  // First occurance of unasfe algebra in the PHI's use-chain.
+  // First occurrence of unasfe algebra in the PHI's use-chain.
   Instruction *UnsafeAlgebraInst;
   // The type of the recurrence.
   Type *RecurrenceType;
@@ -461,12 +461,28 @@ Optional<const MDOperand *> findStringMetadataForLoop(Loop *TheLoop,
 void addStringMetadataToLoop(Loop *TheLoop, const char *MDString,
                              unsigned V = 0);
 
+/// \brief Get a loop's estimated trip count based on branch weight metadata.
+/// Returns 0 when the count is estimated to be 0, or None when a meaningful
+/// estimate can not be made.
+Optional<unsigned> getLoopEstimatedTripCount(Loop *L);
+
 /// Helper to consistently add the set of standard passes to a loop pass's \c
 /// AnalysisUsage.
 ///
 /// All loop passes should call this as part of implementing their \c
 /// getAnalysisUsage.
 void getLoopAnalysisUsage(AnalysisUsage &AU);
+
+/// Returns true if the hoister and sinker can handle this instruction.
+/// If SafetyInfo is null, we are checking for sinking instructions from
+/// preheader to loop body (no speculation).
+/// If SafetyInfo is not null, we are checking for hoisting/sinking
+/// instructions from loop body to preheader/exit. Check if the instruction
+/// can execute specultatively.
+///
+bool canSinkOrHoistInst(Instruction &I, AAResults *AA, DominatorTree *DT,
+                        Loop *CurLoop, AliasSetTracker *CurAST,
+                        LoopSafetyInfo *SafetyInfo);
 }
 
 #endif

@@ -258,7 +258,10 @@ Function::Function(FunctionType *Ty, LinkageTypes Linkage, const Twine &name,
   assert(FunctionType::isValidReturnType(getReturnType()) &&
          "invalid return type");
   setGlobalObjectSubClassData(0);
-  SymTab = new ValueSymbolTable();
+
+  // We only need a symbol table for a function if the context keeps value names
+  if (!getContext().shouldDiscardValueNames())
+    SymTab = make_unique<ValueSymbolTable>();
 
   // If the function has arguments, mark them as lazily built.
   if (Ty->getNumParams())
@@ -279,7 +282,6 @@ Function::~Function() {
 
   // Delete all of the method arguments and unlink from symbol table...
   ArgumentList.clear();
-  delete SymTab;
 
   // Remove the function from the on-the-side GC table.
   clearGC();
@@ -326,10 +328,6 @@ size_t Function::arg_size() const {
 }
 bool Function::arg_empty() const {
   return getFunctionType()->getNumParams() == 0;
-}
-
-void Function::setParent(Module *parent) {
-  Parent = parent;
 }
 
 // dropAllReferences() - This function causes all the subinstructions to "let
@@ -551,6 +549,13 @@ static std::string getMangledTypeStr(Type* Ty) {
   return Result;
 }
 
+StringRef Intrinsic::getName(ID id) {
+  assert(id < num_intrinsics && "Invalid intrinsic ID!");
+  assert(!isOverloaded(id) &&
+         "This version of getName does not support overloading");
+  return IntrinsicNameTable[id];
+}
+
 std::string Intrinsic::getName(ID id, ArrayRef<Type*> Tys) {
   assert(id < num_intrinsics && "Invalid intrinsic ID!");
   std::string Result(IntrinsicNameTable[id]);
@@ -602,10 +607,11 @@ enum IIT_Info {
   IIT_HALF_VEC_ARG = 30,
   IIT_SAME_VEC_WIDTH_ARG = 31,
   IIT_PTR_TO_ARG = 32,
-  IIT_VEC_OF_PTRS_TO_ELT = 33,
-  IIT_I128 = 34,
-  IIT_V512 = 35,
-  IIT_V1024 = 36
+  IIT_PTR_TO_ELT = 33,
+  IIT_VEC_OF_PTRS_TO_ELT = 34,
+  IIT_I128 = 35,
+  IIT_V512 = 36,
+  IIT_V1024 = 37
 };
 
 
@@ -739,6 +745,11 @@ static void DecodeIITType(unsigned &NextElt, ArrayRef<unsigned char> Infos,
                                              ArgInfo));
     return;
   }
+  case IIT_PTR_TO_ELT: {
+    unsigned ArgInfo = (NextElt == Infos.size() ? 0 : Infos[NextElt++]);
+    OutputTable.push_back(IITDescriptor::get(IITDescriptor::PtrToElt, ArgInfo));
+    return;
+  }
   case IIT_VEC_OF_PTRS_TO_ELT: {
     unsigned ArgInfo = (NextElt == Infos.size() ? 0 : Infos[NextElt++]);
     OutputTable.push_back(IITDescriptor::get(IITDescriptor::VecOfPtrsToElt,
@@ -864,6 +875,14 @@ static Type *DecodeFixedType(ArrayRef<Intrinsic::IITDescriptor> &Infos,
   case IITDescriptor::PtrToArgument: {
     Type *Ty = Tys[D.getArgumentNumber()];
     return PointerType::getUnqual(Ty);
+  }
+  case IITDescriptor::PtrToElt: {
+    Type *Ty = Tys[D.getArgumentNumber()];
+    VectorType *VTy = dyn_cast<VectorType>(Ty);
+    if (!VTy)
+      llvm_unreachable("Expected an argument of Vector Type");
+    Type *EltTy = VTy->getVectorElementType();
+    return PointerType::getUnqual(EltTy);
   }
   case IITDescriptor::VecOfPtrsToElt: {
     Type *Ty = Tys[D.getArgumentNumber()];
@@ -1043,7 +1062,7 @@ bool Intrinsic::matchIntrinsicType(Type *Ty, ArrayRef<Intrinsic::IITDescriptor> 
       if (D.getArgumentNumber() >= ArgTys.size())
         return true;
       VectorType * ReferenceType =
-              dyn_cast<VectorType>(ArgTys[D.getArgumentNumber()]);
+        dyn_cast<VectorType>(ArgTys[D.getArgumentNumber()]);
       VectorType *ThisArgType = dyn_cast<VectorType>(Ty);
       if (!ThisArgType || !ReferenceType ||
           (ReferenceType->getVectorNumElements() !=
@@ -1058,6 +1077,16 @@ bool Intrinsic::matchIntrinsicType(Type *Ty, ArrayRef<Intrinsic::IITDescriptor> 
       Type * ReferenceType = ArgTys[D.getArgumentNumber()];
       PointerType *ThisArgType = dyn_cast<PointerType>(Ty);
       return (!ThisArgType || ThisArgType->getElementType() != ReferenceType);
+    }
+    case IITDescriptor::PtrToElt: {
+      if (D.getArgumentNumber() >= ArgTys.size())
+        return true;
+      VectorType * ReferenceType =
+        dyn_cast<VectorType> (ArgTys[D.getArgumentNumber()]);
+      PointerType *ThisArgType = dyn_cast<PointerType>(Ty);
+
+      return (!ThisArgType || !ReferenceType ||
+              ThisArgType->getElementType() != ReferenceType->getElementType());
     }
     case IITDescriptor::VecOfPtrsToElt: {
       if (D.getArgumentNumber() >= ArgTys.size())
@@ -1263,5 +1292,22 @@ Optional<uint64_t> Function::getEntryCount() const {
           return None;
         return Count;
       }
+  return None;
+}
+
+void Function::setSectionPrefix(StringRef Prefix) {
+  MDBuilder MDB(getContext());
+  setMetadata(LLVMContext::MD_section_prefix,
+              MDB.createFunctionSectionPrefix(Prefix));
+}
+
+Optional<StringRef> Function::getSectionPrefix() const {
+  if (MDNode *MD = getMetadata(LLVMContext::MD_section_prefix)) {
+    assert(dyn_cast<MDString>(MD->getOperand(0))
+               ->getString()
+               .equals("function_section_prefix") &&
+           "Metadata not match");
+    return dyn_cast<MDString>(MD->getOperand(1))->getString();
+  }
   return None;
 }

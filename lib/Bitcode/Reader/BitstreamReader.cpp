@@ -8,20 +8,15 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/Bitcode/BitstreamReader.h"
+#include "llvm/ADT/StringRef.h"
+#include <cassert>
+#include <string>
 
 using namespace llvm;
 
 //===----------------------------------------------------------------------===//
 //  BitstreamCursor implementation
 //===----------------------------------------------------------------------===//
-
-void BitstreamCursor::freeState() {
-  // Free all the Abbrevs.
-  CurAbbrevs.clear();
-
-  // Free all the Abbrevs in the block scope.
-  BlockScope.clear();
-}
 
 /// EnterSubBlock - Having read the ENTER_SUBBLOCK abbrevid, enter
 /// the block, and return true if the block has an error.
@@ -31,10 +26,12 @@ bool BitstreamCursor::EnterSubBlock(unsigned BlockID, unsigned *NumWordsP) {
   BlockScope.back().PrevAbbrevs.swap(CurAbbrevs);
 
   // Add the abbrevs specific to this block to the CurAbbrevs list.
-  if (const BitstreamReader::BlockInfo *Info =
-          getBitStreamReader()->getBlockInfo(BlockID)) {
-    CurAbbrevs.insert(CurAbbrevs.end(), Info->Abbrevs.begin(),
-                      Info->Abbrevs.end());
+  if (BlockInfo) {
+    if (const BitstreamBlockInfo::BlockInfo *Info =
+            BlockInfo->getBlockInfo(BlockID)) {
+      CurAbbrevs.insert(CurAbbrevs.end(), Info->Abbrevs.begin(),
+                        Info->Abbrevs.end());
+    }
   }
 
   // Get the codesize of this block.
@@ -94,8 +91,6 @@ static void skipAbbreviatedField(BitstreamCursor &Cursor,
     break;
   }
 }
-
-
 
 /// skipRecord - Read the current record and discard it.
 void BitstreamCursor::skipRecord(unsigned AbbrevID) {
@@ -279,7 +274,6 @@ unsigned BitstreamCursor::readRecord(unsigned AbbrevID,
   return Code;
 }
 
-
 void BitstreamCursor::ReadAbbrevRecord() {
   BitCodeAbbrev *Abbv = new BitCodeAbbrev();
   unsigned NumOpInfo = ReadVBR(5);
@@ -318,26 +312,25 @@ void BitstreamCursor::ReadAbbrevRecord() {
   CurAbbrevs.push_back(Abbv);
 }
 
-bool BitstreamCursor::ReadBlockInfoBlock() {
-  // If this is the second stream to get to the block info block, skip it.
-  if (getBitStreamReader()->hasBlockInfoRecords())
-    return SkipBlock();
+Optional<BitstreamBlockInfo>
+BitstreamCursor::ReadBlockInfoBlock(bool ReadBlockInfoNames) {
+  if (EnterSubBlock(bitc::BLOCKINFO_BLOCK_ID)) return None;
 
-  if (EnterSubBlock(bitc::BLOCKINFO_BLOCK_ID)) return true;
+  BitstreamBlockInfo NewBlockInfo;
 
   SmallVector<uint64_t, 64> Record;
-  BitstreamReader::BlockInfo *CurBlockInfo = nullptr;
+  BitstreamBlockInfo::BlockInfo *CurBlockInfo = nullptr;
 
   // Read all the records for this module.
-  while (1) {
+  while (true) {
     BitstreamEntry Entry = advanceSkippingSubblocks(AF_DontAutoprocessAbbrevs);
 
     switch (Entry.Kind) {
     case llvm::BitstreamEntry::SubBlock: // Handled for us already.
     case llvm::BitstreamEntry::Error:
-      return true;
+      return None;
     case llvm::BitstreamEntry::EndBlock:
-      return false;
+      return std::move(NewBlockInfo);
     case llvm::BitstreamEntry::Record:
       // The interesting case.
       break;
@@ -345,7 +338,7 @@ bool BitstreamCursor::ReadBlockInfoBlock() {
 
     // Read abbrev records, associate them with CurBID.
     if (Entry.ID == bitc::DEFINE_ABBREV) {
-      if (!CurBlockInfo) return true;
+      if (!CurBlockInfo) return None;
       ReadAbbrevRecord();
 
       // ReadAbbrevRecord installs the abbrev in CurAbbrevs.  Move it to the
@@ -360,13 +353,12 @@ bool BitstreamCursor::ReadBlockInfoBlock() {
     switch (readRecord(Entry.ID, Record)) {
       default: break;  // Default behavior, ignore unknown content.
       case bitc::BLOCKINFO_CODE_SETBID:
-        if (Record.size() < 1) return true;
-        CurBlockInfo =
-            &getBitStreamReader()->getOrCreateBlockInfo((unsigned)Record[0]);
+        if (Record.size() < 1) return None;
+        CurBlockInfo = &NewBlockInfo.getOrCreateBlockInfo((unsigned)Record[0]);
         break;
       case bitc::BLOCKINFO_CODE_BLOCKNAME: {
-        if (!CurBlockInfo) return true;
-        if (getBitStreamReader()->isIgnoringBlockInfoNames())
+        if (!CurBlockInfo) return None;
+        if (!ReadBlockInfoNames)
           break; // Ignore name.
         std::string Name;
         for (unsigned i = 0, e = Record.size(); i != e; ++i)
@@ -375,8 +367,8 @@ bool BitstreamCursor::ReadBlockInfoBlock() {
         break;
       }
       case bitc::BLOCKINFO_CODE_SETRECORDNAME: {
-        if (!CurBlockInfo) return true;
-        if (getBitStreamReader()->isIgnoringBlockInfoNames())
+        if (!CurBlockInfo) return None;
+        if (!ReadBlockInfoNames)
           break; // Ignore name.
         std::string Name;
         for (unsigned i = 1, e = Record.size(); i != e; ++i)
@@ -388,4 +380,3 @@ bool BitstreamCursor::ReadBlockInfoBlock() {
     }
   }
 }
-

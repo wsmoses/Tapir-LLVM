@@ -24,6 +24,7 @@
 #include "llvm/Analysis/BlockFrequencyInfo.h"
 #include "llvm/Analysis/BlockFrequencyInfoImpl.h"
 #include "llvm/Analysis/BranchProbabilityInfo.h"
+#include "llvm/Analysis/CFGPrinter.h"
 #include "llvm/Analysis/CFLAndersAliasAnalysis.h"
 #include "llvm/Analysis/CFLSteensAliasAnalysis.h"
 #include "llvm/Analysis/CGSCCPassManager.h"
@@ -69,6 +70,7 @@
 #include "llvm/Transforms/IPO/FunctionImport.h"
 #include "llvm/Transforms/IPO/GlobalDCE.h"
 #include "llvm/Transforms/IPO/GlobalOpt.h"
+#include "llvm/Transforms/IPO/GlobalSplit.h"
 #include "llvm/Transforms/IPO/InferFunctionAttrs.h"
 #include "llvm/Transforms/IPO/Internalize.h"
 #include "llvm/Transforms/IPO/LowerTypeTests.h"
@@ -120,11 +122,12 @@
 #include "llvm/Transforms/Utils/AddDiscriminators.h"
 #include "llvm/Transforms/Utils/BreakCriticalEdges.h"
 #include "llvm/Transforms/Utils/LCSSA.h"
+#include "llvm/Transforms/Utils/LibCallsShrinkWrap.h"
 #include "llvm/Transforms/Utils/LoopSimplify.h"
 #include "llvm/Transforms/Utils/LowerInvoke.h"
 #include "llvm/Transforms/Utils/Mem2Reg.h"
 #include "llvm/Transforms/Utils/MemorySSA.h"
-#include "llvm/Transforms/Utils/NameAnonFunctions.h"
+#include "llvm/Transforms/Utils/NameAnonGlobals.h"
 #include "llvm/Transforms/Utils/SimplifyInstructions.h"
 #include "llvm/Transforms/Utils/SymbolRewriter.h"
 #include "llvm/Transforms/Vectorize/LoopVectorize.h"
@@ -149,7 +152,7 @@ struct NoOpModulePass {
 /// \brief No-op module analysis.
 class NoOpModuleAnalysis : public AnalysisInfoMixin<NoOpModuleAnalysis> {
   friend AnalysisInfoMixin<NoOpModuleAnalysis>;
-  static char PassID;
+  static AnalysisKey Key;
 
 public:
   struct Result {};
@@ -159,8 +162,8 @@ public:
 
 /// \brief No-op CGSCC pass which does nothing.
 struct NoOpCGSCCPass {
-  PreservedAnalyses run(LazyCallGraph::SCC &C,
-                        CGSCCAnalysisManager &) {
+  PreservedAnalyses run(LazyCallGraph::SCC &C, CGSCCAnalysisManager &,
+                        LazyCallGraph &, CGSCCUpdateResult &UR) {
     return PreservedAnalyses::all();
   }
   static StringRef name() { return "NoOpCGSCCPass"; }
@@ -169,11 +172,11 @@ struct NoOpCGSCCPass {
 /// \brief No-op CGSCC analysis.
 class NoOpCGSCCAnalysis : public AnalysisInfoMixin<NoOpCGSCCAnalysis> {
   friend AnalysisInfoMixin<NoOpCGSCCAnalysis>;
-  static char PassID;
+  static AnalysisKey Key;
 
 public:
   struct Result {};
-  Result run(LazyCallGraph::SCC &, CGSCCAnalysisManager &) {
+  Result run(LazyCallGraph::SCC &, CGSCCAnalysisManager &, LazyCallGraph &G) {
     return Result();
   }
   static StringRef name() { return "NoOpCGSCCAnalysis"; }
@@ -190,7 +193,7 @@ struct NoOpFunctionPass {
 /// \brief No-op function analysis.
 class NoOpFunctionAnalysis : public AnalysisInfoMixin<NoOpFunctionAnalysis> {
   friend AnalysisInfoMixin<NoOpFunctionAnalysis>;
-  static char PassID;
+  static AnalysisKey Key;
 
 public:
   struct Result {};
@@ -209,7 +212,7 @@ struct NoOpLoopPass {
 /// \brief No-op loop analysis.
 class NoOpLoopAnalysis : public AnalysisInfoMixin<NoOpLoopAnalysis> {
   friend AnalysisInfoMixin<NoOpLoopAnalysis>;
-  static char PassID;
+  static AnalysisKey Key;
 
 public:
   struct Result {};
@@ -217,10 +220,10 @@ public:
   static StringRef name() { return "NoOpLoopAnalysis"; }
 };
 
-char NoOpModuleAnalysis::PassID;
-char NoOpCGSCCAnalysis::PassID;
-char NoOpFunctionAnalysis::PassID;
-char NoOpLoopAnalysis::PassID;
+AnalysisKey NoOpModuleAnalysis::Key;
+AnalysisKey NoOpCGSCCAnalysis::Key;
+AnalysisKey NoOpFunctionAnalysis::Key;
+AnalysisKey NoOpLoopAnalysis::Key;
 
 } // End anonymous namespace.
 
@@ -516,8 +519,9 @@ bool PassBuilder::parseModulePass(ModulePassManager &MPM,
   }
 #define MODULE_ANALYSIS(NAME, CREATE_PASS)                                     \
   if (Name == "require<" NAME ">") {                                           \
-    MPM.addPass(RequireAnalysisPass<                                           \
-                std::remove_reference<decltype(CREATE_PASS)>::type>());        \
+    MPM.addPass(                                                               \
+        RequireAnalysisPass<                                                   \
+            std::remove_reference<decltype(CREATE_PASS)>::type, Module>());    \
     return true;                                                               \
   }                                                                            \
   if (Name == "invalidate<" NAME ">") {                                        \
@@ -578,7 +582,9 @@ bool PassBuilder::parseCGSCCPass(CGSCCPassManager &CGPM,
 #define CGSCC_ANALYSIS(NAME, CREATE_PASS)                                      \
   if (Name == "require<" NAME ">") {                                           \
     CGPM.addPass(RequireAnalysisPass<                                          \
-                 std::remove_reference<decltype(CREATE_PASS)>::type>());       \
+                 std::remove_reference<decltype(CREATE_PASS)>::type,           \
+                 LazyCallGraph::SCC, CGSCCAnalysisManager, LazyCallGraph &,    \
+                 CGSCCUpdateResult &>());                                      \
     return true;                                                               \
   }                                                                            \
   if (Name == "invalidate<" NAME ">") {                                        \
@@ -637,8 +643,9 @@ bool PassBuilder::parseFunctionPass(FunctionPassManager &FPM,
   }
 #define FUNCTION_ANALYSIS(NAME, CREATE_PASS)                                   \
   if (Name == "require<" NAME ">") {                                           \
-    FPM.addPass(RequireAnalysisPass<                                           \
-                std::remove_reference<decltype(CREATE_PASS)>::type>());        \
+    FPM.addPass(                                                               \
+        RequireAnalysisPass<                                                   \
+            std::remove_reference<decltype(CREATE_PASS)>::type, Function>());  \
     return true;                                                               \
   }                                                                            \
   if (Name == "invalidate<" NAME ">") {                                        \
@@ -688,7 +695,7 @@ bool PassBuilder::parseLoopPass(LoopPassManager &LPM, const PipelineElement &E,
 #define LOOP_ANALYSIS(NAME, CREATE_PASS)                                       \
   if (Name == "require<" NAME ">") {                                           \
     LPM.addPass(RequireAnalysisPass<                                           \
-                std::remove_reference<decltype(CREATE_PASS)>::type>());        \
+                std::remove_reference<decltype(CREATE_PASS)>::type, Loop>());  \
     return true;                                                               \
   }                                                                            \
   if (Name == "invalidate<" NAME ">") {                                        \

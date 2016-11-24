@@ -17,7 +17,7 @@
 #include "llvm/Analysis/GlobalsModRef.h"
 #include "llvm/Analysis/GlobalsModRef.h"
 #include "llvm/Analysis/LoopInfo.h"
-#include "llvm/Analysis/OptimizationDiagnosticInfo.h"
+#include "llvm/Analysis/LoopPass.h"
 #include "llvm/Analysis/ScalarEvolution.h"
 #include "llvm/Analysis/ScalarEvolutionAliasAnalysis.h"
 #include "llvm/Analysis/ScalarEvolutionExpander.h"
@@ -947,6 +947,10 @@ void llvm::getLoopAnalysisUsage(AnalysisUsage &AU) {
   AU.addPreservedID(LoopSimplifyID);
   AU.addRequiredID(LCSSAID);
   AU.addPreservedID(LCSSAID);
+  // This is used in the LPPassManager to perform LCSSA verification on passes
+  // which preserve lcssa form
+  AU.addRequired<LCSSAVerificationPass>();
+  AU.addPreserved<LCSSAVerificationPass>();
 
   // Loop passes are designed to run inside of a loop pass manager which means
   // that any function analyses they require must be required by the first loop
@@ -962,8 +966,6 @@ void llvm::getLoopAnalysisUsage(AnalysisUsage &AU) {
   AU.addPreserved<SCEVAAWrapperPass>();
   AU.addRequired<ScalarEvolutionWrapperPass>();
   AU.addPreserved<ScalarEvolutionWrapperPass>();
-  AU.addRequired<OptimizationRemarkEmitterWrapperPass>();
-  AU.addPreserved<OptimizationRemarkEmitterWrapperPass>();
 }
 
 /// Manually defined generic "LoopPass" dependency initialization. This is used
@@ -984,7 +986,6 @@ void llvm::initializeLoopPassPass(PassRegistry &Registry) {
   INITIALIZE_PASS_DEPENDENCY(GlobalsAAWrapperPass)
   INITIALIZE_PASS_DEPENDENCY(SCEVAAWrapperPass)
   INITIALIZE_PASS_DEPENDENCY(ScalarEvolutionWrapperPass)
-  INITIALIZE_PASS_DEPENDENCY(OptimizationRemarkEmitterWrapperPass)
 }
 
 /// \brief Find string metadata for loop
@@ -1084,4 +1085,40 @@ bool llvm::isGuaranteedToExecute(const Instruction &Inst,
   // See http::llvm.org/PR24078 .  (The "ExitBlocks.empty()" check above is
   // just a special case of this.)
   return true;
+}
+
+Optional<unsigned> llvm::getLoopEstimatedTripCount(Loop *L) {
+  // Only support loops with a unique exiting block, and a latch.
+  if (!L->getExitingBlock())
+    return None;
+
+  // Get the branch weights for the the loop's backedge.
+  BranchInst *LatchBR =
+      dyn_cast<BranchInst>(L->getLoopLatch()->getTerminator());
+  if (!LatchBR || LatchBR->getNumSuccessors() != 2)
+    return None;
+
+  assert((LatchBR->getSuccessor(0) == L->getHeader() ||
+          LatchBR->getSuccessor(1) == L->getHeader()) &&
+         "At least one edge out of the latch must go to the header");
+
+  // To estimate the number of times the loop body was executed, we want to
+  // know the number of times the backedge was taken, vs. the number of times
+  // we exited the loop.
+  // The branch weights give us almost what we want, since they were adjusted
+  // from the raw counts to provide a better probability estimate. Remove
+  // the adjustment by subtracting 1 from both weights.
+  uint64_t TrueVal, FalseVal;
+  if (!LatchBR->extractProfMetadata(TrueVal, FalseVal) || (TrueVal <= 1) ||
+      (FalseVal <= 1))
+    return None;
+
+  TrueVal -= 1;
+  FalseVal -= 1;
+
+  // Divide the count of the backedge by the count of the edge exiting the loop.
+  if (LatchBR->getSuccessor(0) == L->getHeader())
+    return TrueVal / FalseVal;
+  else
+    return FalseVal / TrueVal;
 }

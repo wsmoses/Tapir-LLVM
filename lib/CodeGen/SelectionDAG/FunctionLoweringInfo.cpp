@@ -13,7 +13,6 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/CodeGen/FunctionLoweringInfo.h"
-#include "llvm/ADT/PostOrderIterator.h"
 #include "llvm/CodeGen/Analysis.h"
 #include "llvm/CodeGen/MachineFrameInfo.h"
 #include "llvm/CodeGen/MachineFunction.h"
@@ -98,7 +97,7 @@ void FunctionLoweringInfo::set(const Function &fn, MachineFunction &mf,
                                        Fn->isVarArg(), Outs, Fn->getContext());
 
   // If this personality uses funclets, we need to do a bit more work.
-  DenseMap<const AllocaInst *, int *> CatchObjects;
+  DenseMap<const AllocaInst *, TinyPtrVector<int *>> CatchObjects;
   EHPersonality Personality = classifyEHPersonality(
       Fn->hasPersonalityFn() ? Fn->getPersonalityFn() : nullptr);
   if (isFuncletEHPersonality(Personality)) {
@@ -115,7 +114,8 @@ void FunctionLoweringInfo::set(const Function &fn, MachineFunction &mf,
     for (WinEHTryBlockMapEntry &TBME : EHInfo.TryBlockMap) {
       for (WinEHHandlerType &H : TBME.HandlerArray) {
         if (const AllocaInst *AI = H.CatchObj.Alloca)
-          CatchObjects.insert({AI, &H.CatchObj.FrameIndex});
+          CatchObjects.insert({AI, {}}).first->second.push_back(
+              &H.CatchObj.FrameIndex);
         else
           H.CatchObj.FrameIndex = INT_MAX;
       }
@@ -158,8 +158,10 @@ void FunctionLoweringInfo::set(const Function &fn, MachineFunction &mf,
 
           StaticAllocaMap[AI] = FrameIndex;
           // Update the catch handler information.
-          if (Iter != CatchObjects.end())
-            *Iter->second = FrameIndex;
+          if (Iter != CatchObjects.end()) {
+            for (int *CatchObjPtr : Iter->second)
+              *CatchObjPtr = FrameIndex;
+          }
         } else {
           // FIXME: Overaligned static allocas should be grouped into
           // a single dynamic allocation instead of using a separate
@@ -541,73 +543,26 @@ unsigned FunctionLoweringInfo::getCatchPadExceptionPointerVReg(
   return VReg;
 }
 
-/// ComputeUsesVAFloatArgument - Determine if any floating-point values are
-/// being passed to this variadic function, and set the MachineModuleInfo's
-/// usesVAFloatArgument flag if so. This flag is used to emit an undefined
-/// reference to _fltused on Windows, which will link in MSVCRT's
-/// floating-point support.
-void llvm::ComputeUsesVAFloatArgument(const CallInst &I,
-                                      MachineModuleInfo *MMI)
-{
-  FunctionType *FT = cast<FunctionType>(
-    I.getCalledValue()->getType()->getContainedType(0));
-  if (FT->isVarArg() && !MMI->usesVAFloatArgument()) {
-    for (unsigned i = 0, e = I.getNumArgOperands(); i != e; ++i) {
-      Type* T = I.getArgOperand(i)->getType();
-      for (auto i : post_order(T)) {
-        if (i->isFloatingPointTy()) {
-          MMI->setUsesVAFloatArgument(true);
-          return;
-        }
-      }
-    }
-  }
+unsigned
+FunctionLoweringInfo::getOrCreateSwiftErrorVReg(const MachineBasicBlock *MBB,
+                                                const Value *Val) {
+  auto Key = std::make_pair(MBB, Val);
+  auto It = SwiftErrorVRegDefMap.find(Key);
+  // If this is the first use of this swifterror value in this basic block,
+  // create a new virtual register.
+  // After we processed all basic blocks we will satisfy this "upwards exposed
+  // use" by inserting a copy or phi at the beginning of this block.
+  if (It == SwiftErrorVRegDefMap.end()) {
+    auto &DL = MF->getDataLayout();
+    const TargetRegisterClass *RC = TLI->getRegClassFor(TLI->getPointerTy(DL));
+    auto VReg = MF->getRegInfo().createVirtualRegister(RC);
+    SwiftErrorVRegDefMap[Key] = VReg;
+    SwiftErrorVRegUpwardsUse[Key] = VReg;
+    return VReg;
+  } else return It->second;
 }
 
-/// AddLandingPadInfo - Extract the exception handling information from the
-/// landingpad instruction and add them to the specified machine module info.
-void llvm::AddLandingPadInfo(const LandingPadInst &I, MachineModuleInfo &MMI,
-                             MachineBasicBlock *MBB) {
-  if (const auto *PF = dyn_cast<Function>(
-      I.getParent()->getParent()->getPersonalityFn()->stripPointerCasts()))
-    MMI.addPersonality(PF);
-
-  if (I.isCleanup())
-    MMI.addCleanup(MBB);
-
-  // FIXME: New EH - Add the clauses in reverse order. This isn't 100% correct,
-  //        but we need to do it this way because of how the DWARF EH emitter
-  //        processes the clauses.
-  for (unsigned i = I.getNumClauses(); i != 0; --i) {
-    Value *Val = I.getClause(i - 1);
-    if (I.isCatch(i - 1)) {
-      MMI.addCatchTypeInfo(MBB,
-                           dyn_cast<GlobalValue>(Val->stripPointerCasts()));
-    } else {
-      // Add filters in a list.
-      Constant *CVal = cast<Constant>(Val);
-      SmallVector<const GlobalValue*, 4> FilterList;
-      for (User::op_iterator
-             II = CVal->op_begin(), IE = CVal->op_end(); II != IE; ++II)
-        FilterList.push_back(cast<GlobalValue>((*II)->stripPointerCasts()));
-
-      MMI.addFilterTypeInfo(MBB, FilterList);
-    }
-  }
-}
-
-unsigned FunctionLoweringInfo::findSwiftErrorVReg(const MachineBasicBlock *MBB,
-                                                  const Value* Val) const {
-  // Find the index in SwiftErrorVals.
-  SwiftErrorValues::const_iterator I = find(SwiftErrorVals, Val);
-  assert(I != SwiftErrorVals.end() && "Can't find value in SwiftErrorVals");
-  return SwiftErrorMap.lookup(MBB)[I - SwiftErrorVals.begin()];
-}
-
-void FunctionLoweringInfo::setSwiftErrorVReg(const MachineBasicBlock *MBB,
-                                             const Value* Val, unsigned VReg) {
-  // Find the index in SwiftErrorVals.
-  SwiftErrorValues::iterator I = find(SwiftErrorVals, Val);
-  assert(I != SwiftErrorVals.end() && "Can't find value in SwiftErrorVals");
-  SwiftErrorMap[MBB][I - SwiftErrorVals.begin()] = VReg;
+void FunctionLoweringInfo::setCurrentSwiftErrorVReg(
+    const MachineBasicBlock *MBB, const Value *Val, unsigned VReg) {
+  SwiftErrorVRegDefMap[std::make_pair(MBB, Val)] = VReg;
 }

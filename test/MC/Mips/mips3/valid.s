@@ -167,6 +167,8 @@ a:
         neg.s     $f1,$f15
         nop
         nor       $a3,$zero,$a3
+        not       $3, $4               # CHECK: not $3, $4             # encoding: [0x00,0x80,0x18,0x27]
+        not       $3                   # CHECK: not $3, $3             # encoding: [0x00,0x60,0x18,0x27]
         or        $12,$s0,$sp
         or        $2, 4                # CHECK: ori $2, $2, 4          # encoding: [0x34,0x42,0x00,0x04]
         round.l.d $f12,$f1
@@ -223,6 +225,7 @@ a:
         swl       $15,13694($s3)
         swr       $s1,-26590($14)
         sync                           # CHECK: sync                   # encoding: [0x00,0x00,0x00,0x0f]
+        sync 0                         # CHECK: sync                   # encoding: [0x00,0x00,0x00,0x0f]
         syscall                        # CHECK: syscall                # encoding: [0x00,0x00,0x00,0x0c]
         syscall   256                  # CHECK: syscall 256            # encoding: [0x00,0x00,0x40,0x0c]
         teq       $0,$3                # CHECK: teq $zero, $3          # encoding: [0x00,0x03,0x00,0x34]

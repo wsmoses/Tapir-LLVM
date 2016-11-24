@@ -138,10 +138,6 @@ struct VerifierSupport {
       : OS(OS), M(M), MST(&M), DL(M.getDataLayout()), Context(M.getContext()) {}
 
 private:
-  template <class NodeTy> void Write(const ilist_iterator<NodeTy> &I) {
-    Write(&*I);
-  }
-
   void Write(const Module *M) {
     *OS << "; ModuleID = '" << M->getModuleIdentifier() << "'\n";
   }
@@ -401,8 +397,9 @@ private:
                        SmallVectorImpl<const MDNode *> &Requirements);
   void visitFunction(const Function &F);
   void visitBasicBlock(BasicBlock &BB);
-  void visitRangeMetadata(Instruction& I, MDNode* Range, Type* Ty);
-  void visitDereferenceableMetadata(Instruction& I, MDNode* MD);
+  void visitRangeMetadata(Instruction &I, MDNode *Range, Type *Ty);
+  void visitDereferenceableMetadata(Instruction &I, MDNode *MD);
+  void visitTBAAMetadata(Instruction &I, MDNode *MD);
 
   template <class Ty> bool isValidMetadataArray(const MDTuple &N);
 #define HANDLE_SPECIALIZED_MDNODE_LEAF(CLASS) void visit##CLASS(const CLASS &N);
@@ -710,10 +707,15 @@ void Verifier::visitGlobalAlias(const GlobalAlias &GA) {
 }
 
 void Verifier::visitNamedMDNode(const NamedMDNode &NMD) {
+  // There used to be various other llvm.dbg.* nodes, but we don't support
+  // upgrading them and we want to reserve the namespace for future uses.
+  if (NMD.getName().startswith("llvm.dbg."))
+    AssertDI(NMD.getName() == "llvm.dbg.cu",
+             "unrecognized named metadata node in the llvm.dbg namespace",
+             &NMD);
   for (const MDNode *MD : NMD.operands()) {
-    if (NMD.getName() == "llvm.dbg.cu") {
+    if (NMD.getName() == "llvm.dbg.cu")
       AssertDI(MD && isa<DICompileUnit>(MD), "invalid compile unit", &NMD, MD);
-    }
 
     if (!MD)
       continue;
@@ -871,6 +873,7 @@ void Verifier::visitDIDerivedType(const DIDerivedType &N) {
                N.getTag() == dwarf::DW_TAG_const_type ||
                N.getTag() == dwarf::DW_TAG_volatile_type ||
                N.getTag() == dwarf::DW_TAG_restrict_type ||
+               N.getTag() == dwarf::DW_TAG_atomic_type ||
                N.getTag() == dwarf::DW_TAG_member ||
                N.getTag() == dwarf::DW_TAG_inheritance ||
                N.getTag() == dwarf::DW_TAG_friend,
@@ -1124,12 +1127,8 @@ void Verifier::visitDIGlobalVariable(const DIGlobalVariable &N) {
 
   AssertDI(N.getTag() == dwarf::DW_TAG_variable, "invalid tag", &N);
   AssertDI(!N.getName().empty(), "missing global variable name", &N);
-  if (auto *V = N.getRawVariable()) {
-    AssertDI(isa<ConstantAsMetadata>(V) &&
-                 !isa<Function>(cast<ConstantAsMetadata>(V)->getValue()),
-             "invalid global varaible ref", &N, V);
-    visitConstantExprsRecursively(cast<ConstantAsMetadata>(V)->getValue());
-  }
+  if (auto *V = N.getRawExpr())
+    AssertDI(isa<DIExpression>(V), "invalid expression location", &N, V);
   if (auto *Member = N.getRawStaticDataMemberDeclaration()) {
     AssertDI(isa<DIDerivedType>(Member),
              "invalid static data member declaration", &N, Member);
@@ -2125,9 +2124,9 @@ void Verifier::visitFunction(const Function &F) {
         continue;
 
       // FIXME: Once N is canonical, check "SP == &N".
-      Assert(SP->describes(&F),
-             "!dbg attachment points at wrong subprogram for function", N, &F,
-             &I, DL, Scope, SP);
+      AssertDI(SP->describes(&F),
+               "!dbg attachment points at wrong subprogram for function", N, &F,
+               &I, DL, Scope, SP);
     }
 }
 
@@ -2598,15 +2597,20 @@ void Verifier::verifyCallSite(CallSite CS) {
   }
 
   // For each argument of the callsite, if it has the swifterror argument,
-  // make sure the underlying alloca has swifterror as well.
+  // make sure the underlying alloca/parameter it comes from has a swifterror as
+  // well.
   for (unsigned i = 0, e = FTy->getNumParams(); i != e; ++i)
     if (CS.paramHasAttr(i+1, Attribute::SwiftError)) {
       Value *SwiftErrorArg = CS.getArgument(i);
-      auto AI = dyn_cast<AllocaInst>(SwiftErrorArg->stripInBoundsOffsets());
-      Assert(AI, "swifterror argument should come from alloca", AI, I);
-      if (AI)
+      if (auto AI = dyn_cast<AllocaInst>(SwiftErrorArg->stripInBoundsOffsets())) {
         Assert(AI->isSwiftError(),
                "swifterror argument for call has mismatched alloca", AI, I);
+        continue;
+      }
+      auto ArgI = dyn_cast<Argument>(SwiftErrorArg);
+      Assert(ArgI, "swifterror argument should come from an alloca or parameter", SwiftErrorArg, I);
+      Assert(ArgI->hasSwiftErrorAttr(),
+             "swifterror argument for call has mismatched parameter", ArgI, I);
     }
 
   if (FTy->isVarArg()) {
@@ -2972,10 +2976,8 @@ static bool isContiguous(const ConstantRange &A, const ConstantRange &B) {
   return A.getUpper() == B.getLower() || A.getLower() == B.getUpper();
 }
 
-void Verifier::visitRangeMetadata(Instruction& I,
-                                  MDNode* Range, Type* Ty) {
-  assert(Range &&
-         Range == I.getMetadata(LLVMContext::MD_range) &&
+void Verifier::visitRangeMetadata(Instruction &I, MDNode *Range, Type *Ty) {
+  assert(Range && Range == I.getMetadata(LLVMContext::MD_range) &&
          "precondition violation");
 
   unsigned NumOperands = Range->getNumOperands();
@@ -3663,6 +3665,15 @@ void Verifier::visitDereferenceableMetadata(Instruction& I, MDNode* MD) {
          "dereferenceable_or_null metadata value must be an i64!", &I);
 }
 
+void Verifier::visitTBAAMetadata(Instruction &I, MDNode *MD) {
+  bool IsStructPathTBAA =
+      isa<MDNode>(MD->getOperand(0)) && MD->getNumOperands() >= 3;
+
+  Assert(IsStructPathTBAA,
+         "Old-style TBAA is no longer allowed, use struct-path TBAA instead",
+         &I);
+}
+
 /// verifyInstruction - Verify that an instruction is well formed.
 ///
 void Verifier::visitInstruction(Instruction &I) {
@@ -3798,6 +3809,9 @@ void Verifier::visitInstruction(Instruction &I) {
   if (MDNode *MD = I.getMetadata(LLVMContext::MD_dereferenceable_or_null))
     visitDereferenceableMetadata(I, MD);
 
+  if (MDNode *MD = I.getMetadata(LLVMContext::MD_tbaa))
+    visitTBAAMetadata(I, MD);
+
   if (MDNode *AlignMD = I.getMetadata(LLVMContext::MD_align)) {
     Assert(I.getType()->isPointerTy(), "align applies only to pointer types",
            &I);
@@ -3881,7 +3895,7 @@ void Verifier::visitIntrinsicCallSite(Intrinsic::ID ID, CallSite CS) {
   default:
     break;
   case Intrinsic::coro_id: {
-    auto *InfoArg = CS.getArgOperand(2)->stripPointerCasts();
+    auto *InfoArg = CS.getArgOperand(3)->stripPointerCasts();
     if (isa<ConstantPointerNull>(InfoArg))
       break;
     auto *GV = dyn_cast<GlobalVariable>(InfoArg);
@@ -4272,10 +4286,10 @@ void Verifier::visitDbgIntrinsic(StringRef Kind, DbgIntrinsicTy &DII) {
   if (!VarSP || !LocSP)
     return; // Broken scope chains are checked elsewhere.
 
-  Assert(VarSP == LocSP, "mismatched subprogram between llvm.dbg." + Kind +
-                             " variable and !dbg attachment",
-         &DII, BB, F, Var, Var->getScope()->getSubprogram(), Loc,
-         Loc->getScope()->getSubprogram());
+  AssertDI(VarSP == LocSP, "mismatched subprogram between llvm.dbg." + Kind +
+                               " variable and !dbg attachment",
+           &DII, BB, F, Var, Var->getScope()->getSubprogram(), Loc,
+           Loc->getScope()->getSubprogram());
 }
 
 static uint64_t getVariableSize(const DILocalVariable &V) {
@@ -4338,9 +4352,9 @@ void Verifier::verifyBitPieceExpression(const DbgInfoIntrinsic &I) {
 
   unsigned PieceSize = E->getBitPieceSize();
   unsigned PieceOffset = E->getBitPieceOffset();
-  Assert(PieceSize + PieceOffset <= VarSize,
+  AssertDI(PieceSize + PieceOffset <= VarSize,
          "piece is larger than or outside of variable", &I, V, E);
-  Assert(PieceSize != VarSize, "piece covers entire variable", &I, V, E);
+  AssertDI(PieceSize != VarSize, "piece covers entire variable", &I, V, E);
 }
 
 void Verifier::verifyCompileUnits() {
@@ -4348,7 +4362,7 @@ void Verifier::verifyCompileUnits() {
   SmallPtrSet<const Metadata *, 2> Listed;
   if (CUs)
     Listed.insert(CUs->op_begin(), CUs->op_end());
-  Assert(
+  AssertDI(
       all_of(CUVisited,
              [&Listed](const Metadata *CU) { return Listed.count(CU); }),
       "All DICompileUnits must be listed in llvm.dbg.cu");
@@ -4467,7 +4481,7 @@ FunctionPass *llvm::createVerifierPass(bool FatalErrors) {
   return new VerifierLegacyPass(FatalErrors);
 }
 
-char VerifierAnalysis::PassID;
+AnalysisKey VerifierAnalysis::Key;
 VerifierAnalysis::Result VerifierAnalysis::run(Module &M,
                                                ModuleAnalysisManager &) {
   Result Res;

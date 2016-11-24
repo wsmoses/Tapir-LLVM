@@ -165,7 +165,7 @@ namespace {
         : SelectionDAGISel(tm, OptLevel), OptForSize(false),
           OptForMinSize(false) {}
 
-    const char *getPassName() const override {
+    StringRef getPassName() const override {
       return "X86 DAG->DAG Instruction Selection";
     }
 
@@ -228,6 +228,7 @@ namespace {
                              SDValue &Index, SDValue &Disp,
                              SDValue &Segment,
                              SDValue &NodeWithChain);
+    bool selectRelocImm(SDValue N, SDValue &Op);
 
     bool tryFoldLoad(SDNode *P, SDValue N,
                      SDValue &Base, SDValue &Scale,
@@ -1435,7 +1436,7 @@ bool X86DAGToDAGISel::selectVectorAddr(SDNode *Parent, SDValue N, SDValue &Base,
   SDLoc DL(N);
   Base = Mgs->getBasePtr();
   Index = Mgs->getIndex();
-  unsigned ScalarSize = Mgs->getValue().getValueType().getScalarSizeInBits();
+  unsigned ScalarSize = Mgs->getValue().getScalarValueSizeInBits();
   Scale = getI8Imm(ScalarSize/8, DL);
 
   // If Base is 0, the whole address is in index and the Scale is 1
@@ -1563,12 +1564,9 @@ bool X86DAGToDAGISel::selectMOV64Imm32(SDValue N, SDValue &Imm) {
          "Unexpected node type for MOV32ri64");
   N = N.getOperand(0);
 
-  if (N->getOpcode() != ISD::TargetConstantPool &&
-      N->getOpcode() != ISD::TargetJumpTable &&
-      N->getOpcode() != ISD::TargetGlobalAddress &&
-      N->getOpcode() != ISD::TargetExternalSymbol &&
-      N->getOpcode() != ISD::MCSymbol &&
-      N->getOpcode() != ISD::TargetBlockAddress)
+  // At least GNU as does not accept 'movl' for TPOFF relocations.
+  // FIXME: We could use 'movl' when we know we are targeting MC.
+  if (N->getOpcode() == ISD::TargetGlobalTLSAddress)
     return false;
 
   Imm = N;
@@ -1704,6 +1702,19 @@ bool X86DAGToDAGISel::selectTLSADDRAddr(SDValue N, SDValue &Base,
   return true;
 }
 
+bool X86DAGToDAGISel::selectRelocImm(SDValue N, SDValue &Op) {
+  if (auto *CN = dyn_cast<ConstantSDNode>(N)) {
+    Op = CurDAG->getTargetConstant(CN->getAPIntValue(), SDLoc(CN),
+                                   N.getValueType());
+    return true;
+  }
+
+  if (N.getOpcode() != X86ISD::Wrapper)
+    return false;
+
+  Op = N.getOperand(0);
+  return true;
+}
 
 bool X86DAGToDAGISel::tryFoldLoad(SDNode *P, SDValue N,
                                   SDValue &Base, SDValue &Scale,

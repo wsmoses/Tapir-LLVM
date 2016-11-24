@@ -78,6 +78,7 @@ namespace {
       (void) llvm::createCFLAndersAAWrapperPass();
       (void) llvm::createCFLSteensAAWrapperPass();
       (void) llvm::createStructurizeCFGPass();
+      (void) llvm::createLibCallsShrinkWrapPass();
       (void) llvm::createConstantMergePass();
       (void) llvm::createConstantPropagationPass();
       (void) llvm::createCostModelAnalysisPass();
@@ -112,6 +113,7 @@ namespace {
       (void) llvm::createInternalizePass();
       (void) llvm::createLCSSAPass();
       (void) llvm::createLICMPass();
+      (void) llvm::createLoopSinkPass();
       (void) llvm::createLazyValueInfoPass();
       (void) llvm::createLoopExtractorPass();
       (void) llvm::createLoopInterchangePass();
@@ -162,6 +164,7 @@ namespace {
       (void) llvm::createInstCountPass();
       (void) llvm::createConstantHoistingPass();
       (void) llvm::createCodeGenPreparePass();
+      (void) llvm::createCountingFunctionInserterPass();
       (void) llvm::createEarlyCSEPass();
       (void) llvm::createGVNHoistPass();
       (void) llvm::createMergedLoadStoreMotionPass();

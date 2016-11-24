@@ -21,6 +21,14 @@
 
 namespace llvm {
 
+/// When regcall calling convention compiled to 32 bit arch, special treatment
+/// is required for 64 bit masks.
+/// The value should be assigned to two GPRs.
+/// @return true if registers were allocated and false otherwise
+bool CC_X86_32_RegCall_Assign2Regs(unsigned &ValNo, MVT &ValVT, MVT &LocVT,
+                                   CCValAssign::LocInfo &LocInfo,
+                                   ISD::ArgFlagsTy &ArgFlags, CCState &State);
+
 inline bool CC_X86_32_VectorCallIndirect(unsigned &ValNo, MVT &ValVT,
                                          MVT &LocVT,
                                          CCValAssign::LocInfo &LocInfo,
@@ -41,6 +49,13 @@ inline bool CC_X86_AnyReg_Error(unsigned &, MVT &, MVT &,
                    "stackmap and patchpoint intrinsics.");
   // gracefully fallback to X86 C calling convention on Release builds.
   return false;
+}
+
+inline bool CC_X86_RegCall_Error(unsigned &, MVT &, MVT &,
+                                 CCValAssign::LocInfo &, ISD::ArgFlagsTy &,
+                                 CCState &) {
+  report_fatal_error("LLVM x86 RegCall calling convention implementation" \
+    " doesn't support long double and mask types yet.");
 }
 
 inline bool CC_X86_32_MCUInReg(unsigned &ValNo, MVT &ValVT,

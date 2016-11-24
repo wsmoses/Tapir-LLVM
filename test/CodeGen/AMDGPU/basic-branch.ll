@@ -1,5 +1,5 @@
 ; RUN: llc -O0 -march=amdgcn -verify-machineinstrs < %s | FileCheck -check-prefix=GCNNOOPT -check-prefix=GCN %s
-; RUN: llc -O0 -march=amdgcn -mcpu=tonga -verify-machineinstrs < %s | FileCheck -check-prefix=GCNNOOPT -check-prefix=GCN %s
+; RUN: llc -O0 -march=amdgcn -mcpu=tonga -amdgpu-spill-sgpr-to-smem=0 -verify-machineinstrs < %s | FileCheck -check-prefix=GCNNOOPT -check-prefix=GCN %s
 ; RUN: llc -march=amdgcn -verify-machineinstrs < %s | FileCheck -check-prefix=GCNOPT -check-prefix=GCN %s
 ; RUN: llc -march=amdgcn -mcpu=tonga -verify-machineinstrs < %s | FileCheck -check-prefix=GCNOPT -check-prefix=GCN %s
 
@@ -31,7 +31,7 @@ end:
 ; GCN-LABEL: {{^}}test_brcc_i1:
 ; GCN: buffer_load_ubyte
 ; GCN: v_and_b32_e32 v{{[0-9]+}}, 1,
-; GCN: v_cmp_eq_i32_e32 vcc,
+; GCN: v_cmp_eq_u32_e32 vcc,
 ; GCN: s_cbranch_vccnz [[END:BB[0-9]+_[0-9]+]]
 
 ; GCN: buffer_store_dword

@@ -573,11 +573,14 @@ void CodeGenSchedModels::collectSchedClasses() {
         dbgs() << " " << SchedReads[*RI].Name;
       dbgs() << '\n';
     }
-    for (std::vector<CodeGenProcModel>::iterator PI = ProcModels.begin(),
-           PE = ProcModels.end(); PI != PE; ++PI) {
-      if (!std::count(ProcIndices.begin(), ProcIndices.end(), PI->Index))
-        dbgs() << "No machine model for " << Inst->TheDef->getName()
-               << " on processor " << PI->ModelName << '\n';
+    // If ProcIndices contains zero, the class applies to all processors.
+    if (!std::count(ProcIndices.begin(), ProcIndices.end(), 0)) {
+      for (std::vector<CodeGenProcModel>::iterator PI = ProcModels.begin(),
+             PE = ProcModels.end(); PI != PE; ++PI) {
+        if (!std::count(ProcIndices.begin(), ProcIndices.end(), PI->Index))
+          dbgs() << "No machine model for " << Inst->TheDef->getName()
+                 << " on processor " << PI->ModelName << '\n';
+      }
     }
   }
 }
@@ -1564,7 +1567,8 @@ void CodeGenSchedModels::checkCompleteness() {
       const CodeGenSchedClass &SC = getSchedClass(SCIdx);
       if (!SC.Writes.empty())
         continue;
-      if (SC.ItinClassDef != nullptr)
+      if (SC.ItinClassDef != nullptr &&
+          SC.ItinClassDef->getName() != "NoItinerary")
         continue;
 
       const RecVec &InstRWs = SC.InstRWs;

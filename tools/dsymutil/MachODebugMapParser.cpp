@@ -65,7 +65,9 @@ private:
   std::unique_ptr<DebugMap> parseOneBinary(const MachOObjectFile &MainBinary,
                                            StringRef BinaryPath);
 
-  void switchToNewDebugMapObject(StringRef Filename, sys::TimeValue Timestamp);
+  void
+  switchToNewDebugMapObject(StringRef Filename,
+                            sys::TimePoint<std::chrono::seconds> Timestamp);
   void resetParserState();
   uint64_t getMainBinarySymbolAddress(StringRef Name);
   void loadMainBinarySymbols(const MachOObjectFile &MainBinary);
@@ -110,8 +112,8 @@ void MachODebugMapParser::resetParserState() {
 /// Create a new DebugMapObject. This function resets the state of the
 /// parser that was referring to the last object file and sets
 /// everything up to add symbols to the new one.
-void MachODebugMapParser::switchToNewDebugMapObject(StringRef Filename,
-                                                    sys::TimeValue Timestamp) {
+void MachODebugMapParser::switchToNewDebugMapObject(
+    StringRef Filename, sys::TimePoint<std::chrono::seconds> Timestamp) {
   resetParserState();
 
   SmallString<80> Path(PathPrefix);
@@ -343,11 +345,8 @@ void MachODebugMapParser::handleStabSymbolTableEntry(uint32_t StringIndex,
   const char *Name = &MainBinaryStrings.data()[StringIndex];
 
   // An N_OSO entry represents the start of a new object file description.
-  if (Type == MachO::N_OSO) {
-    sys::TimeValue Timestamp;
-    Timestamp.fromEpochTime(Value);
-    return switchToNewDebugMapObject(Name, Timestamp);
-  }
+  if (Type == MachO::N_OSO)
+    return switchToNewDebugMapObject(Name, sys::toTimePoint(Value));
 
   // If the last N_OSO object file wasn't found,
   // CurrentDebugMapObject will be null. Do not update anything
@@ -445,7 +444,7 @@ void MachODebugMapParser::loadMainBinarySymbols(
     }
     SymbolRef::Type Type = *TypeOrErr;
     // Skip undefined and STAB entries.
-    if ((Type & SymbolRef::ST_Debug) || (Type & SymbolRef::ST_Unknown))
+    if ((Type == SymbolRef::ST_Debug) || (Type == SymbolRef::ST_Unknown))
       continue;
     // The only symbols of interest are the global variables. These
     // are the only ones that need to be queried because the address
