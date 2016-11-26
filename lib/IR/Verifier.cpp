@@ -4481,7 +4481,7 @@ FunctionPass *llvm::createVerifierPass(bool FatalErrors) {
   return new VerifierLegacyPass(FatalErrors);
 }
 
-char VerifierAnalysis::PassID;
+AnalysisKey VerifierAnalysis::Key;
 VerifierAnalysis::Result VerifierAnalysis::run(Module &M,
                                                ModuleAnalysisManager &) {
   Result Res;
