@@ -143,14 +143,6 @@ Function *llvm::CreateHelper(const SetVector<Value *> &Inputs,
       DestI->setName(I->getName()+NameSuffix); // Copy the name over...
       VMap[I] = &*DestI++;                 // Add mapping to VMap
     }
-
-  // // If the old function is no-throw, so is the new one.
-  // if (OldFunc->doesNotThrow())
-  //   NewFunc->setDoesNotThrow();
-
-  // // Inherit the uwtable attribute if we need to.
-  // if (OldFunc->hasUWTable())
-  //   NewFunc->setHasUWTable();
   
   // Copy all attributes other than those stored in the AttributeSet.  We need
   // to remap the parameter indices of the AttributeSet.
