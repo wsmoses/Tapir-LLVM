@@ -16,8 +16,8 @@
 #define LLVM_TRANSFORMS_TAPIR_H
 
 namespace llvm {
-class FunctionPass;
 class Pass;
+class ModulePass;
 
 //===----------------------------------------------------------------------===//
 //
@@ -29,8 +29,8 @@ Pass *createLoopSpawningPass();
 //
 // PromoteDetachToCilk
 //
-FunctionPass *createPromoteDetachToCilkPass(bool DisablePostOpts = false,
-                                            bool instrument = false);
+ModulePass *createPromoteDetachToCilkPass(bool DisablePostOpts = false,
+                                          bool Instrument = false);
 
 } // End llvm namespace
 

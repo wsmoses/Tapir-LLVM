@@ -23,23 +23,27 @@ using namespace llvm;
 
 namespace {
 
-struct CilkPass : public FunctionPass {
+struct CilkPass : public ModulePass {
   static char ID; // Pass identification, replacement for typeid
   bool DisablePostOpts;
   bool Instrument;
-  CilkPass(bool disablePostOpts = false, bool instrument = false)
-      : FunctionPass(ID), DisablePostOpts(disablePostOpts),
-        Instrument(instrument) {
+  CilkPass(bool DisablePostOpts = false, bool Instrument = false)
+      : ModulePass(ID), DisablePostOpts(DisablePostOpts),
+        Instrument(Instrument) {
   }
 
-  // runOnFunction - To run this pass, first we find appropriate instructions,
-  // then we promote each one.
-  //
-  bool runOnFunction(Function &F) override;
+  // // runOnFunction - To run this pass, first we find appropriate instructions,
+  // // then we promote each one.
+  // //
+  // bool runOnFunction(Function &F) override;
+
+  bool runOnModule(Module &M) override;
 
   void getAnalysisUsage(AnalysisUsage &AU) const override {
     AU.addRequired<DominatorTreeWrapperPass>();
   }
+private:
+  bool processFunction(Function &F, DominatorTree &DT);
 };
 }  // End of anonymous namespace
 
@@ -56,21 +60,20 @@ INITIALIZE_PASS_BEGIN(CilkPass, "detach2cilk", "Lower Tapir to Cilk runtime", fa
 INITIALIZE_PASS_DEPENDENCY(DominatorTreeWrapperPass)
 INITIALIZE_PASS_END(CilkPass, "detach2cilk", "Lower Tapir to Cilk runtime",   false, false)
 
-bool CilkPass::runOnFunction(Function &F) {
+bool CilkPass::processFunction(Function &F, DominatorTree &DT) {
   if (verifyFunction(F, &errs())) {
     F.dump();
     assert(0);
   }
 
-
-  bool Changed  = false;
+  bool Changed = false;
   if (fastCilk && F.getName()=="main") {
     IRBuilder<> start(F.getEntryBlock().getFirstNonPHIOrDbg());
     auto m = start.CreateCall(CILKRTS_FUNC(init, *F.getParent()));
     m->moveBefore(F.getEntryBlock().getTerminator());
   }
 
-  DominatorTree &DT = getAnalysis<DominatorTreeWrapperPass>().getDomTree();
+  // DominatorTree &DT = getAnalysis<DominatorTreeWrapperPass>().getDomTree();
   for (Function::iterator i = F.begin(), e = F.end(); i != e; ++i) {
     if (DetachInst* inst = dyn_cast_or_null<DetachInst>(i->getTerminator())) {
       auto cal = cilk::createDetach(*inst, DT, ClInstrumentCilk || Instrument);
@@ -122,8 +125,33 @@ bool CilkPass::runOnFunction(Function &F) {
   return Changed;
 }
 
+bool CilkPass::runOnModule(Module &M) {
+  if (skipModule(M))
+    return false;
+
+  // Find functions that detach for processing.
+  SmallVector<Function *, 4> WorkList;
+  for (Function &F : M)
+    for (BasicBlock &BB : F)
+      if (isa<DetachInst>(BB.getTerminator()))
+        WorkList.push_back(&F);
+
+  if (WorkList.empty())
+    return false;
+
+  bool Changed = false;
+  while (!WorkList.empty()) {
+    // Process the next function.
+    Function *F = WorkList.back();
+    DominatorTree &DT = getAnalysis<DominatorTreeWrapperPass>(*F).getDomTree();
+    Changed |= processFunction(*F, DT);
+    WorkList.pop_back();
+  }
+  return Changed;
+}
+
 // createPromoteDetachToCilkPass - Provide an entry point to create this pass.
 //
-FunctionPass *llvm::createPromoteDetachToCilkPass(bool DisablePostOpts, bool Instrument) {
+ModulePass *llvm::createPromoteDetachToCilkPass(bool DisablePostOpts, bool Instrument) {
   return new CilkPass(DisablePostOpts, Instrument);
 }
