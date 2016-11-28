@@ -247,8 +247,8 @@ bool LoopRotate::rotateLoop(Loop *L, bool SimplifiedLatch) {
   if (isa<SyncInst>(OrigPreheader->getTerminator())) {
     DEBUG(dbgs() << "LoopRotation: Splitting header due to sync terminator.\n");
     BasicBlock *NewPreheader = SplitEdge(OrigPreheader, OrigHeader, DT, LI);
-    SyncInst::Create(NewPreheader, OrigPreheader->getTerminator());
-    OrigPreheader->getTerminator()->eraseFromParent();
+    // SyncInst::Create(NewPreheader, OrigPreheader->getTerminator());
+    // OrigPreheader->getTerminator()->eraseFromParent();
     OrigPreheader = NewPreheader;
   }
 
