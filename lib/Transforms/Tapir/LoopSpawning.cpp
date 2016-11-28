@@ -15,9 +15,10 @@
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/Statistic.h"
+// #include "llvm/Analysis/LoopPass.h"
 #include "llvm/Analysis/LoopInfo.h"
-#include "llvm/Analysis/LoopPass.h"
 #include "llvm/Analysis/OptimizationDiagnosticInfo.h"
+#include "llvm/Analysis/ScalarEvolution.h"
 #include "llvm/Analysis/ScalarEvolutionExpander.h"
 #include "llvm/Analysis/TargetLibraryInfo.h"
 #include "llvm/Analysis/TargetTransformInfo.h"
@@ -67,20 +68,20 @@ namespace {
 // Forward declarations.
 class LoopSpawningHints;
 
-/// \brief This modifies LoopAccessReport to initialize message with
-/// tapir-loop-specific part.
-class LoopSpawningReport : public LoopAccessReport {
-public:
-  LoopSpawningReport(Instruction *I = nullptr)
-      : LoopAccessReport("loop-spawning: ", I) {}
+// /// \brief This modifies LoopAccessReport to initialize message with
+// /// tapir-loop-specific part.
+// class LoopSpawningReport : public LoopAccessReport {
+// public:
+//   LoopSpawningReport(Instruction *I = nullptr)
+//       : LoopAccessReport("loop-spawning: ", I) {}
 
-  /// \brief This allows promotion of the loop-access analysis report into the
-  /// loop-spawning report.  It modifies the message to add the
-  /// loop-spawning-specific part of the message.
-  explicit LoopSpawningReport(const LoopAccessReport &R)
-      : LoopAccessReport(Twine("loop-spawning: ") + R.str(),
-                         R.getInstr()) {}
-};
+//   /// \brief This allows promotion of the loop-access analysis report into the
+//   /// loop-spawning report.  It modifies the message to add the
+//   /// loop-spawning-specific part of the message.
+//   explicit LoopSpawningReport(const LoopAccessReport &R)
+//       : LoopAccessReport(Twine("loop-spawning: ") + R.str(),
+//                          R.getInstr()) {}
+// };
 
 
 /// Utility class for getting and setting loop spawning hints in the form
@@ -142,13 +143,13 @@ public:
     getHintsFromMetadata();
   }
 
-  /// Dumps all the hint information.
-  std::string emitRemark() const {
-    LoopSpawningReport R;
-    R << "Strategy = " << printStrategy(getStrategy());
+  // /// Dumps all the hint information.
+  // std::string emitRemark() const {
+  //   LoopSpawningReport R;
+  //   R << "Strategy = " << printStrategy(getStrategy());
 
-    return R.str();
-  }
+  //   return R.str();
+  // }
 
   enum SpawningStrategy getStrategy() const {
     return (SpawningStrategy)Strategy.Value;
@@ -275,67 +276,77 @@ private:
   OptimizationRemarkEmitter &ORE;
 };
 
-static void emitAnalysisDiag(const Loop *TheLoop,
-                             OptimizationRemarkEmitter &ORE,
-                             const LoopAccessReport &Message) {
-  const char *Name = LS_NAME;
-  LoopAccessReport::emitAnalysis(Message, TheLoop, Name, ORE);
-}
+// static void emitAnalysisDiag(const Loop *TheLoop,
+//                              OptimizationRemarkEmitter &ORE,
+//                              const LoopAccessReport &Message) {
+//   const char *Name = LS_NAME;
+//   LoopAccessReport::emitAnalysis(Message, TheLoop, Name, ORE);
+// }
 
-static void emitMissedWarning(Function *F, Loop *L,
-                              const LoopSpawningHints &LH,
-                              OptimizationRemarkEmitter *ORE) {
-  ORE->emitOptimizationRemarkMissed(LS_NAME, L, LH.emitRemark());
-  switch (LH.getStrategy()) {
-  case LoopSpawningHints::ST_DAC:
-    emitLoopSpawningWarning(
-        F->getContext(), *F, L->getStartLoc(),
-        "failed to use divide-and-conquer loop spawning");
-    break;
-  case LoopSpawningHints::ST_SEQ:
-    emitLoopSpawningWarning(
-        F->getContext(), *F, L->getStartLoc(),
-        "transformation disabled");
-    break;
-  case LoopSpawningHints::ST_END:
-    emitLoopSpawningWarning(
-        F->getContext(), *F, L->getStartLoc(),
-        "unknown spawning strategy");
-    break;
-  }
-}
+// static void emitMissedWarning(Function *F, Loop *L,
+//                               const LoopSpawningHints &LH,
+//                               OptimizationRemarkEmitter *ORE) {
+//   ORE->emit(OptimizationRemarkMissed(
+//                 LS_NAME, "LSHint", L->getStartLoc(), L->getHeader())
+//             << "Strategy = "
+//             << LoopSpawningHints::printStrategy(LH.getStrategy()));
+//   switch (LH.getStrategy()) {
+//   case LoopSpawningHints::ST_DAC:
+//     emitLoopSpawningWarning(
+//         F->getContext(), *F, L->getStartLoc(),
+//         "failed to use divide-and-conquer loop spawning");
+//     break;
+//   case LoopSpawningHints::ST_SEQ:
+//     emitLoopSpawningWarning(
+//         F->getContext(), *F, L->getStartLoc(),
+//         "transformation disabled");
+//     break;
+//   case LoopSpawningHints::ST_END:
+//     emitLoopSpawningWarning(
+//         F->getContext(), *F, L->getStartLoc(),
+//         "unknown spawning strategy");
+//     break;
+//   }
+// }
 
 /// DACLoopSpawning implements the transformation to spawn the iterations of a
 /// Tapir loop in a recursive divide-and-conquer fashion.
 class DACLoopSpawning {
 public:
+  // DACLoopSpawning(Loop *OrigLoop, ScalarEvolution &SE,
+  //                 LoopInfo *LI, DominatorTree *DT,
+  //                 const TargetLibraryInfo *TLI,
+  //                 const TargetTransformInfo *TTI,
+  //                 OptimizationRemarkEmitter *ORE)
+  //     : OrigLoop(OrigLoop), SE(SE), LI(LI), DT(DT),
+  //       TLI(TLI), TTI(TTI), ORE(ORE)
+  // {}
+
   DACLoopSpawning(Loop *OrigLoop, ScalarEvolution &SE,
                   LoopInfo *LI, DominatorTree *DT,
-                  const TargetLibraryInfo *TLI,
-                  const TargetTransformInfo *TTI,
-                  OptimizationRemarkEmitter *ORE)
-      : OrigLoop(OrigLoop), SE(SE), LI(LI), DT(DT),
-        TLI(TLI), TTI(TTI), ORE(ORE) {}
+                  OptimizationRemarkEmitter &ORE)
+      : OrigLoop(OrigLoop), SE(SE), LI(LI), DT(DT), ORE(ORE)
+  {}
 
   bool convertLoop();
 
   virtual ~DACLoopSpawning() {}
 
 protected:
-    PHINode* canonicalizeIVs(Type *Ty);
-    Value* canonicalizeLoopLatch(PHINode *IV, Value *Limit);
-    Value* computeGrainsize(Value *Limit);
-    void implementDACIterSpawnOnHelper(Function *Helper,
-                                       BasicBlock *Preheader,
-                                       BasicBlock *Header,
-                                       PHINode *CanonicalIV,
-                                       Argument *Limit,
-                                       Argument *Grainsize,
-                                       DominatorTree *DT,
-                                       LoopInfo *LI,
-                                       bool CanonicalIVFlagNUW = false,
-                                       bool CanonicalIVFlagNSW = false);
-    void unlinkLoop();
+  PHINode* canonicalizeIVs(Type *Ty);
+  Value* canonicalizeLoopLatch(PHINode *IV, Value *Limit);
+  Value* computeGrainsize(Value *Limit);
+  void implementDACIterSpawnOnHelper(Function *Helper,
+                                     BasicBlock *Preheader,
+                                     BasicBlock *Header,
+                                     PHINode *CanonicalIV,
+                                     Argument *Limit,
+                                     Argument *Grainsize,
+                                     DominatorTree *DT,
+                                     LoopInfo *LI,
+                                     bool CanonicalIVFlagNUW = false,
+                                     bool CanonicalIVFlagNSW = false);
+  void unlinkLoop();
 
   /// The original loop.
   Loop *OrigLoop;
@@ -344,69 +355,72 @@ protected:
   /// more usable form.
   // PredicatedScalarEvolution &PSE;
   ScalarEvolution &SE;
-  /// Loop Info.
+  /// Loop info.
   LoopInfo *LI;
-  /// Dominator Tree.
+  /// Dominator tree.
   DominatorTree *DT;
-  /// Target Library Info.
-  const TargetLibraryInfo *TLI;
-  /// Target Transform Info.
-  const TargetTransformInfo *TTI;
+  // /// Target library info.
+  // const TargetLibraryInfo *TLI;
+  // /// Target transform info.
+  // const TargetTransformInfo *TTI;
   /// Interface to emit optimization remarks.
-  OptimizationRemarkEmitter *ORE;
+  OptimizationRemarkEmitter &ORE;
+
+// private:
+//   /// Report an analysis message to assist the user in diagnosing loops that are
+//   /// not transformed.  These are handled as LoopAccessReport rather than
+//   /// VectorizationReport because the << operator of LoopSpawningReport returns
+//   /// LoopAccessReport.
+//   void emitAnalysis(const LoopAccessReport &Message) const {
+//     emitAnalysisDiag(OrigLoop, *ORE, Message);
+//   }
+};
+
+struct LoopSpawningImpl {
+  // LoopSpawningImpl(Function &F, LoopInfo &LI, ScalarEvolution &SE,
+  //                  DominatorTree &DT,
+  //                  const TargetTransformInfo &TTI,
+  //                  const TargetLibraryInfo *TLI,
+  //                  AliasAnalysis &AA, AssumptionCache &AC,
+  //                  OptimizationRemarkEmitter &ORE)
+  //     : F(&F), LI(&LI), SE(&SE), DT(&DT), TTI(&TTI), TLI(TLI),
+  //       AA(&AA), AC(&AC), ORE(&ORE) {}
+  // LoopSpawningImpl(Function &F,
+  //                  function_ref<LoopInfo &(Function &)> GetLI,
+  //                  function_ref<ScalarEvolution &(Function &)> GetSE,
+  //                  function_ref<DominatorTree &(Function &)> GetDT,
+  //                  OptimizationRemarkEmitter &ORE)
+  //     : F(F), GetLI(GetLI), LI(nullptr), GetSE(GetSE), GetDT(GetDT),
+  //       ORE(ORE)
+  // {}
+  LoopSpawningImpl(Function &F,
+                   LoopInfo &LI,
+                   ScalarEvolution &SE,
+                   DominatorTree &DT,
+                   OptimizationRemarkEmitter &ORE)
+      : F(F), LI(LI), SE(SE), DT(DT),
+        ORE(ORE)
+  {}
+  bool run();
 
 private:
-  /// Report an analysis message to assist the user in diagnosing loops that are
-  /// not transformed.  These are handled as LoopAccessReport rather than
-  /// VectorizationReport because the << operator of LoopSpawningReport returns
-  /// LoopAccessReport.
-  void emitAnalysis(const LoopAccessReport &Message) const {
-    emitAnalysisDiag(OrigLoop, *ORE, Message);
-  }
+  void addTapirLoop(Loop *L, SmallVectorImpl<Loop *> &V);
+  bool isTapirLoop(const Loop *L);
+  bool processLoop(Loop *L);
+
+  Function &F;
+  // function_ref<LoopInfo &(Function &)> GetLI;
+  LoopInfo &LI;
+  // function_ref<ScalarEvolution &(Function &)> GetSE;
+  // function_ref<DominatorTree &(Function &)> GetDT;
+  ScalarEvolution &SE;
+  DominatorTree &DT;
+  // const TargetTransformInfo *TTI;
+  // const TargetLibraryInfo *TLI;
+  // AliasAnalysis *AA;
+  // AssumptionCache *AC;
+  OptimizationRemarkEmitter &ORE;
 };
-
-/// The LoopSpawning Pass.
-struct LoopSpawning : public FunctionPass {
-  /// Pass identification, replacement for typeid
-  static char ID;
-
-  explicit LoopSpawning()
-      : FunctionPass(ID) {
-    initializeLoopSpawningPass(*PassRegistry::getPassRegistry());
-  }
-  
-  LoopSpawningPass Impl;
-
-  bool runOnFunction(Function &F) override {
-    if (skipFunction(F))
-      return false;
-
-    auto *SE = &getAnalysis<ScalarEvolutionWrapperPass>().getSE();
-    auto *LI = &getAnalysis<LoopInfoWrapperPass>().getLoopInfo();
-    auto *TTI = &getAnalysis<TargetTransformInfoWrapperPass>().getTTI(F);
-    auto *DT = &getAnalysis<DominatorTreeWrapperPass>().getDomTree();
-    auto *TLIP = getAnalysisIfAvailable<TargetLibraryInfoWrapperPass>();
-    auto *TLI = TLIP ? &TLIP->getTLI() : nullptr;
-    auto *AA = &getAnalysis<AAResultsWrapperPass>().getAAResults();
-    auto *AC = &getAnalysis<AssumptionCacheTracker>().getAssumptionCache(F);
-    auto *ORE = &getAnalysis<OptimizationRemarkEmitterWrapperPass>().getORE();
-
-    return Impl.runImpl(F, *SE, *LI, *TTI, *DT, TLI, *AA, *AC, *ORE);
-  }
-
-  void getAnalysisUsage(AnalysisUsage &AU) const override {
-    AU.addRequired<AssumptionCacheTracker>();
-    AU.addRequiredID(LoopSimplifyID);
-    AU.addRequiredID(LCSSAID);
-    AU.addRequired<DominatorTreeWrapperPass>();
-    AU.addRequired<LoopInfoWrapperPass>();
-    AU.addRequired<ScalarEvolutionWrapperPass>();
-    AU.addRequired<TargetTransformInfoWrapperPass>();
-    AU.addRequired<AAResultsWrapperPass>();
-    AU.addRequired<OptimizationRemarkEmitterWrapperPass>();
-  }
-};
-
 } // end anonymous namespace
 
 /// Canonicalize the induction variables in the loop.  Return the canonical
@@ -663,6 +677,8 @@ void DACLoopSpawning::implementDACIterSpawnOnHelper(Function *Helper,
     // Use a fast calling convention for the helper.
     RecurCall->setCallingConv(CallingConv::Fast);
     // RecurCall->setCallingConv(Helper->getCallingConv());
+    // // Update CG graph with the recursive call we just added.
+    // CG[Helper]->addCalledFunction(RecurCall, CG[Helper]);
   }
 
   // Set up continuation of detached recursive call.  We effectively
@@ -696,38 +712,6 @@ void DACLoopSpawning::implementDACIterSpawnOnHelper(Function *Helper,
     RecurDet->getTerminator()->eraseFromParent();
   }
 }
-
-// /// Recursive routine to remove a loop and all of its subloops.
-// static void removeLoopAndAllSubloops(Loop *L, LoopInfo &LoopInfo) {
-//   for (Loop *SL : L->getSubLoops())
-//     removeLoopAndAllSubloops(SL, LoopInfo);
-
-//   dbgs() << "Removing " << *L << "\n";
-
-//   SmallPtrSet<BasicBlock *, 8> Blocks;
-//   Blocks.insert(L->block_begin(), L->block_end());
-//   for (BasicBlock *BB : Blocks)
-//     LoopInfo.removeBlock(BB);
-
-//   LoopInfo.markAsRemoved(L);
-// }
-
-// // Recursive routine to traverse the subloops of a loop and push all 
-// static void collectLoopAndAllSubLoops(Loop *L,
-//                                       SetVector<Loop*> &SubLoops) {
-//   for (Loop *SL : L->getSubLoops())
-//     collectLoopAndAllSubLoops(SL, SubLoops);
-//   SubLoops.insert(L);
-// }
-
-// /// Recursive routine to mark a loop and all of its subloops as removed.
-// static void markLoopAndAllSubloopsAsRemoved(Loop *L, LoopInfo &LoopInfo) {
-//   for (Loop *SL : L->getSubLoops())
-//     markLoopAndAllSubloopsAsRemoved(SL, LoopInfo);
-
-//   dbgs() << "Marking as removed:" << *L << "\n";
-//   LoopInfo.markAsRemoved(L);
-// }
 
 /// Unlink the specified loop, and update analysis accordingly.  The heavy
 /// lifting of deleting the loop is carried out by a run of LoopDeletion after
@@ -772,54 +756,6 @@ void DACLoopSpawning::unlinkLoop() {
     P->removeIncomingValue(Preheader);
     ++BI;
   }
-
-  // // Update the dominator tree and remove the instructions and blocks that will
-  // // be deleted from the reference counting scheme.
-  // SmallVector<DomTreeNode*, 8> ChildNodes;
-  // for (Loop::block_iterator LI = L->block_begin(), LE = L->block_end();
-  //      LI != LE; ++LI) {
-  //   // Move all of the block's children to be children of the preheader, which
-  //   // allows us to remove the domtree entry for the block.
-  //   ChildNodes.insert(ChildNodes.begin(), DT[*LI]->begin(), DT[*LI]->end());
-  //   for (DomTreeNode *ChildNode : ChildNodes) {
-  //     DT.changeImmediateDominator(ChildNode, DT[Preheader]);
-  //   }
-
-  //   ChildNodes.clear();
-  //   DT.eraseNode(*LI);
-
-  //   // Remove the block from the reference counting scheme, so that we can
-  //   // delete it freely later.
-  //   (*LI)->dropAllReferences();
-  // }
-
-  // // Erase the instructions and the blocks without having to worry
-  // // about ordering because we already dropped the references.
-  // // NOTE: This iteration is safe because erasing the block does not remove its
-  // // entry from the loop's block list.  We do that in the next section.
-  // for (Loop::block_iterator LI = L->block_begin(), LE = L->block_end();
-  //      LI != LE; ++LI)
-  //   (*LI)->eraseFromParent();
-
-  // // Finally, the blocks from loopinfo.  This has to happen late because
-  // // otherwise our loop iterators won't work.
-
-  // SetVector<Loop *> SubLoops;
-  // collectLoopAndAllSubLoops(L, SubLoops);
-  
-  // SmallPtrSet<BasicBlock *, 8> Blocks;
-  // Blocks.insert(L->block_begin(), L->block_end());
-  // for (BasicBlock *BB : Blocks)
-  //   LoopInfo.removeBlock(BB);
-
-  // // The last step is to update LoopInfo now that we've eliminated this loop.
-  // // for (Loop *SL : L->getSubLoops())
-  // //   LoopInfo.markAsRemoved(SL);
-  // // LoopInfo.markAsRemoved(L);
-  // // markLoopAndAllSubloopsAsRemoved(L, LoopInfo);
-  // // removeLoopAndAllSubloops(L, LoopInfo);
-  // for (Loop *SL : SubLoops)
-  //   LoopInfo.markAsRemoved(SL);
 }
 
 /// Top-level call to convert loop to spawn its iterations in a
@@ -844,6 +780,8 @@ bool DACLoopSpawning::convertLoop() {
   DEBUG(dbgs() << "LS SE max backedge taken count: " << *(SE.getMaxBackedgeTakenCount(L)) << "\n");
   DEBUG(dbgs() << "LS SE exit count: " << *(SE.getExitCount(L, L->getExitingBlock())) << "\n");
 
+  using namespace ore;
+
   /// Get loop limit.
   const SCEV *Limit = SE.getBackedgeTakenCount(L);
   // const SCEV *Limit = SE.getAddExpr(BETC, SE.getOne(BETC->getType()));
@@ -851,19 +789,29 @@ bool DACLoopSpawning::convertLoop() {
   // PredicatedScalarEvolution PSE(SE, *L);
   // const SCEV *PLimit = PSE.getBackedgeTakenCount();
   // DEBUG(dbgs() << "LS predicated loop limit: " << *PLimit << "\n");
-  emitAnalysis(LoopSpawningReport()
-               << "computed loop limit " << *Limit << "\n");
+  // emitAnalysis(LoopSpawningReport()
+  //              << "computed loop limit " << *Limit << "\n");
   if (SE.getCouldNotCompute() == Limit) {
     DEBUG(dbgs() << "SE could not compute loop limit.\n");
+    ORE.emit(OptimizationRemarkAnalysis(LS_NAME, "UnknownLoopLimit",
+                                        L->getStartLoc(),
+                                        Header)
+             << "could not compute limit");
     return false;
   }
-
+  // ORE.emit(OptimizationRemarkAnalysis(LS_NAME, "LoopLimit", L->getStartLoc(),
+  //                                     Header)
+  //          << "loop limit: " << NV("Limit", Limit));
   /// Clean up the loop's induction variables.
   PHINode *CanonicalIV = canonicalizeIVs(Limit->getType());
   if (!CanonicalIV) {
     DEBUG(dbgs() << "Could not get canonical IV.\n");
-    emitAnalysis(LoopSpawningReport()
-                 << "Could not get a canonical IV.\n");
+    // emitAnalysis(LoopSpawningReport()
+    //              << "Could not get a canonical IV.\n");
+    ORE.emit(OptimizationRemarkAnalysis(LS_NAME, "NoCanonicalIV",
+                                        L->getStartLoc(),
+                                        Header)
+             << "could not find or create canonical IV");
     return false;
   }
   const SCEVAddRecExpr *CanonicalSCEV =
@@ -879,8 +827,11 @@ bool DACLoopSpawning::convertLoop() {
     const SCEV *S = SE.getSCEV(PN);
     // dbgs() << " SCEV " << *S << "\n";
     if (SE.getCouldNotCompute() == S) {
-      emitAnalysis(LoopSpawningReport(PN)
-                   << "Could not compute the scalar evolution.\n");
+      // emitAnalysis(LoopSpawningReport(PN)
+      //              << "Could not compute the scalar evolution.\n");
+      ORE.emit(OptimizationRemarkAnalysis(LS_NAME, "NoSCEV", PN)
+               << "could not compute scalar evolution of "
+               << NV("PHINode", PN));
       CanRemoveIVs = false;
     }
   }
@@ -935,9 +886,11 @@ bool DACLoopSpawning::convertLoop() {
         IVs.push_back(PN);
     } else {
       AllCanonical = false;
-      emitAnalysis(LoopSpawningReport(PN)
-                   << "Found a remaining non-canonical IV.\n");
       DEBUG(dbgs() << "Remaining non-canonical PHI Node found: " << *PN << "\n");
+      // emitAnalysis(LoopSpawningReport(PN)
+      //              << "Found a remaining non-canonical IV.\n");
+      ORE.emit(OptimizationRemarkAnalysis(DEBUG_TYPE, "NonCanonicalIV", PN)
+               << "found a remaining noncanonical IV");
     }
   }
   if (!AllCanonical)
@@ -951,7 +904,8 @@ bool DACLoopSpawning::convertLoop() {
   // Canonicalize the loop latch.
   // dbgs() << "Loop backedge guarded by " << *(SE.getSCEV(CanonicalIV)) << " < " << *Limit <<
   //    ": " << SE.isLoopBackedgeGuardedByCond(L, ICmpInst::ICMP_ULT, SE.getSCEV(CanonicalIV), Limit) << "\n";
-  assert(SE.isLoopBackedgeGuardedByCond(L, ICmpInst::ICMP_ULT, SE.getSCEV(CanonicalIV), Limit) &&
+  assert(SE.isLoopBackedgeGuardedByCond(L, ICmpInst::ICMP_ULT,
+                                        SE.getSCEV(CanonicalIV), Limit) &&
          "Loop backedge is not guarded by canonical comparison with limit.");
   Value *NewCond = canonicalizeLoopLatch(CanonicalIV, LimitVar);
 
@@ -959,9 +913,12 @@ bool DACLoopSpawning::convertLoop() {
   // For debugging:
   // Value *GrainVar = ConstantInt::get(Limit->getType(), 2);
   Value *GrainVar = computeGrainsize(LimitVar);
-  emitAnalysis(LoopSpawningReport()
-               << "grainsize value " << *GrainVar << "\n");
   DEBUG(dbgs() << "GrainVar: " << *GrainVar << "\n");
+  // emitAnalysis(LoopSpawningReport()
+  //              << "grainsize value " << *GrainVar << "\n");
+  // ORE.emit(OptimizationRemarkAnalysis(LS_NAME, "UsingGrainsize",
+  //                                     L->getStartLoc(), Header)
+  //          << "grainsize: " << NV("Grainsize", GrainVar));
 
   /// Clone the loop into a new function.
 
@@ -1053,11 +1010,6 @@ bool DACLoopSpawning::convertLoop() {
       // If we have debug info, add mapping for the metadata nodes that should not
       // be cloned by CloneFunctionInto.
       auto &MD = VMap.MD();
-      // dbgs() << "SP: " << *SP << "\n";
-      // dbgs() << "MD:\n";
-      // for (auto &Tmp : MD) {
-      //   dbgs() << *(Tmp.first) << " -> " << *(Tmp.second) << "\n";
-      // }
       MD[SP->getUnit()].reset(SP->getUnit());
       MD[SP->getType()].reset(SP->getType());
       MD[SP->getFile()].reset(SP->getFile());
@@ -1193,14 +1145,11 @@ bool DACLoopSpawning::convertLoop() {
     TopCall->setCallingConv(CallingConv::Fast);
     // TopCall->setCallingConv(Helper->getCallingConv());
     TopCall->setDebugLoc(Header->getTerminator()->getDebugLoc());
+    // // Update CG graph with the call we just added.
+    // CG[F]->addCalledFunction(TopCall, CG[Helper]);
   }
 
   ++LoopsConvertedToDAC;
-
-  // Report the decision.
-  ORE->emitOptimizationRemark(
-      LS_NAME, L,
-      Twine("spawning iterations using divide-and-conquer"));
 
   unlinkLoop();
 
@@ -1215,7 +1164,7 @@ bool DACLoopSpawning::convertLoop() {
 /// 4) The body reattaches to the latch (which is necessary for a valid
 ///    detached CFG).
 /// 5) The loop only branches to the exit block from the header or the latch.
-bool LoopSpawningPass::isTapirLoop(const Loop *L) {
+bool LoopSpawningImpl::isTapirLoop(const Loop *L) {
   const BasicBlock *Header = L->getHeader();
   const BasicBlock *Latch = L->getLoopLatch();
   const BasicBlock *Exit = L->getExitBlock();
@@ -1275,7 +1224,7 @@ bool LoopSpawningPass::isTapirLoop(const Loop *L) {
   return true;
 }
 
-void LoopSpawningPass::addTapirLoop(Loop *L, SmallVectorImpl<Loop *> &V) {
+void LoopSpawningImpl::addTapirLoop(Loop *L, SmallVectorImpl<Loop *> &V) {
   if (isTapirLoop(L)) {
     V.push_back(L);
     return;
@@ -1301,102 +1250,13 @@ static std::string getDebugLocString(const Loop *L) {
 }
 #endif
 
-bool LoopSpawningPass::processLoop(Loop *L) {
-#ifndef NDEBUG
-  const std::string DebugLocStr = getDebugLocString(L);
-#endif /* NDEBUG */
-
-  DEBUG(dbgs() << "\nLS: Checking a Tapir loop in \""
-               << L->getHeader()->getParent()->getName() << "\" from "
-        << DebugLocStr << ": " << *L << "\n");
-
-  LoopSpawningHints Hints(L, *ORE);
-
-  DEBUG(dbgs() << "LS: Loop hints:"
-               << " strategy = " << Hints.printStrategy(Hints.getStrategy())
-               << "\n");
-
-  // Function containing loop
-  Function *F = L->getHeader()->getParent();
-
-  // if (LoopSpawningHints::ST_SEQ == Hints.getStrategy()) {
-  //   DEBUG(dbgs() << "LS: Loop hints prevent transformation.\n");
-  //   emitMissedWarning(F, L, Hints, ORE);
-  //   return false;
-  // } else {
-  //   dbgs() << "LS: " << *L << " with hint "
-  //          << LoopSpawningHints::printStrategy(Hints.getStrategy()) << "\n";
-  // }
-
-  // Fix-up loop preheader.
-  BasicBlock *Preheader = L->getLoopPreheader();
-  if (nullptr == Preheader) {
-    DEBUG(dbgs() << "LS: Loop lacks a preheader.\n");
-  }
-  if (isa<SyncInst>(Preheader->getTerminator())) {
-    DEBUG(dbgs() << "LS: Splitting preheader terminated by a sync.\n");
-    BasicBlock *Header = L->getHeader();
-    SplitEdge(Preheader, Header, DT, LI);
-    // Unsure if it's completely safe to proceed here without necessarily
-    // recomputing ScalarEvolution, but tests are passing so far.
-  }
-  if (!isa<BranchInst>(Preheader->getTerminator())) {
-    DEBUG(dbgs() << "LS: Loop preheader is not terminated by a branch.\n");
-    return false;
-  }
-
-  switch(Hints.getStrategy()) {
-  case LoopSpawningHints::ST_SEQ:
-    DEBUG(dbgs() << "LS: Hints dictate sequential spawning.\n");
-    break;
-  case LoopSpawningHints::ST_DAC:
-    DEBUG(dbgs() << "LS: Hints dictate DAC spawning.\n");
-    {
-      DACLoopSpawning DLS(L, *SE, LI, DT, TLI, TTI, ORE);
-      if (DLS.convertLoop()) {
-        // // Mark the loop as already vectorized to avoid vectorizing again.
-        // Hints.setAlreadyVectorized();
-        DEBUG({
-            if (verifyFunction(*L->getHeader()->getParent())) {
-              dbgs() << "Transformed function is invalid.\n";
-              return false;
-            }
-          });
-        return true;
-      } else {
-        emitMissedWarning(F, L, Hints, ORE);
-        return false;
-      }
-    }
-    break;
-  case LoopSpawningHints::ST_END:
-    dbgs() << "LS: Hints specify unknown spawning strategy.\n";
-    break;
-  }
-  return false;
-}
-
-bool LoopSpawningPass::runImpl(
-    Function &F, ScalarEvolution &SE_, LoopInfo &LI_, TargetTransformInfo &TTI_,
-    DominatorTree &DT_, TargetLibraryInfo *TLI_,
-    AliasAnalysis &AA_, AssumptionCache &AC_,
-    OptimizationRemarkEmitter &ORE_) {
-
-  SE = &SE_;
-  LI = &LI_;
-  TTI = &TTI_;
-  DT = &DT_;
-  TLI = TLI_;
-  AA = &AA_;
-  AC = &AC_;
-  ORE = &ORE_;
-
+bool LoopSpawningImpl::run() {
   // Build up a worklist of inner-loops to vectorize. This is necessary as
   // the act of vectorizing or partially unrolling a loop creates new loops
   // and can invalidate iterators across the loops.
   SmallVector<Loop *, 8> Worklist;
 
-  for (Loop *L : *LI)
+  for (Loop *L : LI)
     addTapirLoop(L, Worklist);
 
   LoopsAnalyzed += Worklist.size();
@@ -1408,38 +1268,292 @@ bool LoopSpawningPass::runImpl(
 
   // Process each loop nest in the function.
   return Changed;
-
 }
 
-PreservedAnalyses LoopSpawningPass::run(Function &F,
-                                         FunctionAnalysisManager &AM) {
-    auto &SE = AM.getResult<ScalarEvolutionAnalysis>(F);
-    auto &LI = AM.getResult<LoopAnalysis>(F);
-    auto &TTI = AM.getResult<TargetIRAnalysis>(F);
-    auto &DT = AM.getResult<DominatorTreeAnalysis>(F);
-    auto *TLI = AM.getCachedResult<TargetLibraryAnalysis>(F);
-    auto &AA = AM.getResult<AAManager>(F);
-    auto &AC = AM.getResult<AssumptionAnalysis>(F);
-    auto &ORE = AM.getResult<OptimizationRemarkEmitterAnalysis>(F);
+bool LoopSpawningImpl::processLoop(Loop *L) {
+#ifndef NDEBUG
+  const std::string DebugLocStr = getDebugLocString(L);
+#endif /* NDEBUG */
 
-    bool Changed =
-        runImpl(F, SE, LI, TTI, DT, TLI, AA, AC, ORE);
-    if (Changed)
-      return PreservedAnalyses::none();
+  // Function containing loop
+  Function *F = L->getHeader()->getParent();
+
+  DEBUG(dbgs() << "\nLS: Checking a Tapir loop in \""
+               << L->getHeader()->getParent()->getName() << "\" from "
+        << DebugLocStr << ": " << *L << "\n");
+
+  LoopSpawningHints Hints(L, ORE);
+
+  DEBUG(dbgs() << "LS: Loop hints:"
+               << " strategy = " << Hints.printStrategy(Hints.getStrategy())
+               << "\n");
+
+
+  // if (LoopSpawningHints::ST_SEQ == Hints.getStrategy()) {
+  //   DEBUG(dbgs() << "LS: Loop hints prevent transformation.\n");
+  //   emitMissedWarning(F, L, Hints, ORE);
+  //   return false;
+  // } else {
+  //   dbgs() << "LS: " << *L << " with hint "
+  //          << LoopSpawningHints::printStrategy(Hints.getStrategy()) << "\n";
+  // }
+
+  using namespace ore;
+
+  // Get the loop preheader.  LoopSimplify should guarantee that the loop
+  // preheader is not terminated by a sync.
+  BasicBlock *Preheader = L->getLoopPreheader();
+  if (!Preheader) {
+    DEBUG(dbgs() << "LS: Loop lacks a preheader.\n");
+    ORE.emit(OptimizationRemarkMissed(LS_NAME, "NoPreheader",
+                                      L->getStartLoc(), L->getHeader())
+             << "loop lacks a preheader");
+    return false;
+  } else if (!isa<BranchInst>(Preheader->getTerminator())) {
+    DEBUG(dbgs() << "LS: Loop preheader is not terminated by a branch.\n");
+    ORE.emit(OptimizationRemarkMissed(LS_NAME, "ComplexPreheader",
+                                      L->getStartLoc(), L->getHeader())
+             << "loop preheader not terminated by a branch");
+    return false;
+  }
+  // // Fix-up loop preheader
+  // if (nullptr == Preheader) {
+  //   DEBUG(dbgs() << "LS: Loop lacks a preheader.\n");
+  // }
+  // if (isa<SyncInst>(Preheader->getTerminator())) {
+  //   // DEBUG(dbgs() << "LS: Splitting preheader terminated by a sync.\n");
+  //   dbgs() << "LS: Splitting preheader terminated by a sync.\n";
+  //   BasicBlock *Header = L->getHeader();
+  //   SplitEdge(Preheader, Header, &DT, &LI);
+  //   // Unsure if it's completely safe to proceed here without necessarily
+  //   // recomputing ScalarEvolution, but tests are passing so far.
+  // }
+  // if (!isa<BranchInst>(Preheader->getTerminator())) {
+  //   DEBUG(dbgs() << "LS: Loop preheader is not terminated by a branch.\n");
+  //   return false;
+  // }
+
+  switch(Hints.getStrategy()) {
+  case LoopSpawningHints::ST_SEQ:
+    DEBUG(dbgs() << "LS: Hints dictate sequential spawning.\n");
+    break;
+  case LoopSpawningHints::ST_DAC:
+    DEBUG(dbgs() << "LS: Hints dictate DAC spawning.\n");
+    {
+      DebugLoc DLoc = L->getStartLoc();
+      BasicBlock *Header = L->getHeader();
+      DACLoopSpawning DLS(L, SE, &LI, &DT, ORE);
+      // DACLoopSpawning DLS(L, SE, LI, DT, TLI, TTI, ORE);
+      if (DLS.convertLoop()) {
+        // // Mark the loop as already vectorized to avoid vectorizing again.
+        // Hints.setAlreadyVectorized();
+        DEBUG({
+            if (verifyFunction(*L->getHeader()->getParent())) {
+              dbgs() << "Transformed function is invalid.\n";
+              return false;
+            }
+          });
+        // Report success.
+        ORE.emit(OptimizationRemark(LS_NAME, "DACSpawning", DLoc, Header)
+                 << "spawning iterations using divide-and-conquer");
+        return true;
+      } else {
+        // Report success.
+        ORE.emit(OptimizationRemarkMissed(LS_NAME, "NoDACSpawning", DLoc,
+                                          Header)
+                 << "cannot spawn iterations using divide-and-conquer");
+        // emitMissedWarning(F, L, Hints, ORE);
+        return false;
+      }
+    }
+    break;
+  case LoopSpawningHints::ST_END:
+    dbgs() << "LS: Hints specify unknown spawning strategy.\n";
+    break;
+  }
+  return false;
+}
+
+// PreservedAnalyses LoopSpawningPass::run(Module &M, ModuleAnalysisManager &AM) {
+//   // Find functions that detach for processing.
+//   SmallVector<Function *, 4> WorkList;
+//   for (Function &F : M)
+//     for (BasicBlock &BB : F)
+//       if (isa<DetachInst>(BB.getTerminator()))
+//         WorkList.push_back(&F);
+
+//   if (WorkList.empty())
+//     return PreservedAnalyses::all();
+
+//   bool Changed = false;
+//   while (!WorkList.empty()) {
+//     Function *F = WorkList.back();
+//     auto &TLI = AM.getResult<TargetLibraryAnalysis>(M);
+//     auto &FAM = AM.getResult<FunctionAnalysisManagerModuleProxy>(M).getManager();
+//     auto &LI = FAM.getResult<LoopAnalysis>(*F);
+//     auto &SE = FAM.getResult<ScalarEvolutionAnalysis>(*F);
+//     auto &DT = FAM.getResult<DominatorTreeAnalysis>(*F);
+//     auto &TTI = FAM.getResult<TargetIRAnalysis>(*F);
+//     auto &AA = FAM.getResult<AAManager>(*F);
+//     auto &AC = FAM.getResult<AssumptionAnalysis>(*F);
+//     auto &ORE = FAM.getResult<OptimizationRemarkEmitterAnalysis>(*F);
+//     LoopSpawningImpl Impl(*F, LI, SE, DT, TTI, &TLI, AA, AC, ORE);
+//     Changed |= Impl.run();
+//     WorkList.pop_back();
+//   }
+
+//   if (Changed)
+//     return PreservedAnalyses::none();
+//   return PreservedAnalyses::all();
+// }
+
+PreservedAnalyses LoopSpawningPass::run(Function &F,
+                                        FunctionAnalysisManager &AM) {
+  // Determine if function detaches.
+  bool DetachingFunction = false;
+  for (BasicBlock &BB : F)
+    if (isa<DetachInst>(BB.getTerminator()))
+      DetachingFunction = true;
+
+  if (!DetachingFunction)
     return PreservedAnalyses::all();
+
+  auto &LI = AM.getResult<LoopAnalysis>(F);
+  auto &SE = AM.getResult<ScalarEvolutionAnalysis>(F);
+  auto &DT = AM.getResult<DominatorTreeAnalysis>(F);
+  // auto &TTI = AM.getResult<TargetIRAnalysis>(F);
+  // auto &TLI = AM.getResult<TargetLibraryAnalysis>(M);
+  // auto &AA = AM.getResult<AAManager>(F);
+  // auto &AC = AM.getResult<AssumptionAnalysis>(F);
+  auto &ORE =
+    AM.getResult<OptimizationRemarkEmitterAnalysis>(F);
+  // OptimizationRemarkEmitter ORE(F);
+
+  bool Changed = LoopSpawningImpl(F, LI, SE, DT, ORE).run();
+
+  AM.invalidate<ScalarEvolutionAnalysis>(F);
+
+  if (Changed)
+    return PreservedAnalyses::none();
+  return PreservedAnalyses::all();
+}
+
+namespace {
+struct LoopSpawning : public FunctionPass {
+  /// Pass identification, replacement for typeid
+  static char ID;
+
+  explicit LoopSpawning() : FunctionPass(ID) {
+    initializeLoopSpawningPass(*PassRegistry::getPassRegistry());
+  }
+
+  bool runOnFunction(Function &F) override {
+    if (skipFunction(F))
+      return false;
+
+    bool DetachingFunction = false;
+    for (BasicBlock &BB : F)
+      if (isa<DetachInst>(BB.getTerminator()))
+        DetachingFunction = true;
+
+    if (!DetachingFunction)
+      return false;
+
+    auto &LI = getAnalysis<LoopInfoWrapperPass>().getLoopInfo();
+    auto &SE = getAnalysis<ScalarEvolutionWrapperPass>().getSE();
+    auto &DT = getAnalysis<DominatorTreeWrapperPass>().getDomTree();
+    // auto *TTI = &getAnalysis<TargetTransformInfoWrapperPass>().getTTI(*F);
+    // auto *TLIP = getAnalysisIfAvailable<TargetLibraryInfoWrapperPass>();
+    // auto *TLI = TLIP ? &TLIP->getTLI() : nullptr;
+    // auto *TLI = &getAnalysis<TargetLibraryInfoWrapperPass>().getTLI();
+    // auto *AA = &getAnalysis<AAResultsWrapperPass>(*F).getAAResults();
+    // auto *AC = &getAnalysis<AssumptionCacheTracker>().getAssumptionCache(*F);
+    auto &ORE =
+      getAnalysis<OptimizationRemarkEmitterWrapperPass>().getORE();
+    // OptimizationRemarkEmitter ORE(F);
+    return LoopSpawningImpl(F, LI, SE, DT, ORE).run();
+  }
+
+  // bool runOnModule(Module &M) override {
+  //   if (skipModule(M))
+  //     return false;
+
+  //   // Find functions that detach for processing.
+  //   SmallVector<Function *, 4> WorkList;
+  //   for (Function &F : M)
+  //     for (BasicBlock &BB : F)
+  //       if (isa<DetachInst>(BB.getTerminator()))
+  //         WorkList.push_back(&F);
+
+  //   if (WorkList.empty())
+  //     return false;
+
+  //   auto GetLI = [this](Function &F) -> LoopInfo & {
+  //     return getAnalysis<LoopInfoWrapperPass>(F).getLoopInfo();
+  //   };
+  //   auto GetSE = [this](Function &F) -> ScalarEvolution & {
+  //     return getAnalysis<ScalarEvolutionWrapperPass>(F).getSE();
+  //   };
+  //   auto GetDT = [this](Function &F) -> DominatorTree & {
+  //     return this->getAnalysis<DominatorTreeWrapperPass>(F).getDomTree();
+  //   };
+
+  //   bool Changed = false;
+  //   while (!WorkList.empty()) {
+  //     // Process the next function.
+  //     Function *F = WorkList.back();
+  //     // auto *LI = &getAnalysis<LoopInfoWrapperPass>(*F).getLoopInfo();
+  //     // auto *SE = &getAnalysis<ScalarEvolutionWrapperPass>(*F).getSE();
+  //     // auto *DT = &getAnalysis<DominatorTreeWrapperPass>(*F).getDomTree();
+  //     // auto *TTI = &getAnalysis<TargetTransformInfoWrapperPass>().getTTI(*F);
+  //     // auto *TLIP = getAnalysisIfAvailable<TargetLibraryInfoWrapperPass>();
+  //     // auto *TLI = TLIP ? &TLIP->getTLI() : nullptr;
+  //     // auto *TLI = &getAnalysis<TargetLibraryInfoWrapperPass>().getTLI();
+  //     // auto *AA = &getAnalysis<AAResultsWrapperPass>(*F).getAAResults();
+  //     // auto *AC = &getAnalysis<AssumptionCacheTracker>().getAssumptionCache(*F);
+  //     auto &ORE =
+  //       getAnalysis<OptimizationRemarkEmitterWrapperPass>(*F).getORE();
+  //     // OptimizationRemarkEmitter ORE(F);
+  //     // LoopSpawningImpl Impl(*F, GetLI, GetSE, GetDT, *TTI, TLI, *AA, *AC, ORE);
+  //     LoopSpawningImpl Impl(*F, GetLI, GetSE, GetDT, ORE);
+  //     Changed |= Impl.run();
+
+  //     WorkList.pop_back();
+  //   }
+  //   return Changed;
+  // }
+
+  void getAnalysisUsage(AnalysisUsage &AU) const override {
+    AU.addRequired<AssumptionCacheTracker>();
+    AU.addRequiredID(LoopSimplifyID);
+    AU.addRequiredID(LCSSAID);
+    AU.addRequired<DominatorTreeWrapperPass>();
+    AU.addRequired<LoopInfoWrapperPass>();
+    AU.addRequired<ScalarEvolutionWrapperPass>();
+    AU.addRequired<TargetTransformInfoWrapperPass>();
+    AU.addRequired<TargetLibraryInfoWrapperPass>();
+    // AU.addRequired<LoopAccessLegacyAnalysis>();
+    // getAAResultsAnalysisUsage(AU);
+    // AU.addRequired<AAResultsWrapperPass>();
+    AU.addRequired<OptimizationRemarkEmitterWrapperPass>();
+  }
+};
 }
 
 char LoopSpawning::ID = 0;
 // static RegisterPass<LoopSpawning> X(LS_NAME, "Transform Tapir loops to spawn iterations efficiently", false, false);
 static const char ls_name[] = "Loop Spawning";
 INITIALIZE_PASS_BEGIN(LoopSpawning, LS_NAME, ls_name, false, false)
-INITIALIZE_PASS_DEPENDENCY(TargetTransformInfoWrapperPass)
 INITIALIZE_PASS_DEPENDENCY(AssumptionCacheTracker)
-INITIALIZE_PASS_DEPENDENCY(DominatorTreeWrapperPass)
-INITIALIZE_PASS_DEPENDENCY(ScalarEvolutionWrapperPass)
+INITIALIZE_PASS_DEPENDENCY(LoopSimplify)
 INITIALIZE_PASS_DEPENDENCY(LCSSAWrapperPass)
 INITIALIZE_PASS_DEPENDENCY(LoopInfoWrapperPass)
-INITIALIZE_PASS_DEPENDENCY(LoopSimplify)
+INITIALIZE_PASS_DEPENDENCY(DominatorTreeWrapperPass)
+INITIALIZE_PASS_DEPENDENCY(ScalarEvolutionWrapperPass)
+INITIALIZE_PASS_DEPENDENCY(TargetLibraryInfoWrapperPass)
+INITIALIZE_PASS_DEPENDENCY(TargetTransformInfoWrapperPass)
+// INITIALIZE_PASS_DEPENDENCY(LoopAccessLegacyAnalysis)
+// INITIALIZE_PASS_DEPENDENCY(AAResultsWrapperPass)
 INITIALIZE_PASS_DEPENDENCY(OptimizationRemarkEmitterWrapperPass)
 INITIALIZE_PASS_END(LoopSpawning, LS_NAME, ls_name, false, false)
 

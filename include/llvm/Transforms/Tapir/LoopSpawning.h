@@ -31,29 +31,7 @@ namespace llvm {
 
 /// The LoopSpawning Pass.
 struct LoopSpawningPass : public PassInfoMixin<LoopSpawningPass> {
-
-  ScalarEvolution *SE;
-  LoopInfo *LI;
-  TargetTransformInfo *TTI;
-  DominatorTree *DT;
-  TargetLibraryInfo *TLI;
-  AliasAnalysis *AA;
-  AssumptionCache *AC;
-  OptimizationRemarkEmitter *ORE;
-
   PreservedAnalyses run(Function &F, FunctionAnalysisManager &AM);
-
-  // Shim for old PM.
-  bool runImpl(Function &F, ScalarEvolution &SE_, LoopInfo &LI_,
-               TargetTransformInfo &TTI_, DominatorTree &DT_,
-               TargetLibraryInfo *TLI_, AliasAnalysis &AA_,
-               AssumptionCache &AC_, OptimizationRemarkEmitter &ORE);
-
-  bool isTapirLoop(const Loop *L);
-  bool processLoop(Loop *L);
-
-private:
-  void addTapirLoop(Loop *L, SmallVectorImpl<Loop *> &V);
 };
 }
 
