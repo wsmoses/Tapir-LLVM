@@ -5395,8 +5395,9 @@ static bool setTargetShuffleZeroElements(SDValue N,
   bool IsUnary;
   if (!isTargetShuffle(N.getOpcode()))
     return false;
-  if (!getTargetShuffleMask(N.getNode(), N.getSimpleValueType(), true, Ops,
-                            Mask, IsUnary))
+
+  MVT VT = N.getSimpleValueType();
+  if (!getTargetShuffleMask(N.getNode(), VT, true, Ops, Mask, IsUnary))
     return false;
 
   SDValue V1 = Ops[0];
@@ -5458,7 +5459,68 @@ static bool setTargetShuffleZeroElements(SDValue N,
     }
   }
 
+  assert(VT.getVectorNumElements() == Mask.size() &&
+         "Different mask size from vector size!");
   return true;
+}
+
+// Attempt to decode ops that could be represented as a shuffle mask.
+// The decoded shuffle mask may contain a different number of elements to the
+// destination value type.
+static bool getFauxShuffleMask(SDValue N, SmallVectorImpl<int> &Mask,
+                               SmallVectorImpl<SDValue> &Ops) {
+  Mask.clear();
+  Ops.clear();
+
+  MVT VT = N.getSimpleValueType();
+  unsigned NumElts = VT.getVectorNumElements();
+
+  unsigned Opcode = N.getOpcode();
+  switch (Opcode) {
+  case X86ISD::VSHLI:
+  case X86ISD::VSRLI: {
+    uint64_t ShiftVal = N.getConstantOperandVal(1);
+    // Out of range bit shifts are guaranteed to be zero.
+    if (VT.getScalarSizeInBits() <= ShiftVal) {
+      Mask.append(NumElts, SM_SentinelZero);
+      return true;
+    }
+
+    // We can only decode 'whole byte' bit shifts as shuffles.
+    if ((ShiftVal % 8) != 0)
+      break;
+
+    uint64_t ByteShift = ShiftVal / 8;
+    unsigned NumBytes = VT.getSizeInBits() / 8;
+    unsigned NumBytesPerElt = VT.getScalarSizeInBits() / 8;
+    Ops.push_back(N.getOperand(0));
+
+    // Clear mask to all zeros and insert the shifted byte indices.
+    Mask.append(NumBytes, SM_SentinelZero);
+
+    if (X86ISD::VSHLI == Opcode) {
+      for (unsigned i = 0; i != NumBytes; i += NumBytesPerElt)
+        for (unsigned j = ByteShift; j != NumBytesPerElt; ++j)
+          Mask[i + j] = i + j - ByteShift;
+    } else {
+      for (unsigned i = 0; i != NumBytes; i += NumBytesPerElt)
+        for (unsigned j = ByteShift; j != NumBytesPerElt; ++j)
+          Mask[i + j - ByteShift] = i + j;
+    }
+    return true;
+  }
+  case X86ISD::VZEXT: {
+    // TODO - add support for VPMOVZX with smaller input vector types.
+    SDValue Op0 = N.getOperand(0);
+    if (VT.getSizeInBits() != Op0.getValueSizeInBits())
+      break;
+    DecodeZeroExtendMask(Op0.getSimpleValueType().getScalarType(), VT, Mask);
+    Ops.push_back(Op0);
+    return true;
+  }
+  }
+
+  return false;
 }
 
 /// Calls setTargetShuffleZeroElements to resolve a target shuffle mask's inputs
@@ -5470,7 +5532,8 @@ static bool resolveTargetShuffleInputs(SDValue Op, SDValue &Op0, SDValue &Op1,
                                        SmallVectorImpl<int> &Mask) {
   SmallVector<SDValue, 2> Ops;
   if (!setTargetShuffleZeroElements(Op, Mask, Ops))
-    return false;
+    if (!getFauxShuffleMask(Op, Mask, Ops))
+      return false;
 
   int NumElts = Mask.size();
   bool Op0InUse = any_of(Mask, [NumElts](int Idx) {
@@ -8134,13 +8197,13 @@ static SDValue lowerVectorShuffleAsRotate(const SDLoc &DL, MVT VT,
 /// [  5, 6,  7, zz, zz, zz, zz, zz]
 /// [ -1, 5,  6,  7, zz, zz, zz, zz]
 /// [  1, 2, -1, -1, -1, -1, zz, zz]
-static SDValue lowerVectorShuffleAsShift(const SDLoc &DL, MVT VT, SDValue V1,
-                                         SDValue V2, ArrayRef<int> Mask,
-                                         const SmallBitVector &Zeroable,
-                                         const X86Subtarget &Subtarget,
-                                         SelectionDAG &DAG) {
+static int matchVectorShuffleAsShift(MVT &ShiftVT, unsigned &Opcode,
+                                     unsigned ScalarSizeInBits,
+                                     ArrayRef<int> Mask, int MaskOffset,
+                                     const SmallBitVector &Zeroable,
+                                     const X86Subtarget &Subtarget) {
   int Size = Mask.size();
-  assert(Size == (int)VT.getVectorNumElements() && "Unexpected mask size");
+  unsigned SizeInBits = Size * ScalarSizeInBits;
 
   auto CheckZeros = [&](int Shift, int Scale, bool Left) {
     for (int i = 0; i < Size; i += Scale)
@@ -8151,37 +8214,30 @@ static SDValue lowerVectorShuffleAsShift(const SDLoc &DL, MVT VT, SDValue V1,
     return true;
   };
 
-  auto MatchShift = [&](int Shift, int Scale, bool Left, SDValue V) {
+  auto MatchShift = [&](int Shift, int Scale, bool Left) {
     for (int i = 0; i != Size; i += Scale) {
       unsigned Pos = Left ? i + Shift : i;
       unsigned Low = Left ? i : i + Shift;
       unsigned Len = Scale - Shift;
-      if (!isSequentialOrUndefInRange(Mask, Pos, Len,
-                                      Low + (V == V1 ? 0 : Size)))
-        return SDValue();
+      if (!isSequentialOrUndefInRange(Mask, Pos, Len, Low + MaskOffset))
+        return -1;
     }
 
-    int ShiftEltBits = VT.getScalarSizeInBits() * Scale;
+    int ShiftEltBits = ScalarSizeInBits * Scale;
     bool ByteShift = ShiftEltBits > 64;
-    unsigned OpCode = Left ? (ByteShift ? X86ISD::VSHLDQ : X86ISD::VSHLI)
-                           : (ByteShift ? X86ISD::VSRLDQ : X86ISD::VSRLI);
-    int ShiftAmt = Shift * VT.getScalarSizeInBits() / (ByteShift ? 8 : 1);
+    Opcode = Left ? (ByteShift ? X86ISD::VSHLDQ : X86ISD::VSHLI)
+                  : (ByteShift ? X86ISD::VSRLDQ : X86ISD::VSRLI);
+    int ShiftAmt = Shift * ScalarSizeInBits / (ByteShift ? 8 : 1);
 
     // Normalize the scale for byte shifts to still produce an i64 element
     // type.
     Scale = ByteShift ? Scale / 2 : Scale;
 
     // We need to round trip through the appropriate type for the shift.
-    MVT ShiftSVT = MVT::getIntegerVT(VT.getScalarSizeInBits() * Scale);
-    MVT ShiftVT = ByteShift ? MVT::getVectorVT(MVT::i8, VT.getSizeInBits() / 8)
-                            : MVT::getVectorVT(ShiftSVT, Size / Scale);
-    assert(DAG.getTargetLoweringInfo().isTypeLegal(ShiftVT) &&
-           "Illegal integer vector type");
-    V = DAG.getBitcast(ShiftVT, V);
-
-    V = DAG.getNode(OpCode, DL, ShiftVT, V,
-                    DAG.getConstant(ShiftAmt, DL, MVT::i8));
-    return DAG.getBitcast(VT, V);
+    MVT ShiftSVT = MVT::getIntegerVT(ScalarSizeInBits * Scale);
+    ShiftVT = ByteShift ? MVT::getVectorVT(MVT::i8, SizeInBits / 8)
+                        : MVT::getVectorVT(ShiftSVT, Size / Scale);
+    return (int)ShiftAmt;
   };
 
   // SSE/AVX supports logical shifts up to 64-bit integers - so we can just
@@ -8190,17 +8246,53 @@ static SDValue lowerVectorShuffleAsShift(const SDLoc &DL, MVT VT, SDValue V1,
   // their width within the elements of the larger integer vector. Test each
   // multiple to see if we can find a match with the moved element indices
   // and that the shifted in elements are all zeroable.
-  unsigned MaxWidth = (VT.is512BitVector() && !Subtarget.hasBWI() ? 64 : 128);
-  for (int Scale = 2; Scale * VT.getScalarSizeInBits() <= MaxWidth; Scale *= 2)
+  unsigned MaxWidth = ((SizeInBits == 512) && !Subtarget.hasBWI() ? 64 : 128);
+  for (int Scale = 2; Scale * ScalarSizeInBits <= MaxWidth; Scale *= 2)
     for (int Shift = 1; Shift != Scale; ++Shift)
       for (bool Left : {true, false})
-        if (CheckZeros(Shift, Scale, Left))
-          for (SDValue V : {V1, V2})
-            if (SDValue Match = MatchShift(Shift, Scale, Left, V))
-              return Match;
+        if (CheckZeros(Shift, Scale, Left)) {
+          int ShiftAmt = MatchShift(Shift, Scale, Left);
+          if (0 < ShiftAmt)
+            return ShiftAmt;
+        }
 
   // no match
-  return SDValue();
+  return -1;
+}
+
+static SDValue lowerVectorShuffleAsShift(const SDLoc &DL, MVT VT, SDValue V1,
+                                         SDValue V2, ArrayRef<int> Mask,
+                                         const SmallBitVector &Zeroable,
+                                         const X86Subtarget &Subtarget,
+                                         SelectionDAG &DAG) {
+  int Size = Mask.size();
+  assert(Size == (int)VT.getVectorNumElements() && "Unexpected mask size");
+
+  MVT ShiftVT;
+  SDValue V = V1;
+  unsigned Opcode;
+
+  // Try to match shuffle against V1 shift.
+  int ShiftAmt = matchVectorShuffleAsShift(
+      ShiftVT, Opcode, VT.getScalarSizeInBits(), Mask, 0, Zeroable, Subtarget);
+
+  // If V1 failed, try to match shuffle against V2 shift.
+  if (ShiftAmt < 0) {
+    ShiftAmt =
+        matchVectorShuffleAsShift(ShiftVT, Opcode, VT.getScalarSizeInBits(),
+                                  Mask, Size, Zeroable, Subtarget);
+    V = V2;
+  }
+
+  if (ShiftAmt < 0)
+    return SDValue();
+
+  assert(DAG.getTargetLoweringInfo().isTypeLegal(ShiftVT) &&
+         "Illegal integer vector type");
+  V = DAG.getBitcast(ShiftVT, V);
+  V = DAG.getNode(Opcode, DL, ShiftVT, V,
+                  DAG.getConstant(ShiftAmt, DL, MVT::i8));
+  return DAG.getBitcast(VT, V);
 }
 
 /// \brief Try to lower a vector shuffle using SSE4a EXTRQ/INSERTQ.
@@ -25451,63 +25543,36 @@ static bool matchUnaryPermuteVectorShuffle(MVT MaskVT, ArrayRef<int> Mask,
                                            unsigned &Shuffle, MVT &ShuffleVT,
                                            unsigned &PermuteImm) {
   unsigned NumMaskElts = Mask.size();
-  unsigned NumLanes = MaskVT.getSizeInBits() / 128;
-  unsigned NumEltsPerLane = NumMaskElts / NumLanes;
   bool FloatDomain = MaskVT.isFloatingPoint();
 
-  // Attempt to match against PSLLDQ/PSRLDQ byte shifts.
-  // TODO: Share common code with lowerVectorShuffleAsShift?
-  //
-  // PSLLDQ : (little-endian) left byte shift
-  // [ zz,  0,  1,  2,  3,  4,  5,  6]
-  // [ zz, zz, -1, -1,  2,  3,  4, -1]
-  // [ zz, zz, zz, zz, zz, zz, -1,  1]
-  // PSRLDQ : (little-endian) right byte shift
-  // [  5, 6,  7, zz, zz, zz, zz, zz]
-  // [ -1, 5,  6,  7, zz, zz, zz, zz]
-  // [  1, 2, -1, -1, -1, -1, zz, zz]
+  bool ContainsZeros = false;
+  SmallBitVector Zeroable(NumMaskElts, false);
+  for (unsigned i = 0; i != NumMaskElts; ++i) {
+    int M = Mask[i];
+    Zeroable[i] = isUndefOrZero(M);
+    ContainsZeros |= (M == SM_SentinelZero);
+  }
+
+  // Attempt to match against byte/bit shifts.
+  // FIXME: Add 512-bit support.
   if (!FloatDomain && ((MaskVT.is128BitVector() && Subtarget.hasSSE2()) ||
                        (MaskVT.is256BitVector() && Subtarget.hasAVX2()))) {
-    for (unsigned Shift = 1; Shift != NumEltsPerLane; ++Shift) {
-      bool IsVSHLDQ = true;
-      bool IsVSRLDQ = true;
-
-      for (unsigned Lane = 0; Lane != NumLanes; ++Lane) {
-        unsigned Base = Lane * NumEltsPerLane;
-        unsigned Ofs = NumEltsPerLane - Shift;
-
-        IsVSHLDQ &= isUndefOrZeroInRange(Mask, Base, Shift);
-        IsVSHLDQ &= isSequentialOrUndefInRange(Mask, Base + Shift, Ofs, Base);
-
-        IsVSRLDQ &= isUndefOrZeroInRange(Mask, Base + Ofs, Shift);
-        IsVSRLDQ &= isSequentialOrUndefInRange(Mask, Base, Ofs, Base + Shift);
-
-        if (!IsVSHLDQ && !IsVSRLDQ)
-          break;
-      }
-
-      if (IsVSHLDQ) {
-        Shuffle = X86ISD::VSHLDQ;
-        ShuffleVT = MVT::getVectorVT(MVT::i8, NumLanes * 16);
-        PermuteImm = Shift * (MaskVT.getScalarSizeInBits() / 8);
-        return true;
-      }
-      if (IsVSRLDQ) {
-        Shuffle = X86ISD::VSRLDQ;
-        ShuffleVT = MVT::getVectorVT(MVT::i8, NumLanes * 16);
-        PermuteImm = Shift * (MaskVT.getScalarSizeInBits() / 8);
-        return true;
-      }
+    int ShiftAmt = matchVectorShuffleAsShift(ShuffleVT, Shuffle,
+                                             MaskVT.getScalarSizeInBits(), Mask,
+                                             0, Zeroable, Subtarget);
+    if (0 < ShiftAmt) {
+      PermuteImm = (unsigned)ShiftAmt;
+      return true;
     }
   }
 
   // Ensure we don't contain any zero elements.
-  for (int M : Mask) {
-    if (M == SM_SentinelZero)
-      return false;
-    assert(SM_SentinelUndef <= M && M < (int)Mask.size() &&
-           "Expected unary shuffle");
-  }
+  if (ContainsZeros)
+    return false;
+
+  assert(llvm::all_of(Mask, [&](int M) {
+                        return SM_SentinelUndef <= M && M < (int)NumMaskElts;
+                      }) && "Expected unary shuffle");
 
   unsigned InputSizeInBits = MaskVT.getSizeInBits();
   unsigned MaskScalarSizeInBits = InputSizeInBits / Mask.size();
@@ -26297,8 +26362,6 @@ static bool combineX86ShufflesRecursively(ArrayRef<SDValue> SrcOps,
     Ops.push_back(Input1);
   }
 
-  assert(VT.getVectorNumElements() == OpMask.size() &&
-         "Different mask size from vector size!");
   assert(((RootMask.size() > OpMask.size() &&
            RootMask.size() % OpMask.size() == 0) ||
           (OpMask.size() > RootMask.size() &&
@@ -29953,7 +30016,7 @@ static SDValue combineOr(SDNode *N, SelectionDAG &DAG,
   return SDValue();
 }
 
-// Generate NEG and CMOV for integer abs.
+/// Generate NEG and CMOV for integer abs.
 static SDValue combineIntegerAbs(SDNode *N, SelectionDAG &DAG) {
   EVT VT = N->getValueType(0);
 
@@ -29969,21 +30032,19 @@ static SDValue combineIntegerAbs(SDNode *N, SelectionDAG &DAG) {
   // Check pattern of XOR(ADD(X,Y), Y) where Y is SRA(X, size(X)-1)
   // and change it to SUB and CMOV.
   if (VT.isInteger() && N->getOpcode() == ISD::XOR &&
-      N0.getOpcode() == ISD::ADD &&
-      N0.getOperand(1) == N1 &&
-      N1.getOpcode() == ISD::SRA &&
-      N1.getOperand(0) == N0.getOperand(0))
-    if (ConstantSDNode *Y1C = dyn_cast<ConstantSDNode>(N1.getOperand(1)))
-      if (Y1C->getAPIntValue() == VT.getSizeInBits()-1) {
-        // Generate SUB & CMOV.
-        SDValue Neg = DAG.getNode(X86ISD::SUB, DL, DAG.getVTList(VT, MVT::i32),
-                                  DAG.getConstant(0, DL, VT), N0.getOperand(0));
-
-        SDValue Ops[] = { N0.getOperand(0), Neg,
-                          DAG.getConstant(X86::COND_GE, DL, MVT::i8),
-                          SDValue(Neg.getNode(), 1) };
-        return DAG.getNode(X86ISD::CMOV, DL, DAG.getVTList(VT, MVT::Glue), Ops);
-      }
+      N0.getOpcode() == ISD::ADD && N0.getOperand(1) == N1 &&
+      N1.getOpcode() == ISD::SRA && N1.getOperand(0) == N0.getOperand(0)) {
+    auto *Y1C = dyn_cast<ConstantSDNode>(N1.getOperand(1));
+    if (Y1C && Y1C->getAPIntValue() == VT.getSizeInBits() - 1) {
+      // Generate SUB & CMOV.
+      SDValue Neg = DAG.getNode(X86ISD::SUB, DL, DAG.getVTList(VT, MVT::i32),
+                                DAG.getConstant(0, DL, VT), N0.getOperand(0));
+      SDValue Ops[] = {N0.getOperand(0), Neg,
+                       DAG.getConstant(X86::COND_GE, DL, MVT::i8),
+                       SDValue(Neg.getNode(), 1)};
+      return DAG.getNode(X86ISD::CMOV, DL, DAG.getVTList(VT, MVT::Glue), Ops);
+    }
+  }
   return SDValue();
 }
 
