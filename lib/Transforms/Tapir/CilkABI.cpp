@@ -983,10 +983,13 @@ Function* llvm::cilk::extractDetachBodyToFunction(DetachInst& detach, DominatorT
   SmallPtrSet<BasicBlock *, 32> functionPieces;
   SmallVector<BasicBlock *, 32 > reattachB;
 
-  assert(Spawned->getUniquePredecessor() &&
-         "Entry block of detached CFG has multiple predecessors.");
-  assert(Spawned->getUniquePredecessor() == Detacher &&
-         "Broken CFG.");
+  // if (!Spawned->getUniquePredecessor())
+  //   dbgs() << *Spawned;
+  // assert(Spawned->getUniquePredecessor() &&
+  //        "Entry block of detached CFG has multiple predecessors.");
+  // assert(Spawned->getUniquePredecessor() == Detacher &&
+  //        "Broken CFG.");
+
   // if (getNumPred(Spawned) > 1) {
   //   dbgs() << "Found multiple predecessors to a detached-CFG entry block "
   //          << Spawned->getName() << ".\n";
@@ -1010,6 +1013,7 @@ Function* llvm::cilk::extractDetachBodyToFunction(DetachInst& detach, DominatorT
   blocks.insert( blocks.begin(), Spawned );
   functionPieces.insert(Spawned);
 
+  // Check the spawned block's predecessors.
   for (BasicBlock* BB: blocks) {
     int detached_count = 0;
     for (pred_iterator PI = pred_begin(BB), E = pred_end(BB); PI != E; ++PI) {
@@ -1064,6 +1068,8 @@ Function* llvm::cilk::extractDetachBodyToFunction(DetachInst& detach, DominatorT
 
     // Use a fast calling convention for the helper.
     extracted->setCallingConv(CallingConv::Fast);
+
+    extracted->addFnAttr(Attribute::NoInline);
   }
 
   // Add call to new helper function in original function.
@@ -1123,7 +1129,7 @@ CallInst* llvm::cilk::createDetach(DetachInst& detach, DominatorTree& DT,
   BasicBlock* detB = detach.getParent();
   Function& F = *(detB->getParent());
 
-  // BasicBlock* Spawned  = detach.getDetached();
+  BasicBlock* Spawned  = detach.getDetached();
   BasicBlock* Continue = detach.getContinue();
 
   Module* M = F.getParent();
@@ -1131,6 +1137,13 @@ CallInst* llvm::cilk::createDetach(DetachInst& detach, DominatorTree& DT,
   //entry / cilk.spawn.savestate
   Value *SF = GetOrInitStackFrame( F, /*isFast*/ false, instrument );
   assert(SF && "null stack frame unexpected");
+
+  // dbgs() << *detB << *Spawned << *Continue;
+
+  // if (!Spawned->getUniquePredecessor())
+  //   SplitEdge(detB, Spawned, &DT, nullptr);
+
+  // dbgs() << *detB << *(detach.getDetached());
 
   CallInst* cal = nullptr;
   Function* extracted = extractDetachBodyToFunction(detach, DT, &cal);
@@ -1141,12 +1154,21 @@ CallInst* llvm::cilk::createDetach(DetachInst& detach, DominatorTree& DT,
   // removing the outlined detached-CFG is left to subsequent DCE.
   BranchInst *ContinueBr;
   {
-    // Crate a new branch to the continuation.
+    // Create a new branch to the continuation.
     IRBuilder<> Builder(&detach);
     ContinueBr = Builder.CreateBr(Continue);
     ContinueBr->setDebugLoc(detach.getDebugLoc());
     // Erase the old detach instruction.
     detach.eraseFromParent();
+
+    // Rewrite phis in the detached block.
+    BasicBlock::iterator BI = Spawned->begin();
+    while (PHINode *P = dyn_cast<PHINode>(BI)) {
+      // int j = P->getBasicBlockIndex(detB);
+      // assert(j >= 0 && "Can't find exiting block in exit block's phi node!");
+      P->removeIncomingValue(detB);
+      ++BI;
+    }
   }
 
   Value *SetJmpRes;

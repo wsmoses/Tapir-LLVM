@@ -133,10 +133,13 @@ llvm::SplitCriticalEdge(TerminatorInst *TI, unsigned SuccNum,
 
   assert(!isa<IndirectBrInst>(TI) &&
          "Cannot split critical edge from IndirectBrInst");
-  assert(!isa<DetachInst>(TI) &&
-         "Cannot split critical edge from DetachInst");
   assert(!isa<ReattachInst>(TI) &&
          "Cannot split critical edge from ReattachInst");
+
+  if (isa<DetachInst>(TI))
+    // Ensure we're not breaking the continuation edge.
+    assert(1 == SuccNum &&
+           "Cannot split critical continuation edge from a detach");
 
   BasicBlock *TIBB = TI->getParent();
   BasicBlock *DestBB = TI->getSuccessor(SuccNum);
