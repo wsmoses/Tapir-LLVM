@@ -475,7 +475,10 @@ Value* DACLoopSpawning::canonicalizeLoopLatch(PHINode *IV, Value *Limit) {
   // This process assumes that IV's increment is in Latch.
 
   // Create comparison between IV and Limit at top of Latch.
-  NewCondition = Builder.CreateICmpULT(IV, Limit);
+  NewCondition =
+    Builder.CreateICmpULT(Builder.CreateAdd(IV,
+                                            ConstantInt::get(IV->getType(), 1)),
+                          Limit);
 
   // Replace the conditional branch at the end of Latch.
   BranchInst *LatchBr = dyn_cast_or_null<BranchInst>(Latch->getTerminator());
@@ -783,8 +786,9 @@ bool DACLoopSpawning::convertLoop() {
   using namespace ore;
 
   /// Get loop limit.
-  const SCEV *Limit = SE.getBackedgeTakenCount(L);
-  // const SCEV *Limit = SE.getAddExpr(BETC, SE.getOne(BETC->getType()));
+  // const SCEV *Limit = SE.getBackedgeTakenCount(L);
+  const SCEV *BETC = SE.getBackedgeTakenCount(L);
+  const SCEV *Limit = SE.getAddExpr(BETC, SE.getOne(BETC->getType()));
   DEBUG(dbgs() << "LS Loop limit: " << *Limit << "\n");
   // PredicatedScalarEvolution PSE(SE, *L);
   // const SCEV *PLimit = PSE.getBackedgeTakenCount();
@@ -904,9 +908,11 @@ bool DACLoopSpawning::convertLoop() {
   // Canonicalize the loop latch.
   // dbgs() << "Loop backedge guarded by " << *(SE.getSCEV(CanonicalIV)) << " < " << *Limit <<
   //    ": " << SE.isLoopBackedgeGuardedByCond(L, ICmpInst::ICMP_ULT, SE.getSCEV(CanonicalIV), Limit) << "\n";
-  assert(SE.isLoopBackedgeGuardedByCond(L, ICmpInst::ICMP_ULT,
-                                        SE.getSCEV(CanonicalIV), Limit) &&
-         "Loop backedge is not guarded by canonical comparison with limit.");
+  // const SCEV *CanonicalSCEV = SE.getSCEV(CanonicalIV);
+  // assert(SE.isLoopBackedgeGuardedByCond(L, ICmpInst::ICMP_ULT,
+  //                                       CanonicalSCEV,
+  //                                       SE.getSubExpr(Limit, SE.getOne(CanonicalSCEV->getType()))) &&
+  //        "Loop backedge is not guarded by canonical comparison with limit.");
   Value *NewCond = canonicalizeLoopLatch(CanonicalIV, LimitVar);
 
   // Insert computation of grainsize into the Preheader.
@@ -1065,25 +1071,25 @@ bool DACLoopSpawning::convertLoop() {
     assert(Returns.empty() && "Returns cloned when cloning loop.");
 
     // Use a fast calling convention for the helper.
-    Helper->setCallingConv(CallingConv::Fast);
+    //Helper->setCallingConv(CallingConv::Fast);
     // Helper->setCallingConv(Header->getParent()->getCallingConv());
   }
 
-  // Add a sync to the helper's return.
-  {
-    BasicBlock *HelperExit = cast<BasicBlock>(VMap[L->getExitBlock()]);
-    assert(isa<ReturnInst>(HelperExit->getTerminator()));
-    BasicBlock *NewHelperExit = SplitBlock(HelperExit,
-                                           HelperExit->getTerminator(),
-                                           DT, LI);
-    IRBuilder<> Builder(&(HelperExit->front()));
-    SyncInst *NewSync = Builder.CreateSync(NewHelperExit);
-    // Set debug info of new sync to match that of terminator of the header of
-    // the cloned loop.
-    BasicBlock *HelperHeader = cast<BasicBlock>(VMap[Header]);
-    NewSync->setDebugLoc(HelperHeader->getTerminator()->getDebugLoc());
-    HelperExit->getTerminator()->eraseFromParent();
-  }
+  // // Add a sync to the helper's return.
+  // {
+  //   BasicBlock *HelperExit = cast<BasicBlock>(VMap[L->getExitBlock()]);
+  //   assert(isa<ReturnInst>(HelperExit->getTerminator()));
+  //   BasicBlock *NewHelperExit = SplitBlock(HelperExit,
+  //                                          HelperExit->getTerminator(),
+  //                                          DT, LI);
+  //   IRBuilder<> Builder(&(HelperExit->front()));
+  //   SyncInst *NewSync = Builder.CreateSync(NewHelperExit);
+  //   // Set debug info of new sync to match that of terminator of the header of
+  //   // the cloned loop.
+  //   BasicBlock *HelperHeader = cast<BasicBlock>(VMap[Header]);
+  //   NewSync->setDebugLoc(HelperHeader->getTerminator()->getDebugLoc());
+  //   HelperExit->getTerminator()->eraseFromParent();
+  // }
 
   BasicBlock *NewPreheader = cast<BasicBlock>(VMap[Preheader]);
   PHINode *NewCanonicalIV = cast<PHINode>(VMap[CanonicalIV]);
@@ -1239,7 +1245,7 @@ bool DACLoopSpawning::convertLoop() {
     CallInst *TopCall = Builder.CreateCall(F, args);
 
     // Use a fast calling convention for the helper.
-    TopCall->setCallingConv(CallingConv::Fast);
+    //TopCall->setCallingConv(CallingConv::Fast);
     // TopCall->setCallingConv(Helper->getCallingConv());
     //TopCall->setDebugLoc(Header->getTerminator()->getDebugLoc());
     // // Update CG graph with the call we just added.
