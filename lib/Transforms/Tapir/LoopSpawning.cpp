@@ -912,8 +912,8 @@ bool DACLoopSpawning::convertLoop() {
   // Insert computation of grainsize into the Preheader.
   // For debugging:
   // Value *GrainVar = ConstantInt::get(Limit->getType(), 2);
-  Value *GrainVar = computeGrainsize(LimitVar);
-  DEBUG(dbgs() << "GrainVar: " << *GrainVar << "\n");
+  //Value *GrainVar = computeGrainsize(LimitVar);
+  //DEBUG(dbgs() << "GrainVar: " << *GrainVar << "\n");
   // emitAnalysis(LoopSpawningReport()
   //              << "grainsize value " << *GrainVar << "\n");
   // ORE.emit(OptimizationRemarkAnalysis(LS_NAME, "UsingGrainsize",
@@ -926,6 +926,7 @@ bool DACLoopSpawning::convertLoop() {
   SetVector<Value*> Inputs, Outputs;
   SetVector<Value*> BodyInputs, BodyOutputs;
   ValueToValueMapTy VMap, InputMap;
+  AllocaInst* closure;
   // Add start iteration, end iteration, and grainsize to inputs.
   {
     // Get the inputs and outputs for the loop body.
@@ -956,20 +957,24 @@ bool DACLoopSpawning::convertLoop() {
     //   }
     // }
 
-    // Add argument for end.
+    // Add argument for end.i
+
+    Value* ea;
     if (isa<Constant>(LimitVar)) {
       Argument *EndArg = new Argument(LimitVar->getType(), "end");
       Inputs.insert(EndArg);
-      InputMap[LimitVar] = EndArg;
+      ea = InputMap[LimitVar] = EndArg;
       // if (!isa<Constant>(LimitVar))
       //   VMap[LimitVar] = EndArg;
     } else {
       Inputs.insert(LimitVar);
-      InputMap[LimitVar] = LimitVar;
+      ea = InputMap[LimitVar] = LimitVar;
     }
 
     // Add argument for grainsize.
     // Inputs.insert(GrainVar);
+
+    /*
     if (isa<Constant>(GrainVar)) {
       Argument *GrainArg = new Argument(GrainVar->getType(), "grainsize");
       Inputs.insert(GrainArg);
@@ -978,15 +983,51 @@ bool DACLoopSpawning::convertLoop() {
       Inputs.insert(GrainVar);
       InputMap[GrainVar] = GrainVar;
     }
+    */
 
     // Put all of the inputs together, and clear redundant inputs from
     // the set for the loop body.
     SmallVector<Value*, 8> BodyInputsToRemove;
-    for (Value *V : BodyInputs)
-      if (!Inputs.count(V))
-        Inputs.insert(V);
+    SmallVector<Value*, 8> StructInputs;
+    SmallVector<Type*, 8> StructIT;
+    for (Value *V : BodyInputs) {
+      if (!Inputs.count(V)) {
+        StructInputs.push_back(V);
+        StructIT.push_back(V->getType());
+      }
       else
         BodyInputsToRemove.push_back(V);
+    }
+    StructType* ST = StructType::create(StructIT);
+    IRBuilder<> B(L->getLoopPreheader()->getTerminator());
+    IRBuilder<> B2(L->getHeader()->getFirstNonPHIOrDbgOrLifetime());
+    closure = B.CreateAlloca(ST);
+    for(unsigned i=0; i<StructInputs.size(); i++) {
+      B.CreateStore(StructInputs[i], B.CreateConstGEP2_32(ST, closure, 0, i));
+      auto l2 = B2.CreateLoad(B2.CreateConstGEP2_32(ST, closure, 0, i));
+      auto UI = StructInputs[i]->use_begin(), E = StructInputs[i]->use_end();
+      for (; UI != E;) {
+        Use &U = *UI;
+        ++UI;
+        auto *Usr = dyn_cast<Instruction>(U.getUser());
+        if (Usr && !L->contains(Usr->getParent()))
+          continue;
+        U.set(l2);
+      }
+    }
+    Inputs.insert(closure);
+    //llvm::errs() << "<B>\n";
+    //for(auto& a : Inputs) a->dump();
+    //llvm::errs() << "</B>\n";
+    //StartArg->dump();
+    //ea->dump();
+    Inputs.remove(StartArg);
+    Inputs.insert(StartArg);
+    Inputs.remove(ea);
+    Inputs.insert(ea);
+    //llvm::errs() << "<A>\n";
+    //for(auto& a : Inputs) a->dump();
+    //llvm::errs() << "</A>\n";
     for (Value *V : BodyInputsToRemove)
       BodyInputs.remove(V);
     assert(0 == BodyOutputs.size() &&
@@ -1110,15 +1151,53 @@ bool DACLoopSpawning::convertLoop() {
   // For debugging:
   // BasicBlock *NewHeader = cast<BasicBlock>(VMap[Header]);
   // SerializeDetachedCFG(cast<DetachInst>(NewHeader->getTerminator()), nullptr);
-  implementDACIterSpawnOnHelper(Helper, NewPreheader,
-                                cast<BasicBlock>(VMap[Header]),
-                                cast<PHINode>(VMap[CanonicalIV]),
-                                cast<Argument>(VMap[InputMap[LimitVar]]),
-                                cast<Argument>(VMap[InputMap[GrainVar]]),
-                                /*DT=*/nullptr, /*LI=*/nullptr,
-                                CanonicalSCEV->getNoWrapFlags(SCEV::FlagNUW),
-                                CanonicalSCEV->getNoWrapFlags(SCEV::FlagNSW));
+  DetachInst* dt=cast<DetachInst>(cast<BasicBlock>(VMap[Header])->getTerminator());
+  //implementDACIterSpawnOnHelper(Helper, NewPreheader,
+  //                              cast<BasicBlock>(VMap[Header]),
+  //                              cast<PHINode>(VMap[CanonicalIV]),
+  //                              cast<Argument>(VMap[InputMap[LimitVar]]),
+  //                              cast<Argument>(VMap[InputMap[GrainVar]]),
+  //                              /*DT=*/nullptr, /*LI=*/nullptr,
+  //                              CanonicalSCEV->getNoWrapFlags(SCEV::FlagNUW),
+  //                              CanonicalSCEV->getNoWrapFlags(SCEV::FlagNSW));
+  BasicBlock* cont = dt->getSuccessor(1);
+  {
+    IRBuilder<> B(dt);
+    B.CreateCondBr(ConstantInt::getTrue(cont->getContext()), dt->getSuccessor(0), dt->getSuccessor(1));
+    dt->eraseFromParent();
+  }
 
+  for (auto PI = pred_begin(cont), PE = pred_end(cont);  PI != PE; ++PI) {
+    BasicBlock *Pred = *PI;
+    auto det = Pred->getTerminator();
+    if (!isa<ReattachInst>(det)) continue;
+    IRBuilder<> B(det);
+    B.CreateBr(det->getSuccessor(0));
+    det->eraseFromParent();
+  }
+  
+  {
+    Value* v = &*Helper->arg_begin();
+    auto UI = v->use_begin(), E = v->use_end();
+    for (; UI != E;) {
+      Use &U = *UI;
+      ++UI;
+      auto *Usr = dyn_cast<Instruction>(U.getUser());
+      Usr->moveBefore(Helper->getEntryBlock().getTerminator());
+
+      auto UI2 = Usr->use_begin(), E2 = Usr->use_end();
+      for (; UI2 != E2;) {
+        Use &U2 = *UI2;
+        ++UI2;
+        auto *Usr2 = dyn_cast<Instruction>(U2.getUser());
+        Usr2->moveBefore(Helper->getEntryBlock().getTerminator());
+      }
+    }
+  }
+
+  //Helper->getParent()->dump();
+  //Helper->dump();
+  
   if (verifyFunction(*Helper, &dbgs()))
     return false;
 
@@ -1133,18 +1212,36 @@ bool DACLoopSpawning::convertLoop() {
     // Add loop limit.
     TopCallArgs.insert(LimitVar);
     // Add grainsize.
-    TopCallArgs.insert(GrainVar);
+    //TopCallArgs.insert(GrainVar);
     // Add the rest of the arguments.
     for (Value *V : BodyInputs)
       TopCallArgs.insert(V);
 
     // Create call instruction.
     IRBuilder<> Builder(Preheader->getTerminator());
-    CallInst *TopCall = Builder.CreateCall(Helper, TopCallArgs.getArrayRef());
+
+    llvm::Function* F;
+    if( ((llvm::IntegerType*)LimitVar->getType())->getBitWidth() == 32 )
+      F = CILKRTS_FUNC(cilk_for_32, *M);
+    else {
+      assert( ((llvm::IntegerType*)LimitVar->getType())->getBitWidth() == 64 );
+      F = CILKRTS_FUNC(cilk_for_64, *M);
+    }
+    llvm::Value* args[] = {
+      Builder.CreatePointerCast(Helper, F->getFunctionType()->getParamType(0)),
+      Builder.CreatePointerCast(closure, F->getFunctionType()->getParamType(1)),
+      LimitVar,
+      ConstantInt::get(IntegerType::get(F->getContext(), sizeof(int)*8),0)
+    };
+
+
+    //F->getParent()->dump();
+    CallInst *TopCall = Builder.CreateCall(F, args);
+
     // Use a fast calling convention for the helper.
     TopCall->setCallingConv(CallingConv::Fast);
     // TopCall->setCallingConv(Helper->getCallingConv());
-    TopCall->setDebugLoc(Header->getTerminator()->getDebugLoc());
+    //TopCall->setDebugLoc(Header->getTerminator()->getDebugLoc());
     // // Update CG graph with the call we just added.
     // CG[F]->addCalledFunction(TopCall, CG[Helper]);
   }
@@ -1276,7 +1373,7 @@ bool LoopSpawningImpl::processLoop(Loop *L) {
 #endif /* NDEBUG */
 
   // Function containing loop
-  Function *F = L->getHeader()->getParent();
+  //Function *F = L->getHeader()->getParent();
 
   DEBUG(dbgs() << "\nLS: Checking a Tapir loop in \""
                << L->getHeader()->getParent()->getName() << "\" from "

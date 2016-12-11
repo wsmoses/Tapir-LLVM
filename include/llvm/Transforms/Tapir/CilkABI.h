@@ -105,6 +105,12 @@ enum {
                             CILK_FRAME_UNWINDING        |       \
                             CILK_FRAME_VERSION_MASK))
 
+
+typedef uint32_t cilk32_t;
+typedef uint64_t cilk64_t;
+typedef void (*__cilk_abi_f32_t)(void *data, cilk32_t low, cilk32_t high);
+typedef void (*__cilk_abi_f64_t)(void *data, cilk64_t low, cilk64_t high);
+
 typedef void (__cilkrts_init)();
 
 typedef void (__cilkrts_enter_frame_1)(__cilkrts_stack_frame *sf);
@@ -131,6 +137,10 @@ typedef void (cilk_sync_begin)(__cilkrts_stack_frame *);
 typedef void (cilk_sync_end)(__cilkrts_stack_frame *);
 typedef void (cilk_leave_begin)(__cilkrts_stack_frame *);
 typedef void (cilk_leave_end)();
+typedef void (__cilkrts_cilk_for_32)(__cilk_abi_f32_t body, void *data,
+                                     cilk32_t count, int grain);
+typedef void (__cilkrts_cilk_for_64)(__cilk_abi_f64_t body, void *data,
+                                     cilk64_t count, int grain);
 
 #define CILKRTS_FUNC(name, CGF) Get__cilkrts_##name(CGF)
 
@@ -167,6 +177,11 @@ DEFAULT_GET_CILKRTS_FUNC(get_tls_worker)
 DEFAULT_GET_CILKRTS_FUNC(get_tls_worker_fast)
 #pragma GCC diagnostic ignored "-Wunused-function"
 DEFAULT_GET_CILKRTS_FUNC(bind_thread_1)
+
+#pragma GCC diagnostic ignored "-Wunused-function"
+DEFAULT_GET_CILKRTS_FUNC(cilk_for_32)
+#pragma GCC diagnostic ignored "-Wunused-function"
+DEFAULT_GET_CILKRTS_FUNC(cilk_for_64)
 
 #define CILK_CSI_FUNC(name, CGF) Get_cilk_##name(CGF)
 
