@@ -671,6 +671,9 @@ void PassManagerBuilder::populateModulePassManager(legacy::PassManagerBase& MPM)
         addExtensionsToPM(EP_TapirLate, MPM);
         break;
       case 3: //fdetach
+        MPM.add(createPromoteDetachToCilkPass(ParallelLevel == 2, InstrumentCilk));
+        prepopulateModulePassManager(MPM);
+        addExtensionsToPM(EP_TapirLate, MPM);
         break;
       case 0: llvm_unreachable("invalid");
     }
@@ -692,17 +695,19 @@ void PassManagerBuilder::populateModulePassManager(legacy::PassManagerBase& MPM)
     addInstructionCombiningPass(MPM);
     addExtensionsToPM(EP_Peephole, MPM);
 
-    if (ParallelLevel != 3) MPM.add(createInferFunctionAttrsLegacyPass());
+    // if (ParallelLevel != 3) MPM.add(createInferFunctionAttrsLegacyPass());
+    MPM.add(createInferFunctionAttrsLegacyPass());
     MPM.add(createPromoteDetachToCilkPass(ParallelLevel == 2, InstrumentCilk));
     // The Detach2Cilk pass may leave cruft around.  Clean it up.
     MPM.add(createCFGSimplificationPass());
-    if (ParallelLevel != 3) MPM.add(createInferFunctionAttrsLegacyPass());
+    // if (ParallelLevel != 3) MPM.add(createInferFunctionAttrsLegacyPass());
+    MPM.add(createInferFunctionAttrsLegacyPass());
     if (OptLevel != 0) MPM.add(createMergeFunctionsPass());
     MPM.add(createBarrierNoopPass());
   }
   prepopulateModulePassManager(MPM);
-  if (ParallelLevel == 0 || ParallelLevel == 3)
-    addExtensionsToPM(EP_TapirLate, MPM);
+  // if (ParallelLevel == 0 || ParallelLevel == 3)
+  //   addExtensionsToPM(EP_TapirLate, MPM);
   addExtensionsToPM(EP_OptimizerLast, MPM);
 }
 
