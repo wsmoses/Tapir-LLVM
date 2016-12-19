@@ -37,14 +37,11 @@ void llvm::CloneIntoFunction(Function *NewFunc, const Function *OldFunc,
 
   // Loop over all of the basic blocks in the function, cloning them as
   // appropriate.
-  //
   for (const BasicBlock *BB : Blocks) {
-    // dbgs() << "Cloning basic block " << BB->getName() << "\n";
     // Create a new basic block and copy instructions into it!
     BasicBlock *CBB = CloneBasicBlock(BB, VMap, NameSuffix, NewFunc, CodeInfo);
 
     // Add basic block mapping.
-    // dbgs() << "Mapping " << BB->getName() << " to " << CBB->getName() << "\n";
     VMap[BB] = CBB;
 
     // It is only legal to clone a function if a block address within that
