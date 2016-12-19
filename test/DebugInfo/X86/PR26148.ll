@@ -21,8 +21,8 @@
 ;
 ; CHECK: 0x00000025: Beginning address offset: 0x0000000000000004
 ; CHECK:                Ending address offset: 0x0000000000000004
-; CHECK:                 Location description: 10 03 93 04 55 93 04
-; constu 0x00000003, piece 0x00000004, rdi, piece 0x00000004
+; CHECK:                 Location description: 10 03 93 04 55 93 02
+; constu 0x00000003, piece 0x00000004, rdi, piece 0x00000002
 ; CHECK:             Beginning address offset: 0x0000000000000004
 ; CHECK:                Ending address offset: 0x0000000000000014
 ; CHECK:                 Location description: 10 03 93 04 10 00
@@ -95,9 +95,9 @@ entry:
 !27 = !DILocation(line: 5, column: 16, scope: !4)
 !28 = !DILocation(line: 6, column: 13, scope: !4)
 !29 = !DILocation(line: 6, column: 16, scope: !4)
-!30 = !DIExpression(DW_OP_bit_piece, 0, 32)
-!31 = !DIExpression(DW_OP_bit_piece, 32, 32)
-!32 = !DIExpression(DW_OP_bit_piece, 32, 16)
+!30 = !DIExpression(DW_OP_LLVM_fragment, 0, 32)
+!31 = !DIExpression(DW_OP_LLVM_fragment, 32, 32)
+!32 = !DIExpression(DW_OP_LLVM_fragment, 32, 16)
 !33 = !DILocation(line: 8, column: 9, scope: !4)
 !34 = !DILocation(line: 9, column: 1, scope: !4)
 !35 = !DILocation(line: 11, column: 14, scope: !17)

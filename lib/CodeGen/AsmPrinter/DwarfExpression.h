@@ -39,6 +39,9 @@ public:
     End = Expr->expr_op_end();
   }
 
+  DIExpressionCursor(ArrayRef<uint64_t> Expr)
+      : Start(Expr.begin()), End(Expr.end()) {}
+
   /// Consume one operation.
   Optional<DIExpression::ExprOperand> take() {
     if (Start == End)
@@ -76,12 +79,27 @@ public:
 /// entry.
 class DwarfExpression {
 protected:
-  // Various convenience accessors that extract things out of AsmPrinter.
   unsigned DwarfVersion;
+  /// Current Fragment Offset in Bits.
+  uint64_t OffsetInBits = 0;
+
+  /// Sometimes we need to add a DW_OP_bit_piece to describe a subregister. 
+  unsigned SubRegisterSizeInBits = 0;
+  unsigned SubRegisterOffsetInBits = 0;
+
+  /// Push a DW_OP_piece / DW_OP_bit_piece for emitting later, if one is needed
+  /// to represent a subregister.
+  void setSubRegisterPiece(unsigned SizeInBits, unsigned OffsetInBits) {
+    SubRegisterSizeInBits = SizeInBits;
+    SubRegisterOffsetInBits = OffsetInBits;
+  }
 
 public:
   DwarfExpression(unsigned DwarfVersion) : DwarfVersion(DwarfVersion) {}
-  virtual ~DwarfExpression() {}
+  virtual ~DwarfExpression() {};
+
+  /// This needs to be called last to commit any pending changes.
+  void finalize();
 
   /// Output a dwarf operand and an optional assembler comment.
   virtual void EmitOp(uint8_t Op, const char *Comment = nullptr) = 0;
@@ -98,10 +116,14 @@ public:
   /// Emit an (double-)indirect dwarf register operation.
   void AddRegIndirect(int DwarfReg, int Offset, bool Deref = false);
 
-  /// Emit DW_OP_piece operation.
+  /// Emit a DW_OP_piece or DW_OP_bit_piece operation for a variable fragment.
+  /// \param OffsetInBits    This is an optional offset into the location that
+  /// is at the top of the DWARF stack.
   void AddOpPiece(unsigned SizeInBits, unsigned OffsetInBits = 0);
+
   /// Emit a shift-right dwarf expression.
   void AddShr(unsigned ShiftBy);
+
   /// Emit a DW_OP_stack_value, if supported.
   ///
   /// The proper way to describe a constant value is DW_OP_constu <const>,
@@ -121,22 +143,17 @@ public:
                              int Offset = 0);
 
   /// Emit a partial DWARF register operation.
-  /// \param MachineReg        the register
-  /// \param PieceSizeInBits   size and
-  /// \param PieceOffsetInBits offset of the piece in bits, if this is one
-  ///                          piece of an aggregate value.
   ///
-  /// If size and offset is zero an operation for the entire
-  /// register is emitted: Some targets do not provide a DWARF
-  /// register number for every register.  If this is the case, this
-  /// function will attempt to emit a DWARF register by emitting a
-  /// piece of a super-register or by piecing together multiple
-  /// subregisters that alias the register.
+  /// \param MachineReg           The register number.
+  ///
+  /// If size and offset is zero an operation for the entire register is
+  /// emitted: Some targets do not provide a DWARF register number for every
+  /// register.  If this is the case, this function will attempt to emit a DWARF
+  /// register by emitting a fragment of a super-register or by piecing together
+  /// multiple subregisters that alias the register.
   ///
   /// \return false if no DWARF register exists for MachineReg.
-  bool AddMachineRegPiece(const TargetRegisterInfo &TRI, unsigned MachineReg,
-                          unsigned PieceSizeInBits = 0,
-                          unsigned PieceOffsetInBits = 0);
+  bool AddMachineReg(const TargetRegisterInfo &TRI, unsigned MachineReg);
 
   /// Emit a signed constant.
   void AddSignedConstant(int64_t Value);
@@ -149,17 +166,25 @@ public:
   /// the prefix of a DwarfExpression if a more efficient representation for
   /// combining the register location and the first operation exists.
   ///
-  /// \param PieceOffsetInBits     If this is one piece out of a fragmented
-  /// location, this is the offset of the piece inside the entire variable.
-  /// \return false if no DWARF register exists for MachineReg.
+  /// \param FragmentOffsetInBits     If this is one fragment out of a fragmented
+  ///                                 location, this is the offset of the
+  ///                                 fragment inside the entire variable.
+  /// \return                         false if no DWARF register exists
+  ///                                 for MachineReg.
   bool AddMachineRegExpression(const TargetRegisterInfo &TRI,
                                DIExpressionCursor &Expr, unsigned MachineReg,
-                               unsigned PieceOffsetInBits = 0);
+                               unsigned FragmentOffsetInBits = 0);
   /// Emit all remaining operations in the DIExpressionCursor.
-  /// \param PieceOffsetInBits     If this is one piece out of a fragmented
-  /// location, this is the offset of the piece inside the entire variable.
+  ///
+  /// \param FragmentOffsetInBits     If this is one fragment out of multiple
+  ///                                 locations, this is the offset of the
+  ///                                 fragment inside the entire variable.
   void AddExpression(DIExpressionCursor &&Expr,
-                     unsigned PieceOffsetInBits = 0);
+                     unsigned FragmentOffsetInBits = 0);
+
+  /// If applicable, emit an empty DW_OP_piece / DW_OP_bit_piece to advance to
+  /// the fragment described by \c Expr.
+  void addFragmentOffset(const DIExpression *Expr);
 };
 
 /// DwarfExpression implementation for .debug_loc entries.

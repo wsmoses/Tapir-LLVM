@@ -44,16 +44,17 @@
 ; NM: func2
 ; NM: main
 
-; YAML: --- !Passed
-; YAML: Pass:            inline
-; YAML: Name:            Inlined
-; YAML: Function:        main
-; YAML: Args:
-; YAML:   - Callee:          foo
-; YAML:   - String:          ' inlined into '
-; YAML:   - Caller:          main
-; YAML: ...
+; YAML:      --- !Passed
+; YAML-NEXT: Pass:            inline
+; YAML-NEXT: Name:            Inlined
+; YAML-NEXT: Function:        main
+; YAML-NEXT: Args:
+; YAML-NEXT:   - Callee:          foo
+; YAML-NEXT:   - String:          ' inlined into '
+; YAML-NEXT:   - Caller:          main
+; YAML-NEXT: ...
 
+target datalayout = "e-m:o-i64:64-f80:128-n8:16:32:64-S128"
 target triple = "x86_64-apple-darwin"
 
 declare i32 @bar()

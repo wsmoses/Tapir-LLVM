@@ -151,7 +151,7 @@ public:
   void EmitCOFFSafeSEH(MCSymbol const *Symbol) override;
   void EmitCOFFSectionIndex(MCSymbol const *Symbol) override;
   void EmitCOFFSecRel32(MCSymbol const *Symbol) override;
-  void emitELFSize(MCSymbolELF *Symbol, const MCExpr *Value) override;
+  void emitELFSize(MCSymbol *Symbol, const MCExpr *Value) override;
   void EmitCommonSymbol(MCSymbol *Symbol, uint64_t Size,
                         unsigned ByteAlignment) override;
 
@@ -209,7 +209,8 @@ public:
                          unsigned MaxBytesToEmit = 0) override;
 
   void emitValueToOffset(const MCExpr *Offset,
-                         unsigned char Value = 0) override;
+                         unsigned char Value,
+                         SMLoc Loc) override;
 
   void EmitFileDirective(StringRef Filename) override;
   unsigned EmitDwarfFileDirective(unsigned FileNo, StringRef Directory,
@@ -620,7 +621,7 @@ void MCAsmStreamer::EmitCOFFSecRel32(MCSymbol const *Symbol) {
   EmitEOL();
 }
 
-void MCAsmStreamer::emitELFSize(MCSymbolELF *Symbol, const MCExpr *Value) {
+void MCAsmStreamer::emitELFSize(MCSymbol *Symbol, const MCExpr *Value) {
   assert(MAI->hasDotTypeDotSizeDirective());
   OS << "\t.size\t";
   Symbol->print(OS, MAI);
@@ -1011,7 +1012,8 @@ void MCAsmStreamer::EmitCodeAlignment(unsigned ByteAlignment,
 }
 
 void MCAsmStreamer::emitValueToOffset(const MCExpr *Offset,
-                                      unsigned char Value) {
+                                      unsigned char Value,
+                                      SMLoc Loc) {
   // FIXME: Verify that Offset is associated with the current section.
   OS << ".org ";
   Offset->print(OS, MAI);

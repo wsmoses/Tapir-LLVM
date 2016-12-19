@@ -12,6 +12,7 @@
 #include "llvm/ADT/StringSwitch.h"
 #include "llvm/DebugInfo/DWARF/DWARFAcceleratorTable.h"
 #include "llvm/DebugInfo/DWARF/DWARFDebugArangeSet.h"
+#include "llvm/DebugInfo/DWARF/DWARFDebugPubTable.h"
 #include "llvm/DebugInfo/DWARF/DWARFUnitIndex.h"
 #include "llvm/Object/MachO.h"
 #include "llvm/Object/RelocVisitor.h"
@@ -31,39 +32,6 @@ using namespace object;
 typedef DWARFDebugLine::LineTable DWARFLineTable;
 typedef DILineInfoSpecifier::FileLineInfoKind FileLineInfoKind;
 typedef DILineInfoSpecifier::FunctionNameKind FunctionNameKind;
-
-static void dumpPubSection(raw_ostream &OS, StringRef Name, StringRef Data,
-                           bool LittleEndian, bool GnuStyle) {
-  OS << "\n." << Name << " contents:\n";
-  DataExtractor pubNames(Data, LittleEndian, 0);
-  uint32_t offset = 0;
-  while (pubNames.isValidOffset(offset)) {
-    OS << "length = " << format("0x%08x", pubNames.getU32(&offset));
-    OS << " version = " << format("0x%04x", pubNames.getU16(&offset));
-    OS << " unit_offset = " << format("0x%08x", pubNames.getU32(&offset));
-    OS << " unit_size = " << format("0x%08x", pubNames.getU32(&offset)) << '\n';
-    if (GnuStyle)
-      OS << "Offset     Linkage  Kind     Name\n";
-    else
-      OS << "Offset     Name\n";
-
-    while (offset < Data.size()) {
-      uint32_t dieRef = pubNames.getU32(&offset);
-      if (dieRef == 0)
-        break;
-      OS << format("0x%8.8x ", dieRef);
-      if (GnuStyle) {
-        PubIndexEntryDescriptor desc(pubNames.getU8(&offset));
-        OS << format("%-8s",
-                     dwarf::GDBIndexEntryLinkageString(desc.Linkage).data())
-           << ' '
-           << format("%-8s", dwarf::GDBIndexEntryKindString(desc.Kind).data())
-           << ' ';
-      }
-      OS << '\"' << pubNames.getCStr(&offset) << "\"\n";
-    }
-  }
-}
 
 static void dumpAccelSection(raw_ostream &OS, StringRef Name,
                              const DWARFSection& Section, StringRef StringSection,
@@ -156,16 +124,16 @@ void DWARFContext::dump(raw_ostream &OS, DIDumpType DumpType, bool DumpEH,
     OS << "\n.debug_line contents:\n";
     for (const auto &CU : compile_units()) {
       savedAddressByteSize = CU->getAddressByteSize();
-      const auto *CUDIE = CU->getUnitDIE();
-      if (CUDIE == nullptr)
+      auto CUDIE = CU->getUnitDIE();
+      if (!CUDIE)
         continue;
-      unsigned stmtOffset = CUDIE->getAttributeValueAsSectionOffset(
-          CU.get(), DW_AT_stmt_list, -1U);
-      if (stmtOffset != -1U) {
+      if (auto StmtOffset =
+              CUDIE.getAttributeValueAsSectionOffset(DW_AT_stmt_list)) {
         DataExtractor lineData(getLineSection().Data, isLittleEndian(),
                                savedAddressByteSize);
         DWARFDebugLine::LineTable LineTable;
-        LineTable.parse(lineData, &getLineSection().Relocs, &stmtOffset);
+        uint32_t Offset = *StmtOffset;
+        LineTable.parse(lineData, &getLineSection().Relocs, &Offset);
         LineTable.dump(OS);
       }
     }
@@ -231,20 +199,22 @@ void DWARFContext::dump(raw_ostream &OS, DIDumpType DumpType, bool DumpEH,
   }
 
   if (DumpType == DIDT_All || DumpType == DIDT_Pubnames)
-    dumpPubSection(OS, "debug_pubnames", getPubNamesSection(),
-                   isLittleEndian(), false);
+    DWARFDebugPubTable(getPubNamesSection(), isLittleEndian(), false)
+        .dump("debug_pubnames", OS);
 
   if (DumpType == DIDT_All || DumpType == DIDT_Pubtypes)
-    dumpPubSection(OS, "debug_pubtypes", getPubTypesSection(),
-                   isLittleEndian(), false);
+    DWARFDebugPubTable(getPubTypesSection(), isLittleEndian(), false)
+        .dump("debug_pubtypes", OS);
 
   if (DumpType == DIDT_All || DumpType == DIDT_GnuPubnames)
-    dumpPubSection(OS, "debug_gnu_pubnames", getGnuPubNamesSection(),
-                   isLittleEndian(), true /* GnuStyle */);
+    DWARFDebugPubTable(getGnuPubNamesSection(), isLittleEndian(),
+                       true /* GnuStyle */)
+        .dump("debug_gnu_pubnames", OS);
 
   if (DumpType == DIDT_All || DumpType == DIDT_GnuPubtypes)
-    dumpPubSection(OS, "debug_gnu_pubtypes", getGnuPubTypesSection(),
-                   isLittleEndian(), true /* GnuStyle */);
+    DWARFDebugPubTable(getGnuPubTypesSection(), isLittleEndian(),
+                       true /* GnuStyle */)
+        .dump("debug_gnu_pubtypes", OS);
 
   if ((DumpType == DIDT_All || DumpType == DIDT_StrOffsetsDwo) &&
       !getStringOffsetDWOSection().empty()) {
@@ -412,16 +382,15 @@ DWARFContext::getLineTableForUnit(DWARFUnit *U) {
   if (!Line)
     Line.reset(new DWARFDebugLine(&getLineSection().Relocs));
 
-  const auto *UnitDIE = U->getUnitDIE();
-  if (UnitDIE == nullptr)
+  auto UnitDIE = U->getUnitDIE();
+  if (!UnitDIE)
     return nullptr;
 
-  unsigned stmtOffset =
-      UnitDIE->getAttributeValueAsSectionOffset(U, DW_AT_stmt_list, -1U);
-  if (stmtOffset == -1U)
+  auto Offset = UnitDIE.getAttributeValueAsSectionOffset(DW_AT_stmt_list);
+  if (!Offset)
     return nullptr; // No line table for this compile unit.
 
-  stmtOffset += U->getLineTableOffset();
+  uint32_t stmtOffset = *Offset + U->getLineTableOffset();
   // See if the line table is cached.
   if (const DWARFLineTable *lt = Line->getLineTable(stmtOffset))
     return lt;
@@ -477,14 +446,12 @@ static bool getFunctionNameForAddress(DWARFCompileUnit *CU, uint64_t Address,
     return false;
   // The address may correspond to instruction in some inlined function,
   // so we have to build the chain of inlined functions and take the
-  // name of the topmost function in it.
-  const DWARFDebugInfoEntryInlinedChain &InlinedChain =
-      CU->getInlinedChainForAddress(Address);
-  if (InlinedChain.DIEs.size() == 0)
+  // name of the topmost function in it.SmallVectorImpl<DWARFDie> &InlinedChain
+  SmallVector<DWARFDie, 4> InlinedChain;
+  CU->getInlinedChainForAddress(Address, InlinedChain);
+  if (InlinedChain.size() == 0)
     return false;
-  const DWARFDebugInfoEntryMinimal &TopFunctionDIE = InlinedChain.DIEs[0];
-  if (const char *Name =
-          TopFunctionDIE.getSubroutineName(InlinedChain.U, Kind)) {
+  if (const char *Name = InlinedChain[0].getSubroutineName(Kind)) {
     FunctionName = Name;
     return true;
   }
@@ -559,9 +526,9 @@ DWARFContext::getInliningInfoForAddress(uint64_t Address,
     return InliningInfo;
 
   const DWARFLineTable *LineTable = nullptr;
-  const DWARFDebugInfoEntryInlinedChain &InlinedChain =
-      CU->getInlinedChainForAddress(Address);
-  if (InlinedChain.DIEs.size() == 0) {
+  SmallVector<DWARFDie, 4> InlinedChain;
+  CU->getInlinedChainForAddress(Address, InlinedChain);
+  if (InlinedChain.size() == 0) {
     // If there is no DIE for address (e.g. it is in unavailable .dwo file),
     // try to at least get file/line info from symbol table.
     if (Spec.FLIKind != FileLineInfoKind::None) {
@@ -576,12 +543,11 @@ DWARFContext::getInliningInfoForAddress(uint64_t Address,
   }
 
   uint32_t CallFile = 0, CallLine = 0, CallColumn = 0;
-  for (uint32_t i = 0, n = InlinedChain.DIEs.size(); i != n; i++) {
-    const DWARFDebugInfoEntryMinimal &FunctionDIE = InlinedChain.DIEs[i];
+  for (uint32_t i = 0, n = InlinedChain.size(); i != n; i++) {
+    DWARFDie &FunctionDIE = InlinedChain[i];
     DILineInfo Frame;
     // Get function name if necessary.
-    if (const char *Name =
-            FunctionDIE.getSubroutineName(InlinedChain.U, Spec.FNKind))
+    if (const char *Name = FunctionDIE.getSubroutineName(Spec.FNKind))
       Frame.FunctionName = Name;
     if (Spec.FLIKind != FileLineInfoKind::None) {
       if (i == 0) {
@@ -603,8 +569,7 @@ DWARFContext::getInliningInfoForAddress(uint64_t Address,
       }
       // Get call file/line/column of a current DIE.
       if (i + 1 < n) {
-        FunctionDIE.getCallerFrame(InlinedChain.U, CallFile, CallLine,
-                                   CallColumn);
+        FunctionDIE.getCallerFrame(CallFile, CallLine, CallColumn);
       }
     }
     InliningInfo.addFrame(Frame);

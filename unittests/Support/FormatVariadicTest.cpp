@@ -13,6 +13,28 @@
 
 using namespace llvm;
 
+// Compile-time tests templates in the detail namespace.
+namespace {
+struct Format : public FormatAdapter<int> {
+  Format(int N) : FormatAdapter<int>(std::move(N)) {}
+  void format(raw_ostream &OS, StringRef Opt) override { OS << "Format"; }
+};
+
+using detail::uses_format_member;
+using detail::uses_missing_provider;
+
+static_assert(uses_format_member<Format>::value, "");
+static_assert(uses_format_member<Format &>::value, "");
+static_assert(uses_format_member<Format &&>::value, "");
+static_assert(uses_format_member<const Format>::value, "");
+static_assert(uses_format_member<const Format &>::value, "");
+static_assert(uses_format_member<const volatile Format>::value, "");
+static_assert(uses_format_member<const volatile Format &>::value, "");
+
+struct NoFormat {};
+static_assert(uses_missing_provider<NoFormat>::value, "");
+}
+
 TEST(FormatVariadicTest, EmptyFormatString) {
   auto Replacements = formatv_object_base::parseFormatString("");
   EXPECT_EQ(0U, Replacements.size());
@@ -506,12 +528,10 @@ TEST(FormatVariadicTest, Range) {
 }
 
 TEST(FormatVariadicTest, Adapter) {
-  class Negative {
-    int N;
-
+  class Negative : public FormatAdapter<int> {
   public:
-    explicit Negative(int N) : N(N) {}
-    void format(raw_ostream &S, StringRef Options) { S << -N; }
+    explicit Negative(int N) : FormatAdapter<int>(std::move(N)) {}
+    void format(raw_ostream &S, StringRef Options) override { S << -Item; }
   };
 
   EXPECT_EQ("-7", formatv("{0}", Negative(7)).str());
@@ -535,4 +555,16 @@ TEST(FormatVariadicTest, ImplicitConversions) {
 
   SmallString<4> S2 = formatv("{0} {1}", 1, 2);
   EXPECT_EQ("1 2", S2);
+}
+
+TEST(FormatVariadicTest, FormatAdapter) {
+  EXPECT_EQ("Format", formatv("{0}", Format(1)).str());
+
+  Format var(1);
+  EXPECT_EQ("Format", formatv("{0}", var).str());
+  EXPECT_EQ("Format", formatv("{0}", std::move(var)).str());
+
+  // Not supposed to compile
+  // const Format cvar(1);
+  // EXPECT_EQ("Format", formatv("{0}", cvar).str());
 }

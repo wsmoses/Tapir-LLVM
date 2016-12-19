@@ -2293,8 +2293,7 @@ void SelectionDAGBuilder::visitLandingPad(const LandingPadInst &LP) {
          "Call to landingpad not in landing pad!");
 
   MachineBasicBlock *MBB = FuncInfo.MBB;
-  MachineModuleInfo &MMI = DAG.getMachineFunction().getMMI();
-  addLandingPadInfo(LP, MMI, *MBB);
+  addLandingPadInfo(LP, *MBB);
 
   // If there aren't registers to copy the values into (e.g., during SjLj
   // exceptions), then don't bother to create these DAG nodes.
@@ -3329,13 +3328,13 @@ void SelectionDAGBuilder::visitGetElementPtr(const User &I) {
   if (VectorWidth && !N.getValueType().isVector()) {
     LLVMContext &Context = *DAG.getContext();
     EVT VT = EVT::getVectorVT(Context, N.getValueType(), VectorWidth);
-    SmallVector<SDValue, 16> Ops(VectorWidth, N);
-    N = DAG.getNode(ISD::BUILD_VECTOR, dl, VT, Ops);
+    N = DAG.getSplatBuildVector(VT, dl, N);
   }
+
   for (gep_type_iterator GTI = gep_type_begin(&I), E = gep_type_end(&I);
        GTI != E; ++GTI) {
     const Value *Idx = GTI.getOperand();
-    if (StructType *StTy = dyn_cast<StructType>(*GTI)) {
+    if (StructType *StTy = GTI.getStructTypeOrNull()) {
       unsigned Field = cast<Constant>(Idx)->getUniqueInteger().getZExtValue();
       if (Field) {
         // N = N + Offset
@@ -3387,9 +3386,9 @@ void SelectionDAGBuilder::visitGetElementPtr(const User &I) {
 
       if (!IdxN.getValueType().isVector() && VectorWidth) {
         MVT VT = MVT::getVectorVT(IdxN.getValueType().getSimpleVT(), VectorWidth);
-        SmallVector<SDValue, 16> Ops(VectorWidth, IdxN);
-        IdxN = DAG.getNode(ISD::BUILD_VECTOR, dl, VT, Ops);
+        IdxN = DAG.getSplatBuildVector(VT, dl, IdxN);
       }
+
       // If the index is smaller or larger than intptr_t, truncate or extend
       // it.
       IdxN = DAG.getSExtOrTrunc(IdxN, dl, N.getValueType());
@@ -3831,8 +3830,7 @@ static bool getUniformBase(const Value* &Ptr, SDValue& Base, SDValue& Index,
   if (!Index.getValueType().isVector()) {
     unsigned GEPWidth = GEP->getType()->getVectorNumElements();
     EVT VT = EVT::getVectorVT(Context, Index.getValueType(), GEPWidth);
-    SmallVector<SDValue, 16> Ops(GEPWidth, Index);
-    Index = DAG.getNode(ISD::BUILD_VECTOR, SDLoc(Index), VT, Ops);
+    Index = DAG.getSplatBuildVector(VT, SDLoc(Index), Index);
   }
   return true;
 }
@@ -4234,7 +4232,7 @@ static SDValue GetExponent(SelectionDAG &DAG, SDValue Op,
 /// getF32Constant - Get 32-bit floating point constant.
 static SDValue getF32Constant(SelectionDAG &DAG, unsigned Flt,
                               const SDLoc &dl) {
-  return DAG.getConstantFP(APFloat(APFloat::IEEEsingle, APInt(32, Flt)), dl,
+  return DAG.getConstantFP(APFloat(APFloat::IEEEsingle(), APInt(32, Flt)), dl,
                            MVT::f32);
 }
 
@@ -5087,7 +5085,7 @@ SelectionDAGBuilder::visitIntrinsicCall(const CallInst &I, unsigned Intrinsic) {
   case Intrinsic::eh_typeid_for: {
     // Find the type id for the given typeinfo.
     GlobalValue *GV = ExtractTypeInfo(I.getArgOperand(0));
-    unsigned TypeID = DAG.getMachineFunction().getMMI().getTypeIDFor(GV);
+    unsigned TypeID = DAG.getMachineFunction().getTypeIDFor(GV);
     Res = DAG.getConstant(TypeID, sdl, MVT::i32);
     setValue(&I, Res);
     return nullptr;
@@ -5095,7 +5093,7 @@ SelectionDAGBuilder::visitIntrinsicCall(const CallInst &I, unsigned Intrinsic) {
 
   case Intrinsic::eh_return_i32:
   case Intrinsic::eh_return_i64:
-    DAG.getMachineFunction().getMMI().setCallsEHReturn(true);
+    DAG.getMachineFunction().setCallsEHReturn(true);
     DAG.setRoot(DAG.getNode(ISD::EH_RETURN, sdl,
                             MVT::Other,
                             getControlRoot(),
@@ -5103,7 +5101,7 @@ SelectionDAGBuilder::visitIntrinsicCall(const CallInst &I, unsigned Intrinsic) {
                             getValue(I.getArgOperand(1))));
     return nullptr;
   case Intrinsic::eh_unwind_init:
-    DAG.getMachineFunction().getMMI().setCallsUnwindInit(true);
+    DAG.getMachineFunction().setCallsUnwindInit(true);
     return nullptr;
   case Intrinsic::eh_dwarf_cfa: {
     setValue(&I, DAG.getNode(ISD::EH_DWARF_CFA, sdl,
@@ -5801,7 +5799,8 @@ SelectionDAGBuilder::visitIntrinsicCall(const CallInst &I, unsigned Intrinsic) {
 std::pair<SDValue, SDValue>
 SelectionDAGBuilder::lowerInvokable(TargetLowering::CallLoweringInfo &CLI,
                                     const BasicBlock *EHPadBB) {
-  MachineModuleInfo &MMI = DAG.getMachineFunction().getMMI();
+  MachineFunction &MF = DAG.getMachineFunction();
+  MachineModuleInfo &MMI = MF.getMMI();
   MCSymbol *BeginLabel = nullptr;
 
   if (EHPadBB) {
@@ -5813,7 +5812,7 @@ SelectionDAGBuilder::lowerInvokable(TargetLowering::CallLoweringInfo &CLI,
     // so as to maintain the ordering of pads in the LSDA.
     unsigned CallSiteIndex = MMI.getCurrentCallSite();
     if (CallSiteIndex) {
-      MMI.setCallSiteBeginLabel(BeginLabel, CallSiteIndex);
+      MF.setCallSiteBeginLabel(BeginLabel, CallSiteIndex);
       LPadToCallSiteMap[FuncInfo.MBBMap[EHPadBB]].push_back(CallSiteIndex);
 
       // Now that the call site is handled, stop tracking it.
@@ -5854,13 +5853,13 @@ SelectionDAGBuilder::lowerInvokable(TargetLowering::CallLoweringInfo &CLI,
     DAG.setRoot(DAG.getEHLabel(getCurSDLoc(), getRoot(), EndLabel));
 
     // Inform MachineModuleInfo of range.
-    if (MMI.hasEHFunclets()) {
+    if (MF.hasEHFunclets()) {
       assert(CLI.CS);
       WinEHFuncInfo *EHInfo = DAG.getMachineFunction().getWinEHFuncInfo();
       EHInfo->addIPToStateRange(cast<InvokeInst>(CLI.CS->getInstruction()),
                                 BeginLabel, EndLabel);
     } else {
-      MMI.addInvoke(FuncInfo.MBBMap[EHPadBB], BeginLabel, EndLabel);
+      MF.addInvoke(FuncInfo.MBBMap[EHPadBB], BeginLabel, EndLabel);
     }
   }
 

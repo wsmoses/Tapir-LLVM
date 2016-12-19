@@ -12,10 +12,11 @@
 #ifndef LLVM_FUZZER_DICTIONARY_H
 #define LLVM_FUZZER_DICTIONARY_H
 
+#include "FuzzerDefs.h"
+#include "FuzzerIO.h"
+#include "FuzzerUtil.h"
 #include <algorithm>
 #include <limits>
-
-#include "FuzzerDefs.h"
 
 namespace fuzzer {
 // A simple POD sized array of bytes.
@@ -121,4 +122,3 @@ bool ParseDictionaryFile(const std::string &Text, std::vector<Unit> *Units);
 }  // namespace fuzzer
 
 #endif  // LLVM_FUZZER_DICTIONARY_H
-

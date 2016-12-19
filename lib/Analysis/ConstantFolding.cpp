@@ -58,6 +58,36 @@ namespace {
 // Constant Folding internal helper functions
 //===----------------------------------------------------------------------===//
 
+static Constant *foldConstVectorToAPInt(APInt &Result, Type *DestTy,
+                                        Constant *C, Type *SrcEltTy,
+                                        unsigned NumSrcElts,
+                                        const DataLayout &DL) {
+  // Now that we know that the input value is a vector of integers, just shift
+  // and insert them into our result.
+  unsigned BitShift = DL.getTypeSizeInBits(SrcEltTy);
+  for (unsigned i = 0; i != NumSrcElts; ++i) {
+    Constant *Element;
+    if (DL.isLittleEndian())
+      Element = C->getAggregateElement(NumSrcElts - i - 1);
+    else
+      Element = C->getAggregateElement(i);
+
+    if (Element && isa<UndefValue>(Element)) {
+      Result <<= BitShift;
+      continue;
+    }
+
+    auto *ElementCI = dyn_cast_or_null<ConstantInt>(Element);
+    if (!ElementCI)
+      return ConstantExpr::getBitCast(C, DestTy);
+
+    Result <<= BitShift;
+    Result |= ElementCI->getValue().zextOrSelf(Result.getBitWidth());
+  }
+
+  return nullptr;
+}
+
 /// Constant fold bitcast, symbolically evaluating it with DataLayout.
 /// This always returns a non-null constant, but it may be a
 /// ConstantExpr if unfoldable.
@@ -69,50 +99,33 @@ Constant *FoldBitCast(Constant *C, Type *DestTy, const DataLayout &DL) {
       !DestTy->isPtrOrPtrVectorTy()) // Don't get ones for ptr types!
     return Constant::getAllOnesValue(DestTy);
 
-  // Handle a vector->integer cast.
-  if (auto *IT = dyn_cast<IntegerType>(DestTy)) {
-    auto *VTy = dyn_cast<VectorType>(C->getType());
-    if (!VTy)
-      return ConstantExpr::getBitCast(C, DestTy);
+  if (auto *VTy = dyn_cast<VectorType>(C->getType())) {
+    // Handle a vector->scalar integer/fp cast.
+    if (isa<IntegerType>(DestTy) || DestTy->isFloatingPointTy()) {
+      unsigned NumSrcElts = VTy->getNumElements();
+      Type *SrcEltTy = VTy->getElementType();
 
-    unsigned NumSrcElts = VTy->getNumElements();
-    Type *SrcEltTy = VTy->getElementType();
-
-    // If the vector is a vector of floating point, convert it to vector of int
-    // to simplify things.
-    if (SrcEltTy->isFloatingPointTy()) {
-      unsigned FPWidth = SrcEltTy->getPrimitiveSizeInBits();
-      Type *SrcIVTy =
-        VectorType::get(IntegerType::get(C->getContext(), FPWidth), NumSrcElts);
-      // Ask IR to do the conversion now that #elts line up.
-      C = ConstantExpr::getBitCast(C, SrcIVTy);
-    }
-
-    // Now that we know that the input value is a vector of integers, just shift
-    // and insert them into our result.
-    unsigned BitShift = DL.getTypeSizeInBits(SrcEltTy);
-    APInt Result(IT->getBitWidth(), 0);
-    for (unsigned i = 0; i != NumSrcElts; ++i) {
-      Constant *Element;
-      if (DL.isLittleEndian())
-        Element = C->getAggregateElement(NumSrcElts-i-1);
-      else
-        Element = C->getAggregateElement(i);
-
-      if (Element && isa<UndefValue>(Element)) {
-        Result <<= BitShift;
-        continue;
+      // If the vector is a vector of floating point, convert it to vector of int
+      // to simplify things.
+      if (SrcEltTy->isFloatingPointTy()) {
+        unsigned FPWidth = SrcEltTy->getPrimitiveSizeInBits();
+        Type *SrcIVTy =
+          VectorType::get(IntegerType::get(C->getContext(), FPWidth), NumSrcElts);
+        // Ask IR to do the conversion now that #elts line up.
+        C = ConstantExpr::getBitCast(C, SrcIVTy);
       }
 
-      auto *ElementCI = dyn_cast_or_null<ConstantInt>(Element);
-      if (!ElementCI)
-        return ConstantExpr::getBitCast(C, DestTy);
+      APInt Result(DL.getTypeSizeInBits(DestTy), 0);
+      if (Constant *CE = foldConstVectorToAPInt(Result, DestTy, C,
+                                                SrcEltTy, NumSrcElts, DL))
+        return CE;
 
-      Result <<= BitShift;
-      Result |= ElementCI->getValue().zextOrSelf(IT->getBitWidth());
+      if (isa<IntegerType>(DestTy))
+        return ConstantInt::get(DestTy, Result);
+
+      APFloat FP(DestTy->getFltSemantics(), Result);
+      return ConstantFP::get(DestTy->getContext(), FP);
     }
-
-    return ConstantInt::get(IT, Result);
   }
 
   // The code below only handles casts to vectors currently.
@@ -721,14 +734,15 @@ Constant *CastGEPIndices(Type *SrcElemTy, ArrayRef<Constant *> Ops,
                          Type *ResultTy, Optional<unsigned> InRangeIndex,
                          const DataLayout &DL, const TargetLibraryInfo *TLI) {
   Type *IntPtrTy = DL.getIntPtrType(ResultTy);
+  Type *IntPtrScalarTy = IntPtrTy->getScalarType();
 
   bool Any = false;
   SmallVector<Constant*, 32> NewIdxs;
   for (unsigned i = 1, e = Ops.size(); i != e; ++i) {
     if ((i == 1 ||
-         !isa<StructType>(GetElementPtrInst::getIndexedType(SrcElemTy,
-             Ops.slice(1, i - 1)))) &&
-        Ops[i]->getType() != IntPtrTy) {
+         !isa<StructType>(GetElementPtrInst::getIndexedType(
+             SrcElemTy, Ops.slice(1, i - 1)))) &&
+        Ops[i]->getType() != (i == 1 ? IntPtrTy : IntPtrScalarTy)) {
       Any = true;
       NewIdxs.push_back(ConstantExpr::getCast(CastInst::getCastOpcode(Ops[i],
                                                                       true,
@@ -1428,7 +1442,7 @@ Constant *GetConstantFoldFPValue(double V, Type *Ty) {
   if (Ty->isHalfTy()) {
     APFloat APF(V);
     bool unused;
-    APF.convert(APFloat::IEEEhalf, APFloat::rmNearestTiesToEven, &unused);
+    APF.convert(APFloat::IEEEhalf(), APFloat::rmNearestTiesToEven, &unused);
     return ConstantFP::get(Ty->getContext(), APF);
   }
   if (Ty->isFloatTy())
@@ -1519,7 +1533,7 @@ double getValueAsDouble(ConstantFP *Op) {
 
   bool unused;
   APFloat APF = Op->getValueAPF();
-  APF.convert(APFloat::IEEEdouble, APFloat::rmNearestTiesToEven, &unused);
+  APF.convert(APFloat::IEEEdouble(), APFloat::rmNearestTiesToEven, &unused);
   return APF.convertToDouble();
 }
 
@@ -1537,7 +1551,7 @@ Constant *ConstantFoldScalarCall(StringRef Name, unsigned IntrinsicID, Type *Ty,
         APFloat Val(Op->getValueAPF());
 
         bool lost = false;
-        Val.convert(APFloat::IEEEhalf, APFloat::rmNearestTiesToEven, &lost);
+        Val.convert(APFloat::IEEEhalf(), APFloat::rmNearestTiesToEven, &lost);
 
         return ConstantInt::get(Ty->getContext(), Val.bitcastToAPInt());
       }
@@ -1712,7 +1726,7 @@ Constant *ConstantFoldScalarCall(StringRef Name, unsigned IntrinsicID, Type *Ty,
       case Intrinsic::bitreverse:
         return ConstantInt::get(Ty->getContext(), Op->getValue().reverseBits());
       case Intrinsic::convert_from_fp16: {
-        APFloat Val(APFloat::IEEEhalf, Op->getValue());
+        APFloat Val(APFloat::IEEEhalf(), Op->getValue());
 
         bool lost = false;
         APFloat::opStatus status = Val.convert(

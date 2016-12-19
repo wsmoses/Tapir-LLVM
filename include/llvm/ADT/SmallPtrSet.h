@@ -15,8 +15,8 @@
 #ifndef LLVM_ADT_SMALLPTRSET_H
 #define LLVM_ADT_SMALLPTRSET_H
 
+#include "llvm/Config/abi-breaking.h"
 #include "llvm/Support/Compiler.h"
-#include "llvm/Support/DataTypes.h"
 #include "llvm/Support/PointerLikeTypeTraits.h"
 #include <cassert>
 #include <cstddef>
@@ -26,9 +26,14 @@
 #include <iterator>
 #include <utility>
 
+#if LLVM_ENABLE_ABI_BREAKING_CHECKS
 namespace llvm {
+template <class T = void> struct ReverseIterate { static bool value; };
+template <class T> bool ReverseIterate<T>::value = false;
+}
+#endif
 
-class SmallPtrSetIteratorImpl;
+namespace llvm {
 
 /// SmallPtrSetImplBase - This is the common code shared among all the
 /// SmallPtrSet<>'s, which is almost everything.  SmallPtrSet has two modes, one
@@ -72,12 +77,14 @@ protected:
                       const SmallPtrSetImplBase &that);
   SmallPtrSetImplBase(const void **SmallStorage, unsigned SmallSize,
                       SmallPtrSetImplBase &&that);
+
   explicit SmallPtrSetImplBase(const void **SmallStorage, unsigned SmallSize)
       : SmallArray(SmallStorage), CurArray(SmallStorage),
         CurArraySize(SmallSize), NumNonEmpty(0), NumTombstones(0) {
     assert(SmallSize && (SmallSize & (SmallSize-1)) == 0 &&
            "Initial size must be a power of two!");
   }
+
   ~SmallPtrSetImplBase() {
     if (!isSmall())
       free(CurArray);
@@ -85,6 +92,9 @@ protected:
 
 public:
   typedef unsigned size_type;
+
+  SmallPtrSetImplBase &operator=(const SmallPtrSetImplBase &) = delete;
+
   LLVM_NODISCARD bool empty() const { return size() == 0; }
   size_type size() const { return NumNonEmpty - NumTombstones; }
 
@@ -104,6 +114,7 @@ public:
 
 protected:
   static void *getTombstoneMarker() { return reinterpret_cast<void*>(-2); }
+
   static void *getEmptyMarker() {
     // Note that -1 is chosen to make clear() efficiently implementable with
     // memset and because it's not a valid pointer value.
@@ -178,8 +189,6 @@ private:
   /// Grow - Allocate a larger backing store for the buckets and move it over.
   void Grow(unsigned NewSize);
 
-  void operator=(const SmallPtrSetImplBase &RHS) = delete;
-
 protected:
   /// swap - Swaps the elements of two sets.
   /// Note: This method assumes that both sets have the same small size.
@@ -205,6 +214,12 @@ protected:
 public:
   explicit SmallPtrSetIteratorImpl(const void *const *BP, const void*const *E)
     : Bucket(BP), End(E) {
+#if LLVM_ENABLE_ABI_BREAKING_CHECKS
+    if (ReverseIterate<bool>::value) {
+      RetreatIfNotValid();
+      return;
+    }
+#endif
     AdvanceIfNotValid();
   }
 
@@ -226,6 +241,17 @@ protected:
             *Bucket == SmallPtrSetImplBase::getTombstoneMarker()))
       ++Bucket;
   }
+#if LLVM_ENABLE_ABI_BREAKING_CHECKS
+  void RetreatIfNotValid() {
+    --Bucket;
+    assert(Bucket <= End);
+    while (Bucket != End &&
+           (*Bucket == SmallPtrSetImplBase::getEmptyMarker() ||
+            *Bucket == SmallPtrSetImplBase::getTombstoneMarker())) {
+      --Bucket;
+    }
+  }
+#endif
 };
 
 /// SmallPtrSetIterator - This implements a const_iterator for SmallPtrSet.
@@ -251,13 +277,27 @@ public:
   }
 
   inline SmallPtrSetIterator& operator++() {          // Preincrement
+#if LLVM_ENABLE_ABI_BREAKING_CHECKS
+    if (ReverseIterate<bool>::value) {
+      RetreatIfNotValid();
+      return *this;
+    }
+#endif
     ++Bucket;
     AdvanceIfNotValid();
     return *this;
   }
 
   SmallPtrSetIterator operator++(int) {        // Postincrement
-    SmallPtrSetIterator tmp = *this; ++*this; return tmp;
+    SmallPtrSetIterator tmp = *this;
+#if LLVM_ENABLE_ABI_BREAKING_CHECKS
+    if (ReverseIterate<bool>::value) {
+      --*this;
+      return tmp;
+    }
+#endif
+    ++*this;
+    return tmp;
   }
 };
 
@@ -295,8 +335,6 @@ template <typename PtrType>
 class SmallPtrSetImpl : public SmallPtrSetImplBase {
   typedef PointerLikeTypeTraits<PtrType> PtrTraits;
 
-  SmallPtrSetImpl(const SmallPtrSetImpl &) = delete;
-
 protected:
   // Constructors that forward to the base.
   SmallPtrSetImpl(const void **SmallStorage, const SmallPtrSetImpl &that)
@@ -310,6 +348,8 @@ protected:
 public:
   typedef SmallPtrSetIterator<PtrType> iterator;
   typedef SmallPtrSetIterator<PtrType> const_iterator;
+
+  SmallPtrSetImpl(const SmallPtrSetImpl &) = delete;
 
   /// Inserts Ptr if and only if there is no element in the container equal to
   /// Ptr. The bool component of the returned pair is true if and only if the
@@ -342,9 +382,22 @@ public:
   }
 
   inline iterator begin() const {
+#if LLVM_ENABLE_ABI_BREAKING_CHECKS
+    if (ReverseIterate<bool>::value)
+      return endPtr();
+#endif
     return iterator(CurArray, EndPointer());
   }
   inline iterator end() const {
+#if LLVM_ENABLE_ABI_BREAKING_CHECKS
+    if (ReverseIterate<bool>::value)
+      return iterator(CurArray, CurArray);
+#endif
+    return endPtr();
+  }
+
+private:
+  inline iterator endPtr() const {
     const void *const *End = EndPointer();
     return iterator(End, End);
   }
@@ -391,7 +444,7 @@ public:
     return *this;
   }
 
-  SmallPtrSet<PtrType, SmallSize>&
+  SmallPtrSet<PtrType, SmallSize> &
   operator=(SmallPtrSet<PtrType, SmallSize> &&RHS) {
     if (&RHS != this)
       this->MoveFrom(SmallSizePowTwo, std::move(RHS));
@@ -410,14 +463,17 @@ public:
     SmallPtrSetImplBase::swap(RHS);
   }
 };
-}
+
+} // end namespace llvm
 
 namespace std {
+
   /// Implement std::swap in terms of SmallPtrSet swap.
   template<class T, unsigned N>
   inline void swap(llvm::SmallPtrSet<T, N> &LHS, llvm::SmallPtrSet<T, N> &RHS) {
     LHS.swap(RHS);
   }
-}
 
-#endif
+} // end namespace std
+
+#endif // LLVM_ADT_SMALLPTRSET_H

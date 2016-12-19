@@ -629,6 +629,9 @@ bool AArch64InstructionSelector::select(MachineInstr &I) const {
       // FIXME: Is going through int64_t always correct?
       ImmOp.ChangeToImmediate(
           ImmOp.getFPImm()->getValueAPF().bitcastToAPInt().getZExtValue());
+    } else {
+      uint64_t Val = I.getOperand(1).getCImm()->getZExtValue();
+      I.getOperand(1).ChangeToImmediate(Val);
     }
 
     constrainSelectedInstRegOperands(I, TII, TRI, RBI);
@@ -659,9 +662,10 @@ bool AArch64InstructionSelector::select(MachineInstr &I) const {
       return false;
     }
     unsigned char OpFlags = STI.ClassifyGlobalReference(GV, TM);
-    if (OpFlags & AArch64II::MO_GOT)
+    if (OpFlags & AArch64II::MO_GOT) {
       I.setDesc(TII.get(AArch64::LOADgot));
-    else {
+      I.getOperand(1).setTargetFlags(OpFlags);
+    } else {
       I.setDesc(TII.get(AArch64::MOVaddr));
       I.getOperand(1).setTargetFlags(OpFlags | AArch64II::MO_PAGE);
       MachineInstrBuilder MIB(MF, I);

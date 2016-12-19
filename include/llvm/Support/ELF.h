@@ -804,6 +804,9 @@ enum : unsigned {
   // Section data is string data by default.
   SHF_MIPS_STRING = 0x80000000,
 
+  // Make code section unreadable when in execute-only mode
+  SHF_ARM_PURECODE = 0x20000000,
+
   SHF_AMDGPU_HSA_GLOBAL = 0x00100000,
   SHF_AMDGPU_HSA_READONLY = 0x00200000,
   SHF_AMDGPU_HSA_CODE = 0x00400000,
@@ -1030,6 +1033,7 @@ enum {
 
   PT_OPENBSD_RANDOMIZE = 0x65a3dbe6, // Fill with random data.
   PT_OPENBSD_WXNEEDED = 0x65a3dbe7,  // Program does W^X violations.
+  PT_OPENBSD_BOOTDATA = 0x65a41be6,  // Section for boot arguments.
 
   // ARM program header types.
   PT_ARM_ARCHEXT = 0x70000000, // Platform architecture compatibility info

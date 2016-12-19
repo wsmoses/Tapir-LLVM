@@ -21,6 +21,7 @@
 #include "llvm/MC/SectionKind.h"
 #include "llvm/Support/Allocator.h"
 #include "llvm/Support/Compiler.h"
+#include "llvm/Support/Dwarf.h"
 #include "llvm/Support/raw_ostream.h"
 #include <map>
 #include <tuple>
@@ -82,9 +83,9 @@ namespace llvm {
     /// Bindings of names to symbols.
     SymbolTable Symbols;
 
-    /// ELF sections can have a corresponding symbol. This maps one to the
+    /// Sections can have a corresponding symbol. This maps one to the
     /// other.
-    DenseMap<const MCSectionELF *, MCSymbolELF *> SectionSymbols;
+    DenseMap<const MCSection *, MCSymbol *> SectionSymbols;
 
     /// A mapping from a local label number and an instance count to a symbol.
     /// For example, in the assembly
@@ -301,6 +302,9 @@ namespace llvm {
 
     /// Get the symbol for \p Name, or null.
     MCSymbol *lookupSymbol(const Twine &Name) const;
+
+    /// Set value for a symbol.
+    void setSymbolValue(MCStreamer &Streamer, StringRef Sym, uint64_t Val);
 
     /// getSymbols - Get a reference for the symbol table for clients that
     /// want to, for example, iterate over all symbols. 'const' because we
@@ -523,7 +527,10 @@ namespace llvm {
 
     void setDwarfDebugProducer(StringRef S) { DwarfDebugProducer = S; }
     StringRef getDwarfDebugProducer() { return DwarfDebugProducer; }
-
+    dwarf::DwarfFormat getDwarfFormat() const {
+      // TODO: Support DWARF64
+      return dwarf::DWARF32;
+    }
     void setDwarfVersion(uint16_t v) { DwarfVersion = v; }
     uint16_t getDwarfVersion() const { return DwarfVersion; }
 

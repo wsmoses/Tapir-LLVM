@@ -16,14 +16,15 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "llvm/CodeGen/SelectionDAG.h"
 #include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/SmallBitVector.h"
 #include "llvm/ADT/SmallPtrSet.h"
+#include "llvm/ADT/SmallSet.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/Analysis/AliasAnalysis.h"
 #include "llvm/CodeGen/MachineFrameInfo.h"
 #include "llvm/CodeGen/MachineFunction.h"
+#include "llvm/CodeGen/SelectionDAG.h"
 #include "llvm/CodeGen/SelectionDAGTargetInfo.h"
 #include "llvm/IR/DataLayout.h"
 #include "llvm/IR/DerivedTypes.h"
@@ -326,7 +327,7 @@ namespace {
 
     SDValue visitFADDForFMACombine(SDNode *N);
     SDValue visitFSUBForFMACombine(SDNode *N);
-    SDValue visitFMULForFMACombine(SDNode *N);
+    SDValue visitFMULForFMADistributiveCombine(SDNode *N);
 
     SDValue XformToShuffleWithZero(SDNode *N);
     SDValue ReassociateOps(unsigned Opc, const SDLoc &DL, SDValue LHS,
@@ -341,6 +342,8 @@ namespace {
     SDValue SimplifySelectCC(const SDLoc &DL, SDValue N0, SDValue N1,
                              SDValue N2, SDValue N3, ISD::CondCode CC,
                              bool NotExtCompare = false);
+    SDValue foldSelectCCToShiftAnd(const SDLoc &DL, SDValue N0, SDValue N1,
+                                   SDValue N2, SDValue N3, ISD::CondCode CC);
     SDValue SimplifySetCC(EVT VT, SDValue N0, SDValue N1, ISD::CondCode Cond,
                           const SDLoc &DL, bool foldBooleans = true);
 
@@ -357,6 +360,7 @@ namespace {
     SDValue BuildSDIV(SDNode *N);
     SDValue BuildSDIVPow2(SDNode *N);
     SDValue BuildUDIV(SDNode *N);
+    SDValue BuildLogBase2(SDValue Op, const SDLoc &DL);
     SDValue BuildReciprocalEstimate(SDValue Op, SDNodeFlags *Flags);
     SDValue buildRsqrtEstimate(SDValue Op, SDNodeFlags *Flags);
     SDValue buildSqrtEstimate(SDValue Op, SDNodeFlags *Flags);
@@ -2374,8 +2378,8 @@ SDValue DAGCombiner::visitSDIV(SDNode *N) {
       return Op;
 
   // sdiv, srem -> sdivrem
-  // If the divisor is constant, then return DIVREM only if isIntDivCheap() is true.
-  // Otherwise, we break the simplification logic in visitREM().
+  // If the divisor is constant, then return DIVREM only if isIntDivCheap() is
+  // true.  Otherwise, we break the simplification logic in visitREM().
   if (!N1C || TLI.isIntDivCheap(N->getValueType(0), Attr))
     if (SDValue DivRem = useDivRem(N))
         return DivRem;
@@ -2411,24 +2415,31 @@ SDValue DAGCombiner::visitUDIV(SDNode *N) {
       return Folded;
 
   // fold (udiv x, (1 << c)) -> x >>u c
-  if (N1C && !N1C->isOpaque() && N1C->getAPIntValue().isPowerOf2())
-    return DAG.getNode(ISD::SRL, DL, VT, N0,
-                       DAG.getConstant(N1C->getAPIntValue().logBase2(), DL,
-                                       getShiftAmountTy(N0.getValueType())));
+  if (isConstantOrConstantVector(N1, /*NoOpaques*/ true) &&
+      DAG.isKnownToBeAPowerOfTwo(N1)) {
+    SDValue LogBase2 = BuildLogBase2(N1, DL);
+    AddToWorklist(LogBase2.getNode());
+
+    EVT ShiftVT = getShiftAmountTy(N0.getValueType());
+    SDValue Trunc = DAG.getZExtOrTrunc(LogBase2, DL, ShiftVT);
+    AddToWorklist(Trunc.getNode());
+    return DAG.getNode(ISD::SRL, DL, VT, N0, Trunc);
+  }
 
   // fold (udiv x, (shl c, y)) -> x >>u (log2(c)+y) iff c is power of 2
   if (N1.getOpcode() == ISD::SHL) {
-    if (ConstantSDNode *SHC = isConstOrConstSplat(N1.getOperand(0))) {
-      if (!SHC->isOpaque() && SHC->getAPIntValue().isPowerOf2()) {
-        EVT ADDVT = N1.getOperand(1).getValueType();
-        SDValue Add = DAG.getNode(ISD::ADD, DL, ADDVT,
-                                  N1.getOperand(1),
-                                  DAG.getConstant(SHC->getAPIntValue()
-                                                                  .logBase2(),
-                                                  DL, ADDVT));
-        AddToWorklist(Add.getNode());
-        return DAG.getNode(ISD::SRL, DL, VT, N0, Add);
-      }
+    SDValue N10 = N1.getOperand(0);
+    if (isConstantOrConstantVector(N10, /*NoOpaques*/ true) &&
+        DAG.isKnownToBeAPowerOfTwo(N10)) {
+      SDValue LogBase2 = BuildLogBase2(N10, DL);
+      AddToWorklist(LogBase2.getNode());
+
+      EVT ADDVT = N1.getOperand(1).getValueType();
+      SDValue Trunc = DAG.getZExtOrTrunc(LogBase2, DL, ADDVT);
+      AddToWorklist(Trunc.getNode());
+      SDValue Add = DAG.getNode(ISD::ADD, DL, ADDVT, N1.getOperand(1), Trunc);
+      AddToWorklist(Add.getNode());
+      return DAG.getNode(ISD::SRL, DL, VT, N0, Add);
     }
   }
 
@@ -2439,8 +2450,8 @@ SDValue DAGCombiner::visitUDIV(SDNode *N) {
       return Op;
 
   // sdiv, srem -> sdivrem
-  // If the divisor is constant, then return DIVREM only if isIntDivCheap() is true.
-  // Otherwise, we break the simplification logic in visitREM().
+  // If the divisor is constant, then return DIVREM only if isIntDivCheap() is
+  // true.  Otherwise, we break the simplification logic in visitREM().
   if (!N1C || TLI.isIntDivCheap(N->getValueType(0), Attr))
     if (SDValue DivRem = useDivRem(N))
         return DivRem;
@@ -2478,21 +2489,21 @@ SDValue DAGCombiner::visitREM(SDNode *N) {
       return DAG.getNode(ISD::UREM, DL, VT, N0, N1);
   } else {
     // fold (urem x, pow2) -> (and x, pow2-1)
-    if (N1C && !N1C->isNullValue() && !N1C->isOpaque() &&
-        N1C->getAPIntValue().isPowerOf2()) {
-      return DAG.getNode(ISD::AND, DL, VT, N0,
-                         DAG.getConstant(N1C->getAPIntValue() - 1, DL, VT));
+    if (DAG.isKnownToBeAPowerOfTwo(N1)) {
+      APInt NegOne = APInt::getAllOnesValue(VT.getScalarSizeInBits());
+      SDValue Add =
+          DAG.getNode(ISD::ADD, DL, VT, N1, DAG.getConstant(NegOne, DL, VT));
+      AddToWorklist(Add.getNode());
+      return DAG.getNode(ISD::AND, DL, VT, N0, Add);
     }
     // fold (urem x, (shl pow2, y)) -> (and x, (add (shl pow2, y), -1))
-    if (N1.getOpcode() == ISD::SHL) {
-      ConstantSDNode *SHC = isConstOrConstSplat(N1.getOperand(0));
-      if (SHC && !SHC->isOpaque() && SHC->getAPIntValue().isPowerOf2()) {
-        APInt NegOne = APInt::getAllOnesValue(VT.getScalarSizeInBits());
-        SDValue Add =
-            DAG.getNode(ISD::ADD, DL, VT, N1, DAG.getConstant(NegOne, DL, VT));
-        AddToWorklist(Add.getNode());
-        return DAG.getNode(ISD::AND, DL, VT, N0, Add);
-      }
+    if (N1.getOpcode() == ISD::SHL &&
+        DAG.isKnownToBeAPowerOfTwo(N1.getOperand(0))) {
+      APInt NegOne = APInt::getAllOnesValue(VT.getScalarSizeInBits());
+      SDValue Add =
+          DAG.getNode(ISD::ADD, DL, VT, N1, DAG.getConstant(NegOne, DL, VT));
+      AddToWorklist(Add.getNode());
+      return DAG.getNode(ISD::AND, DL, VT, N0, Add);
     }
   }
 
@@ -4233,6 +4244,110 @@ SDNode *DAGCombiner::MatchRotate(SDValue LHS, SDValue RHS, const SDLoc &DL) {
 
   return nullptr;
 }
+
+namespace {
+/// Helper struct to parse and store a memory address as base + index + offset.
+/// We ignore sign extensions when it is safe to do so.
+/// The following two expressions are not equivalent. To differentiate we need
+/// to store whether there was a sign extension involved in the index
+/// computation.
+///  (load (i64 add (i64 copyfromreg %c)
+///                 (i64 signextend (add (i8 load %index)
+///                                      (i8 1))))
+/// vs
+///
+/// (load (i64 add (i64 copyfromreg %c)
+///                (i64 signextend (i32 add (i32 signextend (i8 load %index))
+///                                         (i32 1)))))
+struct BaseIndexOffset {
+  SDValue Base;
+  SDValue Index;
+  int64_t Offset;
+  bool IsIndexSignExt;
+
+  BaseIndexOffset() : Offset(0), IsIndexSignExt(false) {}
+
+  BaseIndexOffset(SDValue Base, SDValue Index, int64_t Offset,
+                  bool IsIndexSignExt) :
+    Base(Base), Index(Index), Offset(Offset), IsIndexSignExt(IsIndexSignExt) {}
+
+  bool equalBaseIndex(const BaseIndexOffset &Other) {
+    return Other.Base == Base && Other.Index == Index &&
+      Other.IsIndexSignExt == IsIndexSignExt;
+  }
+
+  /// Parses tree in Ptr for base, index, offset addresses.
+  static BaseIndexOffset match(SDValue Ptr, SelectionDAG &DAG) {
+    bool IsIndexSignExt = false;
+
+    // Split up a folded GlobalAddress+Offset into its component parts.
+    if (GlobalAddressSDNode *GA = dyn_cast<GlobalAddressSDNode>(Ptr))
+      if (GA->getOpcode() == ISD::GlobalAddress && GA->getOffset() != 0) {
+        return BaseIndexOffset(DAG.getGlobalAddress(GA->getGlobal(),
+                                                    SDLoc(GA),
+                                                    GA->getValueType(0),
+                                                    /*Offset=*/0,
+                                                    /*isTargetGA=*/false,
+                                                    GA->getTargetFlags()),
+                               SDValue(),
+                               GA->getOffset(),
+                               IsIndexSignExt);
+      }
+
+    // We only can pattern match BASE + INDEX + OFFSET. If Ptr is not an ADD
+    // instruction, then it could be just the BASE or everything else we don't
+    // know how to handle. Just use Ptr as BASE and give up.
+    if (Ptr->getOpcode() != ISD::ADD)
+      return BaseIndexOffset(Ptr, SDValue(), 0, IsIndexSignExt);
+
+    // We know that we have at least an ADD instruction. Try to pattern match
+    // the simple case of BASE + OFFSET.
+    if (isa<ConstantSDNode>(Ptr->getOperand(1))) {
+      int64_t Offset = cast<ConstantSDNode>(Ptr->getOperand(1))->getSExtValue();
+      return  BaseIndexOffset(Ptr->getOperand(0), SDValue(), Offset,
+                              IsIndexSignExt);
+    }
+
+    // Inside a loop the current BASE pointer is calculated using an ADD and a
+    // MUL instruction. In this case Ptr is the actual BASE pointer.
+    // (i64 add (i64 %array_ptr)
+    //          (i64 mul (i64 %induction_var)
+    //                   (i64 %element_size)))
+    if (Ptr->getOperand(1)->getOpcode() == ISD::MUL)
+      return BaseIndexOffset(Ptr, SDValue(), 0, IsIndexSignExt);
+
+    // Look at Base + Index + Offset cases.
+    SDValue Base = Ptr->getOperand(0);
+    SDValue IndexOffset = Ptr->getOperand(1);
+
+    // Skip signextends.
+    if (IndexOffset->getOpcode() == ISD::SIGN_EXTEND) {
+      IndexOffset = IndexOffset->getOperand(0);
+      IsIndexSignExt = true;
+    }
+
+    // Either the case of Base + Index (no offset) or something else.
+    if (IndexOffset->getOpcode() != ISD::ADD)
+      return BaseIndexOffset(Base, IndexOffset, 0, IsIndexSignExt);
+
+    // Now we have the case of Base + Index + offset.
+    SDValue Index = IndexOffset->getOperand(0);
+    SDValue Offset = IndexOffset->getOperand(1);
+
+    if (!isa<ConstantSDNode>(Offset))
+      return BaseIndexOffset(Ptr, SDValue(), 0, IsIndexSignExt);
+
+    // Ignore signextends.
+    if (Index->getOpcode() == ISD::SIGN_EXTEND) {
+      Index = Index->getOperand(0);
+      IsIndexSignExt = true;
+    } else IsIndexSignExt = false;
+
+    int64_t Off = cast<ConstantSDNode>(Offset)->getSExtValue();
+    return BaseIndexOffset(Base, Index, Off, IsIndexSignExt);
+  }
+};
+} // namespace
 
 SDValue DAGCombiner::visitXOR(SDNode *N) {
   SDValue N0 = N->getOperand(0);
@@ -7135,6 +7250,15 @@ SDValue DAGCombiner::visitSIGN_EXTEND_INREG(SDNode *N) {
       return DAG.getNode(ISD::SIGN_EXTEND, SDLoc(N), VT, N00, N1);
   }
 
+  // fold (sext_in_reg (zext x)) -> (sext x)
+  // iff we are extending the source sign bit.
+  if (N0.getOpcode() == ISD::ZERO_EXTEND) {
+    SDValue N00 = N0.getOperand(0);
+    if (N00.getScalarValueSizeInBits() == EVTBits &&
+        (!LegalOperations || TLI.isOperationLegal(ISD::SIGN_EXTEND, VT)))
+      return DAG.getNode(ISD::SIGN_EXTEND, SDLoc(N), VT, N00, N1);
+  }
+
   // fold (sext_in_reg x) -> (zext_in_reg x) if the sign bit is known zero.
   if (DAG.MaskedValueIsZero(N0, APInt::getBitsSet(VTBits, EVTBits-1, EVTBits)))
     return DAG.getZeroExtendInReg(N0, SDLoc(N), EVT.getScalarType());
@@ -8378,8 +8502,10 @@ SDValue DAGCombiner::visitFSUBForFMACombine(SDNode *N) {
   return SDValue();
 }
 
-/// Try to perform FMA combining on a given FMUL node.
-SDValue DAGCombiner::visitFMULForFMACombine(SDNode *N) {
+/// Try to perform FMA combining on a given FMUL node based on the distributive
+/// law x * (y + 1) = x * y + x and variants thereof (commuted versions,
+/// subtraction instead of addition).
+SDValue DAGCombiner::visitFMULForFMADistributiveCombine(SDNode *N) {
   SDValue N0 = N->getOperand(0);
   SDValue N1 = N->getOperand(1);
   EVT VT = N->getValueType(0);
@@ -8388,16 +8514,22 @@ SDValue DAGCombiner::visitFMULForFMACombine(SDNode *N) {
   assert(N->getOpcode() == ISD::FMUL && "Expected FMUL Operation");
 
   const TargetOptions &Options = DAG.getTarget().Options;
-  bool AllowFusion =
-      (Options.AllowFPOpFusion == FPOpFusion::Fast || Options.UnsafeFPMath);
 
-  // Floating-point multiply-add with intermediate rounding.
-  bool HasFMAD = (LegalOperations && TLI.isOperationLegal(ISD::FMAD, VT));
+  // The transforms below are incorrect when x == 0 and y == inf, because the
+  // intermediate multiplication produces a nan.
+  if (!Options.NoInfsFPMath)
+    return SDValue();
 
   // Floating-point multiply-add without intermediate rounding.
   bool HasFMA =
-      AllowFusion && TLI.isFMAFasterThanFMulAndFAdd(VT) &&
+      (Options.AllowFPOpFusion == FPOpFusion::Fast || Options.UnsafeFPMath) &&
+      TLI.isFMAFasterThanFMulAndFAdd(VT) &&
       (!LegalOperations || TLI.isOperationLegalOrCustom(ISD::FMA, VT));
+
+  // Floating-point multiply-add with intermediate rounding. This can result
+  // in a less precise result due to the changed rounding order.
+  bool HasFMAD = Options.UnsafeFPMath &&
+                 (LegalOperations && TLI.isOperationLegal(ISD::FMAD, VT));
 
   // No valid opcode, do not combine.
   if (!HasFMAD && !HasFMA)
@@ -8774,7 +8906,7 @@ SDValue DAGCombiner::visitFMUL(SDNode *N) {
   }
 
   // FMUL -> FMA combines:
-  if (SDValue Fused = visitFMULForFMACombine(N)) {
+  if (SDValue Fused = visitFMULForFMADistributiveCombine(N)) {
     AddToWorklist(Fused.getNode());
     return Fused;
   }
@@ -8883,7 +9015,7 @@ SDValue DAGCombiner::visitFMA(SDNode *N) {
 // Combine multiple FDIVs with the same divisor into multiple FMULs by the
 // reciprocal.
 // E.g., (a / D; b / D;) -> (recip = 1.0 / D; a * recip; b * recip)
-// Notice that this is not always beneficial. One reason is different target
+// Notice that this is not always beneficial. One reason is different targets
 // may have different costs for FDIV and FMUL, so sometimes the cost of two
 // FDIVs may be lower than the cost of one FDIV and two FMULs. Another reason
 // is the critical path is increased from "one FDIV" to "one FDIV + one FMUL".
@@ -11197,110 +11329,6 @@ SDValue DAGCombiner::TransformFPLoadStorePair(SDNode *N) {
 
   return SDValue();
 }
-
-namespace {
-/// Helper struct to parse and store a memory address as base + index + offset.
-/// We ignore sign extensions when it is safe to do so.
-/// The following two expressions are not equivalent. To differentiate we need
-/// to store whether there was a sign extension involved in the index
-/// computation.
-///  (load (i64 add (i64 copyfromreg %c)
-///                 (i64 signextend (add (i8 load %index)
-///                                      (i8 1))))
-/// vs
-///
-/// (load (i64 add (i64 copyfromreg %c)
-///                (i64 signextend (i32 add (i32 signextend (i8 load %index))
-///                                         (i32 1)))))
-struct BaseIndexOffset {
-  SDValue Base;
-  SDValue Index;
-  int64_t Offset;
-  bool IsIndexSignExt;
-
-  BaseIndexOffset() : Offset(0), IsIndexSignExt(false) {}
-
-  BaseIndexOffset(SDValue Base, SDValue Index, int64_t Offset,
-                  bool IsIndexSignExt) :
-    Base(Base), Index(Index), Offset(Offset), IsIndexSignExt(IsIndexSignExt) {}
-
-  bool equalBaseIndex(const BaseIndexOffset &Other) {
-    return Other.Base == Base && Other.Index == Index &&
-      Other.IsIndexSignExt == IsIndexSignExt;
-  }
-
-  /// Parses tree in Ptr for base, index, offset addresses.
-  static BaseIndexOffset match(SDValue Ptr, SelectionDAG &DAG) {
-    bool IsIndexSignExt = false;
-
-    // Split up a folded GlobalAddress+Offset into its component parts.
-    if (GlobalAddressSDNode *GA = dyn_cast<GlobalAddressSDNode>(Ptr))
-      if (GA->getOpcode() == ISD::GlobalAddress && GA->getOffset() != 0) {
-        return BaseIndexOffset(DAG.getGlobalAddress(GA->getGlobal(),
-                                                    SDLoc(GA),
-                                                    GA->getValueType(0),
-                                                    /*Offset=*/0,
-                                                    /*isTargetGA=*/false,
-                                                    GA->getTargetFlags()),
-                               SDValue(),
-                               GA->getOffset(),
-                               IsIndexSignExt);
-      }
-
-    // We only can pattern match BASE + INDEX + OFFSET. If Ptr is not an ADD
-    // instruction, then it could be just the BASE or everything else we don't
-    // know how to handle. Just use Ptr as BASE and give up.
-    if (Ptr->getOpcode() != ISD::ADD)
-      return BaseIndexOffset(Ptr, SDValue(), 0, IsIndexSignExt);
-
-    // We know that we have at least an ADD instruction. Try to pattern match
-    // the simple case of BASE + OFFSET.
-    if (isa<ConstantSDNode>(Ptr->getOperand(1))) {
-      int64_t Offset = cast<ConstantSDNode>(Ptr->getOperand(1))->getSExtValue();
-      return  BaseIndexOffset(Ptr->getOperand(0), SDValue(), Offset,
-                              IsIndexSignExt);
-    }
-
-    // Inside a loop the current BASE pointer is calculated using an ADD and a
-    // MUL instruction. In this case Ptr is the actual BASE pointer.
-    // (i64 add (i64 %array_ptr)
-    //          (i64 mul (i64 %induction_var)
-    //                   (i64 %element_size)))
-    if (Ptr->getOperand(1)->getOpcode() == ISD::MUL)
-      return BaseIndexOffset(Ptr, SDValue(), 0, IsIndexSignExt);
-
-    // Look at Base + Index + Offset cases.
-    SDValue Base = Ptr->getOperand(0);
-    SDValue IndexOffset = Ptr->getOperand(1);
-
-    // Skip signextends.
-    if (IndexOffset->getOpcode() == ISD::SIGN_EXTEND) {
-      IndexOffset = IndexOffset->getOperand(0);
-      IsIndexSignExt = true;
-    }
-
-    // Either the case of Base + Index (no offset) or something else.
-    if (IndexOffset->getOpcode() != ISD::ADD)
-      return BaseIndexOffset(Base, IndexOffset, 0, IsIndexSignExt);
-
-    // Now we have the case of Base + Index + offset.
-    SDValue Index = IndexOffset->getOperand(0);
-    SDValue Offset = IndexOffset->getOperand(1);
-
-    if (!isa<ConstantSDNode>(Offset))
-      return BaseIndexOffset(Ptr, SDValue(), 0, IsIndexSignExt);
-
-    // Ignore signextends.
-    if (Index->getOpcode() == ISD::SIGN_EXTEND) {
-      Index = Index->getOperand(0);
-      IsIndexSignExt = true;
-    } else IsIndexSignExt = false;
-
-    int64_t Off = cast<ConstantSDNode>(Offset)->getSExtValue();
-    return BaseIndexOffset(Base, Index, Off, IsIndexSignExt);
-  }
-};
-} // namespace
 
 // This is a helper function for visitMUL to check the profitability
 // of folding (mul (add x, c1), c2) -> (add (mul x, c2), c1*c2).
@@ -13766,16 +13794,20 @@ static SDValue partitionShuffleOfConcats(SDNode *N, SelectionDAG &DAG) {
 
 // Attempt to combine a shuffle of 2 inputs of 'scalar sources' -
 // BUILD_VECTOR or SCALAR_TO_VECTOR into a single BUILD_VECTOR.
-// This combine is done in the following cases:
-// 1. Both N0,N1 are BUILD_VECTOR's composed of constants or undefs.
-// 2. Only one of N0,N1 is a BUILD_VECTOR composed of constants or undefs -
-//    Combine iff that node is ALL_ZEROS. We prefer not to combine a
-//    BUILD_VECTOR of all constants to allow efficient materialization of
-//    constant vectors, but the ALL_ZEROS is an exception because
-//    zero-extension matching seems to rely on having BUILD_VECTOR nodes with
-//    zero padding between elements. FIXME: Eliminate this exception for
-//    ALL_ZEROS constant vectors.
-// 3. Neither N0,N1 are composed of only constants.
+//
+// SHUFFLE(BUILD_VECTOR(), BUILD_VECTOR()) -> BUILD_VECTOR() is always
+// a simplification in some sense, but it isn't appropriate in general: some
+// BUILD_VECTORs are substantially cheaper than others. The general case
+// of a BUILD_VECTOR requires inserting each element individually (or
+// performing the equivalent in a temporary stack variable). A BUILD_VECTOR of
+// all constants is a single constant pool load.  A BUILD_VECTOR where each
+// element is identical is a splat.  A BUILD_VECTOR where most of the operands
+// are undef lowers to a small number of element insertions.
+//
+// To deal with this, we currently use a bunch of mostly arbitrary heuristics.
+// We don't fold shuffles where one side is a non-zero constant, and we don't
+// fold shuffles if the resulting BUILD_VECTOR would have duplicate
+// non-constant operands. This seems to work out reasonably well in practice.
 static SDValue combineShuffleOfScalars(ShuffleVectorSDNode *SVN,
                                        SelectionDAG &DAG,
                                        const TargetLowering &TLI) {
@@ -13798,6 +13830,7 @@ static SDValue combineShuffleOfScalars(ShuffleVectorSDNode *SVN,
   }
 
   SmallVector<SDValue, 8> Ops;
+  SmallSet<SDValue, 16> DuplicateOps;
   for (int M : SVN->getMask()) {
     SDValue Op = DAG.getUNDEF(VT.getScalarType());
     if (M >= 0) {
@@ -13813,6 +13846,14 @@ static SDValue combineShuffleOfScalars(ShuffleVectorSDNode *SVN,
         return SDValue();
       }
     }
+
+    // Don't duplicate a non-constant BUILD_VECTOR operand; semantically, this is
+    // fine, but it's likely to generate low-quality code if the target can't
+    // reconstruct an appropriate shuffle.
+    if (!Op.isUndef() && !isa<ConstantSDNode>(Op) && !isa<ConstantFPSDNode>(Op))
+      if (!DuplicateOps.insert(Op).second)
+        return SDValue();
+
     Ops.push_back(Op);
   }
   // BUILD_VECTOR requires all inputs to be of the same type, find the
@@ -14053,6 +14094,11 @@ SDValue DAGCombiner::visitVECTOR_SHUFFLE(SDNode *N) {
   if (N0.getOpcode() == ISD::VECTOR_SHUFFLE && N->isOnlyUserOf(N0.getNode()) &&
       Level < AfterLegalizeDAG && TLI.isTypeLegal(VT)) {
     ShuffleVectorSDNode *OtherSV = cast<ShuffleVectorSDNode>(N0);
+
+    // Don't try to fold splats; they're likely to simplify somehow, or they
+    // might be free.
+    if (OtherSV->isSplat())
+      return SDValue();
 
     // The incoming shuffle must be of the same type as the result of the
     // current shuffle.
@@ -14564,6 +14610,73 @@ bool DAGCombiner::SimplifySelectOps(SDNode *TheSelect, SDValue LHS,
   return false;
 }
 
+/// Try to fold an expression of the form (N0 cond N1) ? N2 : N3 to a shift and
+/// bitwise 'and'.
+SDValue DAGCombiner::foldSelectCCToShiftAnd(const SDLoc &DL, SDValue N0,
+                                            SDValue N1, SDValue N2, SDValue N3,
+                                            ISD::CondCode CC) {
+  // If this is a select where the false operand is zero and the compare is a
+  // check of the sign bit, see if we can perform the "gzip trick":
+  // select_cc setlt X, 0, A, 0 -> and (sra X, size(X)-1), A
+  // select_cc setgt X, 0, A, 0 -> and (not (sra X, size(X)-1)), A
+  EVT XType = N0.getValueType();
+  EVT AType = N2.getValueType();
+  if (!isNullConstant(N3) || !XType.bitsGE(AType))
+    return SDValue();
+
+  // If the comparison is testing for a positive value, we have to invert
+  // the sign bit mask, so only do that transform if the target has a bitwise
+  // 'and not' instruction (the invert is free).
+  if (CC == ISD::SETGT && TLI.hasAndNot(N2)) {
+    // (X > -1) ? A : 0
+    // (X >  0) ? X : 0 <-- This is canonical signed max.
+    if (!(isAllOnesConstant(N1) || (isNullConstant(N1) && N0 == N2)))
+      return SDValue();
+  } else if (CC == ISD::SETLT) {
+    // (X <  0) ? A : 0
+    // (X <  1) ? X : 0 <-- This is un-canonicalized signed min.
+    if (!(isNullConstant(N1) || (isOneConstant(N1) && N0 == N2)))
+      return SDValue();
+  } else {
+    return SDValue();
+  }
+
+  // and (sra X, size(X)-1), A -> "and (srl X, C2), A" iff A is a single-bit
+  // constant.
+  EVT ShiftAmtTy = getShiftAmountTy(N0.getValueType());
+  auto *N2C = dyn_cast<ConstantSDNode>(N2.getNode());
+  if (N2C && ((N2C->getAPIntValue() & (N2C->getAPIntValue() - 1)) == 0)) {
+    unsigned ShCt = XType.getSizeInBits() - N2C->getAPIntValue().logBase2() - 1;
+    SDValue ShiftAmt = DAG.getConstant(ShCt, DL, ShiftAmtTy);
+    SDValue Shift = DAG.getNode(ISD::SRL, DL, XType, N0, ShiftAmt);
+    AddToWorklist(Shift.getNode());
+
+    if (XType.bitsGT(AType)) {
+      Shift = DAG.getNode(ISD::TRUNCATE, DL, AType, Shift);
+      AddToWorklist(Shift.getNode());
+    }
+
+    if (CC == ISD::SETGT)
+      Shift = DAG.getNOT(DL, Shift, AType);
+
+    return DAG.getNode(ISD::AND, DL, AType, Shift, N2);
+  }
+
+  SDValue ShiftAmt = DAG.getConstant(XType.getSizeInBits() - 1, DL, ShiftAmtTy);
+  SDValue Shift = DAG.getNode(ISD::SRA, DL, XType, N0, ShiftAmt);
+  AddToWorklist(Shift.getNode());
+
+  if (XType.bitsGT(AType)) {
+    Shift = DAG.getNode(ISD::TRUNCATE, DL, AType, Shift);
+    AddToWorklist(Shift.getNode());
+  }
+
+  if (CC == ISD::SETGT)
+    Shift = DAG.getNOT(DL, Shift, AType);
+
+  return DAG.getNode(ISD::AND, DL, AType, Shift, N2);
+}
+
 /// Simplify an expression of the form (N0 cond N1) ? N2 : N3
 /// where 'cond' is the comparison specified by CC.
 SDValue DAGCombiner::SimplifySelectCC(const SDLoc &DL, SDValue N0, SDValue N1,
@@ -14660,48 +14773,8 @@ SDValue DAGCombiner::SimplifySelectCC(const SDLoc &DL, SDValue N0, SDValue N1,
       }
     }
 
-  // Check to see if we can perform the "gzip trick", transforming
-  // (select_cc setlt X, 0, A, 0) -> (and (sra X, (sub size(X), 1), A)
-  if (isNullConstant(N3) && CC == ISD::SETLT &&
-      (isNullConstant(N1) ||                 // (a < 0) ? b : 0
-       (isOneConstant(N1) && N0 == N2))) {   // (a < 1) ? a : 0
-    EVT XType = N0.getValueType();
-    EVT AType = N2.getValueType();
-    if (XType.bitsGE(AType)) {
-      // and (sra X, size(X)-1, A) -> "and (srl X, C2), A" iff A is a
-      // single-bit constant.
-      if (N2C && ((N2C->getAPIntValue() & (N2C->getAPIntValue() - 1)) == 0)) {
-        unsigned ShCtV = N2C->getAPIntValue().logBase2();
-        ShCtV = XType.getSizeInBits() - ShCtV - 1;
-        SDValue ShCt = DAG.getConstant(ShCtV, SDLoc(N0),
-                                       getShiftAmountTy(N0.getValueType()));
-        SDValue Shift = DAG.getNode(ISD::SRL, SDLoc(N0),
-                                    XType, N0, ShCt);
-        AddToWorklist(Shift.getNode());
-
-        if (XType.bitsGT(AType)) {
-          Shift = DAG.getNode(ISD::TRUNCATE, DL, AType, Shift);
-          AddToWorklist(Shift.getNode());
-        }
-
-        return DAG.getNode(ISD::AND, DL, AType, Shift, N2);
-      }
-
-      SDValue Shift = DAG.getNode(ISD::SRA, SDLoc(N0),
-                                  XType, N0,
-                                  DAG.getConstant(XType.getSizeInBits() - 1,
-                                                  SDLoc(N0),
-                                         getShiftAmountTy(N0.getValueType())));
-      AddToWorklist(Shift.getNode());
-
-      if (XType.bitsGT(AType)) {
-        Shift = DAG.getNode(ISD::TRUNCATE, DL, AType, Shift);
-        AddToWorklist(Shift.getNode());
-      }
-
-      return DAG.getNode(ISD::AND, DL, AType, Shift, N2);
-    }
-  }
+  if (SDValue V = foldSelectCCToShiftAnd(DL, N0, N1, N2, N3, CC))
+    return V;
 
   // fold (select_cc seteq (and x, y), 0, 0, A) -> (and (shr (shl x)) A)
   // where y is has a single bit set.
@@ -14927,6 +15000,17 @@ SDValue DAGCombiner::BuildUDIV(SDNode *N) {
   for (SDNode *N : Built)
     AddToWorklist(N);
   return S;
+}
+
+/// Determines the LogBase2 value for a non-null input value using the
+/// transform: LogBase2(V) = (EltBits - 1) - ctlz(V).
+SDValue DAGCombiner::BuildLogBase2(SDValue V, const SDLoc &DL) {
+  EVT VT = V.getValueType();
+  unsigned EltBits = VT.getScalarSizeInBits();
+  SDValue Ctlz = DAG.getNode(ISD::CTLZ, DL, VT, V);
+  SDValue Base = DAG.getConstant(EltBits - 1, DL, VT);
+  SDValue LogBase2 = DAG.getNode(ISD::SUB, DL, VT, Base, Ctlz);
+  return LogBase2;
 }
 
 /// Newton iteration for a function: F(X) is X_{i+1} = X_i - F(X_i)/F'(X_i)

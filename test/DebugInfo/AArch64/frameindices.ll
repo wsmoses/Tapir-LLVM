@@ -5,8 +5,8 @@
 ; CHECK: DW_TAG_inlined_subroutine
 ; CHECK:    "_Z3f111A"
 ; CHECK: DW_TAG_formal_parameter
-; CHECK: DW_AT_location [DW_FORM_block1]    (<0x0b> 91 51 9d 78 08 91 4a 9d 38 88 01 )
-;  -- fbreg -47, bit-piece 120 8 , fbreg -54, bit-piece 56 136 ------^
+; CHECK: DW_AT_location [DW_FORM_block1]    (<0x0c> 93 01 91 51 93 0f 93 01 91 4a 93 07 )
+;  -- piece 0x00000001, fbreg -47, piece 0x0000000f, piece 0x00000001, fbreg -54, piece 0x00000007 ------^
 ; CHECK: DW_AT_abstract_origin {{.*}} "p1"
 ;
 ; long a;
@@ -235,15 +235,15 @@ attributes #5 = { builtin }
 !73 = !DILocation(line: 17, column: 27, scope: !31)
 !74 = !DILocalVariable(name: "p1", line: 17, arg: 1, scope: !31, file: !26, type: !4)
 !75 = distinct !DILocation(line: 22, column: 3, scope: !34)
-!76 = !DIExpression(DW_OP_bit_piece, 8, 120)
+!76 = !DIExpression(DW_OP_LLVM_fragment, 8, 120)
 !77 = !DILocation(line: 17, column: 12, scope: !31, inlinedAt: !75)
-!78 = !DIExpression(DW_OP_bit_piece, 136, 56)
+!78 = !DIExpression(DW_OP_LLVM_fragment, 136, 56)
 !79 = !DIExpression(DW_OP_deref)
 !80 = !DILocation(line: 19, column: 5, scope: !34)
 !81 = !DILocation(line: 20, column: 7, scope: !34)
 !82 = !DILocation(line: 20, column: 5, scope: !34)
-!83 = !DIExpression(DW_OP_bit_piece, 0, 8)
-!84 = !DIExpression(DW_OP_bit_piece, 128, 8)
+!83 = !DIExpression(DW_OP_LLVM_fragment, 0, 8)
+!84 = !DIExpression(DW_OP_LLVM_fragment, 128, 8)
 !85 = !DILocation(line: 13, column: 12, scope: !25, inlinedAt: !86)
 !86 = distinct !DILocation(line: 17, column: 18, scope: !31, inlinedAt: !75)
 !87 = !DILocation(line: 14, column: 37, scope: !25, inlinedAt: !86)

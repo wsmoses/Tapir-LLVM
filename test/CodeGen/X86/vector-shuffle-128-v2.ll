@@ -940,22 +940,16 @@ define <2 x double> @shuffle_v2f64_bitcast_1z(<2 x double> %a) {
 define <2 x i64> @shuffle_v2i64_bitcast_z123(<2 x i64> %x) {
 ; SSE2-LABEL: shuffle_v2i64_bitcast_z123:
 ; SSE2:       # BB#0:
-; SSE2-NEXT:    movss {{.*#+}} xmm1 = mem[0],zero,zero,zero
-; SSE2-NEXT:    movss {{.*#+}} xmm0 = xmm1[0],xmm0[1,2,3]
 ; SSE2-NEXT:    andps {{.*}}(%rip), %xmm0
 ; SSE2-NEXT:    retq
 ;
 ; SSE3-LABEL: shuffle_v2i64_bitcast_z123:
 ; SSE3:       # BB#0:
-; SSE3-NEXT:    movss {{.*#+}} xmm1 = mem[0],zero,zero,zero
-; SSE3-NEXT:    movss {{.*#+}} xmm0 = xmm1[0],xmm0[1,2,3]
 ; SSE3-NEXT:    andps {{.*}}(%rip), %xmm0
 ; SSE3-NEXT:    retq
 ;
 ; SSSE3-LABEL: shuffle_v2i64_bitcast_z123:
 ; SSSE3:       # BB#0:
-; SSSE3-NEXT:    movss {{.*#+}} xmm1 = mem[0],zero,zero,zero
-; SSSE3-NEXT:    movss {{.*#+}} xmm0 = xmm1[0],xmm0[1,2,3]
 ; SSSE3-NEXT:    andps {{.*}}(%rip), %xmm0
 ; SSSE3-NEXT:    retq
 ;
@@ -1007,12 +1001,12 @@ define <2 x i64> @insert_reg_and_zero_v2i64(i64 %a) {
 define <2 x i64> @insert_mem_and_zero_v2i64(i64* %ptr) {
 ; SSE-LABEL: insert_mem_and_zero_v2i64:
 ; SSE:       # BB#0:
-; SSE-NEXT:    movq {{.*#+}} xmm0 = mem[0],zero
+; SSE-NEXT:    movsd {{.*#+}} xmm0 = mem[0],zero
 ; SSE-NEXT:    retq
 ;
 ; AVX-LABEL: insert_mem_and_zero_v2i64:
 ; AVX:       # BB#0:
-; AVX-NEXT:    vmovq {{.*#+}} xmm0 = mem[0],zero
+; AVX-NEXT:    vmovsd {{.*#+}} xmm0 = mem[0],zero
 ; AVX-NEXT:    retq
   %a = load i64, i64* %ptr
   %v = insertelement <2 x i64> undef, i64 %a, i32 0

@@ -329,25 +329,29 @@ unsigned getMCReg(unsigned Reg, const MCSubtargetInfo &STI) {
 
 bool isSISrcOperand(const MCInstrDesc &Desc, unsigned OpNo) {
   unsigned OpType = Desc.OpInfo[OpNo].OperandType;
-
-  return OpType == AMDGPU::OPERAND_REG_IMM32_INT ||
-         OpType == AMDGPU::OPERAND_REG_IMM32_FP ||
-         OpType == AMDGPU::OPERAND_REG_INLINE_C_INT ||
-         OpType == AMDGPU::OPERAND_REG_INLINE_C_FP;
+  return OpType >= AMDGPU::OPERAND_SRC_FIRST &&
+         OpType <= AMDGPU::OPERAND_SRC_LAST;
 }
 
 bool isSISrcFPOperand(const MCInstrDesc &Desc, unsigned OpNo) {
   unsigned OpType = Desc.OpInfo[OpNo].OperandType;
-
-  return OpType == AMDGPU::OPERAND_REG_IMM32_FP ||
-         OpType == AMDGPU::OPERAND_REG_INLINE_C_FP;
+  switch (OpType) {
+  case AMDGPU::OPERAND_REG_IMM_FP32:
+  case AMDGPU::OPERAND_REG_IMM_FP64:
+  case AMDGPU::OPERAND_REG_IMM_FP16:
+  case AMDGPU::OPERAND_REG_INLINE_C_FP32:
+  case AMDGPU::OPERAND_REG_INLINE_C_FP64:
+  case AMDGPU::OPERAND_REG_INLINE_C_FP16:
+    return true;
+  default:
+    return false;
+  }
 }
 
 bool isSISrcInlinableOperand(const MCInstrDesc &Desc, unsigned OpNo) {
   unsigned OpType = Desc.OpInfo[OpNo].OperandType;
-
-  return OpType == AMDGPU::OPERAND_REG_INLINE_C_INT ||
-         OpType == AMDGPU::OPERAND_REG_INLINE_C_FP;
+  return OpType >= AMDGPU::OPERAND_REG_INLINE_C_FIRST &&
+         OpType <= AMDGPU::OPERAND_REG_INLINE_C_LAST;
 }
 
 // Avoid using MCRegisterClass::getSize, since that function will go away
@@ -392,42 +396,66 @@ unsigned getRegOperandSize(const MCRegisterInfo *MRI, const MCInstrDesc &Desc,
   return getRegBitWidth(MRI->getRegClass(RCID)) / 8;
 }
 
-bool isInlinableLiteral64(int64_t Literal, bool IsVI) {
+bool isInlinableLiteral64(int64_t Literal, bool HasInv2Pi) {
   if (Literal >= -16 && Literal <= 64)
     return true;
 
-  double D = BitsToDouble(Literal);
-
-  if (D == 0.5 || D == -0.5 ||
-      D == 1.0 || D == -1.0 ||
-      D == 2.0 || D == -2.0 ||
-      D == 4.0 || D == -4.0)
-    return true;
-
-  if (IsVI && Literal == 0x3fc45f306dc9c882)
-    return true;
-
-  return false;
+  uint64_t Val = static_cast<uint64_t>(Literal);
+  return (Val == DoubleToBits(0.0)) ||
+         (Val == DoubleToBits(1.0)) ||
+         (Val == DoubleToBits(-1.0)) ||
+         (Val == DoubleToBits(0.5)) ||
+         (Val == DoubleToBits(-0.5)) ||
+         (Val == DoubleToBits(2.0)) ||
+         (Val == DoubleToBits(-2.0)) ||
+         (Val == DoubleToBits(4.0)) ||
+         (Val == DoubleToBits(-4.0)) ||
+         (Val == 0x3fc45f306dc9c882 && HasInv2Pi);
 }
 
-bool isInlinableLiteral32(int32_t Literal, bool IsVI) {
+bool isInlinableLiteral32(int32_t Literal, bool HasInv2Pi) {
   if (Literal >= -16 && Literal <= 64)
     return true;
 
-  float F = BitsToFloat(Literal);
+  // The actual type of the operand does not seem to matter as long
+  // as the bits match one of the inline immediate values.  For example:
+  //
+  // -nan has the hexadecimal encoding of 0xfffffffe which is -2 in decimal,
+  // so it is a legal inline immediate.
+  //
+  // 1065353216 has the hexadecimal encoding 0x3f800000 which is 1.0f in
+  // floating-point, so it is a legal inline immediate.
 
-  if (F == 0.5 || F == -0.5 ||
-      F == 1.0 || F == -1.0 ||
-      F == 2.0 || F == -2.0 ||
-      F == 4.0 || F == -4.0)
-    return true;
-
-  if (IsVI && Literal == 0x3e22f983)
-    return true;
-
-  return false;
+  uint32_t Val = static_cast<uint32_t>(Literal);
+  return (Val == FloatToBits(0.0f)) ||
+         (Val == FloatToBits(1.0f)) ||
+         (Val == FloatToBits(-1.0f)) ||
+         (Val == FloatToBits(0.5f)) ||
+         (Val == FloatToBits(-0.5f)) ||
+         (Val == FloatToBits(2.0f)) ||
+         (Val == FloatToBits(-2.0f)) ||
+         (Val == FloatToBits(4.0f)) ||
+         (Val == FloatToBits(-4.0f)) ||
+         (Val == 0x3e22f983 && HasInv2Pi);
 }
 
+bool isInlinableLiteral16(int16_t Literal, bool HasInv2Pi) {
+  assert(HasInv2Pi);
+
+  if (Literal >= -16 && Literal <= 64)
+    return true;
+
+  uint16_t Val = static_cast<uint16_t>(Literal);
+  return Val == 0x3C00 || // 1.0
+         Val == 0xBC00 || // -1.0
+         Val == 0x3800 || // 0.5
+         Val == 0xB800 || // -0.5
+         Val == 0x4000 || // 2.0
+         Val == 0xC000 || // -2.0
+         Val == 0x4400 || // 4.0
+         Val == 0xC400 || // -4.0
+         Val == 0x3118;   // 1/2pi
+}
 
 } // End namespace AMDGPU
 } // End namespace llvm

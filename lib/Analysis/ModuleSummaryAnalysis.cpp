@@ -208,11 +208,6 @@ ModuleSummaryIndex llvm::buildModuleSummaryIndex(
   SmallPtrSet<GlobalValue *, 8> Used;
   // First collect those in the llvm.used set.
   collectUsedGlobalVariables(M, Used, /*CompilerUsed*/ false);
-  for (auto *V : Used) {
-    if (V->hasLocalLinkage())
-      LocalsUsed.insert(V);
-  }
-  Used.clear();
   // Next collect those in the llvm.compiler.used set.
   collectUsedGlobalVariables(M, Used, /*CompilerUsed*/ true);
   for (auto *V : Used) {
@@ -269,9 +264,7 @@ ModuleSummaryIndex llvm::buildModuleSummaryIndex(
     // Also, any values used but not defined within module level asm should
     // be listed on the llvm.used or llvm.compiler.used global and marked as
     // referenced from there.
-    // FIXME: Rename CollectAsmUndefinedRefs to something more general, as we
-    // are also using it to find the file-scope locals defined in module asm.
-    object::IRObjectFile::CollectAsmUndefinedRefs(
+    ModuleSymbolTable::CollectAsmSymbols(
         Triple(M.getTargetTriple()), M.getModuleInlineAsm(),
         [&M, &Index](StringRef Name, object::BasicSymbolRef::Flags Flags) {
           // Symbols not marked as Weak or Global are local definitions.

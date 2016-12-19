@@ -588,18 +588,6 @@ bool IfConverter::ValidTriangle(BBInfo &TrueBBI, BBInfo &FalseBBI,
   return TExit && TExit == FalseBBI.BB;
 }
 
-/// Increment \p It until it points to a non-debug instruction or to \p End.
-/// @param It Iterator to increment
-/// @param End Iterator that points to end. Will be compared to It
-/// @returns true if It == End, false otherwise.
-static inline bool skipDebugInstructionsForward(
-    MachineBasicBlock::iterator &It,
-    MachineBasicBlock::iterator &End) {
-  while (It != End && It->isDebugValue())
-    It++;
-  return It == End;
-}
-
 /// Shrink the provided inclusive range by one instruction.
 /// If the range was one instruction (\p It == \p Begin), It is not modified,
 /// but \p Empty is set to true.
@@ -611,21 +599,6 @@ static inline void shrinkInclusiveRange(
     Empty = true;
   else
     It--;
-}
-
-/// Decrement \p It until it points to a non-debug instruction or the range is
-/// empty.
-/// @param It Iterator to decrement.
-/// @param Begin Iterator that points to beginning. Will be compared to It
-/// @param Empty Set to true if the resulting range is Empty
-/// @returns the value of Empty as a convenience.
-static inline bool skipDebugInstructionsBackward(
-    MachineBasicBlock::iterator &Begin,
-    MachineBasicBlock::iterator &It,
-    bool &Empty) {
-  while (!Empty && It->isDebugValue())
-    shrinkInclusiveRange(Begin, It, Empty);
-  return Empty;
 }
 
 /// Count duplicated instructions and move the iterators to show where they
@@ -659,9 +632,11 @@ bool IfConverter::CountDuplicatedInstructions(
 
   while (TIB != TIE && FIB != FIE) {
     // Skip dbg_value instructions. These do not count.
-    if(skipDebugInstructionsForward(TIB, TIE))
+    TIB = skipDebugInstructionsForward(TIB, TIE);
+    if(TIB == TIE)
       break;
-    if(skipDebugInstructionsForward(FIB, FIE))
+    FIB = skipDebugInstructionsForward(FIB, FIE);
+    if(FIB == FIE)
       break;
     if (!TIB->isIdenticalTo(*FIB))
       break;
@@ -718,9 +693,11 @@ bool IfConverter::CountDuplicatedInstructions(
   // Count duplicate instructions at the ends of the blocks.
   while (!TEmpty && !FEmpty) {
     // Skip dbg_value instructions. These do not count.
-    if (skipDebugInstructionsBackward(TIB, TIE, TEmpty))
-      break;
-    if (skipDebugInstructionsBackward(FIB, FIE, FEmpty))
+    TIE = skipDebugInstructionsBackward(TIE, TIB);
+    FIE = skipDebugInstructionsBackward(FIE, FIB);
+    TEmpty = TIE == TIB && TIE->isDebugValue();
+    FEmpty = FIE == FIB && FIE->isDebugValue();
+    if (TEmpty || FEmpty)
       break;
     if (!TIE->isIdenticalTo(*FIE))
       break;
@@ -770,8 +747,11 @@ static void verifySameBranchInstructions(
   MachineBasicBlock::iterator E2 = std::prev(MBB2->end());
   bool Empty1 = false, Empty2 = false;
   while (!Empty1 && !Empty2) {
-    skipDebugInstructionsBackward(B1, E1, Empty1);
-    skipDebugInstructionsBackward(B2, E2, Empty2);
+    E1 = skipDebugInstructionsBackward(E1, B1);
+    E2 = skipDebugInstructionsBackward(E2, B2);
+    Empty1 = E1 == B1 && E1->isDebugValue();
+    Empty2 = E2 == B2 && E2->isDebugValue();
+
     if (Empty1 && Empty2)
       break;
 
@@ -1517,13 +1497,13 @@ bool IfConverter::IfConvertSimple(BBInfo &BBI, IfcvtKind Kind) {
 
   // Initialize liveins to the first BB. These are potentiall redefined by
   // predicated instructions.
-  Redefs.init(TRI);
+  Redefs.init(*TRI);
   Redefs.addLiveIns(CvtMBB);
   Redefs.addLiveIns(NextMBB);
 
   // Compute a set of registers which must not be killed by instructions in
   // BB1: This is everything live-in to BB2.
-  DontKill.init(TRI);
+  DontKill.init(*TRI);
   DontKill.addLiveIns(NextMBB);
 
   if (CvtMBB.pred_size() > 1) {
@@ -1621,7 +1601,7 @@ bool IfConverter::IfConvertTriangle(BBInfo &BBI, IfcvtKind Kind) {
 
   // Initialize liveins to the first BB. These are potentially redefined by
   // predicated instructions.
-  Redefs.init(TRI);
+  Redefs.init(*TRI);
   Redefs.addLiveIns(CvtMBB);
   Redefs.addLiveIns(NextMBB);
 
@@ -1785,7 +1765,7 @@ bool IfConverter::IfConvertDiamondCommon(
   // - BB1 live-out regs need implicit uses before being redefined by BB2
   //   instructions. We start with BB1 live-ins so we have the live-out regs
   //   after tracking the BB1 instructions.
-  Redefs.init(TRI);
+  Redefs.init(*TRI);
   Redefs.addLiveIns(MBB1);
   Redefs.addLiveIns(MBB2);
 
@@ -1811,7 +1791,7 @@ bool IfConverter::IfConvertDiamondCommon(
   // Compute a set of registers which must not be killed by instructions in BB1:
   // This is everything used+live in BB2 after the duplicated instructions. We
   // can compute this set by simulating liveness backwards from the end of BB2.
-  DontKill.init(TRI);
+  DontKill.init(*TRI);
   for (const MachineInstr &MI : make_range(MBB2.rbegin(), ++DI2.getReverse()))
     DontKill.stepBackward(MI);
 

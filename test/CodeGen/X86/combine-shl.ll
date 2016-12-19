@@ -107,10 +107,8 @@ define <4 x i32> @combine_vec_shl_known_zero1(<4 x i32> %x) {
 define <4 x i32> @combine_vec_shl_trunc_and(<4 x i32> %x, <4 x i64> %y) {
 ; SSE-LABEL: combine_vec_shl_trunc_and:
 ; SSE:       # BB#0:
-; SSE-NEXT:    pshufd {{.*#+}} xmm2 = xmm2[0,1,0,2]
-; SSE-NEXT:    pshufd {{.*#+}} xmm1 = xmm1[0,2,2,3]
-; SSE-NEXT:    pblendw {{.*#+}} xmm1 = xmm1[0,1,2,3],xmm2[4,5,6,7]
-; SSE-NEXT:    pand {{.*}}(%rip), %xmm1
+; SSE-NEXT:    shufps {{.*#+}} xmm1 = xmm1[0,2],xmm2[0,2]
+; SSE-NEXT:    andps {{.*}}(%rip), %xmm1
 ; SSE-NEXT:    pslld $23, %xmm1
 ; SSE-NEXT:    paddd {{.*}}(%rip), %xmm1
 ; SSE-NEXT:    cvttps2dq %xmm1, %xmm1
@@ -539,6 +537,42 @@ define <4 x i32> @combine_vec_shl_add1(<4 x i32> %x) {
 ; AVX-NEXT:    vpaddd {{.*}}(%rip), %xmm0, %xmm0
 ; AVX-NEXT:    retq
   %1 = add <4 x i32> %x, <i32 5, i32 6, i32 7, i32 8>
+  %2 = shl <4 x i32> %1, <i32 1, i32 2, i32 3, i32 4>
+  ret <4 x i32> %2
+}
+
+; FIXME: fold (shl (or x, c1), c2) -> (or (shl x, c2), c1 << c2)
+define <4 x i32> @combine_vec_shl_or0(<4 x i32> %x) {
+; SSE-LABEL: combine_vec_shl_or0:
+; SSE:       # BB#0:
+; SSE-NEXT:    por {{.*}}(%rip), %xmm0
+; SSE-NEXT:    pslld $2, %xmm0
+; SSE-NEXT:    retq
+;
+; AVX-LABEL: combine_vec_shl_or0:
+; AVX:       # BB#0:
+; AVX-NEXT:    vpbroadcastd {{.*}}(%rip), %xmm1
+; AVX-NEXT:    vpor %xmm1, %xmm0, %xmm0
+; AVX-NEXT:    vpslld $2, %xmm0, %xmm0
+; AVX-NEXT:    retq
+  %1 = or  <4 x i32> %x, <i32 5, i32 5, i32 5, i32 5>
+  %2 = shl <4 x i32> %1, <i32 2, i32 2, i32 2, i32 2>
+  ret <4 x i32> %2
+}
+
+define <4 x i32> @combine_vec_shl_or1(<4 x i32> %x) {
+; SSE-LABEL: combine_vec_shl_or1:
+; SSE:       # BB#0:
+; SSE-NEXT:    por {{.*}}(%rip), %xmm0
+; SSE-NEXT:    pmulld {{.*}}(%rip), %xmm0
+; SSE-NEXT:    retq
+;
+; AVX-LABEL: combine_vec_shl_or1:
+; AVX:       # BB#0:
+; AVX-NEXT:    vpor {{.*}}(%rip), %xmm0, %xmm0
+; AVX-NEXT:    vpsllvd {{.*}}(%rip), %xmm0, %xmm0
+; AVX-NEXT:    retq
+  %1 = or  <4 x i32> %x, <i32 5, i32 6, i32 7, i32 8>
   %2 = shl <4 x i32> %1, <i32 1, i32 2, i32 3, i32 4>
   ret <4 x i32> %2
 }

@@ -32,71 +32,7 @@ AArch64CallLowering::AArch64CallLowering(const AArch64TargetLowering &TLI)
   : CallLowering(&TLI) {
 }
 
-bool AArch64CallLowering::handleAssignments(MachineIRBuilder &MIRBuilder,
-                                            CCAssignFn *AssignFn,
-                                            ArrayRef<ArgInfo> Args,
-                                            ValueHandler &Handler) const {
-  MachineFunction &MF = MIRBuilder.getMF();
-  const Function &F = *MF.getFunction();
-
-  SmallVector<CCValAssign, 16> ArgLocs;
-  CCState CCInfo(F.getCallingConv(), F.isVarArg(), MF, ArgLocs, F.getContext());
-
-  unsigned NumArgs = Args.size();
-  for (unsigned i = 0; i != NumArgs; ++i) {
-    MVT CurVT = MVT::getVT(Args[i].Ty);
-    if (AssignFn(i, CurVT, CurVT, CCValAssign::Full, Args[i].Flags, CCInfo))
-      return false;
-  }
-
-  for (unsigned i = 0, e = Args.size(); i != e; ++i) {
-    CCValAssign &VA = ArgLocs[i];
-
-    if (VA.isRegLoc())
-      Handler.assignValueToReg(Args[i].Reg, VA.getLocReg(), VA);
-    else if (VA.isMemLoc()) {
-      unsigned Size = VA.getValVT().getSizeInBits() / 8;
-      unsigned Offset = VA.getLocMemOffset();
-      MachinePointerInfo MPO;
-      unsigned StackAddr = Handler.getStackAddress(Size, Offset, MPO);
-      Handler.assignValueToAddress(Args[i].Reg, StackAddr, Size, MPO, VA);
-    } else {
-      // FIXME: Support byvals and other weirdness
-      return false;
-    }
-  }
-  return true;
-}
-
-unsigned AArch64CallLowering::ValueHandler::extendRegister(unsigned ValReg,
-                                                           CCValAssign &VA) {
-  LLT LocTy{VA.getLocVT()};
-  switch (VA.getLocInfo()) {
-  default: break;
-  case CCValAssign::Full:
-  case CCValAssign::BCvt:
-    // FIXME: bitconverting between vector types may or may not be a
-    // nop in big-endian situations.
-    return ValReg;
-  case CCValAssign::AExt:
-    assert(!VA.getLocVT().isVector() && "unexpected vector extend");
-    // Otherwise, it's a nop.
-    return ValReg;
-  case CCValAssign::SExt: {
-    unsigned NewReg = MRI.createGenericVirtualRegister(LocTy);
-    MIRBuilder.buildSExt(NewReg, ValReg);
-    return NewReg;
-  }
-  case CCValAssign::ZExt: {
-    unsigned NewReg = MRI.createGenericVirtualRegister(LocTy);
-    MIRBuilder.buildZExt(NewReg, ValReg);
-    return NewReg;
-  }
-  }
-  llvm_unreachable("unable to extend register");
-}
-
-struct IncomingArgHandler : public AArch64CallLowering::ValueHandler {
+struct IncomingArgHandler : public CallLowering::ValueHandler {
   IncomingArgHandler(MachineIRBuilder &MIRBuilder, MachineRegisterInfo &MRI)
     : ValueHandler(MIRBuilder, MRI) {}
 
@@ -152,7 +88,7 @@ struct CallReturnHandler : public IncomingArgHandler {
   MachineInstrBuilder MIB;
 };
 
-struct OutgoingArgHandler : public AArch64CallLowering::ValueHandler {
+struct OutgoingArgHandler : public CallLowering::ValueHandler {
   OutgoingArgHandler(MachineIRBuilder &MIRBuilder, MachineRegisterInfo &MRI,
                      MachineInstrBuilder MIB)
       : ValueHandler(MIRBuilder, MRI), MIB(MIB) {}
@@ -204,8 +140,10 @@ void AArch64CallLowering::splitToValueTypes(const ArgInfo &OrigArg,
   ComputeValueVTs(TLI, DL, OrigArg.Ty, SplitVTs, &Offsets, 0);
 
   if (SplitVTs.size() == 1) {
-    // No splitting to do, just forward the input directly.
-    SplitArgs.push_back(OrigArg);
+    // No splitting to do, but we want to replace the original type (e.g. [1 x
+    // double] -> double).
+    SplitArgs.emplace_back(OrigArg.Reg, SplitVTs[0].getTypeForEVT(Ctx),
+                           OrigArg.Flags);
     return;
   }
 
@@ -234,12 +172,10 @@ bool AArch64CallLowering::lowerReturn(MachineIRBuilder &MIRBuilder,
   MachineFunction &MF = MIRBuilder.getMF();
   const Function &F = *MF.getFunction();
 
-  MachineInstrBuilder MIB = MIRBuilder.buildInstr(AArch64::RET_ReallyLR);
-  assert(MIB.getInstr() && "Unable to build a return instruction?!");
-
+  auto MIB = MIRBuilder.buildInstrNoInsert(AArch64::RET_ReallyLR);
   assert(((Val && VReg) || (!Val && !VReg)) && "Return value without a vreg");
+  bool Success = true;
   if (VReg) {
-    MIRBuilder.setInstr(*MIB.getInstr(), /* Before */ true);
     const AArch64TargetLowering &TLI = *getTLI<AArch64TargetLowering>();
     CCAssignFn *AssignFn = TLI.CCAssignFnForReturn(F.getCallingConv());
     MachineRegisterInfo &MRI = MF.getRegInfo();
@@ -255,9 +191,11 @@ bool AArch64CallLowering::lowerReturn(MachineIRBuilder &MIRBuilder,
                       });
 
     OutgoingArgHandler Handler(MIRBuilder, MRI, MIB);
-    return handleAssignments(MIRBuilder, AssignFn, SplitArgs, Handler);
+    Success = handleAssignments(MIRBuilder, AssignFn, SplitArgs, Handler);
   }
-  return true;
+
+  MIRBuilder.insertInstr(MIB);
+  return Success;
 }
 
 bool AArch64CallLowering::lowerFormalArguments(MachineIRBuilder &MIRBuilder,

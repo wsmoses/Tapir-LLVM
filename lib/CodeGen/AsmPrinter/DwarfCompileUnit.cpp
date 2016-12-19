@@ -180,7 +180,9 @@ DIE *DwarfCompileUnit::getOrCreateGlobalVariableDIE(
 
       if (Expr) {
         DIEDwarfExpression DwarfExpr(*Asm, *this, *Loc);
+        DwarfExpr.addFragmentOffset(Expr);
         DwarfExpr.AddExpression(Expr);
+        DwarfExpr.finalize();
       }
     }
 
@@ -242,7 +244,7 @@ void DwarfCompileUnit::initStmtList() {
   // is not okay to use line_table_start here.
   const TargetLoweringObjectFile &TLOF = Asm->getObjFileLowering();
   StmtListValue =
-      addSectionLabel(UnitDie, dwarf::DW_AT_stmt_list, LineTableStartSym,
+      addSectionLabel(getUnitDie(), dwarf::DW_AT_stmt_list, LineTableStartSym,
                       TLOF.getDwarfLineSection()->getBeginSymbol());
 }
 
@@ -498,8 +500,10 @@ DIE *DwarfCompileUnit::constructVariableDIEImpl(const DbgVariable &DV,
         DIELoc *Loc = new (DIEValueAllocator) DIELoc;
         DIEDwarfExpression DwarfExpr(*Asm, *this, *Loc);
         // If there is an expression, emit raw unsigned bytes.
+        DwarfExpr.addFragmentOffset(Expr);
         DwarfExpr.AddUnsignedConstant(DVInsn->getOperand(0).getImm());
         DwarfExpr.AddExpression(Expr);
+        DwarfExpr.finalize();
         addBlock(*VariableDie, dwarf::DW_AT_location, Loc);
       } else
         addConstantValue(*VariableDie, DVInsn->getOperand(0), DV.getType());
@@ -524,11 +528,13 @@ DIE *DwarfCompileUnit::constructVariableDIEImpl(const DbgVariable &DV,
     const TargetFrameLowering *TFI = Asm->MF->getSubtarget().getFrameLowering();
     int Offset = TFI->getFrameIndexReference(*Asm->MF, FI, FrameReg);
     assert(Expr != DV.getExpression().end() && "Wrong number of expressions");
+    DwarfExpr.addFragmentOffset(*Expr);
     DwarfExpr.AddMachineRegIndirect(*Asm->MF->getSubtarget().getRegisterInfo(),
                                     FrameReg, Offset);
     DwarfExpr.AddExpression(*Expr);
     ++Expr;
   }
+  DwarfExpr.finalize();
   addBlock(*VariableDie, dwarf::DW_AT_location, Loc);
 
   return VariableDie;
@@ -562,24 +568,21 @@ DIE *DwarfCompileUnit::createScopeChildrenDIE(LexicalScope *Scope,
   return ObjectPointer;
 }
 
-void DwarfCompileUnit::constructSubprogramScopeDIE(LexicalScope *Scope) {
-  assert(Scope && Scope->getScopeNode());
-  assert(!Scope->getInlinedAt());
-  assert(!Scope->isAbstractScope());
-  auto *Sub = cast<DISubprogram>(Scope->getScopeNode());
-
-  DD->getProcessedSPNodes().insert(Sub);
-
+void DwarfCompileUnit::constructSubprogramScopeDIE(const DISubprogram *Sub, LexicalScope *Scope) {
   DIE &ScopeDIE = updateSubprogramScopeDIE(Sub);
+
+  if (Scope) {
+    assert(!Scope->getInlinedAt());
+    assert(!Scope->isAbstractScope());
+    // Collect lexical scope children first.
+    // ObjectPointer might be a local (non-argument) local variable if it's a
+    // block's synthetic this pointer.
+    if (DIE *ObjectPointer = createAndAddScopeChildren(Scope, ScopeDIE))
+      addDIEEntry(ScopeDIE, dwarf::DW_AT_object_pointer, *ObjectPointer);
+  }
 
   // If this is a variadic function, add an unspecified parameter.
   DITypeRefArray FnArgs = Sub->getType()->getTypeArray();
-
-  // Collect lexical scope children first.
-  // ObjectPointer might be a local (non-argument) local variable if it's a
-  // block's synthetic this pointer.
-  if (DIE *ObjectPointer = createAndAddScopeChildren(Scope, ScopeDIE))
-    addDIEEntry(ScopeDIE, dwarf::DW_AT_object_pointer, *ObjectPointer);
 
   // If we have a single element of null, it is a function that returns void.
   // If we have more than one elements and the last one is null, it is a
@@ -672,11 +675,7 @@ void DwarfCompileUnit::finishSubprogramDefinition(const DISubprogram *SP) {
       // If this subprogram has an abstract definition, reference that
       addDIEEntry(*D, dwarf::DW_AT_abstract_origin, *AbsSPDIE);
   } else {
-    if (!D && !includeMinimalInlineScopes())
-      // Lazily construct the subprogram if we didn't see either concrete or
-      // inlined versions during codegen. (except in -gmlt ^ where we want
-      // to omit these entirely)
-      D = getOrCreateSubprogramDIE(SP);
+    assert(D || includeMinimalInlineScopes());
     if (D)
       // And attach the attributes
       applySubprogramAttributesToDefinition(SP, *D);
@@ -727,15 +726,21 @@ void DwarfCompileUnit::addVariableAddress(const DbgVariable &DV, DIE &Die,
 void DwarfCompileUnit::addAddress(DIE &Die, dwarf::Attribute Attribute,
                                   const MachineLocation &Location) {
   DIELoc *Loc = new (DIEValueAllocator) DIELoc;
+  DIEDwarfExpression Expr(*Asm, *this, *Loc);
 
   bool validReg;
   if (Location.isReg())
-    validReg = addRegisterOpPiece(*Loc, Location.getReg());
+    validReg = Expr.AddMachineReg(*Asm->MF->getSubtarget().getRegisterInfo(),
+                                  Location.getReg());
   else
-    validReg = addRegisterOffset(*Loc, Location.getReg(), Location.getOffset());
+    validReg =
+        Expr.AddMachineRegIndirect(*Asm->MF->getSubtarget().getRegisterInfo(),
+                                   Location.getReg(), Location.getOffset());
 
   if (!validReg)
     return;
+
+  Expr.finalize();
 
   // Now attach the location information to the DIE.
   addBlock(Die, Attribute, Loc);
@@ -750,9 +755,11 @@ void DwarfCompileUnit::addComplexAddress(const DbgVariable &DV, DIE &Die,
                                          const MachineLocation &Location) {
   DIELoc *Loc = new (DIEValueAllocator) DIELoc;
   DIEDwarfExpression DwarfExpr(*Asm, *this, *Loc);
-  DIExpressionCursor ExprCursor(DV.getSingleExpression());
+  const DIExpression *Expr = DV.getSingleExpression();
+  DIExpressionCursor ExprCursor(Expr);
   const TargetRegisterInfo &TRI = *Asm->MF->getSubtarget().getRegisterInfo();
   auto Reg = Location.getReg();
+  DwarfExpr.addFragmentOffset(Expr);
   bool ValidReg =
       Location.getOffset()
           ? DwarfExpr.AddMachineRegIndirect(TRI, Reg, Location.getOffset())

@@ -171,6 +171,8 @@ namespace options {
   // Note: This array will contain all plugin options which are not claimed
   // as plugin exclusive to pass to the code generator.
   static std::vector<const char *> extra;
+  // Sample profile file path
+  static std::string sample_profile;
 
   static void process_plugin_option(const char *opt_)
   {
@@ -203,7 +205,7 @@ namespace options {
       thinlto_emit_imports_files = true;
     } else if (opt.startswith("thinlto-prefix-replace=")) {
       thinlto_prefix_replace = opt.substr(strlen("thinlto-prefix-replace="));
-      if (thinlto_prefix_replace.find(";") == std::string::npos)
+      if (thinlto_prefix_replace.find(';') == std::string::npos)
         message(LDPL_FATAL, "thinlto-prefix-replace expects 'old;new' format");
     } else if (opt.startswith("cache-dir=")) {
       cache_dir = opt.substr(strlen("cache-dir="));
@@ -220,6 +222,8 @@ namespace options {
         message(LDPL_FATAL, "Invalid codegen partition level: %s", opt_ + 5);
     } else if (opt == "disable-verify") {
       DisableVerify = true;
+    } else if (opt.startswith("sample-profile=")) {
+      sample_profile= opt.substr(strlen("sample-profile="));
     } else {
       // Save this option to pass to the code generator.
       // ParseCommandLineOptions() expects argv[0] to be program name. Lazily
@@ -727,6 +731,9 @@ static std::unique_ptr<LTO> createLTO() {
                             /* UseInputModulePath */ true));
     break;
   }
+
+  if (!options::sample_profile.empty())
+    Conf.SampleProfile = options::sample_profile;
 
   return llvm::make_unique<LTO>(std::move(Conf), Backend,
                                 options::ParallelCodeGenParallelismLevel);

@@ -243,6 +243,7 @@ public:
   Instruction *visitFDiv(BinaryOperator &I);
   Value *simplifyRangeCheck(ICmpInst *Cmp0, ICmpInst *Cmp1, bool Inverted);
   Value *FoldAndOfICmps(ICmpInst *LHS, ICmpInst *RHS);
+  Value *FoldXorOfICmps(ICmpInst *LHS, ICmpInst *RHS);
   Value *FoldAndOfFCmps(FCmpInst *LHS, FCmpInst *RHS);
   Instruction *visitAnd(BinaryOperator &I);
   Value *FoldOrOfICmps(ICmpInst *LHS, ICmpInst *RHS, Instruction *CxtI);
@@ -380,6 +381,7 @@ private:
   Instruction *scalarizePHI(ExtractElementInst &EI, PHINode *PN);
   Value *EvaluateInDifferentElementOrder(Value *V, ArrayRef<int> Mask);
   Instruction *foldCastedBitwiseLogic(BinaryOperator &I);
+  Instruction *shrinkBitwiseLogic(TruncInst &Trunc);
   Instruction *optimizeBitCastFromPhi(CastInst &CI, PHINode *PN);
 
   /// Determine if a pair of casts can be replaced by a single cast.
@@ -551,6 +553,10 @@ private:
   Instruction *FoldPHIArgGEPIntoPHI(PHINode &PN);
   Instruction *FoldPHIArgLoadIntoPHI(PHINode &PN);
   Instruction *FoldPHIArgZextsIntoPHI(PHINode &PN);
+
+  /// Helper function for FoldPHIArgXIntoPHI() to get debug location for the
+  /// folded operation.
+  DebugLoc PHIArgMergedDebugLoc(PHINode &PN);
 
   Instruction *foldGEPICmp(GEPOperator *GEPLHS, Value *RHS,
                            ICmpInst::Predicate Cond, Instruction &I);

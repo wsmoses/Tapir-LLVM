@@ -587,8 +587,9 @@ PreservedAnalyses GVN::run(Function &F, FunctionAnalysisManager &AM) {
   auto &TLI = AM.getResult<TargetLibraryAnalysis>(F);
   auto &AA = AM.getResult<AAManager>(F);
   auto &MemDep = AM.getResult<MemoryDependenceAnalysis>(F);
+  auto *LI = AM.getCachedResult<LoopAnalysis>(F);
   auto &ORE = AM.getResult<OptimizationRemarkEmitterAnalysis>(F);
-  bool Changed = runImpl(F, AC, DT, TLI, AA, &MemDep, &ORE);
+  bool Changed = runImpl(F, AC, DT, TLI, AA, &MemDep, LI, &ORE);
   if (!Changed)
     return PreservedAnalyses::all();
   PreservedAnalyses PA;
@@ -1208,6 +1209,38 @@ static bool isLifetimeStart(const Instruction *Inst) {
   return false;
 }
 
+/// \brief Try to locate the three instruction involved in a missed
+/// load-elimination case that is due to an intervening store.
+static void reportMayClobberedLoad(LoadInst *LI, MemDepResult DepInfo,
+                                   DominatorTree *DT,
+                                   OptimizationRemarkEmitter *ORE) {
+  using namespace ore;
+  User *OtherAccess = nullptr;
+
+  OptimizationRemarkMissed R(DEBUG_TYPE, "LoadClobbered", LI);
+  R << "load of type " << NV("Type", LI->getType()) << " not eliminated"
+    << setExtraArgs();
+
+  for (auto *U : LI->getPointerOperand()->users())
+    if (U != LI && (isa<LoadInst>(U) || isa<StoreInst>(U)) &&
+        DT->dominates(cast<Instruction>(U), LI)) {
+      // FIXME: for now give up if there are multiple memory accesses that
+      // dominate the load.  We need further analysis to decide which one is
+      // that we're forwarding from.
+      if (OtherAccess)
+        OtherAccess = nullptr;
+      else
+        OtherAccess = U;
+    }
+
+  if (OtherAccess)
+    R << " in favor of " << NV("OtherAccess", OtherAccess);
+
+  R << " because it is clobbered by " << NV("ClobberedBy", DepInfo.getInst());
+
+  ORE->emit(R);
+}
+
 bool GVN::AnalyzeLoadAvailability(LoadInst *LI, MemDepResult DepInfo,
                                   Value *Address, AvailableValue &Res) {
 
@@ -1272,6 +1305,10 @@ bool GVN::AnalyzeLoadAvailability(LoadInst *LI, MemDepResult DepInfo,
       Instruction *I = DepInfo.getInst();
       dbgs() << " is clobbered by " << *I << '\n';
     );
+
+    if (ORE->allowExtraAnalysis())
+      reportMayClobberedLoad(LI, DepInfo, DT, ORE);
+
     return false;
   }
   assert(DepInfo.isDef() && "follows from above");
@@ -1681,7 +1718,10 @@ bool GVN::processNonLocalLoad(LoadInst *LI) {
     if (isa<PHINode>(V))
       V->takeName(LI);
     if (Instruction *I = dyn_cast<Instruction>(V))
-      if (LI->getDebugLoc())
+      // If instruction I has debug info, then we should not update it.
+      // Also, if I has a null DebugLoc, then it is still potentially incorrect
+      // to propagate LI's DebugLoc because LI may not post-dominate I.
+      if (LI->getDebugLoc() && ValuesPerBlock.size() != 1)
         I->setDebugLoc(LI->getDebugLoc());
     if (V->getType()->getScalarType()->isPointerTy())
       MD->invalidateCachedPointerInfo(V);
@@ -2213,7 +2253,7 @@ bool GVN::processInstruction(Instruction *I) {
 
 bool GVN::runImpl(Function &F, AssumptionCache &RunAC, DominatorTree &RunDT,
                   const TargetLibraryInfo &RunTLI, AAResults &RunAA,
-                  MemoryDependenceResults *RunMD,
+                  MemoryDependenceResults *RunMD, LoopInfo *LI,
                   OptimizationRemarkEmitter *RunORE) {
   AC = &RunAC;
   DT = &RunDT;
@@ -2232,9 +2272,9 @@ bool GVN::runImpl(Function &F, AssumptionCache &RunAC, DominatorTree &RunDT,
   for (Function::iterator FI = F.begin(), FE = F.end(); FI != FE; ) {
     BasicBlock *BB = &*FI++;
 
-    bool removedBlock =
-        MergeBlockIntoPredecessor(BB, DT, /* LoopInfo */ nullptr, MD);
-    if (removedBlock) ++NumGVNBlocks;
+    bool removedBlock = MergeBlockIntoPredecessor(BB, DT, LI, MD);
+    if (removedBlock)
+      ++NumGVNBlocks;
 
     Changed |= removedBlock;
   }
@@ -2766,6 +2806,8 @@ public:
     if (skipFunction(F))
       return false;
 
+    auto *LIWP = getAnalysisIfAvailable<LoopInfoWrapperPass>();
+
     return Impl.runImpl(
         F, getAnalysis<AssumptionCacheTracker>().getAssumptionCache(F),
         getAnalysis<DominatorTreeWrapperPass>().getDomTree(),
@@ -2773,6 +2815,7 @@ public:
         getAnalysis<AAResultsWrapperPass>().getAAResults(),
         NoLoads ? nullptr
                 : &getAnalysis<MemoryDependenceWrapperPass>().getMemDep(),
+        LIWP ? &LIWP->getLoopInfo() : nullptr,
         &getAnalysis<OptimizationRemarkEmitterWrapperPass>().getORE());
   }
 
