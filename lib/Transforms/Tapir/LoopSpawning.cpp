@@ -1857,8 +1857,8 @@ bool LoopSpawningImpl::processLoop(Loop *L) {
     {
       DebugLoc DLoc = L->getStartLoc();
       BasicBlock *Header = L->getHeader();
-      // DACLoopSpawning DLS(L, SE, &LI, &DT, ORE);
-      CilkABILoopSpawning DLS(L, SE, &LI, &DT, ORE);
+      DACLoopSpawning DLS(L, SE, &LI, &DT, ORE);
+      // CilkABILoopSpawning DLS(L, SE, &LI, &DT, ORE);
       // DACLoopSpawning DLS(L, SE, LI, DT, TLI, TTI, ORE);
       if (DLS.processLoop()) {
         // // Mark the loop as already vectorized to avoid vectorizing again.
