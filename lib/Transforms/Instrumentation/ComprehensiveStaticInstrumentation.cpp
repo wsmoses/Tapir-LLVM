@@ -1,3 +1,15 @@
+//===-- ComprehensiveStaticInstrumentation.cpp - instrumentation hooks ----===//
+//
+//                     The LLVM Compiler Infrastructure
+//
+// TODO: License
+//===----------------------------------------------------------------------===//
+//
+// This file is part of CSI, a framework that provides comprehensive static
+// instrumentation.
+//
+//===----------------------------------------------------------------------===//
+
 #include "llvm/ADT/SmallSet.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/SmallVector.h"
@@ -423,22 +435,25 @@ Constant *FrontEndDataTable::insertIntoModule(Module &M) const {
 
 StructType *CsiProperty::getType(LLVMContext &C) {
   // Must match the definition of csi_prop_t in csi.h
-  return StructType::get(IntegerType::get(C, 1), IntegerType::get(C, 63), nullptr);
+  return StructType::get(IntegerType::get(C, 1), IntegerType::get(C, 63),
+                         nullptr);
 }
 
 Value *CsiProperty::getValue(IRBuilder<> IRB) const {
   LLVMContext &C = IRB.getContext();
   Constant *Value = ConstantStruct::get(getType(C),
-        ConstantInt::get(IntegerType::get(C, 1), PropValue.LoadReadBeforeWriteInBB),
+        ConstantInt::get(IntegerType::get(C, 1),
+                         PropValue.LoadReadBeforeWriteInBB),
         ConstantInt::get(IntegerType::get(C, 63), 0),
         nullptr);
   Type *StructTy = getType(C);
   Type *Int64PtrTy = PointerType::get(IntegerType::get(C, 64), 0);
   AllocaInst *AI = IRB.CreateAlloca(StructTy);
   IRB.CreateStore(Value, AI);
-  return IRB.CreateLoad(IRB.CreateBitCast(IRB.CreateInBoundsGEP(AI,
-                                                                {IRB.getInt32(0), IRB.getInt32(0)}),
-                                          Int64PtrTy));
+  return IRB.CreateLoad(
+      IRB.CreateBitCast(
+          IRB.CreateInBoundsGEP(AI, {IRB.getInt32(0), IRB.getInt32(0)}),
+          Int64PtrTy));
 }
 
 void CsiProperty::setLoadReadBeforeWriteInBB(bool v) {
@@ -449,19 +464,23 @@ void ComprehensiveStaticInstrumentation::initializeFuncHooks(Module &M) {
   LLVMContext &C = M.getContext();
   IRBuilder<> IRB(C);
   CsiFuncEntry = checkCsiInterfaceFunction(M.getOrInsertFunction(
-      "__csi_func_entry", IRB.getVoidTy(), IRB.getInt64Ty(), IRB.getInt64Ty(), nullptr));
+      "__csi_func_entry", IRB.getVoidTy(), IRB.getInt64Ty(), IRB.getInt64Ty(),
+      nullptr));
   CsiFuncExit = checkCsiInterfaceFunction(
       M.getOrInsertFunction("__csi_func_exit", IRB.getVoidTy(),
-                            IRB.getInt64Ty(), IRB.getInt64Ty(), IRB.getInt64Ty(), nullptr));
+                            IRB.getInt64Ty(), IRB.getInt64Ty(), IRB.getInt64Ty(),
+                            nullptr));
 }
 
 void ComprehensiveStaticInstrumentation::initializeBasicBlockHooks(Module &M) {
   LLVMContext &C = M.getContext();
   IRBuilder<> IRB(C);
   CsiBBEntry = checkCsiInterfaceFunction(M.getOrInsertFunction(
-      "__csi_bb_entry", IRB.getVoidTy(), IRB.getInt64Ty(), IRB.getInt64Ty(), nullptr));
+      "__csi_bb_entry", IRB.getVoidTy(), IRB.getInt64Ty(), IRB.getInt64Ty(),
+      nullptr));
   CsiBBExit = checkCsiInterfaceFunction(M.getOrInsertFunction(
-      "__csi_bb_exit", IRB.getVoidTy(), IRB.getInt64Ty(), IRB.getInt64Ty(), nullptr));
+      "__csi_bb_exit", IRB.getVoidTy(), IRB.getInt64Ty(), IRB.getInt64Ty(),
+      nullptr));
 }
 
 void ComprehensiveStaticInstrumentation::initializeCallsiteHooks(Module &M) {
@@ -469,10 +488,12 @@ void ComprehensiveStaticInstrumentation::initializeCallsiteHooks(Module &M) {
   IRBuilder<> IRB(C);
   CsiBeforeCallsite = checkCsiInterfaceFunction(
       M.getOrInsertFunction("__csi_before_call", IRB.getVoidTy(),
-                            IRB.getInt64Ty(), IRB.getInt64Ty(), IRB.getInt64Ty(), nullptr));
+                            IRB.getInt64Ty(), IRB.getInt64Ty(),
+                            IRB.getInt64Ty(), nullptr));
   CsiAfterCallsite = checkCsiInterfaceFunction(
       M.getOrInsertFunction("__csi_after_call", IRB.getVoidTy(),
-                            IRB.getInt64Ty(), IRB.getInt64Ty(), IRB.getInt64Ty(), nullptr));
+                            IRB.getInt64Ty(), IRB.getInt64Ty(),
+                            IRB.getInt64Ty(), nullptr));
 }
 
 void ComprehensiveStaticInstrumentation::initializeLoadStoreHooks(Module &M) {
@@ -525,15 +546,17 @@ void ComprehensiveStaticInstrumentation::addLoadStoreInstrumentation(
     Type *AddrType, Value *Addr, int NumBytes, CsiProperty Prop) {
   IRBuilder<> IRB(I);
   Value *PropVal = Prop.getValue(IRB);
-  insertConditionalHookCall(I, BeforeFn, {CsiId, IRB.CreatePointerCast(Addr, AddrType),
-        IRB.getInt32(NumBytes), PropVal});
+  insertConditionalHookCall(I, BeforeFn,
+                            {CsiId, IRB.CreatePointerCast(Addr, AddrType),
+                                IRB.getInt32(NumBytes), PropVal});
 
   BasicBlock::iterator Iter(I);
   Iter++;
   IRB.SetInsertPoint(&*Iter);
   PropVal = Prop.getValue(IRB);
-  insertConditionalHookCall(&*Iter, AfterFn, {CsiId, IRB.CreatePointerCast(Addr, AddrType),
-        IRB.getInt32(NumBytes), PropVal});
+  insertConditionalHookCall(&*Iter, AfterFn,
+                            {CsiId, IRB.CreatePointerCast(Addr, AddrType),
+                                IRB.getInt32(NumBytes), PropVal});
 }
 
 void ComprehensiveStaticInstrumentation::instrumentLoadOrStore(
