@@ -170,6 +170,7 @@ namespace {
       (void) llvm::createGVNHoistPass();
       (void) llvm::createMergedLoadStoreMotionPass();
       (void) llvm::createGVNPass();
+      (void) llvm::createNewGVNPass();
       (void) llvm::createMemCpyOptPass();
       (void) llvm::createLoopDeletionPass();
       (void) llvm::createPostDomTree();
