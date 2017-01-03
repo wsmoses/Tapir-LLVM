@@ -31,6 +31,9 @@ struct CilkPass : public ModulePass {
       : ModulePass(ID), DisablePostOpts(DisablePostOpts),
         Instrument(Instrument) {
   }
+  StringRef getPassName() const override {
+    return "Simple Lowering of Tapir to Cilk ABI";
+  }
 
   // // runOnFunction - To run this pass, first we find appropriate instructions,
   // // then we promote each one.
@@ -56,9 +59,9 @@ cl::opt<bool>  fastCilk(
     cl::desc("Attempt faster cilk call implementation"), cl::Hidden);
 
 char CilkPass::ID = 0;
-INITIALIZE_PASS_BEGIN(CilkPass, "detach2cilk", "Lower Tapir to Cilk runtime", false, false)
+INITIALIZE_PASS_BEGIN(CilkPass, "detach2cilk", "Simple Lowering of Tapir to Cilk ABI", false, false)
 INITIALIZE_PASS_DEPENDENCY(DominatorTreeWrapperPass)
-INITIALIZE_PASS_END(CilkPass, "detach2cilk", "Lower Tapir to Cilk runtime",   false, false)
+INITIALIZE_PASS_END(CilkPass, "detach2cilk", "Simple Lowering of Tapir to Cilk ABI",   false, false)
 
 bool CilkPass::processFunction(Function &F, DominatorTree &DT) {
   if (verifyFunction(F, &errs())) {
@@ -73,14 +76,9 @@ bool CilkPass::processFunction(Function &F, DominatorTree &DT) {
     m->moveBefore(F.getEntryBlock().getTerminator());
   }
 
-  // DominatorTree &DT = getAnalysis<DominatorTreeWrapperPass>().getDomTree();
   for (Function::iterator i = F.begin(), e = F.end(); i != e; ++i) {
     if (DetachInst* inst = dyn_cast_or_null<DetachInst>(i->getTerminator())) {
-      auto cal = cilk::createDetach(*inst, DT, ClInstrumentCilk || Instrument);
-      // if (Instrument) {
-      //   InlineFunctionInfo ifi;
-      //   InlineFunction(cal,ifi);
-      // }
+      cilk::createDetach(*inst, DT, ClInstrumentCilk || Instrument);
       Changed = true;
     }
   }
