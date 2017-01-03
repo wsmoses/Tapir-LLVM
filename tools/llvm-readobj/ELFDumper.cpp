@@ -129,6 +129,8 @@ public:
   void printMipsReginfo() override;
   void printMipsOptions() override;
 
+  void printAMDGPURuntimeMD() override;
+
   void printStackMap() const override;
 
   void printHashHistogram() override;
@@ -1067,6 +1069,10 @@ static const EnumEntry<unsigned> ElfAMDGPUSectionFlags[] = {
   LLVM_READOBJ_ENUM_ENT(ELF, SHF_AMDGPU_HSA_AGENT)
 };
 
+static const EnumEntry<unsigned> ElfARMSectionFlags[] = {
+  LLVM_READOBJ_ENUM_ENT(ELF, SHF_ARM_PURECODE)
+};
+
 static const EnumEntry<unsigned> ElfHexagonSectionFlags[] = {
   LLVM_READOBJ_ENUM_ENT(ELF, SHF_HEX_GPREL)
 };
@@ -1160,6 +1166,7 @@ static const char *getElfSegmentType(unsigned Arch, unsigned Type) {
 
   LLVM_READOBJ_ENUM_CASE(ELF, PT_OPENBSD_RANDOMIZE);
   LLVM_READOBJ_ENUM_CASE(ELF, PT_OPENBSD_WXNEEDED);
+  LLVM_READOBJ_ENUM_CASE(ELF, PT_OPENBSD_BOOTDATA);
 
   default: return "";
   }
@@ -1497,7 +1504,29 @@ template <class ELFT> void ELFDumper<ELFT>::printNotes() {
 #define LLVM_READOBJ_TYPE_CASE(name) \
   case DT_##name: return #name
 
-static const char *getTypeString(uint64_t Type) {
+static const char *getTypeString(unsigned Arch, uint64_t Type) {
+  switch (Arch) {
+  case EM_HEXAGON:
+    switch (Type) {
+    LLVM_READOBJ_TYPE_CASE(HEXAGON_SYMSZ);
+    LLVM_READOBJ_TYPE_CASE(HEXAGON_VER);
+    LLVM_READOBJ_TYPE_CASE(HEXAGON_PLT);
+    }
+  case EM_MIPS:
+    switch (Type) {
+    LLVM_READOBJ_TYPE_CASE(MIPS_RLD_MAP_REL);
+    LLVM_READOBJ_TYPE_CASE(MIPS_RLD_VERSION);
+    LLVM_READOBJ_TYPE_CASE(MIPS_FLAGS);
+    LLVM_READOBJ_TYPE_CASE(MIPS_BASE_ADDRESS);
+    LLVM_READOBJ_TYPE_CASE(MIPS_LOCAL_GOTNO);
+    LLVM_READOBJ_TYPE_CASE(MIPS_SYMTABNO);
+    LLVM_READOBJ_TYPE_CASE(MIPS_UNREFEXTNO);
+    LLVM_READOBJ_TYPE_CASE(MIPS_GOTSYM);
+    LLVM_READOBJ_TYPE_CASE(MIPS_RLD_MAP);
+    LLVM_READOBJ_TYPE_CASE(MIPS_PLTGOT);
+    LLVM_READOBJ_TYPE_CASE(MIPS_OPTIONS);
+    }
+  }
   switch (Type) {
   LLVM_READOBJ_TYPE_CASE(BIND_NOW);
   LLVM_READOBJ_TYPE_CASE(DEBUG);
@@ -1543,17 +1572,6 @@ static const char *getTypeString(uint64_t Type) {
   LLVM_READOBJ_TYPE_CASE(GNU_HASH);
   LLVM_READOBJ_TYPE_CASE(TLSDESC_PLT);
   LLVM_READOBJ_TYPE_CASE(TLSDESC_GOT);
-  LLVM_READOBJ_TYPE_CASE(MIPS_RLD_VERSION);
-  LLVM_READOBJ_TYPE_CASE(MIPS_RLD_MAP_REL);
-  LLVM_READOBJ_TYPE_CASE(MIPS_FLAGS);
-  LLVM_READOBJ_TYPE_CASE(MIPS_BASE_ADDRESS);
-  LLVM_READOBJ_TYPE_CASE(MIPS_LOCAL_GOTNO);
-  LLVM_READOBJ_TYPE_CASE(MIPS_SYMTABNO);
-  LLVM_READOBJ_TYPE_CASE(MIPS_UNREFEXTNO);
-  LLVM_READOBJ_TYPE_CASE(MIPS_GOTSYM);
-  LLVM_READOBJ_TYPE_CASE(MIPS_RLD_MAP);
-  LLVM_READOBJ_TYPE_CASE(MIPS_PLTGOT);
-  LLVM_READOBJ_TYPE_CASE(MIPS_OPTIONS);
   LLVM_READOBJ_TYPE_CASE(AUXILIARY);
   default: return "unknown";
   }
@@ -1786,7 +1804,7 @@ void ELFDumper<ELFT>::printDynamicTable() {
     uintX_t Tag = Entry.getTag();
     ++I;
     W.startLine() << "  " << format_hex(Tag, Is64 ? 18 : 10, opts::Output != opts::GNU) << " "
-                  << format("%-21s", getTypeString(Tag));
+                  << format("%-21s", getTypeString(Obj->getHeader()->e_machine, Tag));
     printValue(Tag, Entry.getVal());
     OS << "\n";
   }
@@ -2335,6 +2353,36 @@ template <class ELFT> void ELFDumper<ELFT>::printMipsOptions() {
       break;
     }
     Sec = Sec.slice(O->size);
+  }
+}
+
+template <class ELFT> void ELFDumper<ELFT>::printAMDGPURuntimeMD() {
+  const Elf_Shdr *Shdr = findSectionByName(*Obj, ".note");
+  if (!Shdr) {
+    W.startLine() << "There is no .note section in the file.\n";
+    return;
+  }
+  ArrayRef<uint8_t> Sec = unwrapOrError(Obj->getSectionContents(Shdr));
+
+  const uint32_t RuntimeMDNoteType = 7;
+  for (auto I = reinterpret_cast<const Elf_Word *>(&Sec[0]),
+       E = I + Sec.size()/4; I != E;) {
+    uint32_t NameSZ = I[0];
+    uint32_t DescSZ = I[1];
+    uint32_t Type = I[2];
+    I += 3;
+
+    StringRef Name;
+    if (NameSZ) {
+      Name = StringRef(reinterpret_cast<const char *>(I), NameSZ - 1);
+      I += alignTo<4>(NameSZ)/4;
+    }
+
+    if (Name == "AMD" && Type == RuntimeMDNoteType) {
+      StringRef Desc(reinterpret_cast<const char *>(I), DescSZ);
+      W.printString(Desc);
+    }
+    I += alignTo<4>(DescSZ)/4;
   }
 }
 
@@ -3562,6 +3610,10 @@ template <class ELFT> void LLVMStyle<ELFT>::printSections(const ELFO *Obj) {
     case EM_AMDGPU:
       SectionFlags.insert(SectionFlags.end(), std::begin(ElfAMDGPUSectionFlags),
                           std::end(ElfAMDGPUSectionFlags));
+      break;
+    case EM_ARM:
+      SectionFlags.insert(SectionFlags.end(), std::begin(ElfARMSectionFlags),
+                          std::end(ElfARMSectionFlags));
       break;
     case EM_HEXAGON:
       SectionFlags.insert(SectionFlags.end(),

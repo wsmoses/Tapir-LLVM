@@ -601,6 +601,11 @@ void SanitizerCoverageModule::InjectTraceForSwitch(
           C = ConstantExpr::getCast(CastInst::ZExt, It.getCaseValue(), Int64Ty);
         Initializers.push_back(C);
       }
+      std::sort(Initializers.begin() + 2, Initializers.end(),
+                [](const Constant *A, const Constant *B) {
+                  return cast<ConstantInt>(A)->getLimitedValue() <
+                         cast<ConstantInt>(B)->getLimitedValue();
+                });
       ArrayType *ArrayOfInt64Ty = ArrayType::get(Int64Ty, Initializers.size());
       GlobalVariable *GV = new GlobalVariable(
           *CurModule, ArrayOfInt64Ty, false, GlobalVariable::InternalLinkage,
@@ -705,8 +710,8 @@ void SanitizerCoverageModule::InjectCoverageAtBlock(Function &F, BasicBlock &BB,
           GuardLoad, Constant::getNullValue(GuardLoad->getType()));
       auto Ins = SplitBlockAndInsertIfThen(
           Cmp, &*IP, false, MDBuilder(*C).createBranchWeights(1, 100000));
-      IRB.SetCurrentDebugLocation(EntryLoc);
       IRB.SetInsertPoint(Ins);
+      IRB.SetCurrentDebugLocation(EntryLoc);
     }
     IRB.CreateCall(SanCovTracePCGuard, GuardPtr);
     IRB.CreateCall(EmptyAsm, {}); // Avoids callback merge.

@@ -14,6 +14,7 @@
 #include "llvm/ObjectYAML/MachOYAML.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/Format.h"
+#include "llvm/Support/Host.h"
 #include "llvm/Support/MachO.h"
 
 #include <string.h> // For memcpy, memset and strnlen.
@@ -23,7 +24,10 @@ namespace llvm {
 MachOYAML::LoadCommand::~LoadCommand() {}
 
 bool MachOYAML::LinkEditData::isEmpty() const {
-  return 0 == RebaseOpcodes.size() + BindOpcodes.size() + WeakBindOpcodes.size() + LazyBindOpcodes.size() + ExportTrie.Children.size() + NameList.size() + StringTable.size();
+  return 0 ==
+         RebaseOpcodes.size() + BindOpcodes.size() + WeakBindOpcodes.size() +
+             LazyBindOpcodes.size() + ExportTrie.Children.size() +
+             NameList.size() + StringTable.size();
 }
 
 namespace yaml {
@@ -97,10 +101,17 @@ void MappingTraits<MachOYAML::Object>::mapping(IO &IO,
     IO.setContext(&Object);
   }
   IO.mapTag("!mach-o", true);
+  IO.mapOptional("IsLittleEndian", Object.IsLittleEndian,
+                 sys::IsLittleEndianHost);
+  Object.DWARF.IsLittleEndian = Object.IsLittleEndian;
+
   IO.mapRequired("FileHeader", Object.Header);
   IO.mapOptional("LoadCommands", Object.LoadCommands);
   if(!Object.LinkEdit.isEmpty() || !IO.outputting())
     IO.mapOptional("LinkEditData", Object.LinkEdit);
+
+  if(!Object.DWARF.isEmpty() || !IO.outputting())
+    IO.mapOptional("DWARF", Object.DWARF);
 
   if (IO.getContext() == &Object)
     IO.setContext(nullptr);

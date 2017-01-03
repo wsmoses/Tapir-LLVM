@@ -523,6 +523,7 @@ public:
     Match_RequiresV6,
     Match_RequiresThumb2,
     Match_RequiresV8,
+    Match_RequiresFlagSetting,
 #define GET_OPERAND_DIAGNOSTIC_TYPES
 #include "ARMGenAsmMatcher.inc"
 
@@ -5294,7 +5295,7 @@ ARMAsmParser::parseFPImm(OperandVector &Operands) {
   const AsmToken &Tok = Parser.getTok();
   SMLoc Loc = Tok.getLoc();
   if (Tok.is(AsmToken::Real) && isVmovf) {
-    APFloat RealVal(APFloat::IEEEsingle, Tok.getString());
+    APFloat RealVal(APFloat::IEEEsingle(), Tok.getString());
     uint64_t IntVal = RealVal.bitcastToAPInt().getZExtValue();
     // If we had a '-' in front, toggle the sign bit.
     IntVal ^= (uint64_t)isNegative << 31;
@@ -5452,6 +5453,9 @@ bool ARMAsmParser::parseOperand(OperandVector &Operands, StringRef Mnemonic) {
     if (getParser().parseExpression(SubExprVal))
       return true;
     E = SMLoc::getFromPointer(Parser.getTok().getLoc().getPointer() - 1);
+
+    // execute-only: we assume that assembly programmers know what they are
+    // doing and allow literal pool creation here
     Operands.push_back(ARMOperand::CreateConstantPoolImm(SubExprVal, S, E));
     return false;
   }
@@ -8905,7 +8909,7 @@ unsigned ARMAsmParser::checkTargetMatchPredicate(MCInst &Inst) {
       ;
     // If we're parsing Thumb1, reject it completely.
     if (isThumbOne() && Inst.getOperand(OpNo).getReg() != ARM::CPSR)
-      return Match_MnemonicFail;
+      return Match_RequiresFlagSetting;
     // If we're parsing Thumb2, which form is legal depends on whether we're
     // in an IT block.
     if (isThumbTwo() && Inst.getOperand(OpNo).getReg() != ARM::CPSR &&
@@ -9171,6 +9175,8 @@ bool ARMAsmParser::MatchAndEmitInstruction(SMLoc IDLoc, unsigned &Opcode,
     return Error(IDLoc, "instruction variant requires Thumb2");
   case Match_RequiresV8:
     return Error(IDLoc, "instruction variant requires ARMv8 or later");
+  case Match_RequiresFlagSetting:
+    return Error(IDLoc, "no flag-preserving variant of this instruction available");
   case Match_ImmRange0_15: {
     SMLoc ErrorLoc = ((ARMOperand &)*Operands[ErrorInfo]).getStartLoc();
     if (ErrorLoc == SMLoc()) ErrorLoc = IDLoc;

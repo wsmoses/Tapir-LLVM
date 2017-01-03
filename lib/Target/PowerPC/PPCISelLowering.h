@@ -815,6 +815,8 @@ namespace llvm {
                                 SelectionDAG &DAG, const SDLoc &dl) const;
     SDValue LowerFP_TO_INTDirectMove(SDValue Op, SelectionDAG &DAG,
                                      const SDLoc &dl) const;
+
+    bool directMoveIsProfitable(const SDValue &Op) const;
     SDValue LowerINT_TO_FPDirectMove(SDValue Op, SelectionDAG &DAG,
                                      const SDLoc &dl) const;
 
@@ -990,6 +992,10 @@ namespace llvm {
     unsigned combineRepeatedFPDivisors() const override;
 
     CCAssignFn *useFastISelCCs(unsigned Flag) const;
+
+    SDValue
+      combineElementTruncationToVectorTruncation(SDNode *N,
+                                                 DAGCombinerInfo &DCI) const;
   };
 
   namespace PPC {

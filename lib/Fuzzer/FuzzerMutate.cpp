@@ -9,11 +9,10 @@
 // Mutate a test input.
 //===----------------------------------------------------------------------===//
 
-#include <cstring>
-
 #include "FuzzerCorpus.h"
 #include "FuzzerDefs.h"
 #include "FuzzerExtFunctions.h"
+#include "FuzzerIO.h"
 #include "FuzzerMutate.h"
 #include "FuzzerOptions.h"
 
@@ -222,7 +221,7 @@ DictionaryEntry MutationDispatcher::MakeDictionaryEntryFromCMP(
     size_t NumPositions = 0;
     for (const uint8_t *Cur = Data;
          Cur < End && NumPositions < kMaxNumPositions; Cur++) {
-      Cur = (uint8_t *)memmem(Cur, End - Cur, &ExistingBytes, sizeof(T));
+      Cur = (uint8_t *)SearchMemory(Cur, End - Cur, &ExistingBytes, sizeof(T));
       if (!Cur) break;
       Positions[NumPositions++] = Cur - Data;
     }
@@ -487,7 +486,7 @@ size_t MutationDispatcher::MutateImpl(uint8_t *Data, size_t Size,
                                       const std::vector<Mutator> &Mutators) {
   assert(MaxSize > 0);
   if (Size == 0) {
-    for (size_t i = 0; i < MaxSize; i++)
+    for (size_t i = 0; i < Min(size_t(4), MaxSize); i++)
       Data[i] = RandCh(Rand);
     if (Options.OnlyASCII)
       ToASCII(Data, MaxSize);

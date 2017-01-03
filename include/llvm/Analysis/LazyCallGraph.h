@@ -44,6 +44,7 @@
 #include "llvm/ADT/iterator.h"
 #include "llvm/ADT/iterator_range.h"
 #include "llvm/IR/BasicBlock.h"
+#include "llvm/IR/Constants.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/PassManager.h"
@@ -619,20 +620,32 @@ public:
     SmallVector<SCC *, 1> switchInternalEdgeToCall(Node &SourceN,
                                                    Node &TargetN);
 
-    /// Make an existing internal call edge into a ref edge.
+    /// Make an existing internal call edge between separate SCCs into a ref
+    /// edge.
     ///
-    /// If SourceN and TargetN are part of a single SCC, it may be split up due
-    /// to breaking a cycle in the call edges that formed it. If that happens,
-    /// then this routine will insert new SCCs into the postorder list *before*
-    /// the SCC of TargetN (previously the SCC of both). This preserves
-    /// postorder as the TargetN can reach all of the other nodes by definition
-    /// of previously being in a single SCC formed by the cycle from SourceN to
-    /// TargetN.
+    /// If SourceN and TargetN in separate SCCs within this RefSCC, changing
+    /// the call edge between them to a ref edge is a trivial operation that
+    /// does not require any structural changes to the call graph.
+    void switchTrivialInternalEdgeToRef(Node &SourceN, Node &TargetN);
+
+    /// Make an existing internal call edge within a single SCC into a ref
+    /// edge.
+    ///
+    /// Since SourceN and TargetN are part of a single SCC, this SCC may be
+    /// split up due to breaking a cycle in the call edges that formed it. If
+    /// that happens, then this routine will insert new SCCs into the postorder
+    /// list *before* the SCC of TargetN (previously the SCC of both). This
+    /// preserves postorder as the TargetN can reach all of the other nodes by
+    /// definition of previously being in a single SCC formed by the cycle from
+    /// SourceN to TargetN.
     ///
     /// The newly added SCCs are added *immediately* and contiguously
     /// prior to the TargetN SCC and return the range covering the new SCCs in
     /// the RefSCC's postorder sequence. You can directly iterate the returned
     /// range to observe all of the new SCCs in postorder.
+    ///
+    /// Note that if SourceN and TargetN are in separate SCCs, the simpler
+    /// routine `switchTrivialInternalEdgeToRef` should be used instead.
     iterator_range<iterator> switchInternalEdgeToRef(Node &SourceN,
                                                      Node &TargetN);
 
@@ -953,6 +966,13 @@ public:
   /// useful to code doing updates or otherwise wanting to walk the IR in the
   /// same patterns as when we build the call graph.
 
+  /// Recursively visits the defined functions whose address is reachable from
+  /// every constant in the \p Worklist.
+  ///
+  /// Doesn't recurse through any constants already in the \p Visited set, and
+  /// updates that set with every constant visited.
+  ///
+  /// For each defined function, calls \p Callback with that function.
   template <typename CallbackT>
   static void visitReferences(SmallVectorImpl<Constant *> &Worklist,
                               SmallPtrSetImpl<Constant *> &Visited,
@@ -961,7 +981,17 @@ public:
       Constant *C = Worklist.pop_back_val();
 
       if (Function *F = dyn_cast<Function>(C)) {
-        Callback(*F);
+        if (!F->isDeclaration())
+          Callback(*F);
+        continue;
+      }
+
+      if (BlockAddress *BA = dyn_cast<BlockAddress>(C)) {
+        // The blockaddress constant expression is a weird special case, we
+        // can't generically walk its operands the way we do for all other
+        // constants.
+        if (Visited.insert(BA->getFunction()).second)
+          Worklist.push_back(BA->getFunction());
         continue;
       }
 
@@ -969,9 +999,9 @@ public:
         if (Visited.insert(cast<Constant>(Op)).second)
           Worklist.push_back(cast<Constant>(Op));
     }
-
-    ///@}
   }
+
+  ///@}
 
 private:
   typedef SmallVectorImpl<Node *>::reverse_iterator node_stack_iterator;

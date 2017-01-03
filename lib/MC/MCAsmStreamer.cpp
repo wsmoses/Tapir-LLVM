@@ -100,7 +100,7 @@ public:
   /// file if applicable as a QoI issue to make the output of the compiler
   /// more readable.  This only affects the MCAsmStreamer, and only when
   /// verbose assembly output is enabled.
-  void AddComment(const Twine &T) override;
+  void AddComment(const Twine &T, bool EOL = true) override;
 
   /// AddEncodingComment - Add a comment showing the encoding of an instruction.
   void AddEncodingComment(const MCInst &Inst, const MCSubtargetInfo &);
@@ -151,7 +151,7 @@ public:
   void EmitCOFFSafeSEH(MCSymbol const *Symbol) override;
   void EmitCOFFSectionIndex(MCSymbol const *Symbol) override;
   void EmitCOFFSecRel32(MCSymbol const *Symbol) override;
-  void emitELFSize(MCSymbolELF *Symbol, const MCExpr *Value) override;
+  void emitELFSize(MCSymbol *Symbol, const MCExpr *Value) override;
   void EmitCommonSymbol(MCSymbol *Symbol, uint64_t Size,
                         unsigned ByteAlignment) override;
 
@@ -209,7 +209,8 @@ public:
                          unsigned MaxBytesToEmit = 0) override;
 
   void emitValueToOffset(const MCExpr *Offset,
-                         unsigned char Value = 0) override;
+                         unsigned char Value,
+                         SMLoc Loc) override;
 
   void EmitFileDirective(StringRef Filename) override;
   unsigned EmitDwarfFileDirective(unsigned FileNo, StringRef Directory,
@@ -300,12 +301,14 @@ public:
 /// file if applicable as a QoI issue to make the output of the compiler
 /// more readable.  This only affects the MCAsmStreamer, and only when
 /// verbose assembly output is enabled.
-void MCAsmStreamer::AddComment(const Twine &T) {
+/// By deafult EOL is set to true so that each comment goes on its own line.
+void MCAsmStreamer::AddComment(const Twine &T, bool EOL) {
   if (!IsVerboseAsm) return;
 
   T.toVector(CommentToEmit);
-  // Each comment goes on its own line.
-  CommentToEmit.push_back('\n');
+ 
+  if (EOL)
+    CommentToEmit.push_back('\n'); // Place comment in a new line.
 }
 
 void MCAsmStreamer::EmitCommentsAndEOL() {
@@ -620,7 +623,7 @@ void MCAsmStreamer::EmitCOFFSecRel32(MCSymbol const *Symbol) {
   EmitEOL();
 }
 
-void MCAsmStreamer::emitELFSize(MCSymbolELF *Symbol, const MCExpr *Value) {
+void MCAsmStreamer::emitELFSize(MCSymbol *Symbol, const MCExpr *Value) {
   assert(MAI->hasDotTypeDotSizeDirective());
   OS << "\t.size\t";
   Symbol->print(OS, MAI);
@@ -1011,7 +1014,8 @@ void MCAsmStreamer::EmitCodeAlignment(unsigned ByteAlignment,
 }
 
 void MCAsmStreamer::emitValueToOffset(const MCExpr *Offset,
-                                      unsigned char Value) {
+                                      unsigned char Value,
+                                      SMLoc Loc) {
   // FIXME: Verify that Offset is associated with the current section.
   OS << ".org ";
   Offset->print(OS, MAI);

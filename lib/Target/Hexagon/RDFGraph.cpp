@@ -30,7 +30,7 @@ namespace llvm {
 namespace rdf {
 
 raw_ostream &operator<< (raw_ostream &OS, const PrintLaneMaskOpt &P) {
-  if (P.Mask != ~LaneBitmask(0))
+  if (!P.Mask.all())
     OS << ':' << PrintLaneMask(P.Mask);
   return OS;
 }
@@ -651,10 +651,10 @@ RegisterRef RegisterAggr::normalize(RegisterRef RR) const {
     SuperReg = *SR;
   }
 
-  uint32_t Sub = TRI.getSubRegIndex(SuperReg, RR.Reg);
   const TargetRegisterClass &RC = *TRI.getMinimalPhysRegClass(RR.Reg);
-  LaneBitmask SuperMask = RR.Mask &
-                          TRI.composeSubRegIndexLaneMask(Sub, RC.LaneMask);
+  LaneBitmask Common = RR.Mask & RC.LaneMask;
+  uint32_t Sub = TRI.getSubRegIndex(SuperReg, RR.Reg);
+  LaneBitmask SuperMask = TRI.composeSubRegIndexLaneMask(Sub, Common);
   return RegisterRef(SuperReg, SuperMask);
 }
 
@@ -662,7 +662,7 @@ bool RegisterAggr::hasAliasOf(RegisterRef RR) const {
   RegisterRef NR = normalize(RR);
   auto F = Masks.find(NR.Reg);
   if (F != Masks.end()) {
-    if (F->second & NR.Mask)
+    if ((F->second & NR.Mask).any())
       return true;
   }
   if (CheckUnits) {
@@ -676,7 +676,7 @@ bool RegisterAggr::hasAliasOf(RegisterRef RR) const {
 bool RegisterAggr::hasCoverOf(RegisterRef RR) const {
   // Always have a cover for empty lane mask.
   RegisterRef NR = normalize(RR);
-  if (!NR.Mask)
+  if (NR.Mask.none())
     return true;
   auto F = Masks.find(NR.Reg);
   if (F == Masks.end())
@@ -717,7 +717,7 @@ RegisterAggr &RegisterAggr::clear(RegisterRef RR) {
   if (F == Masks.end())
     return *this;
   LaneBitmask NewM = F->second & ~NR.Mask;
-  if (NewM == LaneBitmask(0))
+  if (NewM.none())
     Masks.erase(F);
   else
     F->second = NewM;
@@ -1089,7 +1089,7 @@ RegisterRef DataFlowGraph::normalizeRef(RegisterRef RR) const {
 RegisterRef DataFlowGraph::restrictRef(RegisterRef AR, RegisterRef BR) const {
   if (AR.Reg == BR.Reg) {
     LaneBitmask M = AR.Mask & BR.Mask;
-    return M ? RegisterRef(AR.Reg, M) : RegisterRef();
+    return M.any() ? RegisterRef(AR.Reg, M) : RegisterRef();
   }
 #ifndef NDEBUG
   RegisterRef NAR = normalizeRef(AR);
@@ -1206,12 +1206,36 @@ bool DataFlowGraph::alias(RegisterRef RA, RegisterRef RB) const {
   while (UMA.isValid() && UMB.isValid()) {
     std::pair<uint32_t,LaneBitmask> PA = *UMA;
     std::pair<uint32_t,LaneBitmask> PB = *UMB;
-    // If the returned lane mask is 0, it should be treated as ~0
-    // (or the lane mask from the given register ref should be ignored).
-    // This can happen when a register has only one unit.
     if (PA.first == PB.first) {
-      if (!PA.second || !PB.second || (PA.second & PB.second))
+      // Lane mask of 0 (given by the iterator) should be treated as "full".
+      // This can happen when the register has only one unit, or when the
+      // unit corresponds to explicit aliasing. In such cases, the lane mask
+      // from RegisterRef should be ignored.
+      if (PA.second.none() || PB.second.none())
         return true;
+
+      // At this point the common unit corresponds to a subregister. The lane
+      // masks correspond to the lane mask of that unit within the original
+      // register, for example assuming register quadruple q0 = r3:0, and
+      // a register pair d1 = r3:2, the lane mask of r2 in q0 may be 0b0100,
+      // while the lane mask of r2 in d1 may be 0b0001.
+      LaneBitmask LA = PA.second & RA.Mask;
+      LaneBitmask LB = PB.second & RB.Mask;
+      if (LA.any() && LB.any()) {
+        unsigned Root = *MCRegUnitRootIterator(PA.first, &TRI);
+        // If register units were guaranteed to only have 1 bit in any lane
+        // mask, the code below would not be necessary. This is because LA
+        // and LB would have at most 1 bit set each, and that bit would be
+        // guaranteed to correspond to the given register unit.
+        uint32_t SubA = TRI.getSubRegIndex(RA.Reg, Root);
+        uint32_t SubB = TRI.getSubRegIndex(RB.Reg, Root);
+        const TargetRegisterClass &RC = *TRI.getMinimalPhysRegClass(Root);
+        LaneBitmask MaskA = TRI.reverseComposeSubRegIndexLaneMask(SubA, LA);
+        LaneBitmask MaskB = TRI.reverseComposeSubRegIndexLaneMask(SubB, LB);
+        if ((MaskA & MaskB & RC.LaneMask).any())
+          return true;
+      }
+
       ++UMA;
       ++UMB;
       continue;

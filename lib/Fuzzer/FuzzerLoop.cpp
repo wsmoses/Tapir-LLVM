@@ -9,16 +9,16 @@
 // Fuzzer's main loop.
 //===----------------------------------------------------------------------===//
 
-#include "FuzzerInternal.h"
 #include "FuzzerCorpus.h"
+#include "FuzzerInternal.h"
+#include "FuzzerIO.h"
 #include "FuzzerMutate.h"
-#include "FuzzerTracePC.h"
 #include "FuzzerRandom.h"
-
+#include "FuzzerTracePC.h"
 #include <algorithm>
 #include <cstring>
-#include <set>
 #include <memory>
+#include <set>
 
 #if defined(__has_include)
 #if __has_include(<sanitizer / coverage_interface.h>)
@@ -137,14 +137,18 @@ struct MallocFreeTracer {
 
 static MallocFreeTracer AllocTracer;
 
+ATTRIBUTE_NO_SANITIZE_MEMORY
 void MallocHook(const volatile void *ptr, size_t size) {
   size_t N = AllocTracer.Mallocs++;
+  F->HandleMalloc(size);
   if (int TraceLevel = AllocTracer.TraceLevel) {
     Printf("MALLOC[%zd] %p %zd\n", N, ptr, size);
     if (TraceLevel >= 2 && EF)
       EF->__sanitizer_print_stack_trace();
   }
 }
+
+ATTRIBUTE_NO_SANITIZE_MEMORY
 void FreeHook(const volatile void *ptr) {
   size_t N = AllocTracer.Frees++;
   if (int TraceLevel = AllocTracer.TraceLevel) {
@@ -152,6 +156,21 @@ void FreeHook(const volatile void *ptr) {
     if (TraceLevel >= 2 && EF)
       EF->__sanitizer_print_stack_trace();
   }
+}
+
+// Crash on a single malloc that exceeds the rss limit.
+void Fuzzer::HandleMalloc(size_t Size) {
+  if (!Options.RssLimitMb || (Size >> 20) < (size_t)Options.RssLimitMb)
+    return;
+  Printf("==%d== ERROR: libFuzzer: out-of-memory (malloc(%zd))\n", GetPid(),
+         Size);
+  Printf("   To change the out-of-memory limit use -rss_limit_mb=<N>\n\n");
+  if (EF->__sanitizer_print_stack_trace)
+    EF->__sanitizer_print_stack_trace();
+  DumpCurrentUnit("oom-");
+  Printf("SUMMARY: libFuzzer: out-of-memory\n");
+  PrintFinalStats();
+  _Exit(Options.ErrorExitCode); // Stop right now.
 }
 
 Fuzzer::Fuzzer(UserCallback CB, InputCorpus &Corpus, MutationDispatcher &MD,
@@ -176,6 +195,8 @@ Fuzzer::Fuzzer(UserCallback CB, InputCorpus &Corpus, MutationDispatcher &MD,
     EpochOfLastReadOfOutputCorpus = GetEpoch(Options.OutputCorpus);
   MaxInputLen = MaxMutationLen = Options.MaxLen;
   AllocateCurrentUnitData();
+  CurrentUnitSize = 0;
+  memset(BaseSha1, 0, sizeof(BaseSha1));
 }
 
 Fuzzer::~Fuzzer() { }
@@ -246,7 +267,7 @@ void Fuzzer::StaticInterruptCallback() {
 }
 
 void Fuzzer::CrashCallback() {
-  Printf("==%d== ERROR: libFuzzer: deadly signal\n", GetPid());
+  Printf("==%lu== ERROR: libFuzzer: deadly signal\n", GetPid());
   if (EF->__sanitizer_print_stack_trace)
     EF->__sanitizer_print_stack_trace();
   Printf("NOTE: libFuzzer has rudimentary signal handlers.\n"
@@ -259,7 +280,7 @@ void Fuzzer::CrashCallback() {
 }
 
 void Fuzzer::InterruptCallback() {
-  Printf("==%d== libFuzzer: run interrupted; exiting\n", GetPid());
+  Printf("==%lu== libFuzzer: run interrupted; exiting\n", GetPid());
   PrintFinalStats();
   _Exit(0);  // Stop right now, don't perform any at-exit actions.
 }
@@ -268,7 +289,7 @@ NO_SANITIZE_MEMORY
 void Fuzzer::AlarmCallback() {
   assert(Options.UnitTimeoutSec > 0);
   if (!InFuzzingThread()) return;
-  if (!CurrentUnitSize)
+  if (!RunningCB)
     return; // We have not started running units yet.
   size_t Seconds =
       duration_cast<seconds>(system_clock::now() - UnitStartTime).count();
@@ -281,7 +302,7 @@ void Fuzzer::AlarmCallback() {
     Printf("       and the timeout value is %d (use -timeout=N to change)\n",
            Options.UnitTimeoutSec);
     DumpCurrentUnit("timeout-");
-    Printf("==%d== ERROR: libFuzzer: timeout after %d seconds\n", GetPid(),
+    Printf("==%lu== ERROR: libFuzzer: timeout after %d seconds\n", GetPid(),
            Seconds);
     if (EF->__sanitizer_print_stack_trace)
       EF->__sanitizer_print_stack_trace();
@@ -293,7 +314,7 @@ void Fuzzer::AlarmCallback() {
 
 void Fuzzer::RssLimitCallback() {
   Printf(
-      "==%d== ERROR: libFuzzer: out-of-memory (used: %zdMb; limit: %zdMb)\n",
+      "==%lu== ERROR: libFuzzer: out-of-memory (used: %zdMb; limit: %zdMb)\n",
       GetPid(), GetPeakRSSMb(), Options.RssLimitMb);
   Printf("   To change the out-of-memory limit use -rss_limit_mb=<N>\n\n");
   if (EF->__sanitizer_print_memory_profile)
@@ -354,6 +375,8 @@ void Fuzzer::PrintStats(const char *Where, const char *End, size_t Units) {
 void Fuzzer::PrintFinalStats() {
   if (Options.PrintCoverage)
     TPC.PrintCoverage();
+  if (Options.DumpCoverage)
+    TPC.DumpCoverage();
   if (Options.PrintCorpusStats)
     Corpus.PrintStats();
   if (!Options.PrintFinalStats) return;
@@ -469,7 +492,9 @@ size_t Fuzzer::RunOne(const uint8_t *Data, size_t Size) {
   ExecuteCallback(Data, Size);
 
   size_t Res = 0;
-  if (size_t NumFeatures = TPC.FinalizeTrace(&Corpus, Size, Options.Shrink))
+  if (size_t NumFeatures = TPC.CollectFeatures([&](size_t Feature) -> bool {
+        return Corpus.AddFeature(Feature, Size, Options.Shrink);
+      }))
     Res = NumFeatures;
 
   if (!TPC.UsingTracePcGuard()) {
@@ -512,7 +537,9 @@ void Fuzzer::ExecuteCallback(const uint8_t *Data, size_t Size) {
   UnitStartTime = system_clock::now();
   ResetCounters();  // Reset coverage right before the callback.
   TPC.ResetMaps();
+  RunningCB = true;
   int Res = CB(DataCopy, Size);
+  RunningCB = false;
   UnitStopTime = system_clock::now();
   (void)Res;
   assert(Res == 0);
@@ -617,7 +644,8 @@ void Fuzzer::Merge(const std::vector<std::string> &Corpora) {
 
   assert(MaxInputLen > 0);
   UnitVector Initial, Extra;
-  ReadDirToVectorOfUnits(Corpora[0].c_str(), &Initial, nullptr, MaxInputLen, true);
+  ReadDirToVectorOfUnits(Corpora[0].c_str(), &Initial, nullptr, MaxInputLen,
+                         true);
   for (auto &C : ExtraCorpora)
     ReadDirToVectorOfUnits(C.c_str(), &Extra, nullptr, MaxInputLen, true);
 
@@ -674,6 +702,19 @@ void Fuzzer::TryDetectingAMemoryLeak(const uint8_t *Data, size_t Size,
   }
 }
 
+static size_t ComputeMutationLen(size_t MaxInputSize, size_t MaxMutationLen,
+                                 Random &Rand) {
+  assert(MaxInputSize <= MaxMutationLen);
+  if (MaxInputSize == MaxMutationLen) return MaxMutationLen;
+  size_t Result = MaxInputSize;
+  size_t R = Rand.Rand();
+  if ((R % (1U << 7)) == 0)
+    Result++;
+  if ((R % (1U << 15)) == 0)
+    Result += 10 + Result / 2;
+  return Min(Result, MaxMutationLen);
+}
+
 void Fuzzer::MutateAndTestOne() {
   MD.StartMutationSequence();
 
@@ -687,13 +728,19 @@ void Fuzzer::MutateAndTestOne() {
 
   assert(MaxMutationLen > 0);
 
+  size_t CurrentMaxMutationLen =
+      Options.ExperimentalLenControl
+          ? ComputeMutationLen(Corpus.MaxInputSize(), MaxMutationLen,
+                               MD.GetRand())
+          : MaxMutationLen;
+
   for (int i = 0; i < Options.MutateDepth; i++) {
     if (TotalNumberOfRuns >= Options.MaxNumberOfRuns)
       break;
     size_t NewSize = 0;
-    NewSize = MD.Mutate(CurrentUnitData, Size, MaxMutationLen);
+    NewSize = MD.Mutate(CurrentUnitData, Size, CurrentMaxMutationLen);
     assert(NewSize > 0 && "Mutator returned empty unit");
-    assert(NewSize <= MaxMutationLen && "Mutator return overisized unit");
+    assert(NewSize <= CurrentMaxMutationLen && "Mutator return overisized unit");
     Size = NewSize;
     if (i == 0)
       StartTraceRecording();
@@ -717,6 +764,7 @@ void Fuzzer::ResetCoverage() {
 }
 
 void Fuzzer::Loop() {
+  TPC.InitializePrintNewPCs();
   system_clock::time_point LastCorpusReload = system_clock::now();
   if (Options.DoCrossOver)
     MD.SetCorpus(&Corpus);

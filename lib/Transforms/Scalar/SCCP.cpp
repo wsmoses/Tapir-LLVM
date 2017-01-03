@@ -242,7 +242,7 @@ public:
   /// this method must be called.
   void AddTrackedFunction(Function *F) {
     // Add an entry, F -> undef.
-    if (StructType *STy = dyn_cast<StructType>(F->getReturnType())) {
+    if (auto *STy = dyn_cast<StructType>(F->getReturnType())) {
       MRVFunctionsTracked.insert(F);
       for (unsigned i = 0, e = STy->getNumElements(); i != e; ++i)
         TrackedMultipleRetVals.insert(std::make_pair(std::make_pair(F, i),
@@ -272,7 +272,7 @@ public:
 
   std::vector<LatticeVal> getStructLatticeValueFor(Value *V) const {
     std::vector<LatticeVal> StructValues;
-    StructType *STy = dyn_cast<StructType>(V->getType());
+    auto *STy = dyn_cast<StructType>(V->getType());
     assert(STy && "getStructLatticeValueFor() can be called only on structs");
     for (unsigned i = 0, e = STy->getNumElements(); i != e; ++i) {
       auto I = StructValueState.find(std::make_pair(V, i));
@@ -315,7 +315,7 @@ public:
   /// markAnythingOverdefined - Mark the specified value overdefined.  This
   /// works with both scalars and structs.
   void markAnythingOverdefined(Value *V) {
-    if (StructType *STy = dyn_cast<StructType>(V->getType()))
+    if (auto *STy = dyn_cast<StructType>(V->getType()))
       for (unsigned i = 0, e = STy->getNumElements(); i != e; ++i)
         markOverdefined(getStructValueState(V, i), V);
     else
@@ -337,7 +337,7 @@ public:
   }
 
 private:
-  // pushToWorkList - Helper for markConstant/markForcedConstant
+  // pushToWorkList - Helper for markConstant/markForcedConstant/markOverdefined
   void pushToWorkList(LatticeVal &IV, Value *V) {
     if (IV.isOverdefined())
       return OverdefinedInstWorkList.push_back(V);
@@ -375,12 +375,12 @@ private:
     if (!IV.markOverdefined()) return;
 
     DEBUG(dbgs() << "markOverdefined: ";
-          if (Function *F = dyn_cast<Function>(V))
+          if (auto *F = dyn_cast<Function>(V))
             dbgs() << "Function '" << F->getName() << "'\n";
           else
             dbgs() << *V << '\n');
     // Only instructions go on the work list
-    OverdefinedInstWorkList.push_back(V);
+    pushToWorkList(IV, V);
   }
 
   void mergeInValue(LatticeVal &IV, Value *V, LatticeVal MergeWithV) {
@@ -414,7 +414,7 @@ private:
     if (!I.second)
       return LV;  // Common case, already in the map.
 
-    if (Constant *C = dyn_cast<Constant>(V)) {
+    if (auto *C = dyn_cast<Constant>(V)) {
       // Undef values remain unknown.
       if (!isa<UndefValue>(V))
         LV.markConstant(C);          // Constants are constant
@@ -440,7 +440,7 @@ private:
     if (!I.second)
       return LV;  // Common case, already in the map.
 
-    if (Constant *C = dyn_cast<Constant>(V)) {
+    if (auto *C = dyn_cast<Constant>(V)) {
       Constant *Elt = C->getAggregateElement(i);
 
       if (!Elt)
@@ -557,7 +557,7 @@ private:
 
   void visitInstruction(Instruction &I) {
     // If a new instruction is added to LLVM that we don't handle.
-    dbgs() << "SCCP: Don't know how to handle: " << I << '\n';
+    DEBUG(dbgs() << "SCCP: Don't know how to handle: " << I << '\n');
     markAnythingOverdefined(&I);   // Just in case
   }
 };
@@ -571,7 +571,7 @@ private:
 void SCCPSolver::getFeasibleSuccessors(TerminatorInst &TI,
                                        SmallVectorImpl<bool> &Succs) {
   Succs.resize(TI.getNumSuccessors());
-  if (BranchInst *BI = dyn_cast<BranchInst>(&TI)) {
+  if (auto *BI = dyn_cast<BranchInst>(&TI)) {
     if (BI->isUnconditional()) {
       Succs[0] = true;
       return;
@@ -598,7 +598,7 @@ void SCCPSolver::getFeasibleSuccessors(TerminatorInst &TI,
     return;
   }
 
-  if (SwitchInst *SI = dyn_cast<SwitchInst>(&TI)) {
+  if (auto *SI = dyn_cast<SwitchInst>(&TI)) {
     if (!SI->getNumCases()) {
       Succs[0] = true;
       return;
@@ -631,9 +631,7 @@ void SCCPSolver::getFeasibleSuccessors(TerminatorInst &TI,
     Succs.assign(TI.getNumSuccessors(), true);
     return;
   }
-#ifndef NDEBUG
-  dbgs() << "Unknown terminator instruction: " << TI << '\n';
-#endif
+  DEBUG(dbgs() << "Unknown terminator instruction: " << TI << '\n');
   llvm_unreachable("SCCP: Don't know how to handle this terminator!");
 }
 
@@ -649,7 +647,7 @@ bool SCCPSolver::isEdgeFeasible(BasicBlock *From, BasicBlock *To) {
 
   // Check to make sure this edge itself is actually feasible now.
   TerminatorInst *TI = From->getTerminator();
-  if (BranchInst *BI = dyn_cast<BranchInst>(TI)) {
+  if (auto *BI = dyn_cast<BranchInst>(TI)) {
     if (BI->isUnconditional())
       return true;
 
@@ -669,7 +667,7 @@ bool SCCPSolver::isEdgeFeasible(BasicBlock *From, BasicBlock *To) {
   if (TI->isExceptional())
     return true;
 
-  if (SwitchInst *SI = dyn_cast<SwitchInst>(TI)) {
+  if (auto *SI = dyn_cast<SwitchInst>(TI)) {
     if (SI->getNumCases() < 1)
       return true;
 
@@ -692,9 +690,7 @@ bool SCCPSolver::isEdgeFeasible(BasicBlock *From, BasicBlock *To) {
       isa<SyncInst>(TI))
     return true;
 
-#ifndef NDEBUG
-  dbgs() << "Unknown terminator instruction: " << *TI << '\n';
-#endif
+  DEBUG(dbgs() << "Unknown terminator instruction: " << *TI << '\n');
   llvm_unreachable("SCCP: Don't know how to handle this terminator!");
 }
 
@@ -789,7 +785,7 @@ void SCCPSolver::visitReturnInst(ReturnInst &I) {
 
   // Handle functions that return multiple values.
   if (!TrackedMultipleRetVals.empty()) {
-    if (StructType *STy = dyn_cast<StructType>(ResultOp->getType()))
+    if (auto *STy = dyn_cast<StructType>(ResultOp->getType()))
       if (MRVFunctionsTracked.count(F))
         for (unsigned i = 0, e = STy->getNumElements(); i != e; ++i)
           mergeInValue(TrackedMultipleRetVals[std::make_pair(F, i)], F,
@@ -848,7 +844,7 @@ void SCCPSolver::visitExtractValueInst(ExtractValueInst &EVI) {
 }
 
 void SCCPSolver::visitInsertValueInst(InsertValueInst &IVI) {
-  StructType *STy = dyn_cast<StructType>(IVI.getType());
+  auto *STy = dyn_cast<StructType>(IVI.getType());
   if (!STy)
     return markOverdefined(&IVI);
 
@@ -940,7 +936,8 @@ void SCCPSolver::visitBinaryOperator(Instruction &I) {
 
   // If this is an AND or OR with 0 or -1, it doesn't matter that the other
   // operand is overdefined.
-  if (I.getOpcode() == Instruction::And || I.getOpcode() == Instruction::Or) {
+  if (I.getOpcode() == Instruction::And || I.getOpcode() == Instruction::Mul ||
+      I.getOpcode() == Instruction::Or) {
     LatticeVal *NonOverdefVal = nullptr;
     if (!V1State.isOverdefined())
       NonOverdefVal = &V1State;
@@ -951,8 +948,10 @@ void SCCPSolver::visitBinaryOperator(Instruction &I) {
       if (NonOverdefVal->isUnknown())
         return;
 
-      if (I.getOpcode() == Instruction::And) {
+      if (I.getOpcode() == Instruction::And ||
+          I.getOpcode() == Instruction::Mul) {
         // X and 0 = 0
+        // X * 0 = 0
         if (NonOverdefVal->getConstant()->isNullValue())
           return markConstant(IV, &I, NonOverdefVal->getConstant());
       } else {
@@ -1078,7 +1077,7 @@ void SCCPSolver::visitLoadInst(LoadInst &I) {
     return;
 
   // Transform load (constant global) into the value loaded.
-  if (GlobalVariable *GV = dyn_cast<GlobalVariable>(Ptr)) {
+  if (auto *GV = dyn_cast<GlobalVariable>(Ptr)) {
     if (!TrackedGlobals.empty()) {
       // If we are tracking this global, merge in the known value for it.
       DenseMap<GlobalVariable*, LatticeVal>::iterator It =
@@ -1166,7 +1165,7 @@ CallOverdefined:
         continue;
       }
 
-      if (StructType *STy = dyn_cast<StructType>(AI->getType())) {
+      if (auto *STy = dyn_cast<StructType>(AI->getType())) {
         for (unsigned i = 0, e = STy->getNumElements(); i != e; ++i) {
           LatticeVal CallArg = getStructValueState(*CAI, i);
           mergeInValue(getStructValueState(&*AI, i), &*AI, CallArg);
@@ -1178,7 +1177,7 @@ CallOverdefined:
   }
 
   // If this is a single/zero retval case, see if we're tracking the function.
-  if (StructType *STy = dyn_cast<StructType>(F->getReturnType())) {
+  if (auto *STy = dyn_cast<StructType>(F->getReturnType())) {
     if (!MRVFunctionsTracked.count(F))
       goto CallOverdefined;  // Not tracking this callee.
 
@@ -1216,7 +1215,7 @@ void SCCPSolver::Solve() {
       // Update all of the users of this instruction's value.
       //
       for (User *U : I->users())
-        if (Instruction *UI = dyn_cast<Instruction>(U))
+        if (auto *UI = dyn_cast<Instruction>(U))
           OperandChangedState(UI);
     }
 
@@ -1235,7 +1234,7 @@ void SCCPSolver::Solve() {
       //
       if (I->getType()->isStructTy() || !getValueState(I).isOverdefined())
         for (User *U : I->users())
-          if (Instruction *UI = dyn_cast<Instruction>(U))
+          if (auto *UI = dyn_cast<Instruction>(U))
             OperandChangedState(UI);
     }
 
@@ -1280,7 +1279,7 @@ bool SCCPSolver::ResolvedUndefsIn(Function &F) {
       // Look for instructions which produce undef values.
       if (I.getType()->isVoidTy()) continue;
 
-      if (StructType *STy = dyn_cast<StructType>(I.getType())) {
+      if (auto *STy = dyn_cast<StructType>(I.getType())) {
         // Only a few things that can be structs matter for undef.
 
         // Tracked calls must never be marked overdefined in ResolvedUndefsIn.
@@ -1420,8 +1419,8 @@ bool SCCPSolver::ResolvedUndefsIn(Function &F) {
               break;
         }
 
-        // undef >>a X -> all ones
-        markForcedConstant(&I, Constant::getAllOnesValue(ITy));
+        // undef >>a X -> 0
+        markForcedConstant(&I, Constant::getNullValue(ITy));
         return true;
       case Instruction::LShr:
       case Instruction::Shl:
@@ -1501,7 +1500,7 @@ bool SCCPSolver::ResolvedUndefsIn(Function &F) {
     // we force the branch to go one way or the other to make the successor
     // values live.  It doesn't really matter which way we force it.
     TerminatorInst *TI = BB.getTerminator();
-    if (BranchInst *BI = dyn_cast<BranchInst>(TI)) {
+    if (auto *BI = dyn_cast<BranchInst>(TI)) {
       if (!BI->isConditional()) continue;
       if (!getValueState(BI->getCondition()).isUnknown())
         continue;
@@ -1522,7 +1521,7 @@ bool SCCPSolver::ResolvedUndefsIn(Function &F) {
       return true;
     }
 
-    if (SwitchInst *SI = dyn_cast<SwitchInst>(TI)) {
+    if (auto *SI = dyn_cast<SwitchInst>(TI)) {
       if (!SI->getNumCases() || !getValueState(SI->getCondition()).isUnknown())
         continue;
 
@@ -1549,7 +1548,7 @@ static bool tryToReplaceWithConstant(SCCPSolver &Solver, Value *V) {
     if (any_of(IVs, [](const LatticeVal &LV) { return LV.isOverdefined(); }))
       return false;
     std::vector<Constant *> ConstVals;
-    StructType *ST = dyn_cast<StructType>(V->getType());
+    auto *ST = dyn_cast<StructType>(V->getType());
     for (unsigned i = 0, e = ST->getNumElements(); i != e; ++i) {
       LatticeVal V = IVs[i];
       ConstVals.push_back(V.isConstant()
@@ -1690,7 +1689,7 @@ static bool AddressIsTaken(const GlobalValue *GV) {
 
   for (const Use &U : GV->uses()) {
     const User *UR = U.getUser();
-    if (const StoreInst *SI = dyn_cast<StoreInst>(UR)) {
+    if (const auto *SI = dyn_cast<StoreInst>(UR)) {
       if (SI->getOperand(0) == GV || SI->isVolatile())
         return true;  // Storing addr of GV.
     } else if (isa<InvokeInst>(UR) || isa<CallInst>(UR)) {
@@ -1698,7 +1697,7 @@ static bool AddressIsTaken(const GlobalValue *GV) {
       ImmutableCallSite CS(cast<Instruction>(UR));
       if (!CS.isCallee(&U))
         return true;
-    } else if (const LoadInst *LI = dyn_cast<LoadInst>(UR)) {
+    } else if (const auto *LI = dyn_cast<LoadInst>(UR)) {
       if (LI->isVolatile())
         return true;
     } else if (isa<BlockAddress>(UR)) {
@@ -1719,7 +1718,7 @@ static void findReturnsToZap(Function &F,
     return;
 
   for (BasicBlock &BB : F)
-    if (ReturnInst *RI = dyn_cast<ReturnInst>(BB.getTerminator()))
+    if (auto *RI = dyn_cast<ReturnInst>(BB.getTerminator()))
       if (!isa<UndefValue>(RI->getOperand(0)))
         ReturnsToZap.push_back(RI);
 }
@@ -1846,7 +1845,7 @@ static bool runIPSCCP(Module &M, const DataLayout &DL,
            UI != UE;) {
         // Grab the user and then increment the iterator early, as the user
         // will be deleted. Step past all adjacent uses from the same user.
-        Instruction *I = dyn_cast<Instruction>(*UI);
+        auto *I = dyn_cast<Instruction>(*UI);
         do { ++UI; } while (UI != UE && *UI == I);
 
         // Ignore blockaddress users; BasicBlock's dtor will handle them.
@@ -1858,10 +1857,10 @@ static bool runIPSCCP(Module &M, const DataLayout &DL,
           // if this is a branch or switch on undef.  Fold it manually as a
           // branch to the first successor.
 #ifndef NDEBUG
-          if (BranchInst *BI = dyn_cast<BranchInst>(I)) {
+          if (auto *BI = dyn_cast<BranchInst>(I)) {
             assert(BI->isConditional() && isa<UndefValue>(BI->getCondition()) &&
                    "Branch should be foldable!");
-          } else if (SwitchInst *SI = dyn_cast<SwitchInst>(I)) {
+          } else if (auto *SI = dyn_cast<SwitchInst>(I)) {
             assert(isa<UndefValue>(SI->getCondition()) && "Switch should fold");
           } else {
             llvm_unreachable("Didn't fold away reference to block!");

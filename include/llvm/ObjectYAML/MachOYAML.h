@@ -17,6 +17,7 @@
 #define LLVM_OBJECTYAML_MACHOYAML_H
 
 #include "llvm/ObjectYAML/YAML.h"
+#include "llvm/ObjectYAML/DWARFYAML.h"
 #include "llvm/Support/MachO.h"
 
 namespace llvm {
@@ -105,10 +106,12 @@ struct LinkEditData {
 };
 
 struct Object {
+  bool IsLittleEndian;
   FileHeader Header;
   std::vector<LoadCommand> LoadCommands;
   std::vector<Section> Sections;
   LinkEditData LinkEdit;
+  DWARFYAML::Data DWARF;
 };
 
 struct FatHeader {
@@ -136,14 +139,12 @@ struct UniversalBinary {
 
 LLVM_YAML_IS_SEQUENCE_VECTOR(llvm::MachOYAML::LoadCommand)
 LLVM_YAML_IS_SEQUENCE_VECTOR(llvm::MachOYAML::Section)
-LLVM_YAML_IS_SEQUENCE_VECTOR(llvm::yaml::Hex8)
 LLVM_YAML_IS_SEQUENCE_VECTOR(llvm::yaml::Hex64)
 LLVM_YAML_IS_SEQUENCE_VECTOR(int64_t)
 LLVM_YAML_IS_SEQUENCE_VECTOR(llvm::MachOYAML::RebaseOpcode)
 LLVM_YAML_IS_SEQUENCE_VECTOR(llvm::MachOYAML::BindOpcode)
 LLVM_YAML_IS_SEQUENCE_VECTOR(llvm::MachOYAML::ExportEntry)
 LLVM_YAML_IS_SEQUENCE_VECTOR(llvm::MachOYAML::NListEntry)
-LLVM_YAML_IS_SEQUENCE_VECTOR(llvm::StringRef)
 LLVM_YAML_IS_SEQUENCE_VECTOR(llvm::MachOYAML::Object)
 LLVM_YAML_IS_SEQUENCE_VECTOR(llvm::MachOYAML::FatArch)
 

@@ -2206,7 +2206,7 @@ AArch64AsmParser::tryParseFPImm(OperandVector &Operands) {
 
   const AsmToken &Tok = Parser.getTok();
   if (Tok.is(AsmToken::Real)) {
-    APFloat RealVal(APFloat::IEEEdouble, Tok.getString());
+    APFloat RealVal(APFloat::IEEEdouble(), Tok.getString());
     if (isNegative)
       RealVal.changeSign();
 
@@ -2232,7 +2232,7 @@ AArch64AsmParser::tryParseFPImm(OperandVector &Operands) {
         return MatchOperand_ParseFail;
       }
     } else {
-      APFloat RealVal(APFloat::IEEEdouble, Tok.getString());
+      APFloat RealVal(APFloat::IEEEdouble(), Tok.getString());
       uint64_t IntVal = RealVal.bitcastToAPInt().getZExtValue();
       // If we had a '-' in front, toggle the sign bit.
       IntVal ^= (uint64_t)isNegative << 63;
@@ -2406,17 +2406,19 @@ AArch64AsmParser::tryParseOptionalShiftExtend(OperandVector &Operands) {
       return MatchOperand_ParseFail;
     }
 
-    // "extend" type operatoins don't need an immediate, #0 is implicit.
+    // "extend" type operations don't need an immediate, #0 is implicit.
     SMLoc E = SMLoc::getFromPointer(getLoc().getPointer() - 1);
     Operands.push_back(
         AArch64Operand::CreateShiftExtend(ShOp, 0, false, S, E, getContext()));
     return MatchOperand_Success;
   }
 
-  // Make sure we do actually have a number or a parenthesized expression.
+  // Make sure we do actually have a number, identifier or a parenthesized
+  // expression.
   SMLoc E = Parser.getTok().getLoc();
   if (!Parser.getTok().is(AsmToken::Integer) &&
-      !Parser.getTok().is(AsmToken::LParen)) {
+      !Parser.getTok().is(AsmToken::LParen) &&
+      !Parser.getTok().is(AsmToken::Identifier)) {
     Error(E, "expected integer shift amount");
     return MatchOperand_ParseFail;
   }
@@ -3154,7 +3156,7 @@ bool AArch64AsmParser::parseOperand(OperandVector &Operands, bool isCondCode,
     // so convert the value.
     const AsmToken &Tok = Parser.getTok();
     if (Tok.is(AsmToken::Real)) {
-      APFloat RealVal(APFloat::IEEEdouble, Tok.getString());
+      APFloat RealVal(APFloat::IEEEdouble(), Tok.getString());
       uint64_t IntVal = RealVal.bitcastToAPInt().getZExtValue();
       if (Mnemonic != "fcmp" && Mnemonic != "fcmpe" && Mnemonic != "fcmeq" &&
           Mnemonic != "fcmge" && Mnemonic != "fcmgt" && Mnemonic != "fcmle" &&
@@ -4137,9 +4139,9 @@ static const struct {
   { "fp", {AArch64::FeatureFPARMv8} },
   { "simd", {AArch64::FeatureNEON} },
   { "ras", {AArch64::FeatureRAS} },
+  { "lse", {AArch64::FeatureLSE} },
 
   // FIXME: Unsupported extensions
-  { "lse", {} },
   { "pan", {} },
   { "lor", {} },
   { "rdma", {} },

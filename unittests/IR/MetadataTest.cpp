@@ -1360,15 +1360,21 @@ typedef MetadataTest DIFileTest;
 TEST_F(DIFileTest, get) {
   StringRef Filename = "file";
   StringRef Directory = "dir";
-  auto *N = DIFile::get(Context, Filename, Directory);
+  DIFile::ChecksumKind CSKind = DIFile::CSK_MD5;
+  StringRef Checksum = "000102030405060708090a0b0c0d0e0f";
+  auto *N = DIFile::get(Context, Filename, Directory, CSKind, Checksum);
 
   EXPECT_EQ(dwarf::DW_TAG_file_type, N->getTag());
   EXPECT_EQ(Filename, N->getFilename());
   EXPECT_EQ(Directory, N->getDirectory());
-  EXPECT_EQ(N, DIFile::get(Context, Filename, Directory));
+  EXPECT_EQ(CSKind, N->getChecksumKind());
+  EXPECT_EQ(Checksum, N->getChecksum());
+  EXPECT_EQ(N, DIFile::get(Context, Filename, Directory, CSKind, Checksum));
 
-  EXPECT_NE(N, DIFile::get(Context, "other", Directory));
-  EXPECT_NE(N, DIFile::get(Context, Filename, "other"));
+  EXPECT_NE(N, DIFile::get(Context, "other", Directory, CSKind, Checksum));
+  EXPECT_NE(N, DIFile::get(Context, Filename, "other", CSKind, Checksum));
+  EXPECT_NE(N, DIFile::get(Context, Filename, Directory, DIFile::CSK_SHA1, Checksum));
+  EXPECT_NE(N, DIFile::get(Context, Filename, Directory));
 
   TempDIFile Temp = N->clone();
   EXPECT_EQ(N, MDNode::replaceWithUniqued(std::move(Temp)));
@@ -1828,16 +1834,13 @@ TEST_F(DIGlobalVariableTest, get) {
   DIType *Type = getDerivedType();
   bool IsLocalToUnit = false;
   bool IsDefinition = true;
-  auto *Expr = DIExpression::get(Context, {1, 2});
-  auto *Expr2 = DIExpression::get(Context, {1, 2, 3});
   DIDerivedType *StaticDataMemberDeclaration =
       cast<DIDerivedType>(getDerivedType());
   uint32_t AlignInBits = 8;
 
   auto *N = DIGlobalVariable::get(Context, Scope, Name, LinkageName, File, Line,
                                   Type, IsLocalToUnit, IsDefinition,
-                                  Expr, StaticDataMemberDeclaration,
-                                  AlignInBits);
+                                  StaticDataMemberDeclaration, AlignInBits);
   EXPECT_EQ(dwarf::DW_TAG_variable, N->getTag());
   EXPECT_EQ(Scope, N->getScope());
   EXPECT_EQ(Name, N->getName());
@@ -1847,65 +1850,85 @@ TEST_F(DIGlobalVariableTest, get) {
   EXPECT_EQ(Type, N->getType());
   EXPECT_EQ(IsLocalToUnit, N->isLocalToUnit());
   EXPECT_EQ(IsDefinition, N->isDefinition());
-  EXPECT_EQ(Expr, N->getExpr());
   EXPECT_EQ(StaticDataMemberDeclaration, N->getStaticDataMemberDeclaration());
   EXPECT_EQ(AlignInBits, N->getAlignInBits());
   EXPECT_EQ(N, DIGlobalVariable::get(Context, Scope, Name, LinkageName, File,
                                      Line, Type, IsLocalToUnit, IsDefinition,
-                                     Expr, StaticDataMemberDeclaration,
-                                     AlignInBits));
+                                     StaticDataMemberDeclaration, AlignInBits));
 
   EXPECT_NE(N,
             DIGlobalVariable::get(Context, getSubprogram(), Name, LinkageName,
                                   File, Line, Type, IsLocalToUnit, IsDefinition,
-                                  Expr, StaticDataMemberDeclaration,
-                                  AlignInBits));
+                                  StaticDataMemberDeclaration, AlignInBits));
   EXPECT_NE(N, DIGlobalVariable::get(Context, Scope, "other", LinkageName, File,
                                      Line, Type, IsLocalToUnit, IsDefinition,
-                                     Expr, StaticDataMemberDeclaration,
-                                     AlignInBits));
+                                     StaticDataMemberDeclaration, AlignInBits));
   EXPECT_NE(N, DIGlobalVariable::get(Context, Scope, Name, "other", File, Line,
-                                     Type, IsLocalToUnit, IsDefinition, Expr,
-                                     StaticDataMemberDeclaration,
-                                     AlignInBits));
+                                     Type, IsLocalToUnit, IsDefinition,
+                                     StaticDataMemberDeclaration, AlignInBits));
   EXPECT_NE(N,
             DIGlobalVariable::get(Context, Scope, Name, LinkageName, getFile(),
-                                  Line, Type, IsLocalToUnit, IsDefinition, Expr,
-                                  StaticDataMemberDeclaration,
-                                  AlignInBits));
+                                  Line, Type, IsLocalToUnit, IsDefinition,
+                                  StaticDataMemberDeclaration, AlignInBits));
   EXPECT_NE(N,
             DIGlobalVariable::get(Context, Scope, Name, LinkageName, File,
                                   Line + 1, Type, IsLocalToUnit, IsDefinition,
-                                  Expr, StaticDataMemberDeclaration,
-                                  AlignInBits));
+                                  StaticDataMemberDeclaration, AlignInBits));
   EXPECT_NE(N,
             DIGlobalVariable::get(Context, Scope, Name, LinkageName, File, Line,
                                   getDerivedType(), IsLocalToUnit, IsDefinition,
-                                  Expr, StaticDataMemberDeclaration,
-                                  AlignInBits));
+                                  StaticDataMemberDeclaration, AlignInBits));
   EXPECT_NE(N, DIGlobalVariable::get(Context, Scope, Name, LinkageName, File,
                                      Line, Type, !IsLocalToUnit, IsDefinition,
-                                     Expr, StaticDataMemberDeclaration,
-                                     AlignInBits));
+                                     StaticDataMemberDeclaration, AlignInBits));
   EXPECT_NE(N, DIGlobalVariable::get(Context, Scope, Name, LinkageName, File,
                                      Line, Type, IsLocalToUnit, !IsDefinition,
-                                     Expr, StaticDataMemberDeclaration,
+                                     StaticDataMemberDeclaration, AlignInBits));
+  EXPECT_NE(N, DIGlobalVariable::get(Context, Scope, Name, LinkageName, File,
+                                     Line, Type, IsLocalToUnit, IsDefinition,
+                                     cast<DIDerivedType>(getDerivedType()),
                                      AlignInBits));
   EXPECT_NE(N, DIGlobalVariable::get(Context, Scope, Name, LinkageName, File,
                                      Line, Type, IsLocalToUnit, IsDefinition,
-                                     Expr2, StaticDataMemberDeclaration,
-                                     AlignInBits));
-  EXPECT_NE(N,
-            DIGlobalVariable::get(Context, Scope, Name, LinkageName, File, Line,
-                                  Type, IsLocalToUnit, IsDefinition, Expr,
-                                  cast<DIDerivedType>(getDerivedType()),
-                                  AlignInBits));
-  EXPECT_NE(N, DIGlobalVariable::get(Context, Scope, Name, LinkageName, File,
-                                     Line, Type, IsLocalToUnit, IsDefinition,
-                                     Expr, StaticDataMemberDeclaration,
+                                     StaticDataMemberDeclaration,
                                      (AlignInBits << 1)));
 
   TempDIGlobalVariable Temp = N->clone();
+  EXPECT_EQ(N, MDNode::replaceWithUniqued(std::move(Temp)));
+}
+
+typedef MetadataTest DIGlobalVariableExpressionTest;
+
+TEST_F(DIGlobalVariableExpressionTest, get) {
+  DIScope *Scope = getSubprogram();
+  StringRef Name = "name";
+  StringRef LinkageName = "linkage";
+  DIFile *File = getFile();
+  unsigned Line = 5;
+  DIType *Type = getDerivedType();
+  bool IsLocalToUnit = false;
+  bool IsDefinition = true;
+  auto *Expr = DIExpression::get(Context, {1, 2});
+  auto *Expr2 = DIExpression::get(Context, {1, 2, 3});
+  DIDerivedType *StaticDataMemberDeclaration =
+      cast<DIDerivedType>(getDerivedType());
+  uint32_t AlignInBits = 8;
+
+  auto *Var = DIGlobalVariable::get(Context, Scope, Name, LinkageName, File,
+                                    Line, Type, IsLocalToUnit, IsDefinition,
+                                    StaticDataMemberDeclaration, AlignInBits);
+  auto *Var2 = DIGlobalVariable::get(Context, Scope, "other", LinkageName, File,
+                                     Line, Type, IsLocalToUnit, IsDefinition,
+                                     StaticDataMemberDeclaration, AlignInBits);
+  auto *N = DIGlobalVariableExpression::get(Context, Var, Expr);
+
+  EXPECT_EQ(Var, N->getVariable());
+  EXPECT_EQ(Expr, N->getExpression());
+  EXPECT_EQ(N, DIGlobalVariableExpression::get(Context, Var, Expr));
+  EXPECT_NE(N, DIGlobalVariableExpression::get(Context, Var2, Expr));
+  EXPECT_NE(N, DIGlobalVariableExpression::get(Context, Var, Expr2));
+
+  TempDIGlobalVariableExpression Temp = N->clone();
   EXPECT_EQ(N, MDNode::replaceWithUniqued(std::move(Temp)));
 }
 
@@ -2011,19 +2034,20 @@ TEST_F(DIExpressionTest, isValid) {
   // Valid constructions.
   EXPECT_VALID(dwarf::DW_OP_plus, 6);
   EXPECT_VALID(dwarf::DW_OP_deref);
-  EXPECT_VALID(dwarf::DW_OP_bit_piece, 3, 7);
+  EXPECT_VALID(dwarf::DW_OP_LLVM_fragment, 3, 7);
   EXPECT_VALID(dwarf::DW_OP_plus, 6, dwarf::DW_OP_deref);
   EXPECT_VALID(dwarf::DW_OP_deref, dwarf::DW_OP_plus, 6);
-  EXPECT_VALID(dwarf::DW_OP_deref, dwarf::DW_OP_bit_piece, 3, 7);
-  EXPECT_VALID(dwarf::DW_OP_deref, dwarf::DW_OP_plus, 6, dwarf::DW_OP_bit_piece, 3, 7);
+  EXPECT_VALID(dwarf::DW_OP_deref, dwarf::DW_OP_LLVM_fragment, 3, 7);
+  EXPECT_VALID(dwarf::DW_OP_deref, dwarf::DW_OP_plus, 6,
+               dwarf::DW_OP_LLVM_fragment, 3, 7);
 
   // Invalid constructions.
   EXPECT_INVALID(~0u);
   EXPECT_INVALID(dwarf::DW_OP_plus);
-  EXPECT_INVALID(dwarf::DW_OP_bit_piece);
-  EXPECT_INVALID(dwarf::DW_OP_bit_piece, 3);
-  EXPECT_INVALID(dwarf::DW_OP_bit_piece, 3, 7, dwarf::DW_OP_plus, 3);
-  EXPECT_INVALID(dwarf::DW_OP_bit_piece, 3, 7, dwarf::DW_OP_deref);
+  EXPECT_INVALID(dwarf::DW_OP_LLVM_fragment);
+  EXPECT_INVALID(dwarf::DW_OP_LLVM_fragment, 3);
+  EXPECT_INVALID(dwarf::DW_OP_LLVM_fragment, 3, 7, dwarf::DW_OP_plus, 3);
+  EXPECT_INVALID(dwarf::DW_OP_LLVM_fragment, 3, 7, dwarf::DW_OP_deref);
 
 #undef EXPECT_VALID
 #undef EXPECT_INVALID

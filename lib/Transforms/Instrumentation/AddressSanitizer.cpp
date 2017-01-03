@@ -1046,10 +1046,14 @@ Value *AddressSanitizer::isInterestingMemoryAccess(Instruction *I,
               F->getName().startswith("llvm.masked.store."))) {
       unsigned OpOffset = 0;
       if (F->getName().startswith("llvm.masked.store.")) {
+        if (!ClInstrumentWrites)
+          return nullptr;
         // Masked store has an initial operand for the value.
         OpOffset = 1;
         *IsWrite = true;
       } else {
+        if (!ClInstrumentReads)
+          return nullptr;
         *IsWrite = false;
       }
       // Only instrument if the mask is constant for now.
@@ -1561,6 +1565,7 @@ bool AddressSanitizerModule::InstrumentGlobals(IRBuilder<> &IRB, Module &M) {
   size_t n = GlobalsToChange.size();
   if (n == 0) return false;
 
+  auto &DL = M.getDataLayout();
   bool UseComdatMetadata = TargetTriple.isOSBinFormatCOFF();
   bool UseMachOGlobalsSection = ShouldUseMachOGlobalsSection();
   bool UseMetadataArray = !(UseComdatMetadata || UseMachOGlobalsSection);
@@ -1578,6 +1583,10 @@ bool AddressSanitizerModule::InstrumentGlobals(IRBuilder<> &IRB, Module &M) {
   StructType *GlobalStructTy =
       StructType::get(IntptrTy, IntptrTy, IntptrTy, IntptrTy, IntptrTy,
                       IntptrTy, IntptrTy, IntptrTy, nullptr);
+  unsigned SizeOfGlobalStruct = DL.getTypeAllocSize(GlobalStructTy);
+  assert((isPowerOf2_32(SizeOfGlobalStruct) ||
+          !TargetTriple.isOSBinFormatCOFF()) &&
+         "global metadata will not be padded appropriately");
   SmallVector<Constant *, 16> Initializers(UseMetadataArray ? n : 0);
 
   // On recent Mach-O platforms, use a structure which binds the liveness of
@@ -1596,7 +1605,6 @@ bool AddressSanitizerModule::InstrumentGlobals(IRBuilder<> &IRB, Module &M) {
   GlobalVariable *ModuleName = createPrivateGlobalForString(
       M, M.getModuleIdentifier(), /*AllowMerging*/ false);
 
-  auto &DL = M.getDataLayout();
   for (size_t i = 0; i < n; i++) {
     static const uint64_t kMaxGlobalRedzone = 1 << 18;
     GlobalVariable *G = GlobalsToChange[i];
@@ -1647,7 +1655,7 @@ bool AddressSanitizerModule::InstrumentGlobals(IRBuilder<> &IRB, Module &M) {
 
     // Transfer the debug info.  The payload starts at offset zero so we can
     // copy the debug info over as is.
-    SmallVector<DIGlobalVariable *, 1> GVs;
+    SmallVector<DIGlobalVariableExpression *, 1> GVs;
     G->getDebugInfo(GVs);
     for (auto *GV : GVs)
       NewGlobal->addDebugInfo(GV);
@@ -1743,7 +1751,14 @@ bool AddressSanitizerModule::InstrumentGlobals(IRBuilder<> &IRB, Module &M) {
         Initializer, Twine("__asan_global_") +
                              GlobalValue::getRealLinkageName(G->getName()));
     Metadata->setSection(getGlobalMetadataSection());
-    Metadata->setAlignment(1); // Don't leave padding in between.
+
+    // The MSVC linker always inserts padding when linking incrementally. We
+    // cope with that by aligning each struct to its size, which must be a power
+    // of two.
+    if (TargetTriple.isOSBinFormatCOFF())
+      Metadata->setAlignment(SizeOfGlobalStruct);
+    else
+      Metadata->setAlignment(1); // Don't leave padding in between.
 
     // On platforms that support comdats, put the metadata and the
     // instrumented global in the same group. This ensures that the metadata
@@ -2051,11 +2066,20 @@ bool AddressSanitizer::runOnFunction(Function &F) {
     int NumInsnsPerBB = 0;
     for (auto &Inst : BB) {
       if (LooksLikeCodeInBug11395(&Inst)) return false;
+      Value *MaybeMask = nullptr;
       if (Value *Addr = isInterestingMemoryAccess(&Inst, &IsWrite, &TypeSize,
-                                                  &Alignment)) {
+                                                  &Alignment, &MaybeMask)) {
         if (ClOpt && ClOptSameTemp) {
-          if (!TempsToInstrument.insert(Addr).second)
-            continue;  // We've seen this temp in the current BB.
+          // If we have a mask, skip instrumentation if we've already
+          // instrumented the full object. But don't add to TempsToInstrument
+          // because we might get another load/store with a different mask.
+          if (MaybeMask) {
+            if (TempsToInstrument.count(Addr))
+              continue; // We've seen this (whole) temp in the current BB.
+          } else {
+            if (!TempsToInstrument.insert(Addr).second)
+              continue; // We've seen this temp in the current BB.
+          }
         }
       } else if (ClInvalidPointerPairs &&
                  isInterestingPointerComparisonOrSubtraction(&Inst)) {

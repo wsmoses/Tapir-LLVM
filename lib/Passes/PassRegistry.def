@@ -79,6 +79,7 @@ MODULE_PASS("verify", VerifierPass())
 #define CGSCC_ANALYSIS(NAME, CREATE_PASS)
 #endif
 CGSCC_ANALYSIS("no-op-cgscc", NoOpCGSCCAnalysis())
+CGSCC_ANALYSIS("fam-proxy", FunctionAnalysisManagerCGSCCProxy())
 #undef CGSCC_ANALYSIS
 
 #ifndef CGSCC_PASS
@@ -86,6 +87,7 @@ CGSCC_ANALYSIS("no-op-cgscc", NoOpCGSCCAnalysis())
 #endif
 CGSCC_PASS("invalidate<all>", InvalidateAllAnalysesPass())
 CGSCC_PASS("function-attrs", PostOrderFunctionAttrsPass())
+CGSCC_PASS("inline", InlinerPass())
 CGSCC_PASS("no-op-cgscc", NoOpCGSCCPass())
 #undef CGSCC_PASS
 
@@ -162,6 +164,7 @@ FUNCTION_PASS("mem2reg", PromotePass())
 FUNCTION_PASS("memcpyopt", MemCpyOptPass())
 FUNCTION_PASS("mldst-motion", MergedLoadStoreMotionPass())
 FUNCTION_PASS("nary-reassociate", NaryReassociatePass())
+FUNCTION_PASS("newgvn", NewGVNPass())
 FUNCTION_PASS("jump-threading", JumpThreadingPass())
 FUNCTION_PASS("partially-inline-libcalls", PartiallyInlineLibCallsPass())
 FUNCTION_PASS("lcssa", LCSSAPass())

@@ -3,8 +3,9 @@
 
 ; Make sure this doesn't crash.
 ; ALL-LABEL: {{^}}test:
-; ALL: s_mov_b32 s92, SCRATCH_RSRC_DWORD0
-; ALL: s_mov_b32 s91, s3
+; ALL: s_mov_b32 s[[LO:[0-9]+]], SCRATCH_RSRC_DWORD0
+; ALL: s_mov_b32 s[[OFF:[0-9]+]], s3
+; ALL: s_mov_b32 s[[HI:[0-9]+]], 0xe80000
 
 ; Make sure we are handling hazards correctly.
 ; SGPR: buffer_load_dword [[VHI:v[0-9]+]], off, s[{{[0-9]+:[0-9]+}}], s{{[0-9]+}} offset:12
@@ -13,31 +14,15 @@
 ; SGPR-NEXT: s_nop 4
 ; SGPR-NEXT: buffer_store_dword v0, off, s[0:[[HI]]{{\]}}, 0
 
-
 ; Make sure scratch wave offset register is correctly incremented and
 ; then restored.
-; SMEM: s_mov_b32 m0, s91{{$}}
-; SMEM: s_buffer_store_dword s{{[0-9]+}}, s[92:95], m0 ; 4-byte Folded Spill
-; SMEM: s_add_u32 m0, s91, 0x100{{$}}
-; SMEM: s_buffer_store_dword s{{[0-9]+}}, s[92:95], m0 ; 4-byte Folded Spill
-; SMEM: s_add_u32 m0, s91, 0x200{{$}}
-; SMEM: s_buffer_store_dword s{{[0-9]+}}, s[92:95], m0 ; 4-byte Folded Spill
-; SMEM: s_add_u32 m0, s91, 0x300{{$}}
-; SMEM: s_buffer_store_dword s{{[0-9]+}}, s[92:95], m0 ; 4-byte Folded Spill
+; SMEM: s_mov_b32 m0, s[[OFF]]{{$}}
+; SMEM: s_buffer_store_dwordx4 s{{\[[0-9]+:[0-9]+\]}}, s{{\[}}[[LO]]:[[HI]]], m0 ; 16-byte Folded Spill
 
+; SMEM: s_mov_b32 m0, s[[OFF]]{{$}}
+; SMEM: s_buffer_load_dwordx4 s{{\[[0-9]+:[0-9]+\]}}, s{{\[}}[[LO]]:[[HI]]], m0 ; 16-byte Folded Reload
 
-; SMEM: s_mov_b32 m0, s91{{$}}
-; SMEM: s_buffer_load_dword s{{[0-9]+}}, s[92:95], m0 ; 4-byte Folded Reload
-; SMEM: s_add_u32 m0, s91, 0x100{{$}}
-; SMEM: s_waitcnt lgkmcnt(0)
-; SMEM: s_buffer_load_dword s{{[0-9]+}}, s[92:95], m0 ; 4-byte Folded Reload
-; SMEM: s_add_u32 m0, s91, 0x200{{$}}
-; SMEM: s_waitcnt lgkmcnt(0)
-; SMEM: s_buffer_load_dword s{{[0-9]+}}, s[92:95], m0 ; 4-byte Folded Reload
-; SMEM: s_add_u32 m0, s91, 0x300{{$}}
-; SMEM: s_waitcnt lgkmcnt(0)
-; SMEM: s_buffer_load_dword s{{[0-9]+}}, s[92:95], m0 ; 4-byte Folded Reload
-
+; SMEM: s_dcache_wb
 ; ALL: s_endpgm
 define void @test(i32 addrspace(1)* %out, i32 %in) {
   call void asm sideeffect "", "~{SGPR0_SGPR1_SGPR2_SGPR3_SGPR4_SGPR5_SGPR6_SGPR7}" ()

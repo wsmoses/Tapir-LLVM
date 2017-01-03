@@ -44,6 +44,7 @@ private:
   //   like x86/x86_64.
   void replaceRetWithPatchableRet(MachineFunction &MF,
     const TargetInstrInfo *TII);
+
   // Prepend the original return instruction with the exit sled code ("patchable
   //   function exit" pseudo-instruction), preserving the original return
   //   instruction just after the exit sled code.
@@ -128,7 +129,15 @@ bool XRayInstrumentation::runOnMachineFunction(MachineFunction &MF) {
       return false; // Function is too small.
   }
 
-  auto &FirstMBB = *MF.begin();
+  // We look for the first non-empty MachineBasicBlock, so that we can insert
+  // the function instrumentation in the appropriate place.
+  auto MBI =
+      find_if(MF, [&](const MachineBasicBlock &MBB) { return !MBB.empty(); });
+  if (MBI == MF.end())
+    return false; // The function is empty.
+
+  auto *TII = MF.getSubtarget().getInstrInfo();
+  auto &FirstMBB = *MBI;
   auto &FirstMI = *FirstMBB.begin();
 
   if (!MF.getSubtarget().isXRaySupported()) {
@@ -141,7 +150,6 @@ bool XRayInstrumentation::runOnMachineFunction(MachineFunction &MF) {
 
   // First, insert an PATCHABLE_FUNCTION_ENTER as the first instruction of the
   // MachineFunction.
-  auto *TII = MF.getSubtarget().getInstrInfo();
   BuildMI(FirstMBB, FirstMI, FirstMI.getDebugLoc(),
           TII->get(TargetOpcode::PATCHABLE_FUNCTION_ENTER));
 

@@ -169,6 +169,7 @@ class MCStreamer {
   MCDwarfFrameInfo *getCurrentDwarfFrameInfo();
   void EnsureValidDwarfFrame();
 
+  MCSymbol *EmitCFILabel();
   MCSymbol *EmitCFICommon();
 
   std::vector<WinEH::FrameInfo *> WinFrameInfos;
@@ -261,7 +262,11 @@ public:
   ///
   /// If the comment includes embedded \n's, they will each get the comment
   /// prefix as appropriate.  The added comment should not end with a \n.
-  virtual void AddComment(const Twine &T) {}
+  /// By default, each comment is terminated with an end of line, i.e. the
+  /// EOL param is set to true by default. If one prefers not to end the 
+  /// comment with a new line then the EOL param should be passed 
+  /// with a false value.
+  virtual void AddComment(const Twine &T, bool EOL = true) {}
 
   /// \brief Return a raw_ostream that comments can be written to. Unlike
   /// AddComment, you are required to terminate comments with \n if you use this
@@ -476,7 +481,7 @@ public:
   ///
   /// This corresponds to an assembler statement such as:
   ///  .size symbol, expression
-  virtual void emitELFSize(MCSymbolELF *Symbol, const MCExpr *Value);
+  virtual void emitELFSize(MCSymbol *Symbol, const MCExpr *Value);
 
   /// \brief Emit a Linker Optimization Hint (LOH) directive.
   /// \param Args - Arguments of the LOH.
@@ -683,7 +688,8 @@ public:
   /// \param Offset - The offset to reach. This may be an expression, but the
   /// expression must be associated with the current section.
   /// \param Value - The value to use when filling bytes.
-  virtual void emitValueToOffset(const MCExpr *Offset, unsigned char Value = 0);
+  virtual void emitValueToOffset(const MCExpr *Offset, unsigned char Value,
+                                 SMLoc Loc);
 
   /// @}
 

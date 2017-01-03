@@ -558,7 +558,7 @@ define <32 x i16> @test_broadcast_8i16_32i16(<8 x i16> *%p) nounwind {
 ; X32-AVX512F:       ## BB#0:
 ; X32-AVX512F-NEXT:    movl {{[0-9]+}}(%esp), %eax
 ; X32-AVX512F-NEXT:    vbroadcasti32x4 {{.*#+}} ymm0 = mem[0,1,2,3,0,1,2,3]
-; X32-AVX512F-NEXT:    vmovdqa64 %ymm0, %ymm1
+; X32-AVX512F-NEXT:    vmovdqa %ymm0, %ymm1
 ; X32-AVX512F-NEXT:    retl
 ;
 ; X32-AVX512BW-LABEL: test_broadcast_8i16_32i16:
@@ -571,7 +571,7 @@ define <32 x i16> @test_broadcast_8i16_32i16(<8 x i16> *%p) nounwind {
 ; X32-AVX512DQ:       ## BB#0:
 ; X32-AVX512DQ-NEXT:    movl {{[0-9]+}}(%esp), %eax
 ; X32-AVX512DQ-NEXT:    vbroadcasti32x4 {{.*#+}} ymm0 = mem[0,1,2,3,0,1,2,3]
-; X32-AVX512DQ-NEXT:    vmovdqa64 %ymm0, %ymm1
+; X32-AVX512DQ-NEXT:    vmovdqa %ymm0, %ymm1
 ; X32-AVX512DQ-NEXT:    retl
 ;
 ; X64-AVX1-LABEL: test_broadcast_8i16_32i16:
@@ -589,7 +589,7 @@ define <32 x i16> @test_broadcast_8i16_32i16(<8 x i16> *%p) nounwind {
 ; X64-AVX512F-LABEL: test_broadcast_8i16_32i16:
 ; X64-AVX512F:       ## BB#0:
 ; X64-AVX512F-NEXT:    vbroadcasti32x4 {{.*#+}} ymm0 = mem[0,1,2,3,0,1,2,3]
-; X64-AVX512F-NEXT:    vmovdqa64 %ymm0, %ymm1
+; X64-AVX512F-NEXT:    vmovdqa %ymm0, %ymm1
 ; X64-AVX512F-NEXT:    retq
 ;
 ; X64-AVX512BW-LABEL: test_broadcast_8i16_32i16:
@@ -600,7 +600,7 @@ define <32 x i16> @test_broadcast_8i16_32i16(<8 x i16> *%p) nounwind {
 ; X64-AVX512DQ-LABEL: test_broadcast_8i16_32i16:
 ; X64-AVX512DQ:       ## BB#0:
 ; X64-AVX512DQ-NEXT:    vbroadcasti32x4 {{.*#+}} ymm0 = mem[0,1,2,3,0,1,2,3]
-; X64-AVX512DQ-NEXT:    vmovdqa64 %ymm0, %ymm1
+; X64-AVX512DQ-NEXT:    vmovdqa %ymm0, %ymm1
 ; X64-AVX512DQ-NEXT:    retq
  %1 = load <8 x i16>, <8 x i16> *%p
  %2 = shufflevector <8 x i16> %1, <8 x i16> undef, <32 x i32> <i32 0, i32 1, i32 2, i32 3, i32 4, i32 5, i32 6, i32 7, i32 0, i32 1, i32 2, i32 3, i32 4, i32 5, i32 6, i32 7, i32 0, i32 1, i32 2, i32 3, i32 4, i32 5, i32 6, i32 7, i32 0, i32 1, i32 2, i32 3, i32 4, i32 5, i32 6, i32 7>
@@ -708,7 +708,7 @@ define <64 x i8> @test_broadcast_16i8_64i8(<16 x i8> *%p) nounwind {
 ; X32-AVX512F:       ## BB#0:
 ; X32-AVX512F-NEXT:    movl {{[0-9]+}}(%esp), %eax
 ; X32-AVX512F-NEXT:    vbroadcasti32x4 {{.*#+}} ymm0 = mem[0,1,2,3,0,1,2,3]
-; X32-AVX512F-NEXT:    vmovdqa64 %ymm0, %ymm1
+; X32-AVX512F-NEXT:    vmovdqa %ymm0, %ymm1
 ; X32-AVX512F-NEXT:    retl
 ;
 ; X32-AVX512BW-LABEL: test_broadcast_16i8_64i8:
@@ -721,7 +721,7 @@ define <64 x i8> @test_broadcast_16i8_64i8(<16 x i8> *%p) nounwind {
 ; X32-AVX512DQ:       ## BB#0:
 ; X32-AVX512DQ-NEXT:    movl {{[0-9]+}}(%esp), %eax
 ; X32-AVX512DQ-NEXT:    vbroadcasti32x4 {{.*#+}} ymm0 = mem[0,1,2,3,0,1,2,3]
-; X32-AVX512DQ-NEXT:    vmovdqa64 %ymm0, %ymm1
+; X32-AVX512DQ-NEXT:    vmovdqa %ymm0, %ymm1
 ; X32-AVX512DQ-NEXT:    retl
 ;
 ; X64-AVX1-LABEL: test_broadcast_16i8_64i8:
@@ -739,7 +739,7 @@ define <64 x i8> @test_broadcast_16i8_64i8(<16 x i8> *%p) nounwind {
 ; X64-AVX512F-LABEL: test_broadcast_16i8_64i8:
 ; X64-AVX512F:       ## BB#0:
 ; X64-AVX512F-NEXT:    vbroadcasti32x4 {{.*#+}} ymm0 = mem[0,1,2,3,0,1,2,3]
-; X64-AVX512F-NEXT:    vmovdqa64 %ymm0, %ymm1
+; X64-AVX512F-NEXT:    vmovdqa %ymm0, %ymm1
 ; X64-AVX512F-NEXT:    retq
 ;
 ; X64-AVX512BW-LABEL: test_broadcast_16i8_64i8:
@@ -750,7 +750,7 @@ define <64 x i8> @test_broadcast_16i8_64i8(<16 x i8> *%p) nounwind {
 ; X64-AVX512DQ-LABEL: test_broadcast_16i8_64i8:
 ; X64-AVX512DQ:       ## BB#0:
 ; X64-AVX512DQ-NEXT:    vbroadcasti32x4 {{.*#+}} ymm0 = mem[0,1,2,3,0,1,2,3]
-; X64-AVX512DQ-NEXT:    vmovdqa64 %ymm0, %ymm1
+; X64-AVX512DQ-NEXT:    vmovdqa %ymm0, %ymm1
 ; X64-AVX512DQ-NEXT:    retq
  %1 = load <16 x i8>, <16 x i8> *%p
  %2 = shufflevector <16 x i8> %1, <16 x i8> undef, <64 x i32> <i32 0, i32 1, i32 2, i32 3, i32 4, i32 5, i32 6, i32 7, i32 8, i32 9, i32 10, i32 11, i32 12, i32 13, i32 14, i32 15, i32 0, i32 1, i32 2, i32 3, i32 4, i32 5, i32 6, i32 7, i32 8, i32 9, i32 10, i32 11, i32 12, i32 13, i32 14, i32 15, i32 0, i32 1, i32 2, i32 3, i32 4, i32 5, i32 6, i32 7, i32 8, i32 9, i32 10, i32 11, i32 12, i32 13, i32 14, i32 15, i32 0, i32 1, i32 2, i32 3, i32 4, i32 5, i32 6, i32 7, i32 8, i32 9, i32 10, i32 11, i32 12, i32 13, i32 14, i32 15>
@@ -900,8 +900,8 @@ define <4 x i64> @test_broadcast_2i64_4i64_reuse(<2 x i64>* %p0, <2 x i64>* %p1)
 ; X32-AVX512F:       ## BB#0:
 ; X32-AVX512F-NEXT:    movl {{[0-9]+}}(%esp), %eax
 ; X32-AVX512F-NEXT:    movl {{[0-9]+}}(%esp), %ecx
-; X32-AVX512F-NEXT:    vmovdqa64 (%ecx), %xmm0
-; X32-AVX512F-NEXT:    vmovdqa64 %xmm0, (%eax)
+; X32-AVX512F-NEXT:    vmovdqa (%ecx), %xmm0
+; X32-AVX512F-NEXT:    vmovdqa %xmm0, (%eax)
 ; X32-AVX512F-NEXT:    vinserti32x4 $1, %xmm0, %ymm0, %ymm0
 ; X32-AVX512F-NEXT:    retl
 ;
@@ -909,8 +909,8 @@ define <4 x i64> @test_broadcast_2i64_4i64_reuse(<2 x i64>* %p0, <2 x i64>* %p1)
 ; X32-AVX512BW:       ## BB#0:
 ; X32-AVX512BW-NEXT:    movl {{[0-9]+}}(%esp), %eax
 ; X32-AVX512BW-NEXT:    movl {{[0-9]+}}(%esp), %ecx
-; X32-AVX512BW-NEXT:    vmovdqa64 (%ecx), %xmm0
-; X32-AVX512BW-NEXT:    vmovdqa64 %xmm0, (%eax)
+; X32-AVX512BW-NEXT:    vmovdqa (%ecx), %xmm0
+; X32-AVX512BW-NEXT:    vmovdqa %xmm0, (%eax)
 ; X32-AVX512BW-NEXT:    vinserti32x4 $1, %xmm0, %ymm0, %ymm0
 ; X32-AVX512BW-NEXT:    retl
 ;
@@ -918,8 +918,8 @@ define <4 x i64> @test_broadcast_2i64_4i64_reuse(<2 x i64>* %p0, <2 x i64>* %p1)
 ; X32-AVX512DQ:       ## BB#0:
 ; X32-AVX512DQ-NEXT:    movl {{[0-9]+}}(%esp), %eax
 ; X32-AVX512DQ-NEXT:    movl {{[0-9]+}}(%esp), %ecx
-; X32-AVX512DQ-NEXT:    vmovdqa64 (%ecx), %xmm0
-; X32-AVX512DQ-NEXT:    vmovdqa64 %xmm0, (%eax)
+; X32-AVX512DQ-NEXT:    vmovdqa (%ecx), %xmm0
+; X32-AVX512DQ-NEXT:    vmovdqa %xmm0, (%eax)
 ; X32-AVX512DQ-NEXT:    vinserti64x2 $1, %xmm0, %ymm0, %ymm0
 ; X32-AVX512DQ-NEXT:    retl
 ;
@@ -932,22 +932,22 @@ define <4 x i64> @test_broadcast_2i64_4i64_reuse(<2 x i64>* %p0, <2 x i64>* %p1)
 ;
 ; X64-AVX512F-LABEL: test_broadcast_2i64_4i64_reuse:
 ; X64-AVX512F:       ## BB#0:
-; X64-AVX512F-NEXT:    vmovdqa64 (%rdi), %xmm0
-; X64-AVX512F-NEXT:    vmovdqa64 %xmm0, (%rsi)
+; X64-AVX512F-NEXT:    vmovdqa (%rdi), %xmm0
+; X64-AVX512F-NEXT:    vmovdqa %xmm0, (%rsi)
 ; X64-AVX512F-NEXT:    vinserti32x4 $1, %xmm0, %ymm0, %ymm0
 ; X64-AVX512F-NEXT:    retq
 ;
 ; X64-AVX512BW-LABEL: test_broadcast_2i64_4i64_reuse:
 ; X64-AVX512BW:       ## BB#0:
-; X64-AVX512BW-NEXT:    vmovdqa64 (%rdi), %xmm0
-; X64-AVX512BW-NEXT:    vmovdqa64 %xmm0, (%rsi)
+; X64-AVX512BW-NEXT:    vmovdqa (%rdi), %xmm0
+; X64-AVX512BW-NEXT:    vmovdqa %xmm0, (%rsi)
 ; X64-AVX512BW-NEXT:    vinserti32x4 $1, %xmm0, %ymm0, %ymm0
 ; X64-AVX512BW-NEXT:    retq
 ;
 ; X64-AVX512DQ-LABEL: test_broadcast_2i64_4i64_reuse:
 ; X64-AVX512DQ:       ## BB#0:
-; X64-AVX512DQ-NEXT:    vmovdqa64 (%rdi), %xmm0
-; X64-AVX512DQ-NEXT:    vmovdqa64 %xmm0, (%rsi)
+; X64-AVX512DQ-NEXT:    vmovdqa (%rdi), %xmm0
+; X64-AVX512DQ-NEXT:    vmovdqa %xmm0, (%rsi)
 ; X64-AVX512DQ-NEXT:    vinserti64x2 $1, %xmm0, %ymm0, %ymm0
 ; X64-AVX512DQ-NEXT:    retq
  %1 = load <2 x i64>, <2 x i64>* %p0
@@ -1008,8 +1008,8 @@ define <8 x i32> @test_broadcast_4i32_8i32_reuse(<4 x i32>* %p0, <4 x i32>* %p1)
 ; X32-AVX512:       ## BB#0:
 ; X32-AVX512-NEXT:    movl {{[0-9]+}}(%esp), %eax
 ; X32-AVX512-NEXT:    movl {{[0-9]+}}(%esp), %ecx
-; X32-AVX512-NEXT:    vmovdqa32 (%ecx), %xmm0
-; X32-AVX512-NEXT:    vmovdqa32 %xmm0, (%eax)
+; X32-AVX512-NEXT:    vmovdqa (%ecx), %xmm0
+; X32-AVX512-NEXT:    vmovdqa %xmm0, (%eax)
 ; X32-AVX512-NEXT:    vinserti32x4 $1, %xmm0, %ymm0, %ymm0
 ; X32-AVX512-NEXT:    retl
 ;
@@ -1022,8 +1022,8 @@ define <8 x i32> @test_broadcast_4i32_8i32_reuse(<4 x i32>* %p0, <4 x i32>* %p1)
 ;
 ; X64-AVX512-LABEL: test_broadcast_4i32_8i32_reuse:
 ; X64-AVX512:       ## BB#0:
-; X64-AVX512-NEXT:    vmovdqa32 (%rdi), %xmm0
-; X64-AVX512-NEXT:    vmovdqa32 %xmm0, (%rsi)
+; X64-AVX512-NEXT:    vmovdqa (%rdi), %xmm0
+; X64-AVX512-NEXT:    vmovdqa %xmm0, (%rsi)
 ; X64-AVX512-NEXT:    vinserti32x4 $1, %xmm0, %ymm0, %ymm0
 ; X64-AVX512-NEXT:    retq
  %1 = load <4 x i32>, <4 x i32>* %p0
@@ -1046,8 +1046,8 @@ define <16 x i16> @test_broadcast_8i16_16i16_reuse(<8 x i16> *%p0, <8 x i16> *%p
 ; X32-AVX512F:       ## BB#0:
 ; X32-AVX512F-NEXT:    movl {{[0-9]+}}(%esp), %eax
 ; X32-AVX512F-NEXT:    movl {{[0-9]+}}(%esp), %ecx
-; X32-AVX512F-NEXT:    vmovdqa64 (%ecx), %xmm0
-; X32-AVX512F-NEXT:    vmovdqa32 %xmm0, (%eax)
+; X32-AVX512F-NEXT:    vmovdqa (%ecx), %xmm0
+; X32-AVX512F-NEXT:    vmovdqa %xmm0, (%eax)
 ; X32-AVX512F-NEXT:    vinserti32x4 $1, %xmm0, %ymm0, %ymm0
 ; X32-AVX512F-NEXT:    retl
 ;
@@ -1055,8 +1055,8 @@ define <16 x i16> @test_broadcast_8i16_16i16_reuse(<8 x i16> *%p0, <8 x i16> *%p
 ; X32-AVX512BW:       ## BB#0:
 ; X32-AVX512BW-NEXT:    movl {{[0-9]+}}(%esp), %eax
 ; X32-AVX512BW-NEXT:    movl {{[0-9]+}}(%esp), %ecx
-; X32-AVX512BW-NEXT:    vmovdqu16 (%ecx), %xmm0
-; X32-AVX512BW-NEXT:    vmovdqu16 %xmm0, (%eax)
+; X32-AVX512BW-NEXT:    vmovdqu (%ecx), %xmm0
+; X32-AVX512BW-NEXT:    vmovdqu %xmm0, (%eax)
 ; X32-AVX512BW-NEXT:    vinserti32x4 $1, %xmm0, %ymm0, %ymm0
 ; X32-AVX512BW-NEXT:    retl
 ;
@@ -1064,8 +1064,8 @@ define <16 x i16> @test_broadcast_8i16_16i16_reuse(<8 x i16> *%p0, <8 x i16> *%p
 ; X32-AVX512DQ:       ## BB#0:
 ; X32-AVX512DQ-NEXT:    movl {{[0-9]+}}(%esp), %eax
 ; X32-AVX512DQ-NEXT:    movl {{[0-9]+}}(%esp), %ecx
-; X32-AVX512DQ-NEXT:    vmovdqa64 (%ecx), %xmm0
-; X32-AVX512DQ-NEXT:    vmovdqa32 %xmm0, (%eax)
+; X32-AVX512DQ-NEXT:    vmovdqa (%ecx), %xmm0
+; X32-AVX512DQ-NEXT:    vmovdqa %xmm0, (%eax)
 ; X32-AVX512DQ-NEXT:    vinserti32x4 $1, %xmm0, %ymm0, %ymm0
 ; X32-AVX512DQ-NEXT:    retl
 ;
@@ -1078,22 +1078,22 @@ define <16 x i16> @test_broadcast_8i16_16i16_reuse(<8 x i16> *%p0, <8 x i16> *%p
 ;
 ; X64-AVX512F-LABEL: test_broadcast_8i16_16i16_reuse:
 ; X64-AVX512F:       ## BB#0:
-; X64-AVX512F-NEXT:    vmovdqa64 (%rdi), %xmm0
-; X64-AVX512F-NEXT:    vmovdqa32 %xmm0, (%rsi)
+; X64-AVX512F-NEXT:    vmovdqa (%rdi), %xmm0
+; X64-AVX512F-NEXT:    vmovdqa %xmm0, (%rsi)
 ; X64-AVX512F-NEXT:    vinserti32x4 $1, %xmm0, %ymm0, %ymm0
 ; X64-AVX512F-NEXT:    retq
 ;
 ; X64-AVX512BW-LABEL: test_broadcast_8i16_16i16_reuse:
 ; X64-AVX512BW:       ## BB#0:
-; X64-AVX512BW-NEXT:    vmovdqu16 (%rdi), %xmm0
-; X64-AVX512BW-NEXT:    vmovdqu16 %xmm0, (%rsi)
+; X64-AVX512BW-NEXT:    vmovdqu (%rdi), %xmm0
+; X64-AVX512BW-NEXT:    vmovdqu %xmm0, (%rsi)
 ; X64-AVX512BW-NEXT:    vinserti32x4 $1, %xmm0, %ymm0, %ymm0
 ; X64-AVX512BW-NEXT:    retq
 ;
 ; X64-AVX512DQ-LABEL: test_broadcast_8i16_16i16_reuse:
 ; X64-AVX512DQ:       ## BB#0:
-; X64-AVX512DQ-NEXT:    vmovdqa64 (%rdi), %xmm0
-; X64-AVX512DQ-NEXT:    vmovdqa32 %xmm0, (%rsi)
+; X64-AVX512DQ-NEXT:    vmovdqa (%rdi), %xmm0
+; X64-AVX512DQ-NEXT:    vmovdqa %xmm0, (%rsi)
 ; X64-AVX512DQ-NEXT:    vinserti32x4 $1, %xmm0, %ymm0, %ymm0
 ; X64-AVX512DQ-NEXT:    retq
  %1 = load <8 x i16>, <8 x i16> *%p0
@@ -1116,8 +1116,8 @@ define <32 x i8> @test_broadcast_16i8_32i8_reuse(<16 x i8> *%p0, <16 x i8> *%p1)
 ; X32-AVX512F:       ## BB#0:
 ; X32-AVX512F-NEXT:    movl {{[0-9]+}}(%esp), %eax
 ; X32-AVX512F-NEXT:    movl {{[0-9]+}}(%esp), %ecx
-; X32-AVX512F-NEXT:    vmovdqa64 (%ecx), %xmm0
-; X32-AVX512F-NEXT:    vmovdqa32 %xmm0, (%eax)
+; X32-AVX512F-NEXT:    vmovdqa (%ecx), %xmm0
+; X32-AVX512F-NEXT:    vmovdqa %xmm0, (%eax)
 ; X32-AVX512F-NEXT:    vinserti32x4 $1, %xmm0, %ymm0, %ymm0
 ; X32-AVX512F-NEXT:    retl
 ;
@@ -1125,8 +1125,8 @@ define <32 x i8> @test_broadcast_16i8_32i8_reuse(<16 x i8> *%p0, <16 x i8> *%p1)
 ; X32-AVX512BW:       ## BB#0:
 ; X32-AVX512BW-NEXT:    movl {{[0-9]+}}(%esp), %eax
 ; X32-AVX512BW-NEXT:    movl {{[0-9]+}}(%esp), %ecx
-; X32-AVX512BW-NEXT:    vmovdqu8 (%ecx), %xmm0
-; X32-AVX512BW-NEXT:    vmovdqu8 %xmm0, (%eax)
+; X32-AVX512BW-NEXT:    vmovdqu (%ecx), %xmm0
+; X32-AVX512BW-NEXT:    vmovdqu %xmm0, (%eax)
 ; X32-AVX512BW-NEXT:    vinserti32x4 $1, %xmm0, %ymm0, %ymm0
 ; X32-AVX512BW-NEXT:    retl
 ;
@@ -1134,8 +1134,8 @@ define <32 x i8> @test_broadcast_16i8_32i8_reuse(<16 x i8> *%p0, <16 x i8> *%p1)
 ; X32-AVX512DQ:       ## BB#0:
 ; X32-AVX512DQ-NEXT:    movl {{[0-9]+}}(%esp), %eax
 ; X32-AVX512DQ-NEXT:    movl {{[0-9]+}}(%esp), %ecx
-; X32-AVX512DQ-NEXT:    vmovdqa64 (%ecx), %xmm0
-; X32-AVX512DQ-NEXT:    vmovdqa32 %xmm0, (%eax)
+; X32-AVX512DQ-NEXT:    vmovdqa (%ecx), %xmm0
+; X32-AVX512DQ-NEXT:    vmovdqa %xmm0, (%eax)
 ; X32-AVX512DQ-NEXT:    vinserti32x4 $1, %xmm0, %ymm0, %ymm0
 ; X32-AVX512DQ-NEXT:    retl
 ;
@@ -1148,22 +1148,22 @@ define <32 x i8> @test_broadcast_16i8_32i8_reuse(<16 x i8> *%p0, <16 x i8> *%p1)
 ;
 ; X64-AVX512F-LABEL: test_broadcast_16i8_32i8_reuse:
 ; X64-AVX512F:       ## BB#0:
-; X64-AVX512F-NEXT:    vmovdqa64 (%rdi), %xmm0
-; X64-AVX512F-NEXT:    vmovdqa32 %xmm0, (%rsi)
+; X64-AVX512F-NEXT:    vmovdqa (%rdi), %xmm0
+; X64-AVX512F-NEXT:    vmovdqa %xmm0, (%rsi)
 ; X64-AVX512F-NEXT:    vinserti32x4 $1, %xmm0, %ymm0, %ymm0
 ; X64-AVX512F-NEXT:    retq
 ;
 ; X64-AVX512BW-LABEL: test_broadcast_16i8_32i8_reuse:
 ; X64-AVX512BW:       ## BB#0:
-; X64-AVX512BW-NEXT:    vmovdqu8 (%rdi), %xmm0
-; X64-AVX512BW-NEXT:    vmovdqu8 %xmm0, (%rsi)
+; X64-AVX512BW-NEXT:    vmovdqu (%rdi), %xmm0
+; X64-AVX512BW-NEXT:    vmovdqu %xmm0, (%rsi)
 ; X64-AVX512BW-NEXT:    vinserti32x4 $1, %xmm0, %ymm0, %ymm0
 ; X64-AVX512BW-NEXT:    retq
 ;
 ; X64-AVX512DQ-LABEL: test_broadcast_16i8_32i8_reuse:
 ; X64-AVX512DQ:       ## BB#0:
-; X64-AVX512DQ-NEXT:    vmovdqa64 (%rdi), %xmm0
-; X64-AVX512DQ-NEXT:    vmovdqa32 %xmm0, (%rsi)
+; X64-AVX512DQ-NEXT:    vmovdqa (%rdi), %xmm0
+; X64-AVX512DQ-NEXT:    vmovdqa %xmm0, (%rsi)
 ; X64-AVX512DQ-NEXT:    vinserti32x4 $1, %xmm0, %ymm0, %ymm0
 ; X64-AVX512DQ-NEXT:    retq
  %1 = load <16 x i8>, <16 x i8> *%p0
@@ -1191,9 +1191,9 @@ define <8 x i32> @test_broadcast_4i32_8i32_chain(<4 x i32>* %p0, <4 x float>* %p
 ; X32-AVX512F:       ## BB#0:
 ; X32-AVX512F-NEXT:    movl {{[0-9]+}}(%esp), %eax
 ; X32-AVX512F-NEXT:    movl {{[0-9]+}}(%esp), %ecx
-; X32-AVX512F-NEXT:    vmovdqa64 (%ecx), %xmm0
-; X32-AVX512F-NEXT:    vpxord %xmm1, %xmm1, %xmm1
-; X32-AVX512F-NEXT:    vmovdqa32 %xmm1, (%eax)
+; X32-AVX512F-NEXT:    vmovdqa (%ecx), %xmm0
+; X32-AVX512F-NEXT:    vpxor %xmm1, %xmm1, %xmm1
+; X32-AVX512F-NEXT:    vmovdqa %xmm1, (%eax)
 ; X32-AVX512F-NEXT:    vinserti32x4 $1, %xmm0, %ymm0, %ymm0
 ; X32-AVX512F-NEXT:    retl
 ;
@@ -1201,9 +1201,9 @@ define <8 x i32> @test_broadcast_4i32_8i32_chain(<4 x i32>* %p0, <4 x float>* %p
 ; X32-AVX512BW:       ## BB#0:
 ; X32-AVX512BW-NEXT:    movl {{[0-9]+}}(%esp), %eax
 ; X32-AVX512BW-NEXT:    movl {{[0-9]+}}(%esp), %ecx
-; X32-AVX512BW-NEXT:    vmovdqa64 (%ecx), %xmm0
-; X32-AVX512BW-NEXT:    vpxord %xmm1, %xmm1, %xmm1
-; X32-AVX512BW-NEXT:    vmovdqa32 %xmm1, (%eax)
+; X32-AVX512BW-NEXT:    vmovdqa (%ecx), %xmm0
+; X32-AVX512BW-NEXT:    vpxor %xmm1, %xmm1, %xmm1
+; X32-AVX512BW-NEXT:    vmovdqa %xmm1, (%eax)
 ; X32-AVX512BW-NEXT:    vinserti32x4 $1, %xmm0, %ymm0, %ymm0
 ; X32-AVX512BW-NEXT:    retl
 ;
@@ -1211,7 +1211,7 @@ define <8 x i32> @test_broadcast_4i32_8i32_chain(<4 x i32>* %p0, <4 x float>* %p
 ; X32-AVX512DQ:       ## BB#0:
 ; X32-AVX512DQ-NEXT:    movl {{[0-9]+}}(%esp), %eax
 ; X32-AVX512DQ-NEXT:    movl {{[0-9]+}}(%esp), %ecx
-; X32-AVX512DQ-NEXT:    vmovdqa64 (%ecx), %xmm0
+; X32-AVX512DQ-NEXT:    vmovdqa (%ecx), %xmm0
 ; X32-AVX512DQ-NEXT:    vxorps %xmm1, %xmm1, %xmm1
 ; X32-AVX512DQ-NEXT:    vmovaps %xmm1, (%eax)
 ; X32-AVX512DQ-NEXT:    vinserti32x4 $1, %xmm0, %ymm0, %ymm0
@@ -1227,23 +1227,23 @@ define <8 x i32> @test_broadcast_4i32_8i32_chain(<4 x i32>* %p0, <4 x float>* %p
 ;
 ; X64-AVX512F-LABEL: test_broadcast_4i32_8i32_chain:
 ; X64-AVX512F:       ## BB#0:
-; X64-AVX512F-NEXT:    vmovdqa64 (%rdi), %xmm0
-; X64-AVX512F-NEXT:    vpxord %xmm1, %xmm1, %xmm1
-; X64-AVX512F-NEXT:    vmovdqa32 %xmm1, (%rsi)
+; X64-AVX512F-NEXT:    vmovdqa (%rdi), %xmm0
+; X64-AVX512F-NEXT:    vpxor %xmm1, %xmm1, %xmm1
+; X64-AVX512F-NEXT:    vmovdqa %xmm1, (%rsi)
 ; X64-AVX512F-NEXT:    vinserti32x4 $1, %xmm0, %ymm0, %ymm0
 ; X64-AVX512F-NEXT:    retq
 ;
 ; X64-AVX512BW-LABEL: test_broadcast_4i32_8i32_chain:
 ; X64-AVX512BW:       ## BB#0:
-; X64-AVX512BW-NEXT:    vmovdqa64 (%rdi), %xmm0
-; X64-AVX512BW-NEXT:    vpxord %xmm1, %xmm1, %xmm1
-; X64-AVX512BW-NEXT:    vmovdqa32 %xmm1, (%rsi)
+; X64-AVX512BW-NEXT:    vmovdqa (%rdi), %xmm0
+; X64-AVX512BW-NEXT:    vpxor %xmm1, %xmm1, %xmm1
+; X64-AVX512BW-NEXT:    vmovdqa %xmm1, (%rsi)
 ; X64-AVX512BW-NEXT:    vinserti32x4 $1, %xmm0, %ymm0, %ymm0
 ; X64-AVX512BW-NEXT:    retq
 ;
 ; X64-AVX512DQ-LABEL: test_broadcast_4i32_8i32_chain:
 ; X64-AVX512DQ:       ## BB#0:
-; X64-AVX512DQ-NEXT:    vmovdqa64 (%rdi), %xmm0
+; X64-AVX512DQ-NEXT:    vmovdqa (%rdi), %xmm0
 ; X64-AVX512DQ-NEXT:    vxorps %xmm1, %xmm1, %xmm1
 ; X64-AVX512DQ-NEXT:    vmovaps %xmm1, (%rsi)
 ; X64-AVX512DQ-NEXT:    vinserti32x4 $1, %xmm0, %ymm0, %ymm0
@@ -1270,9 +1270,9 @@ define <16 x i32> @test_broadcast_4i32_16i32_chain(<4 x i32>* %p0, <4 x float>* 
 ; X32-AVX512F:       ## BB#0:
 ; X32-AVX512F-NEXT:    movl {{[0-9]+}}(%esp), %eax
 ; X32-AVX512F-NEXT:    movl {{[0-9]+}}(%esp), %ecx
-; X32-AVX512F-NEXT:    vmovdqa64 (%ecx), %xmm0
-; X32-AVX512F-NEXT:    vpxord %xmm1, %xmm1, %xmm1
-; X32-AVX512F-NEXT:    vmovdqa32 %xmm1, (%eax)
+; X32-AVX512F-NEXT:    vmovdqa (%ecx), %xmm0
+; X32-AVX512F-NEXT:    vpxor %xmm1, %xmm1, %xmm1
+; X32-AVX512F-NEXT:    vmovdqa %xmm1, (%eax)
 ; X32-AVX512F-NEXT:    vinserti32x4 $1, %xmm0, %zmm0, %zmm0
 ; X32-AVX512F-NEXT:    vinserti64x4 $1, %ymm0, %zmm0, %zmm0
 ; X32-AVX512F-NEXT:    retl
@@ -1281,9 +1281,9 @@ define <16 x i32> @test_broadcast_4i32_16i32_chain(<4 x i32>* %p0, <4 x float>* 
 ; X32-AVX512BW:       ## BB#0:
 ; X32-AVX512BW-NEXT:    movl {{[0-9]+}}(%esp), %eax
 ; X32-AVX512BW-NEXT:    movl {{[0-9]+}}(%esp), %ecx
-; X32-AVX512BW-NEXT:    vmovdqa64 (%ecx), %xmm0
-; X32-AVX512BW-NEXT:    vpxord %xmm1, %xmm1, %xmm1
-; X32-AVX512BW-NEXT:    vmovdqa32 %xmm1, (%eax)
+; X32-AVX512BW-NEXT:    vmovdqa (%ecx), %xmm0
+; X32-AVX512BW-NEXT:    vpxor %xmm1, %xmm1, %xmm1
+; X32-AVX512BW-NEXT:    vmovdqa %xmm1, (%eax)
 ; X32-AVX512BW-NEXT:    vinserti32x4 $1, %xmm0, %zmm0, %zmm0
 ; X32-AVX512BW-NEXT:    vinserti64x4 $1, %ymm0, %zmm0, %zmm0
 ; X32-AVX512BW-NEXT:    retl
@@ -1292,7 +1292,7 @@ define <16 x i32> @test_broadcast_4i32_16i32_chain(<4 x i32>* %p0, <4 x float>* 
 ; X32-AVX512DQ:       ## BB#0:
 ; X32-AVX512DQ-NEXT:    movl {{[0-9]+}}(%esp), %eax
 ; X32-AVX512DQ-NEXT:    movl {{[0-9]+}}(%esp), %ecx
-; X32-AVX512DQ-NEXT:    vmovdqa64 (%ecx), %xmm0
+; X32-AVX512DQ-NEXT:    vmovdqa (%ecx), %xmm0
 ; X32-AVX512DQ-NEXT:    vxorps %xmm1, %xmm1, %xmm1
 ; X32-AVX512DQ-NEXT:    vmovaps %xmm1, (%eax)
 ; X32-AVX512DQ-NEXT:    vinserti32x4 $1, %xmm0, %zmm0, %zmm0
@@ -1310,25 +1310,25 @@ define <16 x i32> @test_broadcast_4i32_16i32_chain(<4 x i32>* %p0, <4 x float>* 
 ;
 ; X64-AVX512F-LABEL: test_broadcast_4i32_16i32_chain:
 ; X64-AVX512F:       ## BB#0:
-; X64-AVX512F-NEXT:    vmovdqa64 (%rdi), %xmm0
-; X64-AVX512F-NEXT:    vpxord %xmm1, %xmm1, %xmm1
-; X64-AVX512F-NEXT:    vmovdqa32 %xmm1, (%rsi)
+; X64-AVX512F-NEXT:    vmovdqa (%rdi), %xmm0
+; X64-AVX512F-NEXT:    vpxor %xmm1, %xmm1, %xmm1
+; X64-AVX512F-NEXT:    vmovdqa %xmm1, (%rsi)
 ; X64-AVX512F-NEXT:    vinserti32x4 $1, %xmm0, %zmm0, %zmm0
 ; X64-AVX512F-NEXT:    vinserti64x4 $1, %ymm0, %zmm0, %zmm0
 ; X64-AVX512F-NEXT:    retq
 ;
 ; X64-AVX512BW-LABEL: test_broadcast_4i32_16i32_chain:
 ; X64-AVX512BW:       ## BB#0:
-; X64-AVX512BW-NEXT:    vmovdqa64 (%rdi), %xmm0
-; X64-AVX512BW-NEXT:    vpxord %xmm1, %xmm1, %xmm1
-; X64-AVX512BW-NEXT:    vmovdqa32 %xmm1, (%rsi)
+; X64-AVX512BW-NEXT:    vmovdqa (%rdi), %xmm0
+; X64-AVX512BW-NEXT:    vpxor %xmm1, %xmm1, %xmm1
+; X64-AVX512BW-NEXT:    vmovdqa %xmm1, (%rsi)
 ; X64-AVX512BW-NEXT:    vinserti32x4 $1, %xmm0, %zmm0, %zmm0
 ; X64-AVX512BW-NEXT:    vinserti64x4 $1, %ymm0, %zmm0, %zmm0
 ; X64-AVX512BW-NEXT:    retq
 ;
 ; X64-AVX512DQ-LABEL: test_broadcast_4i32_16i32_chain:
 ; X64-AVX512DQ:       ## BB#0:
-; X64-AVX512DQ-NEXT:    vmovdqa64 (%rdi), %xmm0
+; X64-AVX512DQ-NEXT:    vmovdqa (%rdi), %xmm0
 ; X64-AVX512DQ-NEXT:    vxorps %xmm1, %xmm1, %xmm1
 ; X64-AVX512DQ-NEXT:    vmovaps %xmm1, (%rsi)
 ; X64-AVX512DQ-NEXT:    vinserti32x4 $1, %xmm0, %zmm0, %zmm0
@@ -1338,4 +1338,77 @@ define <16 x i32> @test_broadcast_4i32_16i32_chain(<4 x i32>* %p0, <4 x float>* 
   store <4 x float> zeroinitializer, <4 x float>* %p1
   %2 = shufflevector <4 x i32> %1, <4 x i32> undef, <16 x i32> <i32 0, i32 1, i32 2, i32 3, i32 0, i32 1, i32 2, i32 3, i32 0, i32 1, i32 2, i32 3, i32 0, i32 1, i32 2, i32 3>
   ret <16 x i32> %2
+}
+
+;
+; subvector Load with multiple uses + broadcast
+; Fallback to the broadcast should be done
+;
+
+@ga4 = global <4 x i64> zeroinitializer, align 8
+@gb4 = global <8 x i64> zeroinitializer, align 8
+
+define void @fallback_broadcast_v4i64_to_v8i64(<4 x i64> %a, <8 x i64> %b) {
+; X32-AVX512-LABEL: fallback_broadcast_v4i64_to_v8i64:
+; X32-AVX512:       ## BB#0: ## %entry
+; X32-AVX512-NEXT:    vpaddq LCPI26_0, %ymm0, %ymm0
+; X32-AVX512-NEXT:    vmovdqa64 {{.*#+}} zmm2 = [1,0,2,0,3,0,4,0,1,0,2,0,3,0,4,0]
+; X32-AVX512-NEXT:    vpaddq %zmm2, %zmm1, %zmm1
+; X32-AVX512-NEXT:    vpandq %zmm2, %zmm1, %zmm1
+; X32-AVX512-NEXT:    vmovdqu %ymm0, _ga4
+; X32-AVX512-NEXT:    vmovdqu64 %zmm1, _gb4
+; X32-AVX512-NEXT:    retl
+;
+; X64-AVX512-LABEL: fallback_broadcast_v4i64_to_v8i64:
+; X64-AVX512:       ## BB#0: ## %entry
+; X64-AVX512-NEXT:    vmovdqa {{.*#+}} ymm2 = [1,2,3,4]
+; X64-AVX512-NEXT:    vpaddq %ymm2, %ymm0, %ymm0
+; X64-AVX512-NEXT:    vinserti64x4 $1, %ymm2, %zmm2, %zmm2
+; X64-AVX512-NEXT:    vpaddq %zmm2, %zmm1, %zmm1
+; X64-AVX512-NEXT:    vpandq %zmm2, %zmm1, %zmm1
+; X64-AVX512-NEXT:    vmovdqu %ymm0, {{.*}}(%rip)
+; X64-AVX512-NEXT:    vmovdqu64 %zmm1, {{.*}}(%rip)
+; X64-AVX512-NEXT:    retq
+entry:
+  %0 = add <4 x i64> %a, <i64 1, i64 2, i64 3, i64 4>
+  %1 = add <8 x i64> %b, <i64 1, i64 2, i64 3, i64 4, i64 1, i64 2, i64 3, i64 4>
+  %2 = and <8 x i64> %1, <i64 1, i64 2, i64 3, i64 4, i64 1, i64 2, i64 3, i64 4>
+  store <4 x i64> %0, <4 x i64>* @ga4, align 8
+  store <8 x i64> %2, <8 x i64>* @gb4, align 8
+  ret void
+}
+
+
+@ga2 = global <4 x double> zeroinitializer, align 8
+@gb2 = global <8 x double> zeroinitializer, align 8
+
+define void @fallback_broadcast_v4f64_to_v8f64(<4 x double> %a, <8 x double> %b) {
+; X32-AVX512-LABEL: fallback_broadcast_v4f64_to_v8f64:
+; X32-AVX512:       ## BB#0: ## %entry
+; X32-AVX512-NEXT:    vmovapd {{.*#+}} ymm2 = [1.000000e+00,2.000000e+00,3.000000e+00,4.000000e+00]
+; X32-AVX512-NEXT:    vaddpd %ymm2, %ymm0, %ymm0
+; X32-AVX512-NEXT:    vinsertf64x4 $1, %ymm2, %zmm2, %zmm2
+; X32-AVX512-NEXT:    vaddpd %zmm2, %zmm1, %zmm1
+; X32-AVX512-NEXT:    vdivpd %zmm2, %zmm1, %zmm1
+; X32-AVX512-NEXT:    vmovupd %ymm0, _ga2
+; X32-AVX512-NEXT:    vmovupd %zmm1, _gb2
+; X32-AVX512-NEXT:    retl
+;
+; X64-AVX512-LABEL: fallback_broadcast_v4f64_to_v8f64:
+; X64-AVX512:       ## BB#0: ## %entry
+; X64-AVX512-NEXT:    vmovapd {{.*#+}} ymm2 = [1.000000e+00,2.000000e+00,3.000000e+00,4.000000e+00]
+; X64-AVX512-NEXT:    vaddpd %ymm2, %ymm0, %ymm0
+; X64-AVX512-NEXT:    vinsertf64x4 $1, %ymm2, %zmm2, %zmm2
+; X64-AVX512-NEXT:    vaddpd %zmm2, %zmm1, %zmm1
+; X64-AVX512-NEXT:    vdivpd %zmm2, %zmm1, %zmm1
+; X64-AVX512-NEXT:    vmovupd %ymm0, {{.*}}(%rip)
+; X64-AVX512-NEXT:    vmovupd %zmm1, {{.*}}(%rip)
+; X64-AVX512-NEXT:    retq
+entry:
+  %0 = fadd <4 x double> %a, <double 1.0, double 2.0, double 3.0, double 4.0>
+  %1 = fadd <8 x double> %b, <double 1.0, double 2.0, double 3.0, double 4.0, double 1.0, double 2.0, double 3.0, double 4.0>
+  %2 = fdiv <8 x double> %1, <double 1.0, double 2.0, double 3.0, double 4.0, double 1.0, double 2.0, double 3.0, double 4.0>
+  store <4 x double> %0, <4 x double>* @ga2, align 8
+  store <8 x double> %2, <8 x double>* @gb2, align 8
+  ret void
 }

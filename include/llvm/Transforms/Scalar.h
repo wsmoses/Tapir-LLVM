@@ -120,13 +120,6 @@ Pass *createIndVarSimplifyPass();
 
 //===----------------------------------------------------------------------===//
 //
-// Loop2Cilk - Transform induction variables in a program to all
-// use a single canonical induction variable per loop.
-//
-Pass *createLoop2CilkPass();
-
-//===----------------------------------------------------------------------===//
-//
 // InstructionCombining - Combine instructions to form fewer, simple
 // instructions. This pass does not modify the CFG, and has a tendency to make
 // instructions dead, so a subsequent DCE pass is useful.
@@ -225,12 +218,6 @@ Pass *createLoopVersioningLICMPass();
 //   ret i32 %Y
 //
 FunctionPass *createPromoteMemoryToRegisterPass();
-
-//===----------------------------------------------------------------------===//
-//
-// PromoteDetachToCilk
-//
-FunctionPass *createPromoteDetachToCilkPass(bool DisablePostOpts, bool instrument);
 
 //===----------------------------------------------------------------------===//
 //
@@ -358,6 +345,13 @@ FunctionPass *createGVNHoistPass();
 // are hoisted into the header, while stores sink into the footer.
 //
 FunctionPass *createMergedLoadStoreMotionPass();
+
+//===----------------------------------------------------------------------===//
+//
+// GVN - This pass performs global value numbering and redundant load
+// elimination cotemporaneously.
+//
+FunctionPass *createNewGVNPass();
 
 //===----------------------------------------------------------------------===//
 //
@@ -513,10 +507,7 @@ FunctionPass *createNaryReassociatePass();
 //
 // LoopDistribute - Distribute loops.
 //
-// ProcessAllLoopsByDefault instructs the pass to look for distribution
-// opportunities in all loops unless -enable-loop-distribute or the
-// llvm.loop.distribute.enable metadata data override this default.
-FunctionPass *createLoopDistributePass(bool ProcessAllLoopsByDefault);
+FunctionPass *createLoopDistributePass();
 
 //===----------------------------------------------------------------------===//
 //

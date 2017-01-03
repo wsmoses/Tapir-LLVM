@@ -108,7 +108,8 @@ enum LocationAtom {
 #define HANDLE_DW_OP(ID, NAME) DW_OP_##NAME = ID,
 #include "llvm/Support/Dwarf.def"
   DW_OP_lo_user = 0xe0,
-  DW_OP_hi_user = 0xff
+  DW_OP_hi_user = 0xff,
+  DW_OP_LLVM_fragment = 0x1000 ///< Only used in LLVM metadata.
 };
 
 enum TypeKind {
@@ -422,7 +423,9 @@ struct PubIndexEntryDescriptor {
                                             KIND_OFFSET)),
         Linkage(static_cast<GDBIndexEntryLinkage>((Value & LINKAGE_MASK) >>
                                                   LINKAGE_OFFSET)) {}
-  uint8_t toBits() { return Kind << KIND_OFFSET | Linkage << LINKAGE_OFFSET; }
+  uint8_t toBits() const {
+    return Kind << KIND_OFFSET | Linkage << LINKAGE_OFFSET;
+  }
 
 private:
   enum {

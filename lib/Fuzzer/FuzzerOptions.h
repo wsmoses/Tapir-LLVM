@@ -19,6 +19,7 @@ namespace fuzzer {
 struct FuzzingOptions {
   int Verbosity = 1;
   size_t MaxLen = 0;
+  bool ExperimentalLenControl = false;
   int UnitTimeoutSec = 300;
   int TimeoutExitCode = 77;
   int ErrorExitCode = 77;
@@ -51,8 +52,16 @@ struct FuzzingOptions {
   bool PrintFinalStats = false;
   bool PrintCorpusStats = false;
   bool PrintCoverage = false;
+  bool DumpCoverage = false;
   bool DetectLeaks = true;
   int  TraceMalloc = 0;
+  bool HandleAbrt = false;
+  bool HandleBus = false;
+  bool HandleFpe = false;
+  bool HandleIll = false;
+  bool HandleInt = false;
+  bool HandleSegv = false;
+  bool HandleTerm = false;
 };
 
 }  // namespace fuzzer

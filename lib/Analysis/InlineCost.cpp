@@ -318,7 +318,7 @@ bool CallAnalyzer::accumulateGEPOffset(GEPOperator &GEP, APInt &Offset) {
       continue;
 
     // Handle a struct index, which adds its field offset to the pointer.
-    if (StructType *STy = dyn_cast<StructType>(*GTI)) {
+    if (StructType *STy = GTI.getStructTypeOrNull()) {
       unsigned ElementIdx = OpC->getZExtValue();
       const StructLayout *SL = DL.getStructLayout(STy);
       Offset += APInt(IntPtrWidth, SL->getElementOffset(ElementIdx));
@@ -638,7 +638,7 @@ void CallAnalyzer::updateThreshold(CallSite CS, Function &Callee) {
 
   bool HotCallsite = false;
   uint64_t TotalWeight;
-  if (CS.getInstruction()->extractProfTotalWeight(TotalWeight) &&
+  if (PSI && CS.getInstruction()->extractProfTotalWeight(TotalWeight) &&
       PSI->isHotCount(TotalWeight)) {
     HotCallsite = true;
   }
@@ -647,14 +647,14 @@ void CallAnalyzer::updateThreshold(CallSite CS, Function &Callee) {
   // when it would increase the threshold and the caller does not need to
   // minimize its size.
   bool InlineHint = Callee.hasFnAttribute(Attribute::InlineHint) ||
-                    PSI->isFunctionEntryHot(&Callee);
+                    (PSI && PSI->isFunctionEntryHot(&Callee));
   if (InlineHint && !Caller->optForMinSize())
     Threshold = MaxIfValid(Threshold, Params.HintThreshold);
 
   if (HotCallsite && !Caller->optForMinSize())
     Threshold = MaxIfValid(Threshold, Params.HotCallSiteThreshold);
 
-  bool ColdCallee = PSI->isFunctionEntryCold(&Callee);
+  bool ColdCallee = PSI && PSI->isFunctionEntryCold(&Callee);
   // For cold callees, use the ColdThreshold knob if it is available and reduces
   // the threshold.
   if (ColdCallee)
@@ -1486,7 +1486,7 @@ InlineCost llvm::getInlineCost(
 
   // Don't inline functions which can be interposed at link-time.  Don't inline
   // functions marked noinline or call sites marked noinline.
-  // Note: inlining non-exact non-interposable fucntions is fine, since we know
+  // Note: inlining non-exact non-interposable functions is fine, since we know
   // we have *a* correct implementation of the source level function.
   if (Callee->isInterposable() || Callee->hasFnAttribute(Attribute::NoInline) ||
       CS.isNoInline())

@@ -125,15 +125,15 @@ MCSymbol *MCContext::getOrCreateSymbol(const Twine &Name) {
 }
 
 MCSymbolELF *MCContext::getOrCreateSectionSymbol(const MCSectionELF &Section) {
-  MCSymbolELF *&Sym = SectionSymbols[&Section];
+  MCSymbol *&Sym = SectionSymbols[&Section];
   if (Sym)
-    return Sym;
+    return cast<MCSymbolELF>(Sym);
 
   StringRef Name = Section.getSectionName();
   auto NameIter = UsedNames.insert(std::make_pair(Name, false)).first;
   Sym = new (&*NameIter, *this) MCSymbolELF(&*NameIter, /*isTemporary*/ false);
 
-  return Sym;
+  return cast<MCSymbolELF>(Sym);
 }
 
 MCSymbol *MCContext::getOrCreateFrameAllocSymbol(StringRef FuncName,
@@ -260,6 +260,13 @@ MCSymbol *MCContext::lookupSymbol(const Twine &Name) const {
   return Symbols.lookup(NameRef);
 }
 
+void MCContext::setSymbolValue(MCStreamer &Streamer,
+                              StringRef Sym,
+                              uint64_t Val) {
+  auto Symbol = getOrCreateSymbol(Sym);
+  Streamer.EmitAssignment(Symbol, MCConstantExpr::create(Val, *this));
+}
+
 //===----------------------------------------------------------------------===//
 // Section Management
 //===----------------------------------------------------------------------===//
@@ -361,7 +368,9 @@ MCSectionELF *MCContext::getELFSection(const Twine &Section, unsigned Type,
   StringRef CachedName = Entry.first.SectionName;
 
   SectionKind Kind;
-  if (Flags & ELF::SHF_EXECINSTR)
+  if (Flags & ELF::SHF_ARM_PURECODE)
+    Kind = SectionKind::getExecuteOnly();
+  else if (Flags & ELF::SHF_EXECINSTR)
     Kind = SectionKind::getText();
   else
     Kind = SectionKind::getReadOnly();

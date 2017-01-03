@@ -39,6 +39,7 @@
 #include "llvm/Transforms/Instrumentation.h"
 #include "llvm/Transforms/Scalar.h"
 #include "llvm/Transforms/Scalar/GVN.h"
+#include "llvm/Transforms/Tapir.h"
 #include "llvm/Transforms/Vectorize.h"
 
 using namespace llvm;
@@ -75,6 +76,9 @@ RunFloat2Int("float-to-int", cl::Hidden, cl::init(true),
 static cl::opt<bool> RunLoadCombine("combine-loads", cl::init(false),
                                     cl::Hidden,
                                     cl::desc("Run the load combining pass"));
+
+static cl::opt<bool> RunNewGVN("enable-newgvn", cl::init(false), cl::Hidden,
+                               cl::desc("Run the NewGVN pass"));
 
 static cl::opt<bool>
 RunSLPAfterLoopVectorization("run-slp-after-loop-vectorization",
@@ -158,7 +162,6 @@ PassManagerBuilder::PassManagerBuilder() {
     ParallelLevel = 0;
     LibraryInfo = nullptr;
     Inliner = nullptr;
-    ModuleSummary = nullptr;
     DisableUnitAtATime = false;
     DisableUnrollLoops = false;
     BBVectorize = RunBBVectorization;
@@ -166,6 +169,7 @@ PassManagerBuilder::PassManagerBuilder() {
     LoopVectorize = RunLoopVectorization;
     RerollLoops = RunLoopRerolling;
     LoadCombine = RunLoadCombine;
+    NewGVN = RunNewGVN;
     DisableGVNLoadPRE = false;
     VerifyInput = false;
     VerifyOutput = false;
@@ -332,7 +336,8 @@ void PassManagerBuilder::addFunctionSimplificationPasses(
   if (OptLevel > 1) {
     if (EnableMLSM)
       MPM.add(createMergedLoadStoreMotionPass()); // Merge ld/st in diamonds
-    MPM.add(createGVNPass(DisableGVNLoadPRE));  // Remove redundancies
+    MPM.add(NewGVN ? createNewGVNPass()
+                   : createGVNPass(DisableGVNLoadPRE)); // Remove redundancies
   }
   MPM.add(createMemCpyOptPass());             // Remove memcpy / form memset
   MPM.add(createSCCPPass());                  // Constant prop with SCCP
@@ -364,7 +369,9 @@ void PassManagerBuilder::addFunctionSimplificationPasses(
       addInstructionCombiningPass(MPM);
       addExtensionsToPM(EP_Peephole, MPM);
       if (OptLevel > 1 && UseGVNAfterVectorization)
-        MPM.add(createGVNPass(DisableGVNLoadPRE)); // Remove redundancies
+        MPM.add(NewGVN
+                    ? createNewGVNPass()
+                    : createGVNPass(DisableGVNLoadPRE)); // Remove redundancies
       else
         MPM.add(createEarlyCSEPass());      // Catch trivial redundancies
 
@@ -386,6 +393,11 @@ void PassManagerBuilder::addFunctionSimplificationPasses(
 
 void PassManagerBuilder::prepopulateModulePassManager(
     legacy::PassManagerBase &MPM) {
+  if (!PGOSampleUse.empty()) {
+    MPM.add(createPruneEHPass());
+    MPM.add(createSampleProfileLoaderPass(PGOSampleUse));
+  }
+
   // Allow forcing function attributes as a debugging and tuning aid.
   MPM.add(createForceFunctionAttrsLegacyPass());
 
@@ -560,7 +572,7 @@ void PassManagerBuilder::prepopulateModulePassManager(
   // into separate loop that would otherwise inhibit vectorization.  This is
   // currently only performed for loops marked with the metadata
   // llvm.loop.distribute=true or when -enable-loop-distribute is specified.
-  MPM.add(createLoopDistributePass(/*ProcessAllLoopsByDefault=*/false));
+  MPM.add(createLoopDistributePass());
 
   MPM.add(createLoopVectorizePass(DisableUnrollLoops, LoopVectorize));
 
@@ -604,7 +616,9 @@ void PassManagerBuilder::prepopulateModulePassManager(
       addInstructionCombiningPass(MPM);
       addExtensionsToPM(EP_Peephole, MPM);
       if (OptLevel > 1 && UseGVNAfterVectorization)
-        MPM.add(createGVNPass(DisableGVNLoadPRE)); // Remove redundancies
+        MPM.add(NewGVN
+                    ? createNewGVNPass()
+                    : createGVNPass(DisableGVNLoadPRE)); // Remove redundancies
       else
         MPM.add(createEarlyCSEPass());      // Catch trivial redundancies
 
@@ -657,6 +671,7 @@ void PassManagerBuilder::prepopulateModulePassManager(
   MPM.add(createLoopSinkPass());
   // Get rid of LCSSA nodes.
   MPM.add(createInstructionSimplifierPass());
+
   // addExtensionsToPM(EP_OptimizerLast, MPM);
 }
 
@@ -669,6 +684,9 @@ void PassManagerBuilder::populateModulePassManager(legacy::PassManagerBase& MPM)
         addExtensionsToPM(EP_TapirLate, MPM);
         break;
       case 3: //fdetach
+        MPM.add(createPromoteDetachToCilkPass(ParallelLevel == 2, InstrumentCilk));
+        prepopulateModulePassManager(MPM);
+        addExtensionsToPM(EP_TapirLate, MPM);
         break;
       case 0: llvm_unreachable("invalid");
     }
@@ -677,20 +695,32 @@ void PassManagerBuilder::populateModulePassManager(legacy::PassManagerBase& MPM)
 
     MPM.add(createIndVarSimplifyPass());
 
-    if(!InstrumentCilk)
-      MPM.add(createLoop2CilkPass());
+    // Re-rotate loops in all our loop nests. These may have fallout out of
+    // rotated form due to GVN or other transformations, and loop spawning
+    // relies on the rotated form.  Disable header duplication at -Oz.
+    MPM.add(createLoopRotatePass(SizeLevel == 2 ? 0 : -1));
 
+    MPM.add(createLoopSpawningPass());
+
+    // The LoopSpawning pass may leave cruft around.  Clean it up.
+    MPM.add(createLoopDeletionPass());
     MPM.add(createCFGSimplificationPass());
+    addInstructionCombiningPass(MPM);
+    addExtensionsToPM(EP_Peephole, MPM);
 
-    if (ParallelLevel != 3) MPM.add(createInferFunctionAttrsLegacyPass());
+    // if (ParallelLevel != 3) MPM.add(createInferFunctionAttrsLegacyPass());
+    MPM.add(createInferFunctionAttrsLegacyPass());
     MPM.add(createPromoteDetachToCilkPass(ParallelLevel == 2, InstrumentCilk));
-    if (ParallelLevel != 3) MPM.add(createInferFunctionAttrsLegacyPass());
+    // The Detach2Cilk pass may leave cruft around.  Clean it up.
+    MPM.add(createCFGSimplificationPass());
+    // if (ParallelLevel != 3) MPM.add(createInferFunctionAttrsLegacyPass());
+    MPM.add(createInferFunctionAttrsLegacyPass());
     if (OptLevel != 0) MPM.add(createMergeFunctionsPass());
     MPM.add(createBarrierNoopPass());
   }
   prepopulateModulePassManager(MPM);
-  if (ParallelLevel == 0 || ParallelLevel == 3)
-    addExtensionsToPM(EP_TapirLate, MPM);
+  // if (ParallelLevel == 0 || ParallelLevel == 3)
+  //   addExtensionsToPM(EP_TapirLate, MPM);
   addExtensionsToPM(EP_OptimizerLast, MPM);
 }
 
@@ -701,9 +731,6 @@ void PassManagerBuilder::addLTOOptimizationPasses(legacy::PassManagerBase &PM) {
 
   // Provide AliasAnalysis services for optimizations.
   addInitialAliasAnalysisPasses(PM);
-
-  if (ModuleSummary)
-    PM.add(createFunctionImportPass(ModuleSummary));
 
   // Allow forcing function attributes as a debugging and tuning aid.
   PM.add(createForceFunctionAttrsLegacyPass());
@@ -793,7 +820,8 @@ void PassManagerBuilder::addLTOOptimizationPasses(legacy::PassManagerBase &PM) {
   PM.add(createLICMPass());                 // Hoist loop invariants.
   if (EnableMLSM)
     PM.add(createMergedLoadStoreMotionPass()); // Merge ld/st in diamonds.
-  PM.add(createGVNPass(DisableGVNLoadPRE)); // Remove redundancies.
+  PM.add(NewGVN ? createNewGVNPass()
+                : createGVNPass(DisableGVNLoadPRE)); // Remove redundancies.
   PM.add(createMemCpyOptPass());            // Remove dead memcpys.
 
   // Nuke dead stores.
@@ -863,9 +891,6 @@ void PassManagerBuilder::populateThinLTOPassManager(
 
   if (VerifyInput)
     PM.add(createVerifierPass());
-
-  if (ModuleSummary)
-    PM.add(createFunctionImportPass(ModuleSummary));
 
   populateModulePassManager(PM);
 

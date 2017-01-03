@@ -1231,7 +1231,7 @@ static void computeKnownBitsFromOperator(const Operator *I, APInt &KnownZero,
     gep_type_iterator GTI = gep_type_begin(I);
     for (unsigned i = 1, e = I->getNumOperands(); i != e; ++i, ++GTI) {
       Value *Index = I->getOperand(i);
-      if (StructType *STy = dyn_cast<StructType>(*GTI)) {
+      if (StructType *STy = GTI.getStructTypeOrNull()) {
         // Handle struct member offset arithmetic.
 
         // Handle case when index is vector zeroinitializer
@@ -1730,7 +1730,7 @@ static bool isGEPKnownNonNull(const GEPOperator *GEP, unsigned Depth,
   for (gep_type_iterator GTI = gep_type_begin(GEP), GTE = gep_type_end(GEP);
        GTI != GTE; ++GTI) {
     // Struct types are easy -- they must always be indexed by a constant.
-    if (StructType *STy = dyn_cast<StructType>(*GTI)) {
+    if (StructType *STy = GTI.getStructTypeOrNull()) {
       ConstantInt *OpC = cast<ConstantInt>(GTI.getOperand());
       unsigned ElementIdx = OpC->getZExtValue();
       const StructLayout *SL = Q.DL.getStructLayout(STy);
@@ -2086,7 +2086,7 @@ unsigned ComputeNumSignBits(const Value *V, unsigned Depth, const Query &Q) {
   // Note that ConstantInt is handled by the general computeKnownBits case
   // below.
 
-  if (Depth == 6)
+  if (Depth == MaxDepth)
     return 1;  // Limit search depth.
 
   const Operator *U = dyn_cast<Operator>(V);
@@ -2545,7 +2545,7 @@ bool llvm::CannotBeNegativeZero(const Value *V, const TargetLibraryInfo *TLI,
   // FIXME: Magic number! At the least, this should be given a name because it's
   // used similarly in CannotBeOrderedLessThanZero(). A better fix may be to
   // expose it as a parameter, so it can be used for testing / experimenting.
-  if (Depth == 6)
+  if (Depth == MaxDepth)
     return false;  // Limit search depth.
 
   const Operator *I = dyn_cast<Operator>(V);
@@ -2592,7 +2592,7 @@ bool llvm::CannotBeOrderedLessThanZero(const Value *V,
   // FIXME: Magic number! At the least, this should be given a name because it's
   // used similarly in CannotBeNegativeZero(). A better fix may be to
   // expose it as a parameter, so it can be used for testing / experimenting.
-  if (Depth == 6)
+  if (Depth == MaxDepth)
     return false;  // Limit search depth.
 
   const Operator *I = dyn_cast<Operator>(V);
@@ -3345,11 +3345,11 @@ bool llvm::isKnownNonNull(const Value *V) {
   if (const Argument *A = dyn_cast<Argument>(V))
     return A->hasByValOrInAllocaAttr() || A->hasNonNullAttr();
 
-  // A global variable in address space 0 is non null unless extern weak.
-  // Other address spaces may have null as a valid address for a global,
-  // so we can't assume anything.
+  // A global variable in address space 0 is non null unless extern weak
+  // or an absolute symbol reference. Other address spaces may have null as a
+  // valid address for a global, so we can't assume anything.
   if (const GlobalValue *GV = dyn_cast<GlobalValue>(V))
-    return !GV->hasExternalWeakLinkage() &&
+    return !GV->isAbsoluteSymbolRef() && !GV->hasExternalWeakLinkage() &&
            GV->getType()->getAddressSpace() == 0;
 
   // A Load tagged with nonnull metadata is never null.

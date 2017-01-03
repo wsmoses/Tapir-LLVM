@@ -151,53 +151,16 @@ void DWARFUnit::clear() {
 }
 
 const char *DWARFUnit::getCompilationDir() {
-  extractDIEsIfNeeded(true);
-  if (DieArray.empty())
-    return nullptr;
-  return DieArray[0].getAttributeValueAsString(this, DW_AT_comp_dir, nullptr);
+  return getUnitDIE().getAttributeValueAsString(DW_AT_comp_dir, nullptr);
 }
 
-uint64_t DWARFUnit::getDWOId() {
-  extractDIEsIfNeeded(true);
-  const uint64_t FailValue = -1ULL;
-  if (DieArray.empty())
-    return FailValue;
-  return DieArray[0]
-      .getAttributeValueAsUnsignedConstant(this, DW_AT_GNU_dwo_id, FailValue);
-}
-
-void DWARFUnit::setDIERelations() {
-  if (DieArray.size() <= 1)
-    return;
-
-  std::vector<DWARFDebugInfoEntryMinimal *> ParentChain;
-  DWARFDebugInfoEntryMinimal *SiblingChain = nullptr;
-  for (auto &DIE : DieArray) {
-    if (SiblingChain) {
-      SiblingChain->setSibling(&DIE);
-    }
-    if (const DWARFAbbreviationDeclaration *AbbrDecl =
-            DIE.getAbbreviationDeclarationPtr()) {
-      // Normal DIE.
-      if (AbbrDecl->hasChildren()) {
-        ParentChain.push_back(&DIE);
-        SiblingChain = nullptr;
-      } else {
-        SiblingChain = &DIE;
-      }
-    } else {
-      // NULL entry terminates the sibling chain.
-      SiblingChain = ParentChain.back();
-      ParentChain.pop_back();
-    }
-  }
-  assert(SiblingChain == nullptr || SiblingChain == &DieArray[0]);
-  assert(ParentChain.empty());
+Optional<uint64_t> DWARFUnit::getDWOId() {
+  return getUnitDIE().getAttributeValueAsUnsignedConstant(DW_AT_GNU_dwo_id);
 }
 
 void DWARFUnit::extractDIEsToVector(
     bool AppendCUDie, bool AppendNonCUDies,
-    std::vector<DWARFDebugInfoEntryMinimal> &Dies) const {
+    std::vector<DWARFDebugInfoEntry> &Dies) const {
   if (!AppendCUDie && !AppendNonCUDies)
     return;
 
@@ -205,12 +168,13 @@ void DWARFUnit::extractDIEsToVector(
   // next compilation unit header.
   uint32_t DIEOffset = Offset + getHeaderSize();
   uint32_t NextCUOffset = getNextUnitOffset();
-  DWARFDebugInfoEntryMinimal DIE;
+  DWARFDebugInfoEntry DIE;
   DataExtractor DebugInfoData = getDebugInfoExtractor();
   uint32_t Depth = 0;
   bool IsCUDie = true;
 
-  while (DIE.extractFast(*this, &DIEOffset, DebugInfoData, NextCUOffset)) {
+  while (DIE.extractFast(*this, &DIEOffset, DebugInfoData, NextCUOffset,
+                         Depth)) {
     if (IsCUDie) {
       if (AppendCUDie)
         Dies.push_back(DIE);
@@ -260,20 +224,20 @@ size_t DWARFUnit::extractDIEsIfNeeded(bool CUDieOnly) {
 
   // If CU DIE was just parsed, copy several attribute values from it.
   if (!HasCUDie) {
-    uint64_t BaseAddr =
-        DieArray[0].getAttributeValueAsAddress(this, DW_AT_low_pc, -1ULL);
-    if (BaseAddr == -1ULL)
-      BaseAddr = DieArray[0].getAttributeValueAsAddress(this, DW_AT_entry_pc, 0);
-    setBaseAddress(BaseAddr);
-    AddrOffsetSectionBase = DieArray[0].getAttributeValueAsSectionOffset(
-        this, DW_AT_GNU_addr_base, 0);
-    RangeSectionBase = DieArray[0].getAttributeValueAsSectionOffset(
-        this, DW_AT_rnglists_base, 0);
+    DWARFDie UnitDie = getUnitDIE();
+    auto BaseAddr = UnitDie.getAttributeValueAsAddress(DW_AT_low_pc);
+    if (!BaseAddr)
+      BaseAddr = UnitDie.getAttributeValueAsAddress(DW_AT_entry_pc);
+    if (BaseAddr)
+      setBaseAddress(*BaseAddr);
+    AddrOffsetSectionBase = UnitDie.getAttributeValueAsSectionOffset(
+        DW_AT_GNU_addr_base, 0);
+    RangeSectionBase = UnitDie.getAttributeValueAsSectionOffset(
+        DW_AT_rnglists_base, 0);
     // Don't fall back to DW_AT_GNU_ranges_base: it should be ignored for
     // skeleton CU DIE, so that DWARF users not aware of it are not broken.
   }
 
-  setDIERelations();
   return DieArray.size();
 }
 
@@ -297,15 +261,15 @@ bool DWARFUnit::parseDWO() {
     return false;
   if (DWO.get())
     return false;
-  extractDIEsIfNeeded(true);
-  if (DieArray.empty())
+  DWARFDie UnitDie = getUnitDIE();
+  if (!UnitDie)
     return false;
   const char *DWOFileName =
-      DieArray[0].getAttributeValueAsString(this, DW_AT_GNU_dwo_name, nullptr);
+      UnitDie.getAttributeValueAsString(DW_AT_GNU_dwo_name, nullptr);
   if (!DWOFileName)
     return false;
   const char *CompilationDir =
-      DieArray[0].getAttributeValueAsString(this, DW_AT_comp_dir, nullptr);
+      UnitDie.getAttributeValueAsString(DW_AT_comp_dir, nullptr);
   SmallString<16> AbsolutePath;
   if (sys::path::is_relative(DWOFileName) && CompilationDir != nullptr) {
     sys::path::append(AbsolutePath, CompilationDir);
@@ -320,8 +284,8 @@ bool DWARFUnit::parseDWO() {
   }
   // Share .debug_addr and .debug_ranges section with compile unit in .dwo
   DWOCU->setAddrOffsetSection(AddrOffsetSection, AddrOffsetSectionBase);
-  uint32_t DWORangesBase = DieArray[0].getRangesBaseAttribute(this, 0);
-  DWOCU->setRangesSection(RangeSection, DWORangesBase);
+  auto DWORangesBase = UnitDie.getRangesBaseAttribute();
+  DWOCU->setRangesSection(RangeSection, DWORangesBase ? *DWORangesBase : 0);
   return true;
 }
 
@@ -334,7 +298,7 @@ void DWARFUnit::clearDIEs(bool KeepCUDie) {
     // contents which will cause just the internal pointers to be swapped
     // so that when temporary vector goes out of scope, it will destroy the
     // contents.
-    std::vector<DWARFDebugInfoEntryMinimal> TmpArray;
+    std::vector<DWARFDebugInfoEntry> TmpArray;
     DieArray.swap(TmpArray);
     // Save at least the compile unit DIE
     if (KeepCUDie)
@@ -343,11 +307,11 @@ void DWARFUnit::clearDIEs(bool KeepCUDie) {
 }
 
 void DWARFUnit::collectAddressRanges(DWARFAddressRangesVector &CURanges) {
-  const auto *U = getUnitDIE();
-  if (U == nullptr)
+  DWARFDie UnitDie = getUnitDIE();
+  if (!UnitDie)
     return;
   // First, check if unit DIE describes address ranges for the whole unit.
-  const auto &CUDIERanges = U->getAddressRanges(this);
+  const auto &CUDIERanges = UnitDie.getAddressRanges();
   if (!CUDIERanges.empty()) {
     CURanges.insert(CURanges.end(), CUDIERanges.begin(), CUDIERanges.end());
     return;
@@ -360,7 +324,7 @@ void DWARFUnit::collectAddressRanges(DWARFAddressRangesVector &CURanges) {
   // up parsing the DWARF and then throwing them all away to keep memory usage
   // down.
   const bool ClearDIEs = extractDIEsIfNeeded(false) > 1;
-  DieArray[0].collectChildrenAddressRanges(this, CURanges);
+  getUnitDIE().collectChildrenAddressRanges(CURanges);
 
   // Collect address ranges from DIEs in .dwo if necessary.
   bool DWOCreated = parseDWO();
@@ -375,36 +339,37 @@ void DWARFUnit::collectAddressRanges(DWARFAddressRangesVector &CURanges) {
     clearDIEs(true);
 }
 
-const DWARFDebugInfoEntryMinimal *
+DWARFDie
 DWARFUnit::getSubprogramForAddress(uint64_t Address) {
   extractDIEsIfNeeded(false);
-  for (const DWARFDebugInfoEntryMinimal &DIE : DieArray) {
+  for (const DWARFDebugInfoEntry &D : DieArray) {
+    DWARFDie DIE(this, &D);
     if (DIE.isSubprogramDIE() &&
-        DIE.addressRangeContainsAddress(this, Address)) {
-      return &DIE;
+        DIE.addressRangeContainsAddress(Address)) {
+      return DIE;
     }
   }
-  return nullptr;
+  return DWARFDie();
 }
 
-DWARFDebugInfoEntryInlinedChain
-DWARFUnit::getInlinedChainForAddress(uint64_t Address) {
+void
+DWARFUnit::getInlinedChainForAddress(uint64_t Address,
+                                     SmallVectorImpl<DWARFDie> &InlinedChain) {
   // First, find a subprogram that contains the given address (the root
   // of inlined chain).
-  const DWARFUnit *ChainCU = nullptr;
-  const DWARFDebugInfoEntryMinimal *SubprogramDIE;
+  DWARFDie SubprogramDIE;
   // Try to look for subprogram DIEs in the DWO file.
   parseDWO();
-  if (DWO) {
-    if ((SubprogramDIE = DWO->getUnit()->getSubprogramForAddress(Address)))
-      ChainCU = DWO->getUnit();
-  } else if ((SubprogramDIE = getSubprogramForAddress(Address)))
-    ChainCU = this;
+  if (DWO)
+    SubprogramDIE = DWO->getUnit()->getSubprogramForAddress(Address);
+  else
+    SubprogramDIE = getSubprogramForAddress(Address);
 
   // Get inlined chain rooted at this subprogram DIE.
-  if (!SubprogramDIE)
-    return DWARFDebugInfoEntryInlinedChain();
-  return SubprogramDIE->getInlinedChainForAddress(ChainCU, Address);
+  if (SubprogramDIE)
+    SubprogramDIE.getInlinedChainForAddress(Address, InlinedChain);
+  else
+    InlinedChain.clear();
 }
 
 const DWARFUnitIndex &getDWARFUnitIndex(DWARFContext &Context,
@@ -413,6 +378,44 @@ const DWARFUnitIndex &getDWARFUnitIndex(DWARFContext &Context,
     return Context.getCUIndex();
   assert(Kind == DW_SECT_TYPES);
   return Context.getTUIndex();
+}
+
+DWARFDie DWARFUnit::getParent(const DWARFDebugInfoEntry *Die) {
+  if (!Die)
+    return DWARFDie();
+  const uint32_t Depth = Die->getDepth();
+  // Unit DIEs always have a depth of zero and never have parents.
+  if (Depth == 0)
+    return DWARFDie();
+  // Depth of 1 always means parent is the compile/type unit.
+  if (Depth == 1)
+    return getUnitDIE();
+  // Look for previous DIE with a depth that is one less than the Die's depth.
+  const uint32_t ParentDepth = Depth - 1;
+  for (uint32_t I = getDIEIndex(Die) - 1; I > 0; --I) {
+    if (DieArray[I].getDepth() == ParentDepth)
+      return DWARFDie(this, &DieArray[I]);
+  }
+  return DWARFDie();
+}
+
+DWARFDie DWARFUnit::getSibling(const DWARFDebugInfoEntry *Die) {
+  if (!Die)
+    return DWARFDie();
+  uint32_t Depth = Die->getDepth();
+  // Unit DIEs always have a depth of zero and never have siblings.
+  if (Depth == 0)
+    return DWARFDie();
+  // NULL DIEs don't have siblings.
+  if (Die->getAbbreviationDeclarationPtr() == nullptr)
+    return DWARFDie();
+  
+  // Find the next DIE whose depth is the same as the Die's depth.
+  for (size_t I=getDIEIndex(Die)+1, EndIdx = DieArray.size(); I<EndIdx; ++I) {
+    if (DieArray[I].getDepth() == Depth)
+      return DWARFDie(this, &DieArray[I]);
+  }
+  return DWARFDie();
 }
 
 } // end namespace llvm

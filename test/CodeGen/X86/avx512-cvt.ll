@@ -84,8 +84,7 @@ define <2 x float> @sltof2f32(<2 x i64> %a) {
 ; KNL-NEXT:    vcvtsi2ssq %rax, %xmm2, %xmm0
 ; KNL-NEXT:    vinsertps {{.*#+}} xmm0 = xmm0[0],xmm1[0],xmm0[2,3]
 ; KNL-NEXT:    vcvtsi2ssq %rax, %xmm2, %xmm1
-; KNL-NEXT:    vinsertps {{.*#+}} xmm0 = xmm0[0,1],xmm1[0],xmm0[3]
-; KNL-NEXT:    vinsertps {{.*#+}} xmm0 = xmm0[0,1,2],xmm1[0]
+; KNL-NEXT:    vshufps {{.*#+}} xmm0 = xmm0[0,1],xmm1[0,0]
 ; KNL-NEXT:    retq
 ;
 ; SKX-LABEL: sltof2f32:
@@ -923,9 +922,7 @@ define <2 x float> @sitofp_2i1_float(<2 x float> %a) {
 ; KNL:       ## BB#0:
 ; KNL-NEXT:    vxorps %xmm1, %xmm1, %xmm1
 ; KNL-NEXT:    vcmpltps %xmm0, %xmm1, %xmm0
-; KNL-NEXT:    vpmovzxdq {{.*#+}} xmm0 = xmm0[0],zero,xmm0[1],zero
-; KNL-NEXT:    vpsllq $32, %xmm0, %xmm0
-; KNL-NEXT:    vpshufd {{.*#+}} xmm0 = xmm0[1,3,2,3]
+; KNL-NEXT:    vinsertps {{.*#+}} xmm0 = xmm0[0,1],zero,xmm0[1]
 ; KNL-NEXT:    vcvtdq2ps %xmm0, %xmm0
 ; KNL-NEXT:    retq
 ;
@@ -1040,7 +1037,7 @@ define <8 x float> @uitofp_8i1_float(<8 x i32> %a) {
 ;
 ; SKX-LABEL: uitofp_8i1_float:
 ; SKX:       ## BB#0:
-; SKX-NEXT:    vpxord %ymm1, %ymm1, %ymm1
+; SKX-NEXT:    vpxor %ymm1, %ymm1, %ymm1
 ; SKX-NEXT:    vpcmpgtd %ymm0, %ymm1, %k1
 ; SKX-NEXT:    vpbroadcastd {{.*}}(%rip), %ymm0 {%k1} {z}
 ; SKX-NEXT:    vcvtudq2ps %ymm0, %ymm0
@@ -1063,7 +1060,7 @@ define <8 x double> @uitofp_8i1_double(<8 x i32> %a) {
 ;
 ; SKX-LABEL: uitofp_8i1_double:
 ; SKX:       ## BB#0:
-; SKX-NEXT:    vpxord %ymm1, %ymm1, %ymm1
+; SKX-NEXT:    vpxor %ymm1, %ymm1, %ymm1
 ; SKX-NEXT:    vpcmpgtd %ymm0, %ymm1, %k1
 ; SKX-NEXT:    vpbroadcastd {{.*}}(%rip), %ymm0 {%k1} {z}
 ; SKX-NEXT:    vcvtudq2pd %ymm0, %zmm0
@@ -1084,7 +1081,7 @@ define <4 x float> @uitofp_4i1_float(<4 x i32> %a) {
 ;
 ; SKX-LABEL: uitofp_4i1_float:
 ; SKX:       ## BB#0:
-; SKX-NEXT:    vpxord %xmm1, %xmm1, %xmm1
+; SKX-NEXT:    vpxor %xmm1, %xmm1, %xmm1
 ; SKX-NEXT:    vpcmpgtd %xmm0, %xmm1, %k1
 ; SKX-NEXT:    vpbroadcastd {{.*}}(%rip), %xmm0 {%k1} {z}
 ; SKX-NEXT:    vcvtudq2ps %xmm0, %xmm0
@@ -1105,7 +1102,7 @@ define <4 x double> @uitofp_4i1_double(<4 x i32> %a) {
 ;
 ; SKX-LABEL: uitofp_4i1_double:
 ; SKX:       ## BB#0:
-; SKX-NEXT:    vpxord %xmm1, %xmm1, %xmm1
+; SKX-NEXT:    vpxor %xmm1, %xmm1, %xmm1
 ; SKX-NEXT:    vpcmpgtd %xmm0, %xmm1, %k1
 ; SKX-NEXT:    vpbroadcastd {{.*}}(%rip), %xmm0 {%k1} {z}
 ; SKX-NEXT:    vcvtudq2pd %xmm0, %ymm0
@@ -1134,7 +1131,7 @@ define <2 x float> @uitofp_2i1_float(<2 x i32> %a) {
 ;
 ; SKX-LABEL: uitofp_2i1_float:
 ; SKX:       ## BB#0:
-; SKX-NEXT:    vpxord %xmm1, %xmm1, %xmm1
+; SKX-NEXT:    vpxor %xmm1, %xmm1, %xmm1
 ; SKX-NEXT:    vpblendd {{.*#+}} xmm0 = xmm0[0],xmm1[1],xmm0[2],xmm1[3]
 ; SKX-NEXT:    vpcmpltuq %xmm1, %xmm0, %k1
 ; SKX-NEXT:    vpbroadcastd {{.*}}(%rip), %xmm0 {%k1} {z}
@@ -1158,7 +1155,7 @@ define <2 x double> @uitofp_2i1_double(<2 x i32> %a) {
 ;
 ; SKX-LABEL: uitofp_2i1_double:
 ; SKX:       ## BB#0:
-; SKX-NEXT:    vpxord %xmm1, %xmm1, %xmm1
+; SKX-NEXT:    vpxor %xmm1, %xmm1, %xmm1
 ; SKX-NEXT:    vpblendd {{.*#+}} xmm0 = xmm0[0],xmm1[1],xmm0[2],xmm1[3]
 ; SKX-NEXT:    vpcmpltuq %xmm1, %xmm0, %k1
 ; SKX-NEXT:    vmovdqa64 {{.*}}(%rip), %xmm0 {%k1} {z}

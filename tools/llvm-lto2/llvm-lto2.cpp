@@ -17,6 +17,8 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/LTO/Caching.h"
+#include "llvm/CodeGen/CommandFlags.h"
+#include "llvm/IR/DiagnosticPrinter.h"
 #include "llvm/LTO/LTO.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/TargetSelect.h"
@@ -30,6 +32,11 @@ static cl::opt<char>
     OptLevel("O", cl::desc("Optimization level. [-O0, -O1, -O2, or -O3] "
                            "(default = '-O2')"),
              cl::Prefix, cl::ZeroOrMore, cl::init('2'));
+
+static cl::opt<char> CGOptLevel(
+    "cg-opt-level",
+    cl::desc("Codegen optimization level (0, 1, 2 or 3, default = '2')"),
+    cl::init('2'));
 
 static cl::list<std::string> InputFilenames(cl::Positional, cl::OneOrMore,
                                             cl::desc("<input bitcode files>"));
@@ -57,7 +64,7 @@ static cl::opt<bool>
                                        "import files for the "
                                        "distributed backend case"));
 
-static cl::opt<int> Threads("-thinlto-threads",
+static cl::opt<int> Threads("thinlto-threads",
                             cl::init(llvm::heavyweight_hardware_concurrency()));
 
 static cl::list<std::string> SymbolResolutions(
@@ -73,6 +80,15 @@ static cl::list<std::string> SymbolResolutions(
              "     visible outside of the LTO unit\n"
              "A resolution for each symbol must be specified."),
     cl::ZeroOrMore);
+
+static cl::opt<std::string> OverrideTriple(
+    "override-triple",
+    cl::desc("Replace target triples in input files with this triple"));
+
+static cl::opt<std::string> DefaultTriple(
+    "default-triple",
+    cl::desc(
+        "Replace unspecified target triples in input files with this triple"));
 
 static void check(Error E, std::string Msg) {
   if (!E)
@@ -109,7 +125,11 @@ int main(int argc, char **argv) {
 
   cl::ParseCommandLineOptions(argc, argv, "Resolution-based LTO test harness");
 
-  std::map<std::pair<std::string, std::string>, SymbolResolution>
+  // FIXME: Workaround PR30396 which means that a symbol can appear
+  // more than once if it is defined in module-level assembly and
+  // has a GV declaration. We allow (file, symbol) pairs to have multiple
+  // resolutions and apply them in the order observed.
+  std::map<std::pair<std::string, std::string>, std::list<SymbolResolution>>
       CommandLineResolutions;
   for (std::string R : SymbolResolutions) {
     StringRef Rest = R;
@@ -132,15 +152,25 @@ int main(int argc, char **argv) {
         llvm::errs() << "invalid character " << C << " in resolution: " << R
                      << '\n';
     }
-    CommandLineResolutions[{FileName, SymbolName}] = Res;
+    CommandLineResolutions[{FileName, SymbolName}].push_back(Res);
   }
 
   std::vector<std::unique_ptr<MemoryBuffer>> MBs;
 
   Config Conf;
-  Conf.DiagHandler = [](const DiagnosticInfo &) {
+  Conf.DiagHandler = [](const DiagnosticInfo &DI) {
+    DiagnosticPrinterRawOStream DP(errs());
+    DI.print(DP);
+    errs() << '\n';
     exit(1);
   };
+
+  Conf.CPU = MCPU;
+  Conf.Options = InitTargetOptionsFromCodeGenFlags();
+  Conf.MAttrs = MAttrs;
+  if (auto RM = getRelocModel())
+    Conf.RelocModel = *RM;
+  Conf.CodeModel = CMModel;
 
   if (SaveTemps)
     check(Conf.addSaveTemps(OutputFilename + "."),
@@ -151,6 +181,26 @@ int main(int argc, char **argv) {
   Conf.AAPipeline = AAPipeline;
 
   Conf.OptLevel = OptLevel - '0';
+  switch (CGOptLevel) {
+  case '0':
+    Conf.CGOptLevel = CodeGenOpt::None;
+    break;
+  case '1':
+    Conf.CGOptLevel = CodeGenOpt::Less;
+    break;
+  case '2':
+    Conf.CGOptLevel = CodeGenOpt::Default;
+    break;
+  case '3':
+    Conf.CGOptLevel = CodeGenOpt::Aggressive;
+    break;
+  default:
+    llvm::errs() << "invalid cg optimization level: " << CGOptLevel << '\n';
+    return 1;
+  }
+
+  Conf.OverrideTriple = OverrideTriple;
+  Conf.DefaultTriple = DefaultTriple;
 
   ThinBackend Backend;
   if (ThinLTODistributedIndexes)
@@ -166,12 +216,6 @@ int main(int argc, char **argv) {
         check(InputFile::create(MB->getMemBufferRef()), F);
 
     std::vector<SymbolResolution> Res;
-    // FIXME: Workaround PR30396 which means that a symbol can appear
-    // more than once if it is defined in module-level assembly and
-    // has a GV declaration. Keep track of the resolutions found in this
-    // file and remove them from the CommandLineResolutions map afterwards,
-    // so that we don't flag the second one as missing.
-    std::map<std::string, SymbolResolution> CurrentFileSymResolutions;
     for (const InputFile::Symbol &Sym : Input->symbols()) {
       auto I = CommandLineResolutions.find({F, Sym.getName()});
       if (I == CommandLineResolutions.end()) {
@@ -179,16 +223,11 @@ int main(int argc, char **argv) {
                      << ',' << Sym.getName() << '\n';
         HasErrors = true;
       } else {
-        Res.push_back(I->second);
-        CurrentFileSymResolutions[Sym.getName()] = I->second;
+        Res.push_back(I->second.front());
+        I->second.pop_front();
+        if (I->second.empty())
+          CommandLineResolutions.erase(I);
       }
-    }
-    for (auto I : CurrentFileSymResolutions) {
-#ifndef NDEBUG
-      auto NumErased =
-#endif
-          CommandLineResolutions.erase({F, I.first});
-      assert(NumErased > 0);
     }
 
     if (HasErrors)

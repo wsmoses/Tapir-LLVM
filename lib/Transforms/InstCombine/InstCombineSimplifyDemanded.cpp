@@ -981,6 +981,7 @@ Value *InstCombiner::SimplifyDemandedVectorElts(Value *V, APInt DemandedElts,
 
   bool MadeChange = false;
   APInt UndefElts2(VWidth, 0);
+  APInt UndefElts3(VWidth, 0);
   Value *TmpV;
   switch (I->getOpcode()) {
   default: break;
@@ -1020,8 +1021,8 @@ Value *InstCombiner::SimplifyDemandedVectorElts(Value *V, APInt DemandedElts,
   }
   case Instruction::ShuffleVector: {
     ShuffleVectorInst *Shuffle = cast<ShuffleVectorInst>(I);
-    uint64_t LHSVWidth =
-      cast<VectorType>(Shuffle->getOperand(0)->getType())->getNumElements();
+    unsigned LHSVWidth =
+      Shuffle->getOperand(0)->getType()->getVectorNumElements();
     APInt LeftDemanded(LHSVWidth, 0), RightDemanded(LHSVWidth, 0);
     for (unsigned i = 0; i < VWidth; i++) {
       if (DemandedElts[i]) {
@@ -1089,7 +1090,7 @@ Value *InstCombiner::SimplifyDemandedVectorElts(Value *V, APInt DemandedElts,
       Constant *Value = nullptr;
       unsigned Idx = -1u;
 
-      // Find constant vector wigth the single element in shuffle (LHS or RHS).
+      // Find constant vector with the single element in shuffle (LHS or RHS).
       if (LHSIdx < LHSVWidth && RHSUniform) {
         if (auto *CV = dyn_cast<ConstantVector>(Shuffle->getOperand(0))) {
           Op = Shuffle->getOperand(1);
@@ -1254,49 +1255,222 @@ Value *InstCombiner::SimplifyDemandedVectorElts(Value *V, APInt DemandedElts,
     switch (II->getIntrinsicID()) {
     default: break;
 
+    case Intrinsic::x86_xop_vfrcz_ss:
+    case Intrinsic::x86_xop_vfrcz_sd:
+      // The instructions for these intrinsics are speced to zero upper bits not
+      // pass them through like other scalar intrinsics. So we shouldn't just
+      // use Arg0 if DemandedElts[0] is clear like we do for other intrinsics.
+      // Instead we should return a zero vector.
+      if (!DemandedElts[0]) {
+        Worklist.Add(II);
+        return ConstantAggregateZero::get(II->getType());
+      }
+
+      // Only the lower element is used.
+      DemandedElts = 1;
+      TmpV = SimplifyDemandedVectorElts(II->getArgOperand(0), DemandedElts,
+                                        UndefElts, Depth + 1);
+      if (TmpV) { II->setArgOperand(0, TmpV); MadeChange = true; }
+
+      // Only the lower element is undefined. The high elements are zero.
+      UndefElts = UndefElts[0];
+      break;
+
     // Unary scalar-as-vector operations that work column-wise.
     case Intrinsic::x86_sse_rcp_ss:
     case Intrinsic::x86_sse_rsqrt_ss:
     case Intrinsic::x86_sse_sqrt_ss:
     case Intrinsic::x86_sse2_sqrt_sd:
-    case Intrinsic::x86_xop_vfrcz_ss:
-    case Intrinsic::x86_xop_vfrcz_sd:
       TmpV = SimplifyDemandedVectorElts(II->getArgOperand(0), DemandedElts,
                                         UndefElts, Depth + 1);
       if (TmpV) { II->setArgOperand(0, TmpV); MadeChange = true; }
 
       // If lowest element of a scalar op isn't used then use Arg0.
-      if (DemandedElts.getLoBits(1) != 1)
+      if (!DemandedElts[0]) {
+        Worklist.Add(II);
         return II->getArgOperand(0);
+      }
       // TODO: If only low elt lower SQRT to FSQRT (with rounding/exceptions
       // checks).
       break;
 
-    // Binary scalar-as-vector operations that work column-wise.  A dest element
-    // is a function of the corresponding input elements from the two inputs.
+    // Binary scalar-as-vector operations that work column-wise. The high
+    // elements come from operand 0. The low element is a function of both
+    // operands.
     case Intrinsic::x86_sse_min_ss:
     case Intrinsic::x86_sse_max_ss:
     case Intrinsic::x86_sse_cmp_ss:
     case Intrinsic::x86_sse2_min_sd:
     case Intrinsic::x86_sse2_max_sd:
-    case Intrinsic::x86_sse2_cmp_sd:
-    case Intrinsic::x86_sse41_round_ss:
-    case Intrinsic::x86_sse41_round_sd:
+    case Intrinsic::x86_sse2_cmp_sd: {
       TmpV = SimplifyDemandedVectorElts(II->getArgOperand(0), DemandedElts,
                                         UndefElts, Depth + 1);
       if (TmpV) { II->setArgOperand(0, TmpV); MadeChange = true; }
+
+      // If lowest element of a scalar op isn't used then use Arg0.
+      if (!DemandedElts[0]) {
+        Worklist.Add(II);
+        return II->getArgOperand(0);
+      }
+
+      // Only lower element is used for operand 1.
+      DemandedElts = 1;
       TmpV = SimplifyDemandedVectorElts(II->getArgOperand(1), DemandedElts,
                                         UndefElts2, Depth + 1);
       if (TmpV) { II->setArgOperand(1, TmpV); MadeChange = true; }
 
-      // If lowest element of a scalar op isn't used then use Arg0.
-      if (DemandedElts.getLoBits(1) != 1)
-        return II->getArgOperand(0);
+      // Lower element is undefined if both lower elements are undefined.
+      // Consider things like undef&0.  The result is known zero, not undef.
+      if (!UndefElts2[0])
+        UndefElts.clearBit(0);
 
-      // Output elements are undefined if both are undefined.  Consider things
-      // like undef&0.  The result is known zero, not undef.
-      UndefElts &= UndefElts2;
       break;
+    }
+
+    // Binary scalar-as-vector operations that work column-wise. The high
+    // elements come from operand 0 and the low element comes from operand 1.
+    case Intrinsic::x86_sse41_round_ss:
+    case Intrinsic::x86_sse41_round_sd: {
+      // Don't use the low element of operand 0.
+      APInt DemandedElts2 = DemandedElts;
+      DemandedElts2.clearBit(0);
+      TmpV = SimplifyDemandedVectorElts(II->getArgOperand(0), DemandedElts2,
+                                        UndefElts, Depth + 1);
+      if (TmpV) { II->setArgOperand(0, TmpV); MadeChange = true; }
+
+      // If lowest element of a scalar op isn't used then use Arg0.
+      if (!DemandedElts[0]) {
+        Worklist.Add(II);
+        return II->getArgOperand(0);
+      }
+
+      // Only lower element is used for operand 1.
+      DemandedElts = 1;
+      TmpV = SimplifyDemandedVectorElts(II->getArgOperand(1), DemandedElts,
+                                        UndefElts2, Depth + 1);
+      if (TmpV) { II->setArgOperand(1, TmpV); MadeChange = true; }
+
+      // Take the high undef elements from operand 0 and take the lower element
+      // from operand 1.
+      UndefElts.clearBit(0);
+      UndefElts |= UndefElts2[0];
+      break;
+    }
+
+    // Three input scalar-as-vector operations that work column-wise. The high
+    // elements come from operand 0 and the low element is a function of all
+    // three inputs.
+    case Intrinsic::x86_avx512_mask_add_ss_round:
+    case Intrinsic::x86_avx512_mask_div_ss_round:
+    case Intrinsic::x86_avx512_mask_mul_ss_round:
+    case Intrinsic::x86_avx512_mask_sub_ss_round:
+    case Intrinsic::x86_avx512_mask_max_ss_round:
+    case Intrinsic::x86_avx512_mask_min_ss_round:
+    case Intrinsic::x86_avx512_mask_add_sd_round:
+    case Intrinsic::x86_avx512_mask_div_sd_round:
+    case Intrinsic::x86_avx512_mask_mul_sd_round:
+    case Intrinsic::x86_avx512_mask_sub_sd_round:
+    case Intrinsic::x86_avx512_mask_max_sd_round:
+    case Intrinsic::x86_avx512_mask_min_sd_round:
+    case Intrinsic::x86_fma_vfmadd_ss:
+    case Intrinsic::x86_fma_vfmsub_ss:
+    case Intrinsic::x86_fma_vfnmadd_ss:
+    case Intrinsic::x86_fma_vfnmsub_ss:
+    case Intrinsic::x86_fma_vfmadd_sd:
+    case Intrinsic::x86_fma_vfmsub_sd:
+    case Intrinsic::x86_fma_vfnmadd_sd:
+    case Intrinsic::x86_fma_vfnmsub_sd:
+    case Intrinsic::x86_avx512_mask_vfmadd_ss:
+    case Intrinsic::x86_avx512_mask_vfmadd_sd:
+    case Intrinsic::x86_avx512_maskz_vfmadd_ss:
+    case Intrinsic::x86_avx512_maskz_vfmadd_sd:
+      TmpV = SimplifyDemandedVectorElts(II->getArgOperand(0), DemandedElts,
+                                        UndefElts, Depth + 1);
+      if (TmpV) { II->setArgOperand(0, TmpV); MadeChange = true; }
+
+      // If lowest element of a scalar op isn't used then use Arg0.
+      if (!DemandedElts[0]) {
+        Worklist.Add(II);
+        return II->getArgOperand(0);
+      }
+
+      // Only lower element is used for operand 1 and 2.
+      DemandedElts = 1;
+      TmpV = SimplifyDemandedVectorElts(II->getArgOperand(1), DemandedElts,
+                                        UndefElts2, Depth + 1);
+      if (TmpV) { II->setArgOperand(1, TmpV); MadeChange = true; }
+      TmpV = SimplifyDemandedVectorElts(II->getArgOperand(2), DemandedElts,
+                                        UndefElts3, Depth + 1);
+      if (TmpV) { II->setArgOperand(2, TmpV); MadeChange = true; }
+
+      // Lower element is undefined if all three lower elements are undefined.
+      // Consider things like undef&0.  The result is known zero, not undef.
+      if (!UndefElts2[0] || !UndefElts3[0])
+        UndefElts.clearBit(0);
+
+      break;
+
+    case Intrinsic::x86_avx512_mask3_vfmadd_ss:
+    case Intrinsic::x86_avx512_mask3_vfmadd_sd:
+    case Intrinsic::x86_avx512_mask3_vfmsub_ss:
+    case Intrinsic::x86_avx512_mask3_vfmsub_sd:
+    case Intrinsic::x86_avx512_mask3_vfnmsub_ss:
+    case Intrinsic::x86_avx512_mask3_vfnmsub_sd:
+      // These intrinsics get the passthru bits from operand 2.
+      TmpV = SimplifyDemandedVectorElts(II->getArgOperand(2), DemandedElts,
+                                        UndefElts, Depth + 1);
+      if (TmpV) { II->setArgOperand(2, TmpV); MadeChange = true; }
+
+      // If lowest element of a scalar op isn't used then use Arg2.
+      if (!DemandedElts[0]) {
+        Worklist.Add(II);
+        return II->getArgOperand(2);
+      }
+
+      // Only lower element is used for operand 0 and 1.
+      DemandedElts = 1;
+      TmpV = SimplifyDemandedVectorElts(II->getArgOperand(0), DemandedElts,
+                                        UndefElts2, Depth + 1);
+      if (TmpV) { II->setArgOperand(0, TmpV); MadeChange = true; }
+      TmpV = SimplifyDemandedVectorElts(II->getArgOperand(1), DemandedElts,
+                                        UndefElts3, Depth + 1);
+      if (TmpV) { II->setArgOperand(1, TmpV); MadeChange = true; }
+
+      // Lower element is undefined if all three lower elements are undefined.
+      // Consider things like undef&0.  The result is known zero, not undef.
+      if (!UndefElts2[0] || !UndefElts3[0])
+        UndefElts.clearBit(0);
+
+      break;
+
+    case Intrinsic::x86_sse2_pmulu_dq:
+    case Intrinsic::x86_sse41_pmuldq:
+    case Intrinsic::x86_avx2_pmul_dq:
+    case Intrinsic::x86_avx2_pmulu_dq:
+    case Intrinsic::x86_avx512_pmul_dq_512:
+    case Intrinsic::x86_avx512_pmulu_dq_512: {
+      Value *Op0 = II->getArgOperand(0);
+      Value *Op1 = II->getArgOperand(1);
+      unsigned InnerVWidth = Op0->getType()->getVectorNumElements();
+      assert((VWidth * 2) == InnerVWidth && "Unexpected input size");
+
+      APInt InnerDemandedElts(InnerVWidth, 0);
+      for (unsigned i = 0; i != VWidth; ++i)
+        if (DemandedElts[i])
+          InnerDemandedElts.setBit(i * 2);
+
+      UndefElts2 = APInt(InnerVWidth, 0);
+      TmpV = SimplifyDemandedVectorElts(Op0, InnerDemandedElts, UndefElts2,
+                                        Depth + 1);
+      if (TmpV) { II->setArgOperand(0, TmpV); MadeChange = true; }
+
+      UndefElts3 = APInt(InnerVWidth, 0);
+      TmpV = SimplifyDemandedVectorElts(Op1, InnerDemandedElts, UndefElts3,
+                                        Depth + 1);
+      if (TmpV) { II->setArgOperand(1, TmpV); MadeChange = true; }
+
+      break;
+    }
 
     // SSE4A instructions leave the upper 64-bits of the 128-bit result
     // in an undefined state.

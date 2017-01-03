@@ -15,21 +15,27 @@
 #ifndef LLVM_IR_DIBUILDER_H
 #define LLVM_IR_DIBUILDER_H
 
+#include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/None.h"
+#include "llvm/ADT/SmallVector.h"
+#include "llvm/ADT/StringRef.h"
 #include "llvm/IR/DebugInfo.h"
+#include "llvm/IR/DebugInfoMetadata.h"
 #include "llvm/IR/TrackingMDRef.h"
-#include "llvm/IR/ValueHandle.h"
-#include "llvm/Support/DataTypes.h"
+#include "llvm/Support/Casting.h"
+#include <algorithm>
+#include <cstdint>
 
 namespace llvm {
+
   class BasicBlock;
-  class Instruction;
+  class Constant;
   class Function;
+  class Instruction;
+  class LLVMContext;
   class Module;
   class Value;
-  class Constant;
-  class LLVMContext;
-  class StringRef;
-  template <typename T> class ArrayRef;
 
   class DIBuilder {
     Module &M;
@@ -57,9 +63,6 @@ namespace llvm {
     /// copy.
     DenseMap<MDNode *, SmallVector<TrackingMDNodeRef, 1>> PreservedVariables;
 
-    DIBuilder(const DIBuilder &) = delete;
-    void operator=(const DIBuilder &) = delete;
-
     /// Create a temporary.
     ///
     /// Create an \a temporary node and track it in \a UnresolvedNodes.
@@ -71,6 +74,8 @@ namespace llvm {
     /// If \c AllowUnresolved, collect unresolved nodes attached to the module
     /// in order to resolve cycles during \a finalize().
     explicit DIBuilder(Module &M, bool AllowUnresolved = true);
+    DIBuilder(const DIBuilder &) = delete;
+    DIBuilder &operator=(const DIBuilder &) = delete;
 
     /// Construct any deferred debug info descriptors.
     void finalize();
@@ -78,8 +83,7 @@ namespace llvm {
     /// A CompileUnit provides an anchor for all debugging
     /// information generated during this instance of compilation.
     /// \param Lang          Source programming language, eg. dwarf::DW_LANG_C99
-    /// \param File          File name
-    /// \param Dir           Directory
+    /// \param File          File info.
     /// \param Producer      Identify the producer of debugging information
     ///                      and code.  Usually this is a compiler
     ///                      version string.
@@ -96,16 +100,21 @@ namespace llvm {
     /// \param Kind          The kind of debug information to generate.
     /// \param DWOId         The DWOId if this is a split skeleton compile unit.
     DICompileUnit *
-    createCompileUnit(unsigned Lang, StringRef File, StringRef Dir,
-                      StringRef Producer, bool isOptimized, StringRef Flags,
-                      unsigned RV, StringRef SplitName = StringRef(),
+    createCompileUnit(unsigned Lang, DIFile *File, StringRef Producer,
+                      bool isOptimized, StringRef Flags, unsigned RV,
+                      StringRef SplitName = StringRef(),
                       DICompileUnit::DebugEmissionKind Kind =
                           DICompileUnit::DebugEmissionKind::FullDebug,
                       uint64_t DWOId = 0, bool SplitDebugInlining = true);
 
-    /// Create a file descriptor to hold debugging information
-    /// for a file.
-    DIFile *createFile(StringRef Filename, StringRef Directory);
+    /// Create a file descriptor to hold debugging information for a file.
+    /// \param Filename  File name.
+    /// \param Directory Directory.
+    /// \param CSKind    Checksum kind (e.g. CSK_None, CSK_MD5, CSK_SHA1, etc.).
+    /// \param Checksum  Checksum data.
+    DIFile *createFile(StringRef Filename, StringRef Directory,
+                       DIFile::ChecksumKind CSKind = DIFile::CSK_None,
+                       StringRef Checksum = StringRef());
 
     /// Create a single enumerator value.
     DIEnumerator *createEnumerator(StringRef Name, int64_t Val);
@@ -223,7 +232,7 @@ namespace llvm {
     DIDerivedType *createStaticMemberType(DIScope *Scope, StringRef Name,
                                           DIFile *File, unsigned LineNo,
                                           DIType *Ty, DINode::DIFlags Flags,
-                                          llvm::Constant *Val,
+                                          Constant *Val,
                                           uint32_t AlignInBits = 0);
 
     /// Create debugging information entry for Objective-C
@@ -445,8 +454,7 @@ namespace llvm {
     /// implicitly uniques the values returned.
     DISubrange *getOrCreateSubrange(int64_t Lo, int64_t Count);
 
-    /// Create a new descriptor for the specified
-    /// variable.
+    /// Create a new descriptor for the specified variable.
     /// \param Context     Variable scope.
     /// \param Name        Name of the variable.
     /// \param LinkageName Mangled  name of the variable.
@@ -460,20 +468,18 @@ namespace llvm {
     /// \param Decl        Reference to the corresponding declaration.
     /// \param AlignInBits Variable alignment(or 0 if no alignment attr was
     ///                    specified)
-    DIGlobalVariable *createGlobalVariable(DIScope *Context, StringRef Name,
-                                           StringRef LinkageName, DIFile *File,
-                                           unsigned LineNo, DIType *Ty,
-                                           bool isLocalToUnit,
-                                           DIExpression *Expr = nullptr,
-                                           MDNode *Decl = nullptr,
-                                           uint32_t AlignInBits = 0);
+    DIGlobalVariableExpression *createGlobalVariableExpression(
+        DIScope *Context, StringRef Name, StringRef LinkageName, DIFile *File,
+        unsigned LineNo, DIType *Ty, bool isLocalToUnit,
+        DIExpression *Expr = nullptr, MDNode *Decl = nullptr,
+        uint32_t AlignInBits = 0);
 
     /// Identical to createGlobalVariable
     /// except that the resulting DbgNode is temporary and meant to be RAUWed.
     DIGlobalVariable *createTempGlobalVariableFwdDecl(
         DIScope *Context, StringRef Name, StringRef LinkageName, DIFile *File,
-        unsigned LineNo, DIType *Ty, bool isLocalToUnit, DIExpression *Expr,
-        MDNode *Decl = nullptr, uint32_t AlignInBits = 0);
+        unsigned LineNo, DIType *Ty, bool isLocalToUnit, MDNode *Decl = nullptr,
+        uint32_t AlignInBits = 0);
 
     /// Create a new descriptor for an auto variable.  This is a local variable
     /// that is not a subprogram parameter.
@@ -517,7 +523,7 @@ namespace llvm {
     ///
     /// \param OffsetInBits Offset of the piece in bits.
     /// \param SizeInBits   Size of the piece in bits.
-    DIExpression *createBitPieceExpression(unsigned OffsetInBits,
+    DIExpression *createFragmentExpression(unsigned OffsetInBits,
                                            unsigned SizeInBits);
 
     /// Create an expression for a variable that does not have an address, but
@@ -742,6 +748,7 @@ namespace llvm {
       return Replacement;
     }
   };
+
 } // end namespace llvm
 
-#endif
+#endif // LLVM_IR_DIBUILDER_H

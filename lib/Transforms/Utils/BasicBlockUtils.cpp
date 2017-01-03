@@ -235,7 +235,17 @@ BasicBlock *llvm::SplitEdge(BasicBlock *BB, BasicBlock *Succ, DominatorTree *DT,
   // block.
   assert(BB->getTerminator()->getNumSuccessors() == 1 &&
          "Should have a single succ!");
-  return SplitBlock(BB, BB->getTerminator(), DT, LI);
+  // return SplitBlock(BB, BB->getTerminator(), DT, LI);
+  BasicBlock *NewBB = SplitBlock(BB, BB->getTerminator(), DT, LI);
+  if (isa<SyncInst>(NewBB->getTerminator())) {
+    // Make sure the original BB is terminated by the sync.
+    SyncInst *SI = SyncInst::Create(NewBB, BB->getTerminator());
+    BranchInst::Create(Succ, NewBB->getTerminator());
+    SI->setDebugLoc(NewBB->getTerminator()->getDebugLoc());
+    BB->getTerminator()->eraseFromParent();
+    NewBB->getTerminator()->eraseFromParent();
+  }
+  return NewBB;
 }
 
 unsigned

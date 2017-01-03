@@ -18,6 +18,7 @@
 #include "X86TargetTransformInfo.h"
 #include "llvm/CodeGen/GlobalISel/GISelAccessor.h"
 #include "llvm/CodeGen/GlobalISel/IRTranslator.h"
+#include "llvm/CodeGen/MachineScheduler.h"
 #include "llvm/CodeGen/Passes.h"
 #include "llvm/CodeGen/TargetPassConfig.h"
 #include "llvm/IR/Function.h"
@@ -45,6 +46,7 @@ extern "C" void LLVMInitializeX86Target() {
   initializeGlobalISel(PR);
   initializeWinEHStatePassPass(PR);
   initializeFixupBWInstPassPass(PR);
+  initializeEvexToVexInstPassPass(PR);
 }
 
 static std::unique_ptr<TargetLoweringObjectFile> createTLOF(const Triple &TT) {
@@ -189,7 +191,7 @@ struct X86GISelActualAccessor : public GISelAccessor {
     //TODO: Implement
     return nullptr;
   }
-  const class LegalizerInfo *getLegalizerInfo() const override {
+  const LegalizerInfo *getLegalizerInfo() const override {
     //TODO: Implement
     return nullptr;
   }
@@ -282,6 +284,13 @@ public:
 
   X86TargetMachine &getX86TargetMachine() const {
     return getTM<X86TargetMachine>();
+  }
+
+  ScheduleDAGInstrs *
+  createMachineScheduler(MachineSchedContext *C) const override {
+    ScheduleDAGMILive *DAG = createGenericSchedLive(C);
+    DAG->addMutation(createMacroFusionDAGMutation(DAG->TII));
+    return DAG;
   }
 
   void addIRPasses() override;
@@ -391,5 +400,6 @@ void X86PassConfig::addPreEmitPass() {
     addPass(createX86FixupBWInsts());
     addPass(createX86PadShortFunctions());
     addPass(createX86FixupLEAs());
+    addPass(createX86EvexToVexInsts());
   }
 }

@@ -311,6 +311,7 @@ static const char *GetCodeName(unsigned CodeID, unsigned BlockID,
       STRINGIFY_CODE(FS, COMBINED_ALIAS)
       STRINGIFY_CODE(FS, COMBINED_ORIGINAL_NAME)
       STRINGIFY_CODE(FS, VERSION)
+      STRINGIFY_CODE(FS, TYPE_TESTS)
     }
   case bitc::METADATA_ATTACHMENT_ID:
     switch(CodeID) {
@@ -352,6 +353,8 @@ static const char *GetCodeName(unsigned CodeID, unsigned BlockID,
       STRINGIFY_CODE(METADATA, OBJC_PROPERTY)
       STRINGIFY_CODE(METADATA, IMPORTED_ENTITY)
       STRINGIFY_CODE(METADATA, MODULE)
+      STRINGIFY_CODE(METADATA, INDEX_OFFSET)
+      STRINGIFY_CODE(METADATA, INDEX)
     }
   case bitc::METADATA_KIND_BLOCK_ID:
     switch (CodeID) {
@@ -513,6 +516,9 @@ static bool ParseBlock(BitstreamCursor &Stream, BitstreamBlockInfo &BlockInfo,
 
   SmallVector<uint64_t, 64> Record;
 
+  // Keep the offset to the metadata index if seen.
+  uint64_t MetadataIndexOffset = 0;
+
   // Read all the records for this block.
   while (1) {
     if (Stream.AtEndOfStream())
@@ -567,7 +573,7 @@ static bool ParseBlock(BitstreamCursor &Stream, BitstreamBlockInfo &BlockInfo,
     ++BlockStats.NumRecords;
 
     StringRef Blob;
-    unsigned CurrentRecordPos = Stream.getCurrentByteNo();
+    unsigned CurrentRecordPos = Stream.GetCurrentBitNo();
     unsigned Code = Stream.readRecord(Entry.ID, Record, &Blob);
 
     // Increment the # occurrences of this code.
@@ -599,6 +605,27 @@ static bool ParseBlock(BitstreamCursor &Stream, BitstreamBlockInfo &BlockInfo,
       for (unsigned i = 0, e = Record.size(); i != e; ++i)
         outs() << " op" << i << "=" << (int64_t)Record[i];
 
+      // If we found a metadata index, let's verify that we had an offset before
+      // and validate its forward reference offset was correct!
+      if (BlockID == bitc::METADATA_BLOCK_ID) {
+        if (Code == bitc::METADATA_INDEX_OFFSET) {
+          if (Record.size() != 2)
+            outs() << "(Invalid record)";
+          else {
+            auto Offset = Record[0] + (Record[1] << 32);
+            MetadataIndexOffset = Stream.GetCurrentBitNo() + Offset;
+          }
+        }
+        if (Code == bitc::METADATA_INDEX) {
+          outs() << " (offset ";
+          if (MetadataIndexOffset == RecordStartBit)
+            outs() << "match)";
+          else
+            outs() << "mismatch: " << MetadataIndexOffset << " vs "
+                   << RecordStartBit << ")";
+        }
+      }
+
       // If we found a module hash, let's verify that it matches!
       if (BlockID == bitc::MODULE_BLOCK_ID && Code == bitc::MODULE_CODE_HASH) {
         if (Record.size() != 5)
@@ -608,7 +635,7 @@ static bool ParseBlock(BitstreamCursor &Stream, BitstreamBlockInfo &BlockInfo,
           SHA1 Hasher;
           StringRef Hash;
           {
-            int BlockSize = CurrentRecordPos - BlockEntryPos;
+            int BlockSize = (CurrentRecordPos / 8) - BlockEntryPos;
             auto Ptr = Stream.getPointerToByte(BlockEntryPos, BlockSize);
             Hasher.update(ArrayRef<uint8_t>(Ptr, BlockSize));
             Hash = Hasher.result();
@@ -675,6 +702,10 @@ static bool ParseBlock(BitstreamCursor &Stream, BitstreamBlockInfo &BlockInfo,
 
       outs() << "\n";
     }
+
+    // Make sure that we can skip the current record.
+    Stream.JumpToBit(CurrentRecordPos);
+    Stream.skipRecord(Entry.ID);
   }
 }
 

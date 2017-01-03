@@ -11,7 +11,6 @@ add_llvm_library(LLVMTransformUtils
   CodeExtractor.cpp
   CtorUtils.cpp
   DemoteRegToStack.cpp
-  Detach2Cilk.cpp
   EscapeEnumerator.cpp
   Evaluator.cpp
   FlattenCFG.cpp
@@ -25,9 +24,9 @@ add_llvm_library(LLVMTransformUtils
   LCSSA.cpp
   LibCallsShrinkWrap.cpp
   Local.cpp
-  Loop2Cilk.cpp
   LoopSimplify.cpp
   LoopUnroll.cpp
+  LoopUnrollPeel.cpp
   LoopUnrollRuntime.cpp
   LoopUtils.cpp
   LoopVersioning.cpp

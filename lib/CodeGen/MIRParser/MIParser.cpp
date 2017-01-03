@@ -197,6 +197,12 @@ private:
   /// Return true if an error occurred.
   bool getUint64(uint64_t &Result);
 
+  /// Convert the hexadecimal literal in the current token into an unsigned
+  ///  APInt with a minimum bitwidth required to represent the value.
+  ///
+  /// Return true if the literal does not represent an integer value.
+  bool getHexUint(APInt &Result);
+
   /// If the current token is of the given kind, consume it and return false.
   /// Otherwise report an error and return true.
   bool expectAndConsume(MIToken::TokenKind TokenKind);
@@ -456,15 +462,18 @@ bool MIParser::parseBasicBlockLiveins(MachineBasicBlock &MBB) {
     if (parseNamedRegister(Reg))
       return true;
     lex();
-    LaneBitmask Mask = ~LaneBitmask(0);
+    LaneBitmask Mask = LaneBitmask::getAll();
     if (consumeIfPresent(MIToken::colon)) {
       // Parse lane mask.
       if (Token.isNot(MIToken::IntegerLiteral) &&
           Token.isNot(MIToken::HexLiteral))
         return error("expected a lane mask");
-      static_assert(sizeof(LaneBitmask) == sizeof(unsigned), "");
-      if (getUnsigned(Mask))
+      static_assert(sizeof(LaneBitmask::Type) == sizeof(unsigned),
+                    "Use correct get-function for lane mask");
+      LaneBitmask::Type V;
+      if (getUnsigned(V))
         return error("invalid lane mask value");
+      Mask = LaneBitmask(V);
       lex();
     }
     MBB.addLiveIn(Reg, Mask);
@@ -1017,12 +1026,9 @@ bool MIParser::parseRegisterOperand(MachineOperand &Dest,
       }
     }
   } else if (consumeIfPresent(MIToken::lparen)) {
-    // Virtual registers may have a size with GlobalISel.
+    // Virtual registers may have a tpe with GlobalISel.
     if (!TargetRegisterInfo::isVirtualRegister(Reg))
-      return error("unexpected size on physical register");
-    if (RegInfo->Kind != VRegInfo::GENERIC &&
-        RegInfo->Kind != VRegInfo::REGBANK)
-      return error("unexpected size on non-generic virtual register");
+      return error("unexpected type on physical register");
 
     LLT Ty;
     if (parseLowLevelType(Token.location(), Ty))
@@ -1036,12 +1042,12 @@ bool MIParser::parseRegisterOperand(MachineOperand &Dest,
 
     MRI.setType(Reg, Ty);
   } else if (TargetRegisterInfo::isVirtualRegister(Reg)) {
-    // Generic virtual registers must have a size.
-    // If we end up here this means the size hasn't been specified and
+    // Generic virtual registers must have a type.
+    // If we end up here this means the type hasn't been specified and
     // this is bad!
     if (RegInfo->Kind == VRegInfo::GENERIC ||
         RegInfo->Kind == VRegInfo::REGBANK)
-      return error("generic virtual registers must have a size");
+      return error("generic virtual registers must have a type");
   }
   Dest = MachineOperand::CreateReg(
       Reg, Flags & RegState::Define, Flags & RegState::Implicit,
@@ -1157,16 +1163,10 @@ bool MIParser::getUnsigned(unsigned &Result) {
     return false;
   }
   if (Token.is(MIToken::HexLiteral)) {
-    StringRef S = Token.range();
-    assert(S[0] == '0' && tolower(S[1]) == 'x');
-    // This could be a floating point literal with a special prefix.
-    if (!isxdigit(S[2]))
+    APInt A;
+    if (getHexUint(A))
       return true;
-    StringRef V = S.substr(2);
-    unsigned BW = std::min<unsigned>(V.size()*4, 32);
-    APInt A(BW, V, 16);
-    APInt Limit = APInt(BW, std::numeric_limits<unsigned>::max());
-    if (A.ugt(Limit))
+    if (A.getBitWidth() > 32)
       return error("expected 32-bit integer (too large)");
     Result = A.getZExtValue();
     return false;
@@ -1391,7 +1391,6 @@ bool MIParser::parseCFIRegister(unsigned &Reg) {
 bool MIParser::parseCFIOperand(MachineOperand &Dest) {
   auto Kind = Token.kind();
   lex();
-  auto &MMI = MF.getMMI();
   int Offset;
   unsigned Reg;
   unsigned CFIIndex;
@@ -1399,27 +1398,26 @@ bool MIParser::parseCFIOperand(MachineOperand &Dest) {
   case MIToken::kw_cfi_same_value:
     if (parseCFIRegister(Reg))
       return true;
-    CFIIndex =
-        MMI.addFrameInst(MCCFIInstruction::createSameValue(nullptr, Reg));
+    CFIIndex = MF.addFrameInst(MCCFIInstruction::createSameValue(nullptr, Reg));
     break;
   case MIToken::kw_cfi_offset:
     if (parseCFIRegister(Reg) || expectAndConsume(MIToken::comma) ||
         parseCFIOffset(Offset))
       return true;
     CFIIndex =
-        MMI.addFrameInst(MCCFIInstruction::createOffset(nullptr, Reg, Offset));
+        MF.addFrameInst(MCCFIInstruction::createOffset(nullptr, Reg, Offset));
     break;
   case MIToken::kw_cfi_def_cfa_register:
     if (parseCFIRegister(Reg))
       return true;
     CFIIndex =
-        MMI.addFrameInst(MCCFIInstruction::createDefCfaRegister(nullptr, Reg));
+        MF.addFrameInst(MCCFIInstruction::createDefCfaRegister(nullptr, Reg));
     break;
   case MIToken::kw_cfi_def_cfa_offset:
     if (parseCFIOffset(Offset))
       return true;
     // NB: MCCFIInstruction::createDefCfaOffset negates the offset.
-    CFIIndex = MMI.addFrameInst(
+    CFIIndex = MF.addFrameInst(
         MCCFIInstruction::createDefCfaOffset(nullptr, -Offset));
     break;
   case MIToken::kw_cfi_def_cfa:
@@ -1428,7 +1426,7 @@ bool MIParser::parseCFIOperand(MachineOperand &Dest) {
       return true;
     // NB: MCCFIInstruction::createDefCfa negates the offset.
     CFIIndex =
-        MMI.addFrameInst(MCCFIInstruction::createDefCfa(nullptr, Reg, -Offset));
+        MF.addFrameInst(MCCFIInstruction::createDefCfa(nullptr, Reg, -Offset));
     break;
   default:
     // TODO: Parse the other CFI operands.
@@ -1822,10 +1820,35 @@ bool MIParser::parseIRValue(const Value *&V) {
 }
 
 bool MIParser::getUint64(uint64_t &Result) {
-  assert(Token.hasIntegerValue());
-  if (Token.integerValue().getActiveBits() > 64)
-    return error("expected 64-bit integer (too large)");
-  Result = Token.integerValue().getZExtValue();
+  if (Token.hasIntegerValue()) {
+    if (Token.integerValue().getActiveBits() > 64)
+      return error("expected 64-bit integer (too large)");
+    Result = Token.integerValue().getZExtValue();
+    return false;
+  }
+  if (Token.is(MIToken::HexLiteral)) {
+    APInt A;
+    if (getHexUint(A))
+      return true;
+    if (A.getBitWidth() > 64)
+      return error("expected 64-bit integer (too large)");
+    Result = A.getZExtValue();
+    return false;
+  }
+  return true;
+}
+
+bool MIParser::getHexUint(APInt &Result) {
+  assert(Token.is(MIToken::HexLiteral));
+  StringRef S = Token.range();
+  assert(S[0] == '0' && tolower(S[1]) == 'x');
+  // This could be a floating point literal with a special prefix.
+  if (!isxdigit(S[2]))
+    return true;
+  StringRef V = S.substr(2);
+  APInt A(V.size()*4, V, 16);
+  Result = APInt(A.getActiveBits(),
+                 ArrayRef<uint64_t>(A.getRawData(), A.getNumWords()));
   return false;
 }
 

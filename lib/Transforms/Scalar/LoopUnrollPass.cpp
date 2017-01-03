@@ -24,7 +24,6 @@
 #include "llvm/Analysis/OptimizationDiagnosticInfo.h"
 #include "llvm/Analysis/ScalarEvolution.h"
 #include "llvm/Analysis/ScalarEvolutionExpressions.h"
-#include "llvm/Analysis/TargetTransformInfo.h"
 #include "llvm/IR/DataLayout.h"
 #include "llvm/IR/Dominators.h"
 #include "llvm/IR/InstVisitor.h"
@@ -47,16 +46,14 @@ static cl::opt<unsigned>
     UnrollThreshold("unroll-threshold", cl::Hidden,
                     cl::desc("The baseline cost threshold for loop unrolling"));
 
-static cl::opt<unsigned> UnrollPercentDynamicCostSavedThreshold(
-    "unroll-percent-dynamic-cost-saved-threshold", cl::init(50), cl::Hidden,
-    cl::desc("The percentage of estimated dynamic cost which must be saved by "
-             "unrolling to allow unrolling up to the max threshold."));
-
-static cl::opt<unsigned> UnrollDynamicCostSavingsDiscount(
-    "unroll-dynamic-cost-savings-discount", cl::init(100), cl::Hidden,
-    cl::desc("This is the amount discounted from the total unroll cost when "
-             "the unrolled form has a high dynamic cost savings (triggered by "
-             "the '-unroll-perecent-dynamic-cost-saved-threshold' flag)."));
+static cl::opt<unsigned> UnrollMaxPercentThresholdBoost(
+    "unroll-max-percent-threshold-boost", cl::init(400), cl::Hidden,
+    cl::desc("The maximum 'boost' (represented as a percentage >= 100) applied "
+             "to the threshold when aggressively unrolling a loop due to the "
+             "dynamic cost savings. If completely unrolling a loop will reduce "
+             "the total runtime from X to Y, we boost the loop unroll "
+             "threshold to DefaultThreshold*std::min(MaxPercentThresholdBoost, "
+             "X/Y). This limit avoids excessive code bloat."));
 
 static cl::opt<unsigned> UnrollMaxIterationsCountToAnalyze(
     "unroll-max-iteration-count-to-analyze", cl::init(10), cl::Hidden,
@@ -108,6 +105,11 @@ static cl::opt<unsigned> FlatLoopTripCountThreshold(
              "threshold, the loop is considered as flat and will be less "
              "aggressively unrolled."));
 
+static cl::opt<bool>
+    UnrollAllowPeeling("unroll-allow-peeling", cl::Hidden,
+                       cl::desc("Allows loops to be peeled when the dynamic "
+                                "trip count is known to be low."));
+
 /// A magic value for use with the Threshold parameter to indicate
 /// that the loop unroll should be performed regardless of how much
 /// code expansion would result.
@@ -123,12 +125,12 @@ static TargetTransformInfo::UnrollingPreferences gatherUnrollingPreferences(
 
   // Set up the defaults
   UP.Threshold = 150;
-  UP.PercentDynamicCostSavedThreshold = 50;
-  UP.DynamicCostSavingsDiscount = 100;
+  UP.MaxPercentThresholdBoost = 400;
   UP.OptSizeThreshold = 0;
   UP.PartialThreshold = UP.Threshold;
   UP.PartialOptSizeThreshold = 0;
   UP.Count = 0;
+  UP.PeelCount = 0;
   UP.DefaultUnrollRuntimeCount = 8;
   UP.MaxCount = UINT_MAX;
   UP.FullUnrollMaxCount = UINT_MAX;
@@ -139,6 +141,7 @@ static TargetTransformInfo::UnrollingPreferences gatherUnrollingPreferences(
   UP.AllowExpensiveTripCount = false;
   UP.Force = false;
   UP.UpperBound = false;
+  UP.AllowPeeling = false;
 
   // Override with any target specific settings
   TTI.getUnrollingPreferences(L, UP);
@@ -154,11 +157,8 @@ static TargetTransformInfo::UnrollingPreferences gatherUnrollingPreferences(
     UP.Threshold = UnrollThreshold;
     UP.PartialThreshold = UnrollThreshold;
   }
-  if (UnrollPercentDynamicCostSavedThreshold.getNumOccurrences() > 0)
-    UP.PercentDynamicCostSavedThreshold =
-        UnrollPercentDynamicCostSavedThreshold;
-  if (UnrollDynamicCostSavingsDiscount.getNumOccurrences() > 0)
-    UP.DynamicCostSavingsDiscount = UnrollDynamicCostSavingsDiscount;
+  if (UnrollMaxPercentThresholdBoost.getNumOccurrences() > 0)
+    UP.MaxPercentThresholdBoost = UnrollMaxPercentThresholdBoost;
   if (UnrollMaxCount.getNumOccurrences() > 0)
     UP.MaxCount = UnrollMaxCount;
   if (UnrollFullMaxCount.getNumOccurrences() > 0)
@@ -171,6 +171,8 @@ static TargetTransformInfo::UnrollingPreferences gatherUnrollingPreferences(
     UP.Runtime = UnrollRuntime;
   if (UnrollMaxUpperBound == 0)
     UP.UpperBound = false;
+  if (UnrollAllowPeeling.getNumOccurrences() > 0)
+    UP.AllowPeeling = UnrollAllowPeeling;
 
   // Apply user values provided by argument
   if (UserThreshold.hasValue()) {
@@ -226,11 +228,11 @@ struct UnrolledInstStateKeyInfo {
 namespace {
 struct EstimatedUnrollCost {
   /// \brief The estimated cost after unrolling.
-  int UnrolledCost;
+  unsigned UnrolledCost;
 
   /// \brief The estimated dynamic cost of executing the instructions in the
   /// rolled form.
-  int RolledDynamicCost;
+  unsigned RolledDynamicCost;
 };
 }
 
@@ -250,7 +252,7 @@ struct EstimatedUnrollCost {
 static Optional<EstimatedUnrollCost>
 analyzeLoopUnrollCost(const Loop *L, unsigned TripCount, DominatorTree &DT,
                       ScalarEvolution &SE, const TargetTransformInfo &TTI,
-                      int MaxUnrolledLoopSize) {
+                      unsigned MaxUnrolledLoopSize) {
   // We want to be able to scale offsets by the trip count and add more offsets
   // to them without checking for overflows, and we already don't want to
   // analyze *massive* trip counts, so we force the max to be reasonably small.
@@ -274,14 +276,14 @@ analyzeLoopUnrollCost(const Loop *L, unsigned TripCount, DominatorTree &DT,
 
   // The estimated cost of the unrolled form of the loop. We try to estimate
   // this by simplifying as much as we can while computing the estimate.
-  int UnrolledCost = 0;
+  unsigned UnrolledCost = 0;
 
   // We also track the estimated dynamic (that is, actually executed) cost in
   // the rolled form. This helps identify cases when the savings from unrolling
   // aren't just exposing dead control flows, but actual reduced dynamic
   // instructions due to the simplifications which we expect to occur after
   // unrolling.
-  int RolledDynamicCost = 0;
+  unsigned RolledDynamicCost = 0;
 
   // We track the simplification of each instruction in each iteration. We use
   // this to recursively merge costs into the unrolled cost on-demand so that
@@ -654,56 +656,21 @@ static void SetLoopAlreadyUnrolled(Loop *L) {
   L->setLoopID(NewLoopID);
 }
 
-static bool canUnrollCompletely(Loop *L, unsigned Threshold,
-                                unsigned PercentDynamicCostSavedThreshold,
-                                unsigned DynamicCostSavingsDiscount,
-                                uint64_t UnrolledCost,
-                                uint64_t RolledDynamicCost) {
-  if (Threshold == NoThreshold) {
-    DEBUG(dbgs() << "  Can fully unroll, because no threshold is set.\n");
-    return true;
-  }
-
-  if (UnrolledCost <= Threshold) {
-    DEBUG(dbgs() << "  Can fully unroll, because unrolled cost: "
-                 << UnrolledCost << "<=" << Threshold << "\n");
-    return true;
-  }
-
-  assert(UnrolledCost && "UnrolledCost can't be 0 at this point.");
-  assert(RolledDynamicCost >= UnrolledCost &&
-         "Cannot have a higher unrolled cost than a rolled cost!");
-
-  // Compute the percentage of the dynamic cost in the rolled form that is
-  // saved when unrolled. If unrolling dramatically reduces the estimated
-  // dynamic cost of the loop, we use a higher threshold to allow more
-  // unrolling.
-  unsigned PercentDynamicCostSaved =
-      (uint64_t)(RolledDynamicCost - UnrolledCost) * 100ull / RolledDynamicCost;
-
-  if (PercentDynamicCostSaved >= PercentDynamicCostSavedThreshold &&
-      (int64_t)UnrolledCost - (int64_t)DynamicCostSavingsDiscount <=
-          (int64_t)Threshold) {
-    DEBUG(dbgs() << "  Can fully unroll, because unrolling will reduce the "
-                    "expected dynamic cost by "
-                 << PercentDynamicCostSaved << "% (threshold: "
-                 << PercentDynamicCostSavedThreshold << "%)\n"
-                 << "  and the unrolled cost (" << UnrolledCost
-                 << ") is less than the max threshold ("
-                 << DynamicCostSavingsDiscount << ").\n");
-    return true;
-  }
-
-  DEBUG(dbgs() << "  Too large to fully unroll:\n");
-  DEBUG(dbgs() << "    Threshold: " << Threshold << "\n");
-  DEBUG(dbgs() << "    Max threshold: " << DynamicCostSavingsDiscount << "\n");
-  DEBUG(dbgs() << "    Percent cost saved threshold: "
-               << PercentDynamicCostSavedThreshold << "%\n");
-  DEBUG(dbgs() << "    Unrolled cost: " << UnrolledCost << "\n");
-  DEBUG(dbgs() << "    Rolled dynamic cost: " << RolledDynamicCost << "\n");
-  DEBUG(dbgs() << "    Percent cost saved: " << PercentDynamicCostSaved
-               << "\n");
-  return false;
+// Computes the boosting factor for complete unrolling.
+// If fully unrolling the loop would save a lot of RolledDynamicCost, it would
+// be beneficial to fully unroll the loop even if unrolledcost is large. We
+// use (RolledDynamicCost / UnrolledCost) to model the unroll benefits to adjust
+// the unroll threshold.
+static unsigned getFullUnrollBoostingFactor(const EstimatedUnrollCost &Cost,
+                                            unsigned MaxPercentThresholdBoost) {
+  if (Cost.RolledDynamicCost >= UINT_MAX / 100)
+    return 100;
+  else if (Cost.UnrolledCost != 0)
+    // The boosting factor is RolledDynamicCost / UnrolledCost
+    return std::min(100 * Cost.RolledDynamicCost / Cost.UnrolledCost,
+                    MaxPercentThresholdBoost);
+  else
+    return MaxPercentThresholdBoost;
 }
 
 // Returns loop size estimation for unrolled loop.
@@ -754,16 +721,6 @@ static bool computeUnrollCount(
   bool ExplicitUnroll = PragmaCount > 0 || PragmaFullUnroll ||
                         PragmaEnableUnroll || UserUnrollCount;
 
-  // Check if the runtime trip count is too small when profile is available.
-  if (L->getHeader()->getParent()->getEntryCount() && TripCount == 0) {
-    if (auto ProfileTripCount = getLoopEstimatedTripCount(L)) {
-      if (*ProfileTripCount < FlatLoopTripCountThreshold)
-        return false;
-      else
-        UP.AllowExpensiveTripCount = true;
-    }
-  }
-
   if (ExplicitUnroll && TripCount != 0) {
     // If the loop has an unrolling pragma, we want to be more aggressive with
     // unrolling limits. Set thresholds to at least the PragmaThreshold value
@@ -789,9 +746,7 @@ static bool computeUnrollCount(
   if (FullUnrollTripCount && FullUnrollTripCount <= UP.FullUnrollMaxCount) {
     // When computing the unrolled size, note that BEInsns are not replicated
     // like the rest of the loop body.
-    if (canUnrollCompletely(L, UP.Threshold, 100, UP.DynamicCostSavingsDiscount,
-                            getUnrolledLoopSize(LoopSize, UP),
-                            getUnrolledLoopSize(LoopSize, UP))) {
+    if (getUnrolledLoopSize(LoopSize, UP) < UP.Threshold) {
       UseUpperBound = (MaxTripCount == FullUnrollTripCount);
       TripCount = FullUnrollTripCount;
       TripMultiple = UP.UpperBound ? 1 : TripMultiple;
@@ -802,16 +757,16 @@ static bool computeUnrollCount(
       // To check that, run additional analysis on the loop.
       if (Optional<EstimatedUnrollCost> Cost = analyzeLoopUnrollCost(
               L, FullUnrollTripCount, DT, *SE, TTI,
-              UP.Threshold + UP.DynamicCostSavingsDiscount))
-        if (canUnrollCompletely(L, UP.Threshold,
-                                UP.PercentDynamicCostSavedThreshold,
-                                UP.DynamicCostSavingsDiscount,
-                                Cost->UnrolledCost, Cost->RolledDynamicCost)) {
+              UP.Threshold * UP.MaxPercentThresholdBoost / 100)) {
+        unsigned Boost =
+            getFullUnrollBoostingFactor(*Cost, UP.MaxPercentThresholdBoost);
+        if (Cost->UnrolledCost < UP.Threshold * Boost / 100) {
           UseUpperBound = (MaxTripCount == FullUnrollTripCount);
           TripCount = FullUnrollTripCount;
           TripMultiple = UP.UpperBound ? 1 : TripMultiple;
           return ExplicitUnroll;
         }
+      }
     }
   }
 
@@ -878,12 +833,31 @@ static bool computeUnrollCount(
         << "Unable to fully unroll loop as directed by unroll(full) pragma "
            "because loop has a runtime trip count.");
 
-  // 5th priority is runtime unrolling.
+  // 5th priority is loop peeling
+  computePeelCount(L, LoopSize, UP);
+  if (UP.PeelCount) {
+    UP.Runtime = false;
+    UP.Count = 1;
+    return ExplicitUnroll;
+  }
+
+  // 6th priority is runtime unrolling.
   // Don't unroll a runtime trip count loop when it is disabled.
   if (HasRuntimeUnrollDisablePragma(L)) {
     UP.Count = 0;
     return false;
   }
+  
+  // Check if the runtime trip count is too small when profile is available.
+  if (L->getHeader()->getParent()->getEntryCount()) {
+    if (auto ProfileTripCount = getLoopEstimatedTripCount(L)) {
+      if (*ProfileTripCount < FlatLoopTripCountThreshold)
+        return false;
+      else
+        UP.AllowExpensiveTripCount = true;
+    }
+  }  
+
   // Reduce count based on the type of unrolling and the threshold values.
   UP.Runtime |= PragmaEnableUnroll || PragmaCount > 0 || UserUnrollCount;
   if (!UP.Runtime) {
@@ -1042,13 +1016,17 @@ static bool tryToUnrollLoop(Loop *L, DominatorTree &DT, LoopInfo *LI,
   // Unroll the loop.
   if (!UnrollLoop(L, UP.Count, TripCount, UP.Force, UP.Runtime,
                   UP.AllowExpensiveTripCount, UseUpperBound, MaxOrZero,
-                  TripMultiple, LI, SE, &DT, &AC, &ORE, PreserveLCSSA))
+                  TripMultiple, UP.PeelCount, LI, SE, &DT, &AC, &ORE,
+                  PreserveLCSSA))
     return false;
 
   // If loop has an unroll count pragma or unrolled by explicitly set count
   // mark loop as unrolled to prevent unrolling beyond that requested.
-  if (IsCountSetExplicitly)
+  // If the loop was peeled, we already "used up" the profile information
+  // we had, so we don't want to unroll or peel again.
+  if (IsCountSetExplicitly || UP.PeelCount)
     SetLoopAlreadyUnrolled(L);
+
   return true;
 }
 

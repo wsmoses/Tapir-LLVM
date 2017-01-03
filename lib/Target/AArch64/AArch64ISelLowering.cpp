@@ -7157,8 +7157,8 @@ bool AArch64TargetLowering::isExtFreeImpl(const Instruction *Ext) const {
     case Instruction::GetElementPtr: {
       gep_type_iterator GTI = gep_type_begin(Instr);
       auto &DL = Ext->getModule()->getDataLayout();
-      std::advance(GTI, U.getOperandNo());
-      Type *IdxTy = *GTI;
+      std::advance(GTI, U.getOperandNo()-1);
+      Type *IdxTy = GTI.getIndexedType();
       // This extension will end up with a shift because of the scaling factor.
       // 8-bit sized types have a scaling factor of 1, thus a shift amount of 0.
       // Get the shift amount based on the scaling factor:
@@ -7281,7 +7281,7 @@ static Constant *getSequentialMask(IRBuilder<> &Builder, unsigned Start,
 ///
 /// E.g. Lower an interleaved store (Factor = 3):
 ///        %i.vec = shuffle <8 x i32> %v0, <8 x i32> %v1,
-///                                  <0, 4, 8, 1, 5, 9, 2, 6, 10, 3, 7, 11>
+///                 <0, 4, 8, 1, 5, 9, 2, 6, 10, 3, 7, 11>
 ///        store <12 x i32> %i.vec, <12 x i32>* %ptr
 ///
 ///      Into:
@@ -7292,6 +7292,17 @@ static Constant *getSequentialMask(IRBuilder<> &Builder, unsigned Start,
 ///
 /// Note that the new shufflevectors will be removed and we'll only generate one
 /// st3 instruction in CodeGen.
+///
+/// Example for a more general valid mask (Factor 3). Lower:
+///        %i.vec = shuffle <32 x i32> %v0, <32 x i32> %v1,
+///                 <4, 32, 16, 5, 33, 17, 6, 34, 18, 7, 35, 19>
+///        store <12 x i32> %i.vec, <12 x i32>* %ptr
+///
+///      Into:
+///        %sub.v0 = shuffle <32 x i32> %v0, <32 x i32> v1, <4, 5, 6, 7>
+///        %sub.v1 = shuffle <32 x i32> %v0, <32 x i32> v1, <32, 33, 34, 35>
+///        %sub.v2 = shuffle <32 x i32> %v0, <32 x i32> v1, <16, 17, 18, 19>
+///        call void llvm.aarch64.neon.st3(%sub.v0, %sub.v1, %sub.v2, %ptr)
 bool AArch64TargetLowering::lowerInterleavedStore(StoreInst *SI,
                                                   ShuffleVectorInst *SVI,
                                                   unsigned Factor) const {
@@ -7302,9 +7313,9 @@ bool AArch64TargetLowering::lowerInterleavedStore(StoreInst *SI,
   assert(VecTy->getVectorNumElements() % Factor == 0 &&
          "Invalid interleaved store");
 
-  unsigned NumSubElts = VecTy->getVectorNumElements() / Factor;
+  unsigned LaneLen = VecTy->getVectorNumElements() / Factor;
   Type *EltTy = VecTy->getVectorElementType();
-  VectorType *SubVecTy = VectorType::get(EltTy, NumSubElts);
+  VectorType *SubVecTy = VectorType::get(EltTy, LaneLen);
 
   const DataLayout &DL = SI->getModule()->getDataLayout();
   unsigned SubVecSize = DL.getTypeSizeInBits(SubVecTy);
@@ -7329,7 +7340,7 @@ bool AArch64TargetLowering::lowerInterleavedStore(StoreInst *SI,
     Op0 = Builder.CreatePtrToInt(Op0, IntVecTy);
     Op1 = Builder.CreatePtrToInt(Op1, IntVecTy);
 
-    SubVecTy = VectorType::get(IntTy, NumSubElts);
+    SubVecTy = VectorType::get(IntTy, LaneLen);
   }
 
   Type *PtrTy = SubVecTy->getPointerTo(SI->getPointerAddressSpace());
@@ -7343,9 +7354,28 @@ bool AArch64TargetLowering::lowerInterleavedStore(StoreInst *SI,
   SmallVector<Value *, 5> Ops;
 
   // Split the shufflevector operands into sub vectors for the new stN call.
-  for (unsigned i = 0; i < Factor; i++)
-    Ops.push_back(Builder.CreateShuffleVector(
-        Op0, Op1, getSequentialMask(Builder, NumSubElts * i, NumSubElts)));
+  auto Mask = SVI->getShuffleMask();
+  for (unsigned i = 0; i < Factor; i++) {
+    if (Mask[i] >= 0) {
+      Ops.push_back(Builder.CreateShuffleVector(
+        Op0, Op1, getSequentialMask(Builder, Mask[i], LaneLen)));
+    } else {
+      unsigned StartMask = 0;
+      for (unsigned j = 1; j < LaneLen; j++) {
+        if (Mask[j*Factor + i] >= 0) {
+          StartMask = Mask[j*Factor + i] - j;
+          break;
+        }
+      }
+      // Note: If all elements in a chunk are undefs, StartMask=0!
+      // Note: Filling undef gaps with random elements is ok, since
+      // those elements were being written anyway (with undefs).
+      // In the case of all undefs we're defaulting to using elems from 0
+      // Note: StartMask cannot be negative, it's checked in isReInterleaveMask
+      Ops.push_back(Builder.CreateShuffleVector(
+        Op0, Op1, getSequentialMask(Builder, StartMask, LaneLen)));
+    }
+  }
 
   Ops.push_back(Builder.CreateBitCast(SI->getPointerOperand(), PtrTy));
   Builder.CreateCall(StNFunc, Ops);
@@ -7437,7 +7467,7 @@ bool AArch64TargetLowering::isLegalAddressingMode(const DataLayout &DL,
     int64_t Offset = AM.BaseOffs;
 
     // 9-bit signed offset
-    if (Offset >= -(1LL << 9) && Offset <= (1LL << 9) - 1)
+    if (isInt<9>(Offset))
       return true;
 
     // 12-bit unsigned offset
@@ -7451,8 +7481,7 @@ bool AArch64TargetLowering::isLegalAddressingMode(const DataLayout &DL,
 
   // Check reg1 + SIZE_IN_BYTES * reg2 and reg1 + reg2
 
-  return !AM.Scale || AM.Scale == 1 ||
-         (AM.Scale > 0 && (uint64_t)AM.Scale == NumBytes);
+  return AM.Scale == 1 || (AM.Scale > 0 && (uint64_t)AM.Scale == NumBytes);
 }
 
 int AArch64TargetLowering::getScalingFactorCost(const DataLayout &DL,
@@ -10243,8 +10272,10 @@ bool AArch64TargetLowering::getIndexedAddressParts(SDNode *Op, SDValue &Base,
   // All of the indexed addressing mode instructions take a signed
   // 9 bit immediate offset.
   if (ConstantSDNode *RHS = dyn_cast<ConstantSDNode>(Op->getOperand(1))) {
-    int64_t RHSC = (int64_t)RHS->getZExtValue();
-    if (RHSC >= 256 || RHSC <= -256)
+    int64_t RHSC = RHS->getSExtValue();
+    if (Op->getOpcode() == ISD::SUB)
+      RHSC = -(uint64_t)RHSC;
+    if (!isInt<9>(RHSC))
       return false;
     IsInc = (Op->getOpcode() == ISD::ADD);
     Offset = Op->getOperand(1);
