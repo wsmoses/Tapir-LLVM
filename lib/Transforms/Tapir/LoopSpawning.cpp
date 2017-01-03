@@ -320,8 +320,16 @@ public:
   LoopOutline(Loop *OrigLoop, ScalarEvolution &SE,
               LoopInfo *LI, DominatorTree *DT,
               OptimizationRemarkEmitter &ORE)
-      : OrigLoop(OrigLoop), SE(SE), LI(LI), DT(DT), ORE(ORE)
-  {}
+    : OrigLoop(OrigLoop), SE(SE), LI(LI), DT(DT), ORE(ORE),
+      ExitBlock(nullptr)
+  {
+    TerminatorInst *TI = OrigLoop->getLoopLatch()->getTerminator();
+    if (2 != TI->getNumSuccessors())
+      return;
+    ExitBlock = TI->getSuccessor(0);
+    if (ExitBlock == OrigLoop->getHeader())
+      ExitBlock = TI->getSuccessor(1);
+  }
 
   virtual bool processLoop() = 0;
 
@@ -345,6 +353,11 @@ protected:
   DominatorTree *DT;
   /// Interface to emit optimization remarks.
   OptimizationRemarkEmitter &ORE;
+
+  /// The exit block of this loop.  We compute our own exit block,
+  /// based on the latch, to deal with blocks terminated by
+  /// unreachable.
+  BasicBlock *ExitBlock;
 
 // private:
 //   /// Report an analysis message to assist the user in diagnosing loops that are
@@ -373,7 +386,6 @@ public:
                   LoopInfo *LI, DominatorTree *DT,
                   OptimizationRemarkEmitter &ORE)
       : LoopOutline(OrigLoop, SE, LI, DT, ORE)
-      // : OrigLoop(OrigLoop), SE(SE), LI(LI), DT(DT), ORE(ORE)
   {}
 
   bool processLoop();
@@ -410,7 +422,6 @@ public:
                       LoopInfo *LI, DominatorTree *DT,
                       OptimizationRemarkEmitter &ORE)
       : LoopOutline(OrigLoop, SE, LI, DT, ORE)
-      // : OrigLoop(OrigLoop), SE(SE), LI(LI), DT(DT), ORE(ORE)
   {}
 
   bool processLoop();
@@ -453,9 +464,8 @@ struct LoopSpawningImpl {
                    ScalarEvolution &SE,
                    DominatorTree &DT,
                    OptimizationRemarkEmitter &ORE)
-      : F(F), LI(LI), SE(SE), DT(DT),
-        ORE(ORE)
-  {}
+      : F(F), LI(LI), SE(SE), DT(DT), ORE(ORE) {}
+
   bool run();
 
 private:
@@ -485,14 +495,6 @@ PHINode* LoopOutline::canonicalizeIVs(Type *Ty) {
 
   BasicBlock* Header = L->getHeader();
   Module* M = Header->getParent()->getParent();
-  BasicBlock *Latch = L->getLoopLatch();
-  assert(L->getExitingBlock() == Latch);
-
-  // dbgs() << "LS SE trip count: " << SE->getSmallConstantTripCount(L, L->getExitingBlock()) << "\n";
-  // dbgs() << "LS SE trip multiple: " << SE->getSmallConstantTripMultiple(L, L->getExitingBlock()) << "\n";
-  DEBUG(dbgs() << "LS SE backedge taken count: " << *(SE.getBackedgeTakenCount(L)) << "\n");
-  DEBUG(dbgs() << "LS SE max backedge taken count: " << *(SE.getMaxBackedgeTakenCount(L)) << "\n");
-  DEBUG(dbgs() << "LS SE exit count: " << *(SE.getExitCount(L, Latch)) << "\n");
 
   SCEVExpander Exp(SE, M->getDataLayout(), "ls");
 
@@ -501,8 +503,6 @@ PHINode* LoopOutline::canonicalizeIVs(Type *Ty) {
 
   SmallVector<WeakVH, 16> DeadInsts;
   Exp.replaceCongruentIVs(L, DT, DeadInsts);
-  // dbgs() << "Updated header:" << *(L->getHeader());
-  // dbgs() << "Updated exiting block:" << *(L->getExitingBlock());
   for (WeakVH V : DeadInsts) {
     DEBUG(dbgs() << "LS erasing dead inst " << *V << "\n");
     Instruction *I = cast<Instruction>(V);
@@ -515,8 +515,7 @@ PHINode* LoopOutline::canonicalizeIVs(Type *Ty) {
 /// \brief Replace the latch of the loop to check that IV is always less than or
 /// equal to the limit.
 ///
-/// This method assumes that the loop has a single loop latch and a single exit
-/// block.
+/// This method assumes that the loop has a single loop latch.
 Value* LoopOutline::canonicalizeLoopLatch(PHINode *IV, Value *Limit) {
   Loop *L = OrigLoop;
 
@@ -537,9 +536,7 @@ Value* LoopOutline::canonicalizeLoopLatch(PHINode *IV, Value *Limit) {
   assert(LatchBr && LatchBr->isConditional() &&
          "Latch does not terminate with a conditional branch.");
   Builder.SetInsertPoint(Latch->getTerminator());
-  assert(L->getExitBlock() &&
-         "Loop does not have a single exit block.");
-  Builder.CreateCondBr(NewCondition, Header, L->getExitBlock());
+  Builder.CreateCondBr(NewCondition, Header, ExitBlock);
 
   // Erase the old conditional branch.
   LatchBr->eraseFromParent();
@@ -556,10 +553,7 @@ void LoopOutline::unlinkLoop() {
   // Get components of the old loop.
   BasicBlock *Preheader = L->getLoopPreheader();
   assert(Preheader && "Loop does not have a unique preheader.");
-  BasicBlock *ExitBlock = L->getExitBlock();
-  assert(ExitBlock && "Loop does not have a unique exit block.");
-  BasicBlock *ExitingBlock = L->getExitingBlock();
-  assert(ExitingBlock && "Loop does not have a unique exiting block.");
+  BasicBlock *Latch = L->getLoopLatch();
 
   // Invalidate the analysis of the old loop.
   SE.forgetLoop(L);
@@ -574,10 +568,10 @@ void LoopOutline::unlinkLoop() {
   // the preheader instead of the exiting block.
   BasicBlock::iterator BI = ExitBlock->begin();
   while (PHINode *P = dyn_cast<PHINode>(BI)) {
-    int j = P->getBasicBlockIndex(ExitingBlock);
+    int j = P->getBasicBlockIndex(Latch);
     assert(j >= 0 && "Can't find exiting block in exit block's phi node!");
     P->setIncomingBlock(j, Preheader);
-    P->removeIncomingValue(ExitingBlock);
+    P->removeIncomingValue(Latch);
     ++BI;
   }
 
@@ -707,7 +701,6 @@ void DACLoopSpawning::implementDACIterSpawnOnHelper(Function *Helper,
     IterCount = Builder.CreateSub(Limit, CanonicalIVStart,
                                   "itercount");
     Value *IterCountCmp = Builder.CreateICmpUGT(IterCount, Grainsize);
-    // dbgs() << "DAC head before split:" << *DACHead;
     TerminatorInst *RecurTerm =
       SplitBlockAndInsertIfThen(IterCountCmp, PreheaderOrigFront,
                                 /*Unreachable=*/false,
@@ -820,26 +813,48 @@ bool DACLoopSpawning::processLoop() {
   BasicBlock *Preheader = L->getLoopPreheader();
   BasicBlock *Latch = L->getLoopLatch();
 
+  using namespace ore;
+
+  // Check the exit blocks of the loop.
+  if (!ExitBlock) {
+    DEBUG(dbgs() << "LS loop does not contain valid exit block after latch.\n");
+    ORE.emit(OptimizationRemarkAnalysis(LS_NAME, "InvalidLatchExit",
+                                        L->getStartLoc(),
+                                        Header)
+             << "invalid latch exit");
+    return false;
+  }
+
+  SmallVector<BasicBlock *, 4> ExitBlocks;
+  L->getExitBlocks(ExitBlocks);
+  for (const BasicBlock *Exit : ExitBlocks) {
+    if (Exit == ExitBlock) continue;
+    if (!isa<UnreachableInst>(Exit->getTerminator())) {
+      DEBUG(dbgs() << "LS loop contains a bad exit block " << *Exit);
+      ORE.emit(OptimizationRemarkAnalysis(LS_NAME, "BadExit",
+                                          L->getStartLoc(),
+                                          Header)
+               << "bad exit block found");
+      return false;
+    }
+  }
+
   Function *F = Header->getParent();
   Module* M = F->getParent();
 
   DEBUG(dbgs() << "LS loop header:" << *Header);
   DEBUG(dbgs() << "LS loop latch:" << *Latch);
-  DEBUG(dbgs() << "LS exiting block:" << *(L->getExitingBlock()));
 
-  // dbgs() << "LS SE trip count: " << SE->getSmallConstantTripCount(L, L->getExitingBlock()) << "\n";
-  // dbgs() << "LS SE trip multiple: " << SE->getSmallConstantTripMultiple(L, L->getExitingBlock()) << "\n";
-  DEBUG(dbgs() << "LS SE backedge taken count: " << *(SE.getBackedgeTakenCount(L)) << "\n");
-  DEBUG(dbgs() << "LS SE max backedge taken count: " << *(SE.getMaxBackedgeTakenCount(L)) << "\n");
-  DEBUG(dbgs() << "LS SE exit count: " << *(SE.getExitCount(L, L->getExitingBlock())) << "\n");
-
-  using namespace ore;
+  // DEBUG(dbgs() << "LS SE backedge taken count: " << *(SE.getBackedgeTakenCount(L)) << "\n");
+  // DEBUG(dbgs() << "LS SE max backedge taken count: " << *(SE.getMaxBackedgeTakenCount(L)) << "\n");
+  DEBUG(dbgs() << "LS SE exit count: " << *(SE.getExitCount(L, Latch)) << "\n");
 
   /// Get loop limit.
-  const SCEV *Limit = SE.getBackedgeTakenCount(L);
+  // const SCEV *Limit = SE.getBackedgeTakenCount(L);
+  const SCEV *Limit = SE.getExitCount(L, Latch);
   DEBUG(dbgs() << "LS Loop limit: " << *Limit << "\n");
   // PredicatedScalarEvolution PSE(SE, *L);
-  // const SCEV *PLimit = PSE.getBackedgeTakenCount();
+  // const SCEV *PLimit = PSE.getExitCount(L, Latch);
   // DEBUG(dbgs() << "LS predicated loop limit: " << *PLimit << "\n");
   // emitAnalysis(LoopSpawningReport()
   //              << "computed loop limit " << *Limit << "\n");
@@ -955,7 +970,7 @@ bool DACLoopSpawning::processLoop() {
 
   // Canonicalize the loop latch.
   assert(SE.isLoopBackedgeGuardedByCond(L, ICmpInst::ICMP_ULT,
-                                        CanonicalSCEV /*SE.getSCEV(CanonicalIV)*/, Limit) &&
+                                        CanonicalSCEV, Limit) &&
          "Loop backedge is not guarded by canonical comparison with limit.");
   Value *NewCond = canonicalizeLoopLatch(CanonicalIV, LimitVar);
 
@@ -976,11 +991,33 @@ bool DACLoopSpawning::processLoop() {
   SetVector<Value*> Inputs, Outputs;
   SetVector<Value*> BodyInputs, BodyOutputs;
   ValueToValueMapTy VMap, InputMap;
+  std::vector<BasicBlock *> LoopBlocks;
 
   // Add start iteration, end iteration, and grainsize to inputs.
   {
+    LoopBlocks = L->getBlocks();
+    // Add exit blocks terminated by unreachable.  There should not be any other
+    // exit blocks in the loop.
+    SmallSet<BasicBlock *, 4> UnreachableExit;
+    for (BasicBlock *Exit : ExitBlocks) {
+      if (Exit == ExitBlock) continue;
+      assert(isa<UnreachableInst>(Exit->getTerminator()) &&
+             "Found problematic exit block.");
+      UnreachableExit.insert(Exit);
+    }
+    for (BasicBlock *BB : UnreachableExit)
+      LoopBlocks.push_back(BB);
+
+    // DEBUG({
+    //     dbgs() << "LoopBlocks: ";
+    //     for (BasicBlock *LB : LoopBlocks)
+    //       dbgs() << LB->getName() << "("
+    //              << *(LB->getTerminator()) << "), ";
+    //     dbgs() << "\n";
+    //   });
+
     // Get the inputs and outputs for the loop body.
-    CodeExtractor Ext(L->getBlocks(), DT);
+    CodeExtractor Ext(LoopBlocks, DT);
     Ext.findInputsOutputs(BodyInputs, BodyOutputs);
 
     // Add argument for start of CanonicalIV.
@@ -993,34 +1030,17 @@ bool DACLoopSpawning::processLoop() {
     Inputs.insert(StartArg);
     InputMap[CanonicalIV] = StartArg;
 
-    // for (PHINode *IV : IVs) {
-    //   Value *IVInput = IV->getIncomingValueForBlock(Preheader);
-    //   if (isa<Constant>(IVInput)) {
-    //     Argument *StartArg = new Argument(IV->getType(), IV->getName()+".start");
-    //     Inputs.insert(StartArg);
-    //     InputMap[IV] = StartArg;
-    //   } else {
-    //     assert(BodyInputs.count(IVInput) &&
-    //            "Non-constant input to IV not captured.");
-    //     Inputs.insert(IVInput);
-    //     InputMap[IV] = IVInput;
-    //   }
-    // }
-
     // Add argument for end.
     if (isa<Constant>(LimitVar)) {
       Argument *EndArg = new Argument(LimitVar->getType(), "end");
       Inputs.insert(EndArg);
       InputMap[LimitVar] = EndArg;
-      // if (!isa<Constant>(LimitVar))
-      //   VMap[LimitVar] = EndArg;
     } else {
       Inputs.insert(LimitVar);
       InputMap[LimitVar] = LimitVar;
     }
 
     // Add argument for grainsize.
-    // Inputs.insert(GrainVar);
     if (isa<Constant>(GrainVar)) {
       Argument *GrainArg = new Argument(GrainVar->getType(), "grainsize");
       Inputs.insert(GrainArg);
@@ -1040,6 +1060,8 @@ bool DACLoopSpawning::processLoop() {
         BodyInputsToRemove.push_back(V);
     for (Value *V : BodyInputsToRemove)
       BodyInputs.remove(V);
+    for (Value *V : BodyOutputs)
+      dbgs() << "EL output: " << *V << "\n";
     assert(0 == BodyOutputs.size() &&
            "All results from parallel loop should be passed by memory already.");
   }
@@ -1066,8 +1088,8 @@ bool DACLoopSpawning::processLoop() {
       MD[SP->getFile()].reset(SP->getFile());
     }
 
-    Helper = CreateHelper(Inputs, Outputs, L->getBlocks(),
-                          Header, Preheader, L->getExitBlock(),
+    Helper = CreateHelper(Inputs, Outputs, LoopBlocks/*L->getBlocks()*/,
+                          Header, Preheader, /*L->getExitBlock()*/ ExitBlock,
                           VMap, Header->getParent()->getParent(),
                           /*ModuleLevelChanges=*/false, Returns, ".ls",
                           nullptr, nullptr, nullptr);
@@ -1081,7 +1103,7 @@ bool DACLoopSpawning::processLoop() {
 
   // Add a sync to the helper's return.
   {
-    BasicBlock *HelperExit = cast<BasicBlock>(VMap[L->getExitBlock()]);
+    BasicBlock *HelperExit = cast<BasicBlock>(VMap[ExitBlock/*L->getExitBlock()*/]);
     assert(isa<ReturnInst>(HelperExit->getTerminator()));
     BasicBlock *NewHelperExit = SplitBlock(HelperExit,
                                            HelperExit->getTerminator(),
@@ -1158,7 +1180,7 @@ bool DACLoopSpawning::processLoop() {
     HelperCond->eraseFromParent();
   }
 
-  // For debugging:
+  // DEBUGGING: Simply serialize the cloned loop.
   // BasicBlock *NewHeader = cast<BasicBlock>(VMap[Header]);
   // SerializeDetachedCFG(cast<DetachInst>(NewHeader->getTerminator()), nullptr);
   implementDACIterSpawnOnHelper(Helper, NewPreheader,
@@ -1211,8 +1233,7 @@ bool DACLoopSpawning::processLoop() {
 /// \brief Replace the latch of the loop to check that IV is always less than or
 /// equal to the limit.
 ///
-/// This method assumes that the loop has a single loop latch and a single exit
-/// block.
+/// This method assumes that the loop has a single loop latch.
 Value* CilkABILoopSpawning::canonicalizeLoopLatch(PHINode *IV, Value *Limit) {
   Loop *L = OrigLoop;
 
@@ -1236,9 +1257,7 @@ Value* CilkABILoopSpawning::canonicalizeLoopLatch(PHINode *IV, Value *Limit) {
   assert(LatchBr && LatchBr->isConditional() &&
          "Latch does not terminate with a conditional branch.");
   Builder.SetInsertPoint(Latch->getTerminator());
-  assert(L->getExitBlock() &&
-         "Loop does not have a single exit block.");
-  Builder.CreateCondBr(NewCondition, Header, L->getExitBlock());
+  Builder.CreateCondBr(NewCondition, Header, ExitBlock);
 
   // Erase the old conditional branch.
   LatchBr->eraseFromParent();
@@ -1255,26 +1274,48 @@ bool CilkABILoopSpawning::processLoop() {
   BasicBlock *Preheader = L->getLoopPreheader();
   BasicBlock *Latch = L->getLoopLatch();
 
+  using namespace ore;
+
+  // Check the exit blocks of the loop.
+  if (!ExitBlock) {
+    DEBUG(dbgs() << "LS loop does not contain valid exit block after latch.\n");
+    ORE.emit(OptimizationRemarkAnalysis(LS_NAME, "InvalidLatchExit",
+                                        L->getStartLoc(),
+                                        Header)
+             << "invalid latch exit");
+    return false;
+  }
+
+  SmallVector<BasicBlock *, 4> ExitBlocks;
+  L->getExitBlocks(ExitBlocks);
+  for (const BasicBlock *Exit : ExitBlocks) {
+    if (Exit == ExitBlock) continue;
+    if (!isa<UnreachableInst>(Exit->getTerminator())) {
+      DEBUG(dbgs() << "LS loop contains a bad exit block " << *Exit);
+      ORE.emit(OptimizationRemarkAnalysis(LS_NAME, "BadExit",
+                                          L->getStartLoc(),
+                                          Header)
+               << "bad exit block found");
+      return false;
+    }
+  }
+
   Function *F = Header->getParent();
   Module* M = F->getParent();
 
   DEBUG(dbgs() << "LS loop header:" << *Header);
   DEBUG(dbgs() << "LS loop latch:" << *Latch);
-  DEBUG(dbgs() << "LS exiting block:" << *(L->getExitingBlock()));
 
   // DEBUG(dbgs() << "LS SE backedge taken count: " << *(SE.getBackedgeTakenCount(L)) << "\n");
   // DEBUG(dbgs() << "LS SE max backedge taken count: " << *(SE.getMaxBackedgeTakenCount(L)) << "\n");
-  DEBUG(dbgs() << "LS SE exit count: " << *(SE.getExitCount(L, L->getExitingBlock())) << "\n");
-
-  using namespace ore;
+  DEBUG(dbgs() << "LS SE exit count: " << *(SE.getExitCount(L, Latch)) << "\n");
 
   /// Get loop limit.
-  // const SCEV *Limit = SE.getBackedgeTakenCount(L);
-  const SCEV *BETC = SE.getBackedgeTakenCount(L);
+  const SCEV *BETC = SE.getExitCount(L, Latch);
   const SCEV *Limit = SE.getAddExpr(BETC, SE.getOne(BETC->getType()));
   DEBUG(dbgs() << "LS Loop limit: " << *Limit << "\n");
   // PredicatedScalarEvolution PSE(SE, *L);
-  // const SCEV *PLimit = PSE.getBackedgeTakenCount();
+  // const SCEV *PLimit = PSE.getExitCount(L, Latch);
   // DEBUG(dbgs() << "LS predicated loop limit: " << *PLimit << "\n");
   // emitAnalysis(LoopSpawningReport()
   //              << "computed loop limit " << *Limit << "\n");
@@ -1397,11 +1438,33 @@ bool CilkABILoopSpawning::processLoop() {
   SetVector<Value*> Inputs, Outputs;
   SetVector<Value*> BodyInputs, BodyOutputs;
   ValueToValueMapTy VMap, InputMap;
+  std::vector<BasicBlock *> LoopBlocks;
   AllocaInst* closure;
   // Add start iteration, end iteration, and grainsize to inputs.
   {
+    LoopBlocks = L->getBlocks();
+    // Add exit blocks terminated by unreachable.  There should not be any other
+    // exit blocks in the loop.
+    SmallSet<BasicBlock *, 4> UnreachableExit;
+    for (BasicBlock *Exit : ExitBlocks) {
+      if (Exit == ExitBlock) continue;
+      assert(isa<UnreachableInst>(Exit->getTerminator()) &&
+             "Found problematic exit block.");
+      UnreachableExit.insert(Exit);
+    }
+    for (BasicBlock *BB : UnreachableExit)
+      LoopBlocks.push_back(BB);
+
+    // DEBUG({
+    //     dbgs() << "LoopBlocks: ";
+    //     for (BasicBlock *LB : LoopBlocks)
+    //       dbgs() << LB->getName() << "("
+    //              << *(LB->getTerminator()) << "), ";
+    //     dbgs() << "\n";
+    //   });
+
     // Get the inputs and outputs for the loop body.
-    CodeExtractor Ext(L->getBlocks(), DT);
+    CodeExtractor Ext(LoopBlocks, DT);
     Ext.findInputsOutputs(BodyInputs, BodyOutputs);
 
     // Add argument for start of CanonicalIV.
@@ -1414,15 +1477,12 @@ bool CilkABILoopSpawning::processLoop() {
     Inputs.insert(StartArg);
     InputMap[CanonicalIV] = StartArg;
 
-    // Add argument for end.i
-
+    // Add argument for end.
     Value* ea;
     if (isa<Constant>(LimitVar)) {
       Argument *EndArg = new Argument(LimitVar->getType(), "end");
       Inputs.insert(EndArg);
       ea = InputMap[LimitVar] = EndArg;
-      // if (!isa<Constant>(LimitVar))
-      //   VMap[LimitVar] = EndArg;
     } else {
       Inputs.insert(LimitVar);
       ea = InputMap[LimitVar] = LimitVar;
@@ -1500,7 +1560,7 @@ bool CilkABILoopSpawning::processLoop() {
     }
 
     Helper = CreateHelper(Inputs, Outputs, L->getBlocks(),
-                          Header, Preheader, L->getExitBlock(),
+                          Header, Preheader, ExitBlock/*L->getExitBlock()*/,
                           VMap, Header->getParent()->getParent(),
                           /*ModuleLevelChanges=*/false, Returns, ".ls",
                           nullptr, nullptr, nullptr);
@@ -1578,23 +1638,6 @@ bool CilkABILoopSpawning::processLoop() {
   // For debugging:
   BasicBlock *NewHeader = cast<BasicBlock>(VMap[Header]);
   SerializeDetachedCFG(cast<DetachInst>(NewHeader->getTerminator()), nullptr);
-  // DetachInst* dt=cast<DetachInst>(cast<BasicBlock>(VMap[Header])->getTerminator());
-  // BasicBlock* cont = dt->getSuccessor(1);
-  // {
-  //   IRBuilder<> B(dt);
-  //   B.CreateCondBr(ConstantInt::getTrue(cont->getContext()), dt->getSuccessor(0), dt->getSuccessor(1));
-  //   dt->eraseFromParent();
-  // }
-
-  // for (auto PI = pred_begin(cont), PE = pred_end(cont);  PI != PE; ++PI) {
-  //   BasicBlock *Pred = *PI;
-  //   auto det = Pred->getTerminator();
-  //   if (!isa<ReattachInst>(det)) continue;
-  //   IRBuilder<> B(det);
-  //   B.CreateBr(det->getSuccessor(0));
-  //   det->eraseFromParent();
-  // }
-
   {
     Value* v = &*Helper->arg_begin();
     auto UI = v->use_begin(), E = v->use_end();
@@ -1613,9 +1656,6 @@ bool CilkABILoopSpawning::processLoop() {
       }
     }
   }
-
-  //Helper->getParent()->dump();
-  //Helper->dump();
 
   if (verifyFunction(*Helper, &dbgs()))
     return false;
@@ -1653,8 +1693,7 @@ bool CilkABILoopSpawning::processLoop() {
       ConstantInt::get(IntegerType::get(F->getContext(), sizeof(int)*8),0)
     };
 
-    //F->getParent()->dump();
-    CallInst *TopCall = Builder.CreateCall(F, args);
+    /*CallInst *TopCall = */Builder.CreateCall(F, args);
 
     // Use a fast calling convention for the helper.
     //TopCall->setCallingConv(CallingConv::Fast);
@@ -1675,14 +1714,13 @@ bool CilkABILoopSpawning::processLoop() {
 /// in a canonical form:
 /// 1) The header detaches the body.
 /// 2) The loop contains a single latch.
-/// 3) The loop contains a single exit block.
-/// 4) The body reattaches to the latch (which is necessary for a valid
+/// 3) The body reattaches to the latch (which is necessary for a valid
 ///    detached CFG).
-/// 5) The loop only branches to the exit block from the header or the latch.
+/// 4) The loop only branches to the exit block from the header or the latch.
 bool LoopSpawningImpl::isTapirLoop(const Loop *L) {
   const BasicBlock *Header = L->getHeader();
   const BasicBlock *Latch = L->getLoopLatch();
-  const BasicBlock *Exit = L->getExitBlock();
+  // const BasicBlock *Exit = L->getExitBlock();
 
   // DEBUG(dbgs() << "LS checking if Tapir loop: " << *L);
 
@@ -1698,11 +1736,15 @@ bool LoopSpawningImpl::isTapirLoop(const Loop *L) {
     return false;
   }
 
-  // Loop must have a unique exit block.
-  if (nullptr == Exit) {
-    DEBUG(dbgs() << "LS loop does not have a unique exit block: " << *L << "\n");
-    return false;
-  }
+  // // Loop must have a unique exit block.
+  // if (nullptr == Exit) {
+  //   DEBUG(dbgs() << "LS loop does not have a unique exit block: " << *L << "\n");
+  //   SmallVector<BasicBlock *, 4> ExitBlocks;
+  //   L->getUniqueExitBlocks(ExitBlocks);
+  //   for (BasicBlock *Exit : ExitBlocks)
+  //     DEBUG(dbgs() << *Exit);
+  //   return false;
+  // }
 
   // Continuation of header terminator must be the latch.
   const DetachInst *HeaderDetach = cast<DetachInst>(Header->getTerminator());
@@ -1724,6 +1766,11 @@ bool LoopSpawningImpl::isTapirLoop(const Loop *L) {
     }
   }
 
+  // Get the exit block from Latch.
+  BasicBlock *Exit = Latch->getTerminator()->getSuccessor(0);
+  if (Header == Exit)
+    Exit = Latch->getTerminator()->getSuccessor(1);
+
   // The only predecessors of Exit inside the loop are Header and Latch.
   for (auto PI = pred_begin(Exit), PE = pred_end(Exit);  PI != PE; ++PI) {
     const BasicBlock *Pred = *PI;
@@ -1744,6 +1791,25 @@ void LoopSpawningImpl::addTapirLoop(Loop *L, SmallVectorImpl<Loop *> &V) {
     V.push_back(L);
     return;
   }
+
+  LoopSpawningHints Hints(L, ORE);
+
+  DEBUG(dbgs() << "LS: Loop hints:"
+               << " strategy = " << Hints.printStrategy(Hints.getStrategy())
+               << "\n");
+
+  using namespace ore;
+
+  if (LoopSpawningHints::ST_SEQ != Hints.getStrategy()) {
+    DEBUG(dbgs() << "LS: Marked loop is not a valid Tapir loop.\n"
+          << "\tLoop hints:"
+          << " strategy = " << Hints.printStrategy(Hints.getStrategy())
+          << "\n");
+    ORE.emit(OptimizationRemarkMissed(LS_NAME, "NotTapir",
+                                      L->getStartLoc(), L->getHeader())
+             << "marked loop is not a valid Tapir loop");
+  }
+    
   for (Loop *InnerL : *L)
     addTapirLoop(InnerL, V);
 }
@@ -1790,8 +1856,8 @@ bool LoopSpawningImpl::processLoop(Loop *L) {
   const std::string DebugLocStr = getDebugLocString(L);
 #endif /* NDEBUG */
 
-  // Function containing loop
-  Function *F = L->getHeader()->getParent();
+  // // Function containing loop
+  // Function *F = L->getHeader()->getParent();
 
   DEBUG(dbgs() << "\nLS: Checking a Tapir loop in \""
                << L->getHeader()->getParent()->getName() << "\" from "
@@ -1802,7 +1868,6 @@ bool LoopSpawningImpl::processLoop(Loop *L) {
   DEBUG(dbgs() << "LS: Loop hints:"
                << " strategy = " << Hints.printStrategy(Hints.getStrategy())
                << "\n");
-
 
   // if (LoopSpawningHints::ST_SEQ == Hints.getStrategy()) {
   //   DEBUG(dbgs() << "LS: Loop hints prevent transformation.\n");
@@ -1831,22 +1896,6 @@ bool LoopSpawningImpl::processLoop(Loop *L) {
              << "loop preheader not terminated by a branch");
     return false;
   }
-  // // Fix-up loop preheader
-  // if (nullptr == Preheader) {
-  //   DEBUG(dbgs() << "LS: Loop lacks a preheader.\n");
-  // }
-  // if (isa<SyncInst>(Preheader->getTerminator())) {
-  //   // DEBUG(dbgs() << "LS: Splitting preheader terminated by a sync.\n");
-  //   dbgs() << "LS: Splitting preheader terminated by a sync.\n";
-  //   BasicBlock *Header = L->getHeader();
-  //   SplitEdge(Preheader, Header, &DT, &LI);
-  //   // Unsure if it's completely safe to proceed here without necessarily
-  //   // recomputing ScalarEvolution, but tests are passing so far.
-  // }
-  // if (!isa<BranchInst>(Preheader->getTerminator())) {
-  //   DEBUG(dbgs() << "LS: Loop preheader is not terminated by a branch.\n");
-  //   return false;
-  // }
 
   switch(Hints.getStrategy()) {
   case LoopSpawningHints::ST_SEQ:
@@ -1861,8 +1910,6 @@ bool LoopSpawningImpl::processLoop(Loop *L) {
       // CilkABILoopSpawning DLS(L, SE, &LI, &DT, ORE);
       // DACLoopSpawning DLS(L, SE, LI, DT, TLI, TTI, ORE);
       if (DLS.processLoop()) {
-        // // Mark the loop as already vectorized to avoid vectorizing again.
-        // Hints.setAlreadyVectorized();
         DEBUG({
             if (verifyFunction(*L->getHeader()->getParent())) {
               dbgs() << "Transformed function is invalid.\n";
@@ -1874,7 +1921,7 @@ bool LoopSpawningImpl::processLoop(Loop *L) {
                  << "spawning iterations using divide-and-conquer");
         return true;
       } else {
-        // Report success.
+        // Report failure.
         ORE.emit(OptimizationRemarkMissed(LS_NAME, "NoDACSpawning", DLoc,
                                           Header)
                  << "cannot spawn iterations using divide-and-conquer");
