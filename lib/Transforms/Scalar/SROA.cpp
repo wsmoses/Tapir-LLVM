@@ -4187,8 +4187,11 @@ bool SROA::promoteAllocas(Function &F) {
   NumPromoted += PromotableAllocas.size();
 
   DEBUG(dbgs() << "Promoting allocas with mem2reg...\n");
-  for( auto a : PromotableAllocas) 
-        assert(isAllocaParallelPromotable(a, *DT) && "Alloca must be promotable");
+  DEBUG({
+      for (auto Alloca : PromotableAllocas)
+        assert(isAllocaParallelPromotable(Alloca, *DT) &&
+               "Alloca must be promotable");
+    });
   PromoteMemToReg(PromotableAllocas, *DT, nullptr, AC);
   PromotableAllocas.clear();
   return true;
