@@ -941,19 +941,25 @@ bool DACLoopSpawning::processLoop() {
   bool AllCanonical = true;
   for (BasicBlock::iterator II = Header->begin(); isa<PHINode>(II); ++II) {
     PHINode *PN = cast<PHINode>(II);
-    const SCEVAddRecExpr *PNSCEV = dyn_cast<const SCEVAddRecExpr>(SE.getSCEV(PN));
-    assert(PNSCEV && "PHINode did not have corresponding SCEVAddRecExpr.");
-    assert(PNSCEV->getStart()->isZero() && "PHINode SCEV does not start at 0.");
-    DEBUG(dbgs() << "LS step recurrence for SCEV " << *PNSCEV << " is "
-          << *(PNSCEV->getStepRecurrence(SE)) << "\n");
-    assert(PNSCEV->getStepRecurrence(SE)->isOne() && "PHINode SCEV step is not 1.");
+    DEBUG({
+        const SCEVAddRecExpr *PNSCEV =
+          dyn_cast<const SCEVAddRecExpr>(SE.getSCEV(PN));
+        assert(PNSCEV && "PHINode did not have corresponding SCEVAddRecExpr");
+        assert(PNSCEV->getStart()->isZero() &&
+               "PHINode SCEV does not start at 0");
+        dbgs() << "LS step recurrence for SCEV " << *PNSCEV << " is "
+               << *(PNSCEV->getStepRecurrence(SE)) << "\n";
+        assert(PNSCEV->getStepRecurrence(SE)->isOne() &&
+               "PHINode SCEV step is not 1");
+      });
     if (ConstantInt *C =
         dyn_cast<ConstantInt>(PN->getIncomingValueForBlock(Preheader))) {
       if (C->isZero())
         IVs.push_back(PN);
     } else {
       AllCanonical = false;
-      DEBUG(dbgs() << "Remaining non-canonical PHI Node found: " << *PN << "\n");
+      DEBUG(dbgs() << "Remaining non-canonical PHI Node found: " << *PN <<
+            "\n");
       // emitAnalysis(LoopSpawningReport(PN)
       //              << "Found a remaining non-canonical IV.\n");
       ORE.emit(OptimizationRemarkAnalysis(DEBUG_TYPE, "NonCanonicalIV", PN)
@@ -1021,10 +1027,13 @@ bool DACLoopSpawning::processLoop() {
     Ext.findInputsOutputs(BodyInputs, BodyOutputs);
 
     // Add argument for start of CanonicalIV.
-    Value *CanonicalIVInput = CanonicalIV->getIncomingValueForBlock(Preheader);
-    // CanonicalIVInput should be the constant 0.
-    assert(isa<Constant>(CanonicalIVInput) &&
-           "Input to canonical IV from preheader is not constant.");
+    DEBUG({
+        Value *CanonicalIVInput =
+          CanonicalIV->getIncomingValueForBlock(Preheader);
+        // CanonicalIVInput should be the constant 0.
+        assert(isa<Constant>(CanonicalIVInput) &&
+               "Input to canonical IV from preheader is not constant.");
+      });
     Argument *StartArg = new Argument(CanonicalIV->getType(),
                                       CanonicalIV->getName()+".start");
     Inputs.insert(StartArg);
@@ -1402,12 +1411,17 @@ bool CilkABILoopSpawning::processLoop() {
   bool AllCanonical = true;
   for (BasicBlock::iterator II = Header->begin(); isa<PHINode>(II); ++II) {
     PHINode *PN = cast<PHINode>(II);
-    const SCEVAddRecExpr *PNSCEV = dyn_cast<const SCEVAddRecExpr>(SE.getSCEV(PN));
-    assert(PNSCEV && "PHINode did not have corresponding SCEVAddRecExpr.");
-    assert(PNSCEV->getStart()->isZero() && "PHINode SCEV does not start at 0.");
-    DEBUG(dbgs() << "LS step recurrence for SCEV " << *PNSCEV << " is "
-          << *(PNSCEV->getStepRecurrence(SE)) << "\n");
-    assert(PNSCEV->getStepRecurrence(SE)->isOne() && "PHINode SCEV step is not 1.");
+    DEBUG({
+        const SCEVAddRecExpr *PNSCEV =
+          dyn_cast<const SCEVAddRecExpr>(SE.getSCEV(PN));
+        assert(PNSCEV && "PHINode did not have corresponding SCEVAddRecExpr");
+        assert(PNSCEV->getStart()->isZero() &&
+               "PHINode SCEV does not start at 0");
+        dbgs() << "LS step recurrence for SCEV " << *PNSCEV << " is "
+               << *(PNSCEV->getStepRecurrence(SE)) << "\n";
+        assert(PNSCEV->getStepRecurrence(SE)->isOne() &&
+               "PHINode SCEV step is not 1");
+      });
     if (ConstantInt *C =
         dyn_cast<ConstantInt>(PN->getIncomingValueForBlock(Preheader))) {
       if (C->isZero())
@@ -1468,10 +1482,13 @@ bool CilkABILoopSpawning::processLoop() {
     Ext.findInputsOutputs(BodyInputs, BodyOutputs);
 
     // Add argument for start of CanonicalIV.
-    Value *CanonicalIVInput = CanonicalIV->getIncomingValueForBlock(Preheader);
-    // CanonicalIVInput should be the constant 0.
-    assert(isa<Constant>(CanonicalIVInput) &&
-           "Input to canonical IV from preheader is not constant.");
+    DEBUG({
+        Value *CanonicalIVInput =
+          CanonicalIV->getIncomingValueForBlock(Preheader);
+        // CanonicalIVInput should be the constant 0.
+        assert(isa<Constant>(CanonicalIVInput) &&
+               "Input to canonical IV from preheader is not constant.");
+      });
     Argument *StartArg = new Argument(CanonicalIV->getType(),
                                       CanonicalIV->getName()+".start");
     Inputs.insert(StartArg);
