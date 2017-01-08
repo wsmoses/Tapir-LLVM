@@ -29,8 +29,8 @@ Pass *createLoopSpawningPass();
 //
 // PromoteDetachToCilk
 //
-ModulePass *createPromoteDetachToCilkPass(bool DisablePostOpts = false,
-                                          bool Instrument = false);
+ModulePass *createLowerTapirToCilkPass(bool DisablePostOpts = false,
+                                       bool Instrument = false);
 
 } // End llvm namespace
 

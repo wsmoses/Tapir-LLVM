@@ -40,6 +40,7 @@
 #include "llvm/Transforms/Scalar.h"
 #include "llvm/Transforms/Scalar/GVN.h"
 #include "llvm/Transforms/Tapir.h"
+#include "llvm/Transforms/Utils/UnifyFunctionExitNodes.h"
 #include "llvm/Transforms/Vectorize.h"
 
 using namespace llvm;
@@ -684,7 +685,7 @@ void PassManagerBuilder::populateModulePassManager(legacy::PassManagerBase& MPM)
         addExtensionsToPM(EP_TapirLate, MPM);
         break;
       case 3: //fdetach
-        MPM.add(createPromoteDetachToCilkPass(ParallelLevel == 2, InstrumentCilk));
+        MPM.add(createLowerTapirToCilkPass(ParallelLevel == 2, InstrumentCilk));
         prepopulateModulePassManager(MPM);
         addExtensionsToPM(EP_TapirLate, MPM);
         break;
@@ -710,7 +711,8 @@ void PassManagerBuilder::populateModulePassManager(legacy::PassManagerBase& MPM)
 
     // if (ParallelLevel != 3) MPM.add(createInferFunctionAttrsLegacyPass());
     MPM.add(createInferFunctionAttrsLegacyPass());
-    MPM.add(createPromoteDetachToCilkPass(ParallelLevel == 2, InstrumentCilk));
+    MPM.add(createUnifyFunctionExitNodesPass());
+    MPM.add(createLowerTapirToCilkPass(ParallelLevel == 2, InstrumentCilk));
     // The Detach2Cilk pass may leave cruft around.  Clean it up.
     MPM.add(createCFGSimplificationPass());
     // if (ParallelLevel != 3) MPM.add(createInferFunctionAttrsLegacyPass());

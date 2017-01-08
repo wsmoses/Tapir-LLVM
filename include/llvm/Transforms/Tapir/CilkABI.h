@@ -40,7 +40,7 @@
 #include "llvm/Support/Debug.h"
 #include <deque>
 
-extern llvm::cl::opt<bool>  fastCilk;
+extern llvm::cl::opt<bool> fastCilk;
 
 static inline size_t getNonPhiSize(llvm::BasicBlock* b){
     int bad = 0;
@@ -346,20 +346,24 @@ public:
 namespace llvm {
 namespace cilk {
 
-  Value* GetOrCreateWorker8(Function &F);
-  void createSync(SyncInst& inst, bool instrument = false);
-  bool verifyDetachedCFG(const DetachInst& detach, bool error = true);
-  size_t getNumPred(BasicBlock* BB);
+  Value *GetOrCreateWorker8(Function &F);
+  void createSync(SyncInst &inst, ValueToValueMapTy &DetachCtxToStackFrame,
+                  bool instrument = false);
+  bool verifyDetachedCFG(const DetachInst &detach, bool error = true);
+  size_t getNumPred(BasicBlock *BB);
 
   bool populateDetachedCFG(const DetachInst &detach, DominatorTree &DT,
 			   SmallPtrSetImpl<BasicBlock *> &functionPieces,
 			   SmallVectorImpl<BasicBlock *> &reattachB,
 			   bool replace, bool error = true);
 
-  Function* extractDetachBodyToFunction(DetachInst& detach, DominatorTree& DT,
+  Function *extractDetachBodyToFunction(DetachInst& detach,
+                                        DominatorTree& DT,
 					llvm::CallInst** call = nullptr);
 
-  CallInst* createDetach(DetachInst& detach, DominatorTree& DT,
+  Function *createDetach(DetachInst &detach,
+                         ValueToValueMapTy &DetachCtxToStackFrame,
+                         DominatorTree &DT,
 			 bool instrument = false);
 
 }  // end of cilk namespace

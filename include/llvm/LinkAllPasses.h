@@ -109,7 +109,6 @@ namespace {
       (void) llvm::createIPSCCPPass();
       (void) llvm::createInductiveRangeCheckEliminationPass();
       (void) llvm::createIndVarSimplifyPass();
-      (void) llvm::createLoopSpawningPass();
       (void) llvm::createInstructionCombiningPass();
       (void) llvm::createInternalizePass();
       (void) llvm::createLCSSAPass();
@@ -120,6 +119,7 @@ namespace {
       (void) llvm::createLoopInterchangePass();
       (void) llvm::createLoopSimplifyPass();
       (void) llvm::createLoopSimplifyCFGPass();
+      (void) llvm::createLoopSpawningPass();
       (void) llvm::createLoopStrengthReducePass();
       (void) llvm::createLoopRerollPass();
       (void) llvm::createLoopUnrollPass();
@@ -130,6 +130,7 @@ namespace {
       (void) llvm::createLowerExpectIntrinsicPass();
       (void) llvm::createLowerInvokePass();
       (void) llvm::createLowerSwitchPass();
+      (void) llvm::createLowerTapirToCilkPass(false,false);
       (void) llvm::createNaryReassociatePass();
       (void) llvm::createObjCARCAAWrapperPass();
       (void) llvm::createObjCARCAPElimPass();
@@ -137,7 +138,6 @@ namespace {
       (void) llvm::createObjCARCContractPass();
       (void) llvm::createObjCARCOptPass();
       (void) llvm::createPAEvalPass();
-      (void) llvm::createPromoteDetachToCilkPass(false,false);
       (void) llvm::createPromoteMemoryToRegisterPass();
       (void) llvm::createDemoteRegisterToMemoryPass();
       (void) llvm::createPruneEHPass();

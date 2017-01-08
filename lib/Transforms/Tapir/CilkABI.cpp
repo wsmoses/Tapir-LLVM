@@ -617,128 +617,97 @@ static Function *GetCilkParentEpilogue(Module &M, bool instrument = false) {
   return Fn;
 }
 
-static const char *stack_frame_name = "__cilkrts_sf";
-static const char *worker8_name = "__cilkrts_wc8";
+static const StringRef stack_frame_name = "__cilkrts_sf";
+static const StringRef worker8_name = "__cilkrts_wc8";
 
-static llvm::Value *LookupStackFrame(Function &F) {
-  return F.getValueSymbolTable()->lookup(stack_frame_name);
-}
+// static llvm::Value *LookupStackFrame(Function &F) {
+//   return F.getValueSymbolTable()->lookup(stack_frame_name);
+// }
 
 /// \brief Create the __cilkrts_stack_frame for the spawning function.
-static llvm::AllocaInst *CreateStackFrame(Function &F) {
-  assert(!LookupStackFrame(F) && "already created the stack frame");
+static AllocaInst *CreateStackFrame(Function &F) {
+  // assert(!LookupStackFrame(F) && "already created the stack frame");
 
-  llvm::LLVMContext &Ctx = F.getContext();
-  llvm::Type *SFTy = StackFrameBuilder::get(Ctx);
+  LLVMContext &Ctx = F.getContext();
+  Type *SFTy = StackFrameBuilder::get(Ctx);
 
   Instruction* I = F.getEntryBlock().getFirstNonPHIOrDbgOrLifetime();
 
-  AllocaInst* SF = new AllocaInst(SFTy, /*size*/nullptr, 8, /*name*/stack_frame_name, /*insert before*/I);
-  if( I == nullptr ) {
-    F.getEntryBlock().getInstList().push_back( SF );
-  }
+  AllocaInst* SF = new AllocaInst(SFTy, /*size*/nullptr, 8,
+                                  /*name*/stack_frame_name, /*insert before*/I);
+  if (!I)
+    F.getEntryBlock().getInstList().push_back(SF);
 
   return SF;
 }
 
-static inline llvm::Value* GetOrInitStackFrame(Function& F, bool fast = true, bool instrument = false) {
-  llvm::Value* V = LookupStackFrame(F);
+Value* GetOrInitCilkStackFrame(Function& F, ValueToValueMapTy &DetachCtxToStackFrame,
+                               bool Helper = true, bool instrument = false) {
+  // Value* V = LookupStackFrame(F);
+  Value *V = DetachCtxToStackFrame[&F];
   if (V) return V;
 
-  llvm::AllocaInst* alloc = CreateStackFrame(F);
-  llvm::BasicBlock::iterator II = F.getEntryBlock().getFirstInsertionPt();
-  llvm::AllocaInst* curinst;
+  AllocaInst* alloc = CreateStackFrame(F);
+  DetachCtxToStackFrame[&F] = alloc;
+  BasicBlock::iterator II = F.getEntryBlock().getFirstInsertionPt();
+  AllocaInst* curinst;
   do {
     curinst = dyn_cast<llvm::AllocaInst>(II);
     II++;
   } while (curinst != alloc);
-  llvm::Value *StackSave;
+  Value *StackSave;
   IRBuilder<> IRB( &(F.getEntryBlock()), II );
+
   if (instrument) {
-    llvm::Type *Int8PtrTy = IRB.getInt8PtrTy();
-    llvm::Value *ThisFn =
-      llvm::ConstantExpr::getBitCast(&F, Int8PtrTy);
-    llvm::Value *ReturnAddress =
+    Type *Int8PtrTy = IRB.getInt8PtrTy();
+    Value *ThisFn = ConstantExpr::getBitCast(&F, Int8PtrTy);
+    Value *ReturnAddress =
       IRB.CreateCall(Intrinsic::getDeclaration(F.getParent(), Intrinsic::returnaddress),
                      IRB.getInt32(0));
     StackSave =
       IRB.CreateCall(Intrinsic::getDeclaration(F.getParent(), Intrinsic::stacksave));
-    if (fast) {
-      llvm::Value* begin_args[3] = { alloc, ThisFn, ReturnAddress };
+    if (Helper) {
+      Value *begin_args[3] = { alloc, ThisFn, ReturnAddress };
       IRB.CreateCall(CILK_CSI_FUNC(enter_helper_begin, *F.getParent()), begin_args);
     } else {
-      llvm::Value* begin_args[4] = { IRB.getInt32(0), alloc, ThisFn, ReturnAddress };
+      Value *begin_args[4] = { IRB.getInt32(0), alloc, ThisFn, ReturnAddress };
       IRB.CreateCall(CILK_CSI_FUNC(enter_begin, *F.getParent()), begin_args);
     }
   }
   llvm::Value* args[1] = { alloc };
-  /* llvm::Instruction* inst; */
-  if( fast ) {
+  if (Helper)
     IRB.CreateCall(CILKRTS_FUNC(enter_frame_fast_1, *F.getParent()), args);
-    /* inst = CallInst::Create(CILKRTS_FUNC(enter_frame_fast_1, *F.getParent()), args, "" ); */
-  } else {
+  else
     IRB.CreateCall(CILKRTS_FUNC(enter_frame_1, *F.getParent()), args);
-    /* inst = CallInst::Create(CILKRTS_FUNC(enter_frame_1, *F.getParent()), args, "" ); */
-  }
   /* inst->insertAfter(alloc); */
 
   if (instrument) {
-    llvm::Value* end_args[2] = { alloc, StackSave };
+    Value* end_args[2] = { alloc, StackSave };
     IRB.CreateCall(CILK_CSI_FUNC(enter_end, *F.getParent()), end_args);
   }
 
-  std::vector<ReturnInst*> rets;
-
-  for (Function::iterator i = F.begin(), e = F.end(); i != e; ++i) {
-    TerminatorInst* term = i->getTerminator();
-    if( term == nullptr ) continue;
-    if( ReturnInst* inst = llvm::dyn_cast<ReturnInst>(term) ) {
-      rets.emplace_back( inst );
-    } else continue;
-  }
-
-  if (rets.size()==0) F.dump();
-  assert( rets.size() > 0 );
-
-  Instruction* retInst = nullptr;
-  if( rets.size() > 1 ) {
-    //TODO check this
-    BasicBlock* retB = BasicBlock::Create( rets[0]->getContext(), "retMerge", rets[0]->getParent()->getParent() );
-    PHINode* PN = nullptr;
-    if( Value* V = rets[0]->getReturnValue() )
-      PN = PHINode::Create( V->getType(), rets.size(), "finalRet", retB );
-    for( auto& a : rets ) {
-      if( PN )
-        PN->addIncoming( a->getReturnValue(), a->getParent() );
-      ReplaceInstWithInst( a, BranchInst::Create( retB ) );
+  // The function exits are unified before lowering.
+  ReturnInst *retInst = nullptr;
+  for (BasicBlock &BB : F) {
+    TerminatorInst* TI = BB.getTerminator();
+    if (!TI) continue;
+    if (ReturnInst* RI = llvm::dyn_cast<ReturnInst>(TI)) {
+      assert(!retInst && "Multiple returns found.");
+      retInst = RI;
     }
-    retInst = ReturnInst::Create( rets[0]->getContext(), PN, retB );
-  } else {
-    retInst = rets[0];
   }
 
-  assert (retInst);
-  CallInst::Create(GetCilkParentEpilogue(*F.getParent(), instrument ), args, "", retInst);
+  assert(retInst && "No returns found.");
+  CallInst::Create(GetCilkParentEpilogue(*F.getParent(), instrument), args, "",
+                   retInst);
   return alloc;
 }
 
-static inline void replaceInList(llvm::Value* v,
-				 llvm::Value* replaceWith,
-				 SmallPtrSet<BasicBlock*,32>& blocks) {
-  AShrOperator::use_iterator UI = v->use_begin(), E = v->use_end();
-  for (; UI != E;) {
-    Use &U = *UI;
-    ++UI;
-    auto *Usr = dyn_cast<Instruction>(U.getUser());
-    if (Usr && ( blocks.count(Usr->getParent()) ) ) {
-      U.set(replaceWith);
-    }
-  }
-
-}
-
-static inline bool makeFunctionDetachable( Function& extracted, bool instrument = false ) {
-  Module* M = extracted.getParent();
+static inline
+bool makeFunctionDetachable(Function &extracted,
+                            ValueToValueMapTy &DetachCtxToStackFrame,
+                            bool instrument = false) {
+  Module *M = extracted.getParent();
   // LLVMContext& Context = extracted.getContext();
   // const DataLayout& DL = M->getDataLayout();
   /*
@@ -746,144 +715,167 @@ static inline bool makeFunctionDetachable( Function& extracted, bool instrument 
     __cilkrts_enter_frame_fast_1(&sf);
     __cilkrts_detach();
     *x = f(y);
-    */
+  */
 
-  llvm::Value* sf = CreateStackFrame( extracted );
-  assert(sf);
-  Value* args[1] = { sf };
+  Value *SF = CreateStackFrame(extracted);
+  DetachCtxToStackFrame[&extracted] = SF;
+  assert(SF);
+  Value *args[1] = { SF };
 
-  llvm::BasicBlock::iterator II = extracted.getEntryBlock().getFirstInsertionPt();
-  llvm::AllocaInst* curinst;
+  // Scan function to see if it detaches.
+  bool SimpleHelper = true;
+  for (BasicBlock &BB : extracted) {
+    if (isa<DetachInst>(BB.getTerminator())) {
+      SimpleHelper = false;
+      break;
+    }
+  }
+  if (!SimpleHelper)
+    dbgs() << "Detachable helper function itself detaches.\n";
+
+  BasicBlock::iterator II = extracted.getEntryBlock().getFirstInsertionPt();
+  AllocaInst* curinst;
   do {
     curinst = dyn_cast<llvm::AllocaInst>(II);
     II++;
-  } while (curinst != sf);
-  llvm::Value *StackSave;
-  IRBuilder<> IRB( &(extracted.getEntryBlock()), II );
+  } while (curinst != SF);
+  Value *StackSave;
+  IRBuilder<> IRB(&(extracted.getEntryBlock()), II);
 
   if (instrument) {
-    llvm::Type *Int8PtrTy = IRB.getInt8PtrTy();
-    llvm::Value *ThisFn =
-      llvm::ConstantExpr::getBitCast(&extracted, Int8PtrTy);
-    llvm::Value *ReturnAddress =
+    Type *Int8PtrTy = IRB.getInt8PtrTy();
+    Value *ThisFn = ConstantExpr::getBitCast(&extracted, Int8PtrTy);
+    Value *ReturnAddress =
       IRB.CreateCall(Intrinsic::getDeclaration(M, Intrinsic::returnaddress),
                      IRB.getInt32(0));
     StackSave =
       IRB.CreateCall(Intrinsic::getDeclaration(M, Intrinsic::stacksave));
-    llvm::Value* begin_args[3] = { sf, ThisFn, ReturnAddress };
-    IRB.CreateCall(CILK_CSI_FUNC(enter_helper_begin, *M), begin_args);
-  }
-
-  IRB.CreateCall(CILKRTS_FUNC(enter_frame_fast_1, *M), args);
-
-  if (instrument) {
-    llvm::Value* end_args[2] = { sf, StackSave };
-    IRB.CreateCall(CILK_CSI_FUNC(enter_end, *M), end_args);
-
-    IRB.CreateCall(CILK_CSI_FUNC(detach_begin, *M), args);
-  }
-
-  IRB.CreateCall(CILKRTS_FUNC(detach, *M), args);
-
-  if (instrument)
-    IRB.CreateCall(CILK_CSI_FUNC(detach_end, *M));
-
-  ReturnInst* ret = nullptr;
-  for (Function::iterator i = extracted.begin(), e = extracted.end(); i != e; ++i) {
-    BasicBlock* bb = &*i;
-    TerminatorInst* term = bb->getTerminator();
-    if (!term) continue;
-    if (ReturnInst* inst = llvm::dyn_cast<ReturnInst>(term)) {
-      assert( ret == nullptr && "Multiple return" );
-      ret = inst;
+    if (SimpleHelper) {
+      Value *begin_args[3] = { SF, ThisFn, ReturnAddress };
+      IRB.CreateCall(CILK_CSI_FUNC(enter_helper_begin, *M), begin_args);
+    } else {
+      Value *begin_args[4] = { IRB.getInt32(0), SF, ThisFn, ReturnAddress };
+      IRB.CreateCall(CILK_CSI_FUNC(enter_begin, *M), begin_args);
     }
   }
-  assert( ret && "No return from extract function" );
+
+  if (SimpleHelper)
+    IRB.CreateCall(CILKRTS_FUNC(enter_frame_fast_1, *M), args);
+  else
+    IRB.CreateCall(CILKRTS_FUNC(enter_frame_1, *M), args);
+
+  if (instrument) {
+    Value *end_args[2] = { SF, StackSave };
+    IRB.CreateCall(CILK_CSI_FUNC(enter_end, *M), end_args);
+  }
+
+  // Call __cilkrts_detach
+  {
+    if (instrument)
+      IRB.CreateCall(CILK_CSI_FUNC(detach_begin, *M), args);
+
+    IRB.CreateCall(CILKRTS_FUNC(detach, *M), args);
+
+    if (instrument)
+      IRB.CreateCall(CILK_CSI_FUNC(detach_end, *M));
+  }
+
+  ReturnInst* Ret = nullptr;
+  for (BasicBlock &BB : extracted) {
+    TerminatorInst* TI = BB.getTerminator();
+    if (!TI) continue;
+    if (ReturnInst* RI = dyn_cast<ReturnInst>(TI)) {
+      assert(Ret == nullptr && "Multiple return");
+      Ret = RI;
+    }
+  }
+  assert(Ret && "No return from extract function");
 
   /*
      __cilkrts_pop_frame(&sf);
      if (sf->flags)
      __cilkrts_leave_frame(&sf);
   */
-  auto PE = GetCilkParentEpilogue(*M, instrument);
+  CallInst::Create(GetCilkParentEpilogue(*M, instrument), args, "", Ret);
 
-  CallInst::Create(PE, args,"",ret);
   return true;
 }
 
-//#####################################################################################################3333
+//##############################################################################
 
 /// \brief Get/Create the worker count for the spawning function.
 Value* llvm::cilk::GetOrCreateWorker8(Function &F) {
-  Value* W8 = F.getValueSymbolTable()->lookup(worker8_name);
-  if (W8) return W8;
+  // Value* W8 = F.getValueSymbolTable()->lookup(worker8_name);
+  // if (W8) return W8;
   IRBuilder<> b(F.getEntryBlock().getFirstNonPHIOrDbgOrLifetime());
   Value* P0 = b.CreateCall(CILKRTS_FUNC(get_nworkers, *F.getParent()));
   Value* P8 = b.CreateMul(P0, ConstantInt::get(P0->getType(), 8), worker8_name);
   return P8;
 }
 
-void llvm::cilk::createSync(SyncInst& inst, bool instrument) {
-  Function* Fn = (inst.getParent()->getParent());
-  Module& M = * Fn->getParent();
+void llvm::cilk::createSync(SyncInst &SI, ValueToValueMapTy &DetachCtxToStackFrame,
+                            bool instrument) {
+  Function &Fn = *(SI.getParent()->getParent());
+  Module &M = *(Fn.getParent());
 
-
-  llvm::Value* SF = GetOrInitStackFrame( *Fn, /*isFast*/false, instrument);
-  llvm::Value* args[] = {SF };
+  Value *SF = GetOrInitCilkStackFrame(Fn, DetachCtxToStackFrame,
+                                      /*isFast*/false, instrument);
+  Value *args[] = { SF };
   assert( args[0] && "sync used in function without frame!" );
-  auto ci = CallInst::Create( GetCilkSyncFn( M, instrument ), args, "", /*insert before*/&inst );
-  auto suc = inst.getSuccessor(0);
-  inst.eraseFromParent();
-  BranchInst::Create(suc, ci->getParent());
+  CallInst *CI = CallInst::Create(GetCilkSyncFn(M, instrument), args, "",
+                                  /*insert before*/&SI);
+  CI->setDebugLoc(SI.getDebugLoc());
+  auto Succ = SI.getSuccessor(0);
+  SI.eraseFromParent();
+  BranchInst::Create(Succ, CI->getParent());
 }
 
-bool llvm::cilk::verifyDetachedCFG(const DetachInst& detach, bool error) {
-  SmallVector<BasicBlock *, 32> todo;
+bool llvm::cilk::verifyDetachedCFG(const DetachInst &detach, bool error) {
+  SmallVector<BasicBlock *, 32> Todo;
 
-  SmallPtrSet<BasicBlock*,32> functionPieces;
-  SmallVector<BasicBlock*,32> reattachB;
+  SmallPtrSet<BasicBlock *, 32> functionPieces;
+  SmallVector<BasicBlock *, 32> reattachB;
 
-  BasicBlock* Spawned  = detach.getSuccessor(0);
-  BasicBlock* Continue = detach.getSuccessor(1);
-  todo.push_back(Spawned);
+  BasicBlock *Spawned  = detach.getDetached();
+  BasicBlock *Continue = detach.getContinue();
+  Todo.push_back(Spawned);
 
-  while( todo.size() > 0 ){
-    BasicBlock* BB = todo.pop_back_val();
+  while (Todo.size() > 0) {
+    BasicBlock *BB = Todo.pop_back_val();
 
     if (!functionPieces.insert(BB).second)
       continue;
 
     TerminatorInst* term = BB->getTerminator();
     if (term == nullptr) return false;
-    if( ReattachInst* inst = llvm::dyn_cast<ReattachInst>(term) ) {
+    if (ReattachInst* inst = llvm::dyn_cast<ReattachInst>(term)) {
       //only analyze reattaches going to the same continuation
-      if( inst->getSuccessor(0) != Continue ) continue;
+      if (inst->getSuccessor(0) != Continue) continue;
       continue;
-    } else if( DetachInst* inst = llvm::dyn_cast<DetachInst>(term) ) {
-      assert( inst != &detach && "Found recursive detach!" );
-      todo.emplace_back( inst->getSuccessor(0) );
-      todo.emplace_back( inst->getSuccessor(1) );
+    } else if (DetachInst* inst = llvm::dyn_cast<DetachInst>(term)) {
+      assert(inst != &detach && "Found recursive detach!");
+      Todo.emplace_back(inst->getSuccessor(0));
+      Todo.emplace_back(inst->getSuccessor(1));
       continue;
-    } else if( SyncInst* inst = llvm::dyn_cast<SyncInst>(term) ) {
+    } else if (SyncInst* inst = llvm::dyn_cast<SyncInst>(term)) {
       //only sync inner elements, consider as branch
-      todo.emplace_back( inst->getSuccessor(0) );
+      Todo.emplace_back(inst->getSuccessor(0));
       continue;
-    } else if( BranchInst* inst = llvm::dyn_cast<BranchInst>(term) ) {
-      //only sync inner elements, consider as branch
-      for( unsigned idx = 0, max = inst->getNumSuccessors(); idx < max; idx++ )
-        todo.emplace_back( inst->getSuccessor(idx) );
+    } else if (BranchInst* inst = llvm::dyn_cast<BranchInst>(term)) {
+      for (unsigned idx = 0, max = inst->getNumSuccessors(); idx < max; idx++)
+        Todo.emplace_back(inst->getSuccessor(idx));
       continue;
-    } else if( SwitchInst* inst = llvm::dyn_cast<SwitchInst>(term) ) {
-      //only sync inner elements, consider as branch
-      for( unsigned idx = 0, max = inst->getNumSuccessors(); idx < max; idx++ )
-        todo.emplace_back( inst->getSuccessor(idx) );
+    } else if (SwitchInst* inst = llvm::dyn_cast<SwitchInst>(term)) {
+      for (unsigned idx = 0, max = inst->getNumSuccessors(); idx < max; idx++)
+        Todo.emplace_back(inst->getSuccessor(idx));
       continue;
-    } else if( llvm::isa<UnreachableInst>(term) ) {
+    } else if (llvm::isa<UnreachableInst>(term)) {
       continue;
     } else {
       term->dump();
       term->getParent()->getParent()->dump();
-      if (error) assert( 0 && "Detached block did not absolutely terminate in reattach");
+      if (error)
+        assert(0 && "Detached block did not absolutely terminate in reattach");
       return false;
     }
   }
@@ -1110,12 +1102,11 @@ Function* llvm::cilk::extractDetachBodyToFunction(DetachInst& detach, DominatorT
 
   blocksInDetachedScope.erase(&extracted->getEntryBlock());
 
-  for (BasicBlock* BB : blocksInDetachedScope) {
+  for (BasicBlock* BB : blocksInDetachedScope)
     for (BasicBlock::iterator I = BB->begin(), E = --BB->end(); I != E; ++I)
-      if (AllocaInst *AI = dyn_cast<AllocaInst>(I)) {
-        if (isa<Constant>(AI->getArraySize())) Allocas.push_back(AI);
-      }
-  }
+      if (AllocaInst *AI = dyn_cast<AllocaInst>(I))
+        if (isa<Constant>(AI->getArraySize()))
+          Allocas.push_back(AI);
 
   for (AllocaInst *AI : Allocas) {
     AI->moveBefore(extracted->getEntryBlock().getTerminator());
@@ -1124,19 +1115,21 @@ Function* llvm::cilk::extractDetachBodyToFunction(DetachInst& detach, DominatorT
   return extracted;
 }
 
-CallInst* llvm::cilk::createDetach(DetachInst& detach, DominatorTree& DT,
-				   bool instrument) {
-  BasicBlock* detB = detach.getParent();
-  Function& F = *(detB->getParent());
+Function *llvm::cilk::createDetach(DetachInst &detach,
+                                   ValueToValueMapTy &DetachCtxToStackFrame,
+                                   DominatorTree &DT, bool instrument) {
+  BasicBlock *detB = detach.getParent();
+  Function &F = *(detB->getParent());
 
-  BasicBlock* Spawned  = detach.getDetached();
-  BasicBlock* Continue = detach.getContinue();
+  BasicBlock *Spawned  = detach.getDetached();
+  BasicBlock *Continue = detach.getContinue();
 
-  Module* M = F.getParent();
+  Module *M = F.getParent();
   //replace with branch to succesor
   //entry / cilk.spawn.savestate
-  Value *SF = GetOrInitStackFrame( F, /*isFast*/ false, instrument );
-  assert(SF && "null stack frame unexpected");
+  Value *SF = GetOrInitCilkStackFrame(F, DetachCtxToStackFrame,
+                                      /*isFast=*/false, instrument);
+  // assert(SF && "null stack frame unexpected");
 
   // dbgs() << *detB << *Spawned << *Continue;
 
@@ -1145,9 +1138,8 @@ CallInst* llvm::cilk::createDetach(DetachInst& detach, DominatorTree& DT,
 
   // dbgs() << *detB << *(detach.getDetached());
 
-  CallInst* cal = nullptr;
-  Function* extracted = extractDetachBodyToFunction(detach, DT, &cal);
-
+  CallInst *cal = nullptr;
+  Function *extracted = extractDetachBodyToFunction(detach, DT, &cal);
   assert(extracted && "could not extract detach body to function");
 
   // Unlink the detached CFG in the original function.  The heavy lifting of
@@ -1200,7 +1192,7 @@ CallInst* llvm::cilk::createDetach(DetachInst& detach, DominatorTree& DT,
     detB->getTerminator()->eraseFromParent();
   }
 
-  makeFunctionDetachable( *extracted, instrument );
+  makeFunctionDetachable(*extracted, DetachCtxToStackFrame, instrument);
 
-  return cal;
+  return extracted;
 }

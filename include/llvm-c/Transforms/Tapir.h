@@ -37,7 +37,7 @@ extern "C" {
 void LLVMAddLoopSpawningPass(LLVMPassManagerRef PM);
 
 /** See llvm::createCilkPassPass function. */
-void LLVMAddCilkPassPass(LLVMPassManagerRef PM);
+void LLVMAddLowerTapirToCilkPass(LLVMPassManagerRef PM);
 
 /**
  * @}
