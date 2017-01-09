@@ -33,8 +33,6 @@ void llvm::CloneIntoFunction(Function *NewFunc, const Function *OldFunc,
                              ClonedCodeInfo *CodeInfo,
                              ValueMapTypeRemapper *TypeMapper,
                              ValueMaterializer *Materializer) {
-  assert(NameSuffix && "NameSuffix cannot be null!");
-
   // Loop over all of the basic blocks in the function, cloning them as
   // appropriate.
   for (const BasicBlock *BB : Blocks) {
