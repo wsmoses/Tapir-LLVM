@@ -67,6 +67,30 @@ INITIALIZE_PASS_DEPENDENCY(DominatorTreeWrapperPass)
 INITIALIZE_PASS_END(LowerTapirToCilk, "tapir2cilk",
                     "Simple Lowering of Tapir to Cilk ABI", false, false)
 
+static inline void inlineCilkFunctions(Function &F) {
+  bool inlining = true;
+  while (inlining) {
+    inlining = false;
+    for (inst_iterator I = inst_begin(F), E = inst_end(F); I != E; ++I)
+      if (CallInst *cal = dyn_cast<CallInst>(&*I))
+        if (Function *fn = cal->getCalledFunction())
+          if (fn->getName().startswith("__cilk")) {
+            InlineFunctionInfo ifi;
+            if (InlineFunction(cal, ifi)) {
+              if (fn->getNumUses()==0)
+                fn->eraseFromParent();
+              inlining = true;
+              break;
+            }
+          }
+  }
+
+  if (verifyFunction(F, &errs())) {
+    F.dump();
+    assert(0);
+  }
+}
+
 SmallVectorImpl<Function *>
 *LowerTapirToCilk::processFunction(Function &F, DominatorTree &DT) {
   // if (verifyFunction(F, &errs())) {
@@ -98,29 +122,10 @@ SmallVectorImpl<Function *>
     assert(0);
   }
 
-  bool inlining = true;
-  while (inlining) {
-    inlining = false;
-    for (inst_iterator I = inst_begin(F), E = inst_end(F); I != E; ++I) {
-      if (auto cal = dyn_cast<CallInst>(&*I)) {
-        if (auto fn = cal->getCalledFunction()) {
-          if (fn->getName().startswith("__cilk")) {
-            InlineFunctionInfo ifi;
-            if (InlineFunction(cal,ifi)) {
-              if (fn->getNumUses()==0) fn->eraseFromParent();
-              inlining = true;
-              break;
-            }
-          }
-        }
-      }
-    }
-  }
+  inlineCilkFunctions(F);
+  for (Function *H : *NewHelpers)
+    inlineCilkFunctions(*H);
 
-  if (verifyFunction(F, &errs())) {
-    F.dump();
-    assert(0);
-  }
   return NewHelpers;
 }
 
