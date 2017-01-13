@@ -10,7 +10,7 @@
 // This file implements the CilkABI interface, which is used to convert Tapir
 // instructions -- detach, reattach, and sync -- to calls into the Cilk
 // runtime system.  This interface does the low-level dirty work of passes
-// such as Detach2Cilk and Loop2Cilk.
+// such as LowerToCilk.
 //
 //===----------------------------------------------------------------------===//
 

@@ -713,7 +713,7 @@ void PassManagerBuilder::populateModulePassManager(legacy::PassManagerBase& MPM)
     MPM.add(createInferFunctionAttrsLegacyPass());
     MPM.add(createUnifyFunctionExitNodesPass());
     MPM.add(createLowerTapirToCilkPass(ParallelLevel == 2, InstrumentCilk));
-    // The Detach2Cilk pass may leave cruft around.  Clean it up.
+    // The lowering pass may leave cruft around.  Clean it up.
     MPM.add(createCFGSimplificationPass());
     // if (ParallelLevel != 3) MPM.add(createInferFunctionAttrsLegacyPass());
     MPM.add(createInferFunctionAttrsLegacyPass());
