@@ -285,31 +285,31 @@ private:
 //   LoopAccessReport::emitAnalysis(Message, TheLoop, Name, ORE);
 // }
 
-// static void emitMissedWarning(Function *F, Loop *L,
-//                               const LoopSpawningHints &LH,
-//                               OptimizationRemarkEmitter *ORE) {
-//   ORE->emit(OptimizationRemarkMissed(
-//                 LS_NAME, "LSHint", L->getStartLoc(), L->getHeader())
-//             << "Strategy = "
-//             << LoopSpawningHints::printStrategy(LH.getStrategy()));
-//   switch (LH.getStrategy()) {
-//   case LoopSpawningHints::ST_DAC:
-//     emitLoopSpawningWarning(
-//         F->getContext(), *F, L->getStartLoc(),
-//         "failed to use divide-and-conquer loop spawning");
-//     break;
-//   case LoopSpawningHints::ST_SEQ:
-//     emitLoopSpawningWarning(
-//         F->getContext(), *F, L->getStartLoc(),
-//         "transformation disabled");
-//     break;
-//   case LoopSpawningHints::ST_END:
-//     emitLoopSpawningWarning(
-//         F->getContext(), *F, L->getStartLoc(),
-//         "unknown spawning strategy");
-//     break;
-//   }
-// }
+static void emitMissedWarning(Function *F, Loop *L,
+                              const LoopSpawningHints &LH,
+                              OptimizationRemarkEmitter *ORE) {
+  // ORE->emit(OptimizationRemarkMissed(
+  //               LS_NAME, "LSHint", L->getStartLoc(), L->getHeader())
+  //           << "Strategy = "
+  //           << LoopSpawningHints::printStrategy(LH.getStrategy()));
+  switch (LH.getStrategy()) {
+  case LoopSpawningHints::ST_DAC:
+    emitLoopSpawningWarning(
+        F->getContext(), *F, L->getStartLoc(),
+        "failed to use divide-and-conquer loop spawning");
+    break;
+  case LoopSpawningHints::ST_SEQ:
+    emitLoopSpawningWarning(
+        F->getContext(), *F, L->getStartLoc(),
+        "transformation disabled");
+    break;
+  case LoopSpawningHints::ST_END:
+    emitLoopSpawningWarning(
+        F->getContext(), *F, L->getStartLoc(),
+        "unknown spawning strategy");
+    break;
+  }
+}
 
 /// LoopOutline serves as a base class for different variants of LoopSpawning.
 /// LoopOutline implements common parts of LoopSpawning transformations, namely,
@@ -1873,8 +1873,8 @@ bool LoopSpawningImpl::processLoop(Loop *L) {
   const std::string DebugLocStr = getDebugLocString(L);
 #endif /* NDEBUG */
 
-  // // Function containing loop
-  // Function *F = L->getHeader()->getParent();
+  // Function containing loop
+  Function *F = L->getHeader()->getParent();
 
   DEBUG(dbgs() << "\nLS: Checking a Tapir loop in \""
                << L->getHeader()->getParent()->getName() << "\" from "
@@ -1905,12 +1905,14 @@ bool LoopSpawningImpl::processLoop(Loop *L) {
     ORE.emit(OptimizationRemarkMissed(LS_NAME, "NoPreheader",
                                       L->getStartLoc(), L->getHeader())
              << "loop lacks a preheader");
+    emitMissedWarning(F, L, Hints, &ORE);
     return false;
   } else if (!isa<BranchInst>(Preheader->getTerminator())) {
     DEBUG(dbgs() << "LS: Loop preheader is not terminated by a branch.\n");
     ORE.emit(OptimizationRemarkMissed(LS_NAME, "ComplexPreheader",
                                       L->getStartLoc(), L->getHeader())
              << "loop preheader not terminated by a branch");
+    emitMissedWarning(F, L, Hints, &ORE);
     return false;
   }
 
@@ -1942,7 +1944,7 @@ bool LoopSpawningImpl::processLoop(Loop *L) {
         ORE.emit(OptimizationRemarkMissed(LS_NAME, "NoDACSpawning", DLoc,
                                           Header)
                  << "cannot spawn iterations using divide-and-conquer");
-        // emitMissedWarning(F, L, Hints, ORE);
+        emitMissedWarning(F, L, Hints, &ORE);
         return false;
       }
     }
