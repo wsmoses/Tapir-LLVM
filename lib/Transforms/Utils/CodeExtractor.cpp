@@ -890,32 +890,6 @@ Function *CodeExtractor::extractCodeRegion() {
         }
     }
 
-  // Update debug intrinsics
-  DIBuilder DIB(*newFunction->getParent());
-  std::vector<DbgValueInst *> ToDelete;
-  std::vector<AllocaInst *> ToMove;
-  for (inst_iterator I = inst_begin(newFunction),
-                     E = inst_end(newFunction); I != E; ++I)
-    if (DbgValueInst *DVI = dyn_cast<DbgValueInst>(&*I)) {
-      Value *NewVal = GetCorrectDbgValue(newFunction, DVI->getValue());
-      if (NewVal) {
-        auto DbgVal =
-          DIB.insertDbgValueIntrinsic(NewVal, DVI->getOffset(), DVI->getVariable(), DVI->getExpression(), DVI->getDebugLoc(), DVI);
-
-        DbgVal->setDebugLoc(DVI->getDebugLoc());
-        ToDelete.push_back(DVI);
-      }
-    } else if (DbgDeclareInst *DDI = dyn_cast<DbgDeclareInst>(&*I)) {
-      AllocaInst *AI = dyn_cast_or_null<AllocaInst>(DDI->getAddress());
-      if (AI && AI->getParent()->getParent() != newFunction)
-        ToMove.push_back(AI);
-    }
-
-  for (auto I : ToDelete)
-    I->eraseFromParent();
-  for (auto I : ToMove)
-    I->moveBefore(&*newFunction->getEntryBlock().begin());
-
   //cerr << "NEW FUNCTION: " << *newFunction;
   //  verifyFunction(*newFunction);
 
