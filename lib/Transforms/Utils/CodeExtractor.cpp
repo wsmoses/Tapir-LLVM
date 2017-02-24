@@ -703,29 +703,6 @@ void CodeExtractor::moveCodeToFunction(Function *newFunction) {
   }
 }
 
-static Value *GetCorrectDbgValue(Function *newFunc, Value *V) {
-  Function *ActualF = nullptr;
-  if (Instruction *I = dyn_cast<Instruction>(V))
-    ActualF = I->getParent()->getParent();
-  else if (Argument *A = dyn_cast<Argument>(V))
-    ActualF = A->getParent();
-  else
-    return nullptr;
-
-  if (ActualF == newFunc)
-    return nullptr;
-
-  CallInst *CI = cast<CallInst>(newFunc->user_back());
-  unsigned i = 0;
-  for (Function::arg_iterator I = newFunc->arg_begin(),
-                              E = newFunc->arg_end(); I != E; ++I, ++i)
-    if (CI->getArgOperand(i) == V)
-      return &*I;
-
-  assert(false && "debug intrinsics are in extracted function but"
-                  " matching load/store are not.");
-}
-
 void CodeExtractor::calculateNewCallTerminatorWeights(
     BasicBlock *CodeReplacer,
     DenseMap<BasicBlock *, BlockFrequency> &ExitWeights,
