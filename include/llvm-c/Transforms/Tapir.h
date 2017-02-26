@@ -36,7 +36,7 @@ extern "C" {
 /** See llvm::createLoopSpawningPass function. */
 void LLVMAddLoopSpawningPass(LLVMPassManagerRef PM);
 
-/** See llvm::createCilkPassPass function. */
+/** See llvm::createLowerTapirToCilkPass function. */
 void LLVMAddLowerTapirToCilkPass(LLVMPassManagerRef PM);
 
 /**
