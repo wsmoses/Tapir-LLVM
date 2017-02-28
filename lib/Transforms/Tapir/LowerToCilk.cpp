@@ -157,6 +157,7 @@ bool LowerTapirToCilk::runOnModule(Module &M) {
       for (BasicBlock &BB : *Helper)
         if (isa<DetachInst>(BB.getTerminator()))
           WorkList.push_back(Helper);
+    delete NewHelpers;
   }
   return Changed;
 }
