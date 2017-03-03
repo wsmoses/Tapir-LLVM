@@ -1,0 +1,14 @@
+language: cpp
+
+addons:
+  apt:
+    libcilkrts5
+
+compiler:
+  - clang
+  - gcc
+
+script:
+  - mkdir build
+  - cd build
+  - cmake .. && make -j
