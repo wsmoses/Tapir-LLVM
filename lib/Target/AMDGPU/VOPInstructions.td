@@ -250,7 +250,7 @@ class VOP_SDWA_Pseudo <string opName, VOPProfile P, list<dag> pattern=[]> :
   VOP <opName>,
   SIMCInstr <opName#"_sdwa", SIEncodingFamily.NONE>,
   MnemonicAlias <opName#"_sdwa", opName> {
-  
+
   let isPseudo = 1;
   let isCodeGenOnly = 1;
   let UseNamedOperandTable = 1;
@@ -261,14 +261,14 @@ class VOP_SDWA_Pseudo <string opName, VOPProfile P, list<dag> pattern=[]> :
   let Size = 8;
   let mayLoad = 0;
   let mayStore = 0;
-  let hasSideEffects = 0;  
+  let hasSideEffects = 0;
 
   let VALU = 1;
   let SDWA = 1;
   let Uses = [EXEC];
-  
-  let SubtargetPredicate = isVI;
-  let AssemblerPredicate = !if(P.HasExt, isVI, DisableInst);
+
+  let SubtargetPredicate = HasSDWA;
+  let AssemblerPredicate = !if(P.HasExt, HasSDWA, DisableInst);
   let AsmVariantName = !if(P.HasExt, AMDGPUAsmVariants.SDWA,
                                      AMDGPUAsmVariants.Disable);
   let DecoderNamespace = "SDWA";
@@ -337,8 +337,8 @@ class VOP_DPP <string OpName, VOPProfile P> :
   let Size = 8;
 
   let AsmMatchConverter = !if(!eq(P.HasModifiers,1), "cvtDPP", "");
-  let SubtargetPredicate = isVI;
-  let AssemblerPredicate = !if(P.HasExt, isVI, DisableInst);
+  let SubtargetPredicate = HasDPP;
+  let AssemblerPredicate = !if(P.HasExt, HasDPP, DisableInst);
   let AsmVariantName = !if(P.HasExt, AMDGPUAsmVariants.DPP,
                                      AMDGPUAsmVariants.Disable);
   let DecoderNamespace = "DPP";

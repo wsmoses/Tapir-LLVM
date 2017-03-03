@@ -128,7 +128,7 @@ public:
   /// to an LLVM basic block.
   const BasicBlock *getBasicBlock() const { return BB; }
 
-  /// Return the name of the corresponding LLVM basic block, or "(null)".
+  /// Return the name of the corresponding LLVM basic block, or an empty string.
   StringRef getName() const;
 
   /// Return a formatted string to identify this block and its parent function.
@@ -308,7 +308,17 @@ public:
   // Iteration support for live in sets.  These sets are kept in sorted
   // order by their register number.
   typedef LiveInVector::const_iterator livein_iterator;
-  livein_iterator livein_begin() const { return LiveIns.begin(); }
+#ifndef NDEBUG
+  /// Unlike livein_begin, this method does not check that the liveness
+  /// information is accurate. Still for debug purposes it may be useful
+  /// to have iterators that won't assert if the liveness information
+  /// is not current.
+  livein_iterator livein_begin_dbg() const { return LiveIns.begin(); }
+  iterator_range<livein_iterator> liveins_dbg() const {
+    return make_range(livein_begin_dbg(), livein_end());
+  }
+#endif
+  livein_iterator livein_begin() const;
   livein_iterator livein_end()   const { return LiveIns.end(); }
   bool            livein_empty() const { return LiveIns.empty(); }
   iterator_range<livein_iterator> liveins() const {
@@ -653,6 +663,10 @@ public:
   DebugLoc findDebugLoc(iterator MBBI) {
     return findDebugLoc(MBBI.getInstrIterator());
   }
+
+  /// Find and return the merged DebugLoc of the branch instructions of the
+  /// block. Return UnknownLoc if there is none.
+  DebugLoc findBranchDebugLoc();
 
   /// Possible outcome of a register liveness query to computeRegisterLiveness()
   enum LivenessQueryResult {

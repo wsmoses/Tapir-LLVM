@@ -28,6 +28,10 @@
 
 namespace llvm {
 
+namespace yaml {
+template <typename T> struct MappingTraits;
+}
+
 /// \brief Class to accumulate and hold information about a callee.
 struct CalleeInfo {
   enum class HotnessType : uint8_t { Unknown = 0, Cold = 1, None = 2, Hot = 3 };
@@ -102,7 +106,7 @@ public:
   /// \brief Sububclass discriminator (for dyn_cast<> et al.)
   enum SummaryKind : unsigned { AliasKind, FunctionKind, GlobalVarKind };
 
-  /// Group flags (Linkage, noRename, isOptSize, etc.) as a bitfield.
+  /// Group flags (Linkage, NotEligibleToImport, etc.) as a bitfield.
   struct GVFlags {
     /// \brief The linkage type of the associated global value.
     ///
@@ -113,39 +117,20 @@ public:
     /// types based on global summary-based analysis.
     unsigned Linkage : 4;
 
-    /// Indicate if the global value cannot be renamed (in a specific section,
-    /// possibly referenced from inline assembly, etc).
-    unsigned NoRename : 1;
+    /// Indicate if the global value cannot be imported (e.g. it cannot
+    /// be renamed or references something that can't be renamed).
+    unsigned NotEligibleToImport : 1;
 
-    /// Indicate if a function contains inline assembly (which is opaque),
-    /// that may reference a local value. This is used to prevent importing
-    /// of this function, since we can't promote and rename the uses of the
-    /// local in the inline assembly. Use a flag rather than bloating the
-    /// summary with references to every possible local value in the
-    /// llvm.used set.
-    unsigned HasInlineAsmMaybeReferencingInternal : 1;
-
-    /// Indicate if the function is not viable to inline.
-    unsigned IsNotViableToInline : 1;
+    /// Indicate that the global value must be considered a live root for
+    /// index-based liveness analysis. Used for special LLVM values such as
+    /// llvm.global_ctors that the linker does not know about.
+    unsigned LiveRoot : 1;
 
     /// Convenience Constructors
-    explicit GVFlags(GlobalValue::LinkageTypes Linkage, bool NoRename,
-                     bool HasInlineAsmMaybeReferencingInternal,
-                     bool IsNotViableToInline)
-        : Linkage(Linkage), NoRename(NoRename),
-          HasInlineAsmMaybeReferencingInternal(
-              HasInlineAsmMaybeReferencingInternal),
-          IsNotViableToInline(IsNotViableToInline) {}
-
-    GVFlags(const GlobalValue &GV)
-        : Linkage(GV.getLinkage()), NoRename(GV.hasSection()),
-          HasInlineAsmMaybeReferencingInternal(false) {
-      IsNotViableToInline = false;
-      if (const auto *F = dyn_cast<Function>(&GV))
-        // Inliner doesn't handle variadic functions.
-        // FIXME: refactor this to use the same code that inliner is using.
-        IsNotViableToInline = F->isVarArg();
-    }
+    explicit GVFlags(GlobalValue::LinkageTypes Linkage,
+                     bool NotEligibleToImport, bool LiveRoot)
+        : Linkage(Linkage), NotEligibleToImport(NotEligibleToImport),
+          LiveRoot(LiveRoot) {}
   };
 
 private:
@@ -213,31 +198,19 @@ public:
     Flags.Linkage = Linkage;
   }
 
-  bool isNotViableToInline() const { return Flags.IsNotViableToInline; }
+  /// Return true if this global value can't be imported.
+  bool notEligibleToImport() const { return Flags.NotEligibleToImport; }
 
-  /// Return true if this summary is for a GlobalValue that needs promotion
-  /// to be referenced from another module.
-  bool needsRenaming() const { return GlobalValue::isLocalLinkage(linkage()); }
+  /// Return true if this global value must be considered a root for live
+  /// value analysis on the index.
+  bool liveRoot() const { return Flags.LiveRoot; }
 
-  /// Return true if this global value cannot be renamed (in a specific section,
-  /// possibly referenced from inline assembly, etc).
-  bool noRename() const { return Flags.NoRename; }
+  /// Flag that this global value must be considered a root for live
+  /// value analysis on the index.
+  void setLiveRoot() { Flags.LiveRoot = true; }
 
-  /// Flag that this global value cannot be renamed (in a specific section,
-  /// possibly referenced from inline assembly, etc).
-  void setNoRename() { Flags.NoRename = true; }
-
-  /// Return true if this global value possibly references another value
-  /// that can't be renamed.
-  bool hasInlineAsmMaybeReferencingInternal() const {
-    return Flags.HasInlineAsmMaybeReferencingInternal;
-  }
-
-  /// Flag that this global value possibly references another value that
-  /// can't be renamed.
-  void setHasInlineAsmMaybeReferencingInternal() {
-    Flags.HasInlineAsmMaybeReferencingInternal = true;
-  }
+  /// Flag that this global value cannot be imported.
+  void setNotEligibleToImport() { Flags.NotEligibleToImport = true; }
 
   /// Return the list of values referenced by this global value definition.
   ArrayRef<ValueInfo> refs() const { return RefEdgeList; }
@@ -276,6 +249,23 @@ public:
   /// <CalleeValueInfo, CalleeInfo> call edge pair.
   typedef std::pair<ValueInfo, CalleeInfo> EdgeTy;
 
+  /// An "identifier" for a virtual function. This contains the type identifier
+  /// represented as a GUID and the offset from the address point to the virtual
+  /// function pointer, where "address point" is as defined in the Itanium ABI:
+  /// https://mentorembedded.github.io/cxx-abi/abi.html#vtable-general
+  struct VFuncId {
+    GlobalValue::GUID GUID;
+    uint64_t Offset;
+  };
+
+  /// A specification for a virtual function call with all constant integer
+  /// arguments. This is used to perform virtual constant propagation on the
+  /// summary.
+  struct ConstVCall {
+    VFuncId VFunc;
+    std::vector<uint64_t> Args;
+  };
+
 private:
   /// Number of instructions (ignoring debug instructions, e.g.) computed
   /// during the initial compile step when the summary index is first built.
@@ -284,17 +274,47 @@ private:
   /// List of <CalleeValueInfo, CalleeInfo> call edge pairs from this function.
   std::vector<EdgeTy> CallGraphEdgeList;
 
-  /// List of type identifiers used by this function, represented as GUIDs.
-  std::vector<GlobalValue::GUID> TypeIdList;
+  /// All type identifier related information. Because these fields are
+  /// relatively uncommon we only allocate space for them if necessary.
+  struct TypeIdInfo {
+    /// List of type identifiers used by this function in llvm.type.test
+    /// intrinsics other than by an llvm.assume intrinsic, represented as GUIDs.
+    std::vector<GlobalValue::GUID> TypeTests;
+
+    /// List of virtual calls made by this function using (respectively)
+    /// llvm.assume(llvm.type.test) or llvm.type.checked.load intrinsics that do
+    /// not have all constant integer arguments.
+    std::vector<VFuncId> TypeTestAssumeVCalls, TypeCheckedLoadVCalls;
+
+    /// List of virtual calls made by this function using (respectively)
+    /// llvm.assume(llvm.type.test) or llvm.type.checked.load intrinsics with
+    /// all constant integer arguments.
+    std::vector<ConstVCall> TypeTestAssumeConstVCalls,
+        TypeCheckedLoadConstVCalls;
+  };
+
+  std::unique_ptr<TypeIdInfo> TIdInfo;
 
 public:
   /// Summary constructors.
   FunctionSummary(GVFlags Flags, unsigned NumInsts, std::vector<ValueInfo> Refs,
                   std::vector<EdgeTy> CGEdges,
-                  std::vector<GlobalValue::GUID> TypeIds)
+                  std::vector<GlobalValue::GUID> TypeTests,
+                  std::vector<VFuncId> TypeTestAssumeVCalls,
+                  std::vector<VFuncId> TypeCheckedLoadVCalls,
+                  std::vector<ConstVCall> TypeTestAssumeConstVCalls,
+                  std::vector<ConstVCall> TypeCheckedLoadConstVCalls)
       : GlobalValueSummary(FunctionKind, Flags, std::move(Refs)),
-        InstCount(NumInsts), CallGraphEdgeList(std::move(CGEdges)),
-        TypeIdList(std::move(TypeIds)) {}
+        InstCount(NumInsts), CallGraphEdgeList(std::move(CGEdges)) {
+    if (!TypeTests.empty() || !TypeTestAssumeVCalls.empty() ||
+        !TypeCheckedLoadVCalls.empty() || !TypeTestAssumeConstVCalls.empty() ||
+        !TypeCheckedLoadConstVCalls.empty())
+      TIdInfo = llvm::make_unique<TypeIdInfo>(TypeIdInfo{
+          std::move(TypeTests), std::move(TypeTestAssumeVCalls),
+          std::move(TypeCheckedLoadVCalls),
+          std::move(TypeTestAssumeConstVCalls),
+          std::move(TypeCheckedLoadConstVCalls)});
+  }
 
   /// Check if this is a function summary.
   static bool classof(const GlobalValueSummary *GVS) {
@@ -307,8 +327,77 @@ public:
   /// Return the list of <CalleeValueInfo, CalleeInfo> pairs.
   ArrayRef<EdgeTy> calls() const { return CallGraphEdgeList; }
 
-  /// Returns the list of type identifiers used by this function.
-  ArrayRef<GlobalValue::GUID> type_tests() const { return TypeIdList; }
+  /// Returns the list of type identifiers used by this function in
+  /// llvm.type.test intrinsics other than by an llvm.assume intrinsic,
+  /// represented as GUIDs.
+  ArrayRef<GlobalValue::GUID> type_tests() const {
+    if (TIdInfo)
+      return TIdInfo->TypeTests;
+    return {};
+  }
+
+  /// Returns the list of virtual calls made by this function using
+  /// llvm.assume(llvm.type.test) intrinsics that do not have all constant
+  /// integer arguments.
+  ArrayRef<VFuncId> type_test_assume_vcalls() const {
+    if (TIdInfo)
+      return TIdInfo->TypeTestAssumeVCalls;
+    return {};
+  }
+
+  /// Returns the list of virtual calls made by this function using
+  /// llvm.type.checked.load intrinsics that do not have all constant integer
+  /// arguments.
+  ArrayRef<VFuncId> type_checked_load_vcalls() const {
+    if (TIdInfo)
+      return TIdInfo->TypeCheckedLoadVCalls;
+    return {};
+  }
+
+  /// Returns the list of virtual calls made by this function using
+  /// llvm.assume(llvm.type.test) intrinsics with all constant integer
+  /// arguments.
+  ArrayRef<ConstVCall> type_test_assume_const_vcalls() const {
+    if (TIdInfo)
+      return TIdInfo->TypeTestAssumeConstVCalls;
+    return {};
+  }
+
+  /// Returns the list of virtual calls made by this function using
+  /// llvm.type.checked.load intrinsics with all constant integer arguments.
+  ArrayRef<ConstVCall> type_checked_load_const_vcalls() const {
+    if (TIdInfo)
+      return TIdInfo->TypeCheckedLoadConstVCalls;
+    return {};
+  }
+};
+
+template <> struct DenseMapInfo<FunctionSummary::VFuncId> {
+  static FunctionSummary::VFuncId getEmptyKey() { return {0, uint64_t(-1)}; }
+  static FunctionSummary::VFuncId getTombstoneKey() {
+    return {0, uint64_t(-2)};
+  }
+  static bool isEqual(FunctionSummary::VFuncId L, FunctionSummary::VFuncId R) {
+    return L.GUID == R.GUID && L.Offset == R.Offset;
+  }
+  static unsigned getHashValue(FunctionSummary::VFuncId I) { return I.GUID; }
+};
+
+template <> struct DenseMapInfo<FunctionSummary::ConstVCall> {
+  static FunctionSummary::ConstVCall getEmptyKey() {
+    return {{0, uint64_t(-1)}, {}};
+  }
+  static FunctionSummary::ConstVCall getTombstoneKey() {
+    return {{0, uint64_t(-2)}, {}};
+  }
+  static bool isEqual(FunctionSummary::ConstVCall L,
+                      FunctionSummary::ConstVCall R) {
+    return DenseMapInfo<FunctionSummary::VFuncId>::isEqual(L.VFunc, R.VFunc) &&
+           L.Args == R.Args;
+  }
+  static unsigned getHashValue(FunctionSummary::ConstVCall I) {
+    return I.VFunc.GUID;
+  }
 };
 
 /// \brief Global variable summary information to aid decisions and
@@ -328,6 +417,62 @@ public:
   static bool classof(const GlobalValueSummary *GVS) {
     return GVS->getSummaryKind() == GlobalVarKind;
   }
+};
+
+struct TypeTestResolution {
+  /// Specifies which kind of type check we should emit for this byte array.
+  /// See http://clang.llvm.org/docs/ControlFlowIntegrityDesign.html for full
+  /// details on each kind of check; the enumerators are described with
+  /// reference to that document.
+  enum Kind {
+    Unsat,     ///< Unsatisfiable type (i.e. no global has this type metadata)
+    ByteArray, ///< Test a byte array (first example)
+    Inline,    ///< Inlined bit vector ("Short Inline Bit Vectors")
+    Single,    ///< Single element (last example in "Short Inline Bit Vectors")
+    AllOnes,   ///< All-ones bit vector ("Eliminating Bit Vector Checks for
+               ///  All-Ones Bit Vectors")
+  } TheKind = Unsat;
+
+  /// Range of size-1 expressed as a bit width. For example, if the size is in
+  /// range [1,256], this number will be 8. This helps generate the most compact
+  /// instruction sequences.
+  unsigned SizeM1BitWidth = 0;
+};
+
+struct WholeProgramDevirtResolution {
+  enum Kind {
+    Indir,      ///< Just do a regular virtual call
+    SingleImpl, ///< Single implementation devirtualization
+  } TheKind = Indir;
+
+  std::string SingleImplName;
+
+  struct ByArg {
+    enum Kind {
+      Indir,            ///< Just do a regular virtual call
+      UniformRetVal,    ///< Uniform return value optimization
+      UniqueRetVal,     ///< Unique return value optimization
+      VirtualConstProp, ///< Virtual constant propagation
+    } TheKind = Indir;
+
+    /// Additional information for the resolution:
+    /// - UniformRetVal: the uniform return value.
+    /// - UniqueRetVal: the return value associated with the unique vtable (0 or
+    ///   1).
+    uint64_t Info = 0;
+  };
+
+  /// Resolutions for calls with all constant integer arguments (excluding the
+  /// first argument, "this"), where the key is the argument vector.
+  std::map<std::vector<uint64_t>, ByArg> ResByArg;
+};
+
+struct TypeIdSummary {
+  TypeTestResolution TTRes;
+
+  /// Mapping from byte offset to whole-program devirt resolution for that
+  /// (typeid, byte offset) pair.
+  std::map<uint64_t, WholeProgramDevirtResolution> WPDRes;
 };
 
 /// 160 bits SHA1
@@ -370,11 +515,20 @@ private:
   /// Holds strings for combined index, mapping to the corresponding module ID.
   ModulePathStringTableTy ModulePathStringTable;
 
+  /// Mapping from type identifiers to summary information for that type
+  /// identifier.
+  // FIXME: Add bitcode read/write support for this field.
+  std::map<std::string, TypeIdSummary> TypeIdMap;
+
+  // YAML I/O support.
+  friend yaml::MappingTraits<ModuleSummaryIndex>;
+
 public:
   gvsummary_iterator begin() { return GlobalValueMap.begin(); }
   const_gvsummary_iterator begin() const { return GlobalValueMap.begin(); }
   gvsummary_iterator end() { return GlobalValueMap.end(); }
   const_gvsummary_iterator end() const { return GlobalValueMap.end(); }
+  size_t size() const { return GlobalValueMap.size(); }
 
   /// Get the list of global value summary objects for a given value name.
   const GlobalValueSummaryList &getGlobalValueSummaryList(StringRef ValueName) {
@@ -499,6 +653,10 @@ public:
   /// to have exported functions.
   bool hasExportedFunctions(const Module &M) const {
     return ModulePathStringTable.count(M.getModuleIdentifier());
+  }
+
+  TypeIdSummary &getTypeIdSummary(StringRef TypeId) {
+    return TypeIdMap[TypeId];
   }
 
   /// Remove entries in the GlobalValueMap that have empty summaries due to the

@@ -71,6 +71,7 @@ void AArch64Subtarget::initializeProperties() {
     break;
   case Falkor:
     MaxInterleaveFactor = 4;
+    VectorInsertExtractBaseCost = 2;
     break;
   case Kryo:
     MaxInterleaveFactor = 4;
@@ -82,6 +83,14 @@ void AArch64Subtarget::initializeProperties() {
     break;
   case Vulcan:
     MaxInterleaveFactor = 4;
+    break;
+  case ThunderX:
+  case ThunderXT88:
+  case ThunderXT81:
+  case ThunderXT83:
+    CacheLineSize = 128;
+    PrefFunctionAlignment = 4;
+    PrefLoopAlignment = 4;
     break;
   case CortexA35: break;
   case CortexA53: break;

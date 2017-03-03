@@ -7,23 +7,22 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "llvm/MC/MCSectionELF.h"
+#include "llvm/ADT/Triple.h"
 #include "llvm/MC/MCAsmInfo.h"
-#include "llvm/MC/MCContext.h"
 #include "llvm/MC/MCExpr.h"
-#include "llvm/MC/MCSymbol.h"
+#include "llvm/MC/MCSectionELF.h"
 #include "llvm/Support/ELF.h"
 #include "llvm/Support/raw_ostream.h"
+#include <cassert>
 
 using namespace llvm;
 
-MCSectionELF::~MCSectionELF() {} // anchor.
+MCSectionELF::~MCSectionELF() = default; // anchor.
 
 // Decides whether a '.section' directive
 // should be printed before the section name.
 bool MCSectionELF::ShouldOmitSectionDirective(StringRef Name,
                                               const MCAsmInfo &MAI) const {
-
   if (isUnique())
     return false;
 
@@ -53,10 +52,9 @@ static void printName(raw_ostream &OS, StringRef Name) {
   OS << '"';
 }
 
-void MCSectionELF::PrintSwitchToSection(const MCAsmInfo &MAI,
+void MCSectionELF::PrintSwitchToSection(const MCAsmInfo &MAI, const Triple &T,
                                         raw_ostream &OS,
                                         const MCExpr *Subsection) const {
-
   if (ShouldOmitSectionDirective(SectionName, MAI)) {
     OS << '\t' << getSectionName();
     if (Subsection) {
@@ -106,12 +104,17 @@ void MCSectionELF::PrintSwitchToSection(const MCAsmInfo &MAI,
     OS << 'T';
 
   // If there are target-specific flags, print them.
-  if (Flags & ELF::XCORE_SHF_CP_SECTION)
-    OS << 'c';
-  if (Flags & ELF::XCORE_SHF_DP_SECTION)
-    OS << 'd';
-  if (Flags & ELF::SHF_ARM_PURECODE)
-    OS << 'y';
+  Triple::ArchType Arch = T.getArch();
+  if (Arch == Triple::xcore) {
+    if (Flags & ELF::XCORE_SHF_CP_SECTION)
+      OS << 'c';
+    if (Flags & ELF::XCORE_SHF_DP_SECTION)
+      OS << 'd';
+  } else if (Arch == Triple::arm || Arch == Triple::armeb ||
+             Arch == Triple::thumb || Arch == Triple::thumbeb) {
+    if (Flags & ELF::SHF_ARM_PURECODE)
+      OS << 'y';
+  }
 
   OS << '"';
 

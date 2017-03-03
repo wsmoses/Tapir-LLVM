@@ -1044,9 +1044,16 @@ Instruction *InstCombiner::visitAdd(BinaryOperator &I) {
 
   const APInt *Val;
   if (match(RHS, m_APInt(Val))) {
-    // X + (signbit) --> X ^ signbit
-    if (Val->isSignBit())
+    if (Val->isSignBit()) {
+      // If wrapping is not allowed, then the addition must set the sign bit:
+      // X + (signbit) --> X | signbit
+      if (I.hasNoSignedWrap() || I.hasNoUnsignedWrap())
+        return BinaryOperator::CreateOr(LHS, RHS);
+
+      // If wrapping is allowed, then the addition flips the sign bit of LHS:
+      // X + (signbit) --> X ^ signbit
       return BinaryOperator::CreateXor(LHS, RHS);
+    }
 
     // Is this add the last step in a convoluted sext?
     Value *X;
@@ -1056,6 +1063,15 @@ Instruction *InstCombiner::visitAdd(BinaryOperator &I) {
         C->sext(LHS->getType()->getScalarSizeInBits()) == *Val) {
       // add(zext(xor i16 X, -32768), -32768) --> sext X
       return CastInst::Create(Instruction::SExt, X, LHS->getType());
+    }
+
+    if (Val->isNegative() &&
+        match(LHS, m_ZExt(m_NUWAdd(m_Value(X), m_APInt(C)))) &&
+        Val->sge(-C->sext(Val->getBitWidth()))) {
+      // (add (zext (add nuw X, C)), Val) -> (zext (add nuw X, C+Val))
+      Constant *NewC =
+          ConstantInt::get(X->getType(), *C + Val->trunc(C->getBitWidth()));
+      return new ZExtInst(Builder->CreateNUWAdd(X, NewC), I.getType());
     }
   }
 
@@ -1359,15 +1375,9 @@ Instruction *InstCombiner::visitFAdd(BinaryOperator &I) {
           SimplifyFAddInst(LHS, RHS, I.getFastMathFlags(), DL, &TLI, &DT, &AC))
     return replaceInstUsesWith(I, V);
 
-  if (isa<Constant>(RHS)) {
-    if (isa<PHINode>(LHS))
-      if (Instruction *NV = FoldOpIntoPhi(I))
-        return NV;
-
-    if (SelectInst *SI = dyn_cast<SelectInst>(LHS))
-      if (Instruction *NV = FoldOpIntoSelect(I, SI))
-        return NV;
-  }
+  if (isa<Constant>(RHS))
+    if (Instruction *FoldedFAdd = foldOpWithConstantIntoOperand(I))
+      return FoldedFAdd;
 
   // -A + B  -->  B - A
   // -A + -B  -->  -(A + B)

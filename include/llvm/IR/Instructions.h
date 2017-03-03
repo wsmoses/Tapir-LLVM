@@ -4531,7 +4531,7 @@ protected:
   friend class Instruction;
   DetachInst *cloneImpl() const;
 
- public:
+public:
   static DetachInst *Create(BasicBlock *Detached, BasicBlock *Continue,
                            Instruction *InsertBefore = nullptr) {
     return new(2) DetachInst(Detached, Continue, InsertBefore);

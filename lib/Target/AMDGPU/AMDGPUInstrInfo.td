@@ -54,6 +54,9 @@ def AMDGPUconstdata_ptr : SDNode<
 // This argument to this node is a dword address.
 def AMDGPUdwordaddr : SDNode<"AMDGPUISD::DWORDADDR", SDTIntUnaryOp>;
 
+// Force dependencies for vector trunc stores
+def R600dummy_chain : SDNode<"AMDGPUISD::DUMMY_CHAIN", SDTNone, [SDNPHasChain]>;
+
 def AMDGPUcos : SDNode<"AMDGPUISD::COS_HW", SDTFPUnaryOp>;
 def AMDGPUsin : SDNode<"AMDGPUISD::SIN_HW", SDTFPUnaryOp>;
 
@@ -90,16 +93,6 @@ def AMDGPUfmul_legacy : SDNode<"AMDGPUISD::FMUL_LEGACY", SDTFPBinOp,
 >;
 
 def AMDGPUclamp : SDNode<"AMDGPUISD::CLAMP", SDTFPTernaryOp, []>;
-
-// out = max(a, b) a and b are signed ints
-def AMDGPUsmax : SDNode<"AMDGPUISD::SMAX", SDTIntBinOp,
-  [SDNPCommutative, SDNPAssociative]
->;
-
-// out = max(a, b) a and b are unsigned ints
-def AMDGPUumax : SDNode<"AMDGPUISD::UMAX", SDTIntBinOp,
-  [SDNPCommutative, SDNPAssociative]
->;
 
 // out = min(a, b) a and b are floats, where a nan comparison fails.
 def AMDGPUfmin_legacy : SDNode<"AMDGPUISD::FMIN_LEGACY", SDTFPBinOp,
@@ -266,6 +259,10 @@ def AMDGPUsendmsg : SDNode<"AMDGPUISD::SENDMSG",
                     SDTypeProfile<0, 1, [SDTCisInt<0>]>,
                     [SDNPHasChain, SDNPInGlue]>;
 
+def AMDGPUsendmsghalt : SDNode<"AMDGPUISD::SENDMSGHALT",
+                    SDTypeProfile<0, 1, [SDTCisInt<0>]>,
+                    [SDNPHasChain, SDNPInGlue]>;
+
 def AMDGPUinterp_mov : SDNode<"AMDGPUISD::INTERP_MOV",
                         SDTypeProfile<1, 3, [SDTCisFP<0>]>,
                         [SDNPInGlue]>;
@@ -284,15 +281,16 @@ def AMDGPUkill : SDNode<"AMDGPUISD::KILL", AMDGPUKillSDT,
 
 // SI+ export
 def AMDGPUExportOp : SDTypeProfile<0, 8, [
-  SDTCisInt<0>, // i8 en
-  SDTCisInt<1>, // i1 vm
+  SDTCisInt<0>,       // i8 tgt
+  SDTCisInt<1>,       // i8 en
+                      // i32 or f32 src0
+  SDTCisSameAs<3, 2>, // f32 src1
+  SDTCisSameAs<4, 2>, // f32 src2
+  SDTCisSameAs<5, 2>, // f32 src3
+  SDTCisInt<6>,       // i1 compr
   // skip done
-  SDTCisInt<2>, // i8 tgt
-  SDTCisSameAs<3, 1>, // i1 compr
-  SDTCisFP<4>,        // f32 src0
-  SDTCisSameAs<5, 4>, // f32 src1
-  SDTCisSameAs<6, 4>, // f32 src2
-  SDTCisSameAs<7, 4>  // f32 src3
+  SDTCisInt<1>        // i1 vm
+
 ]>;
 
 def AMDGPUexport: SDNode<"AMDGPUISD::EXPORT", AMDGPUExportOp,

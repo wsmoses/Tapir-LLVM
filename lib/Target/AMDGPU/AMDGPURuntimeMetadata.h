@@ -37,44 +37,99 @@
 #include <string>
 
 namespace AMDGPU {
-
 namespace RuntimeMD {
 
   // Version and revision of runtime metadata
   const unsigned char MDVersion   = 2;
-  const unsigned char MDRevision  = 0;
+  const unsigned char MDRevision  = 1;
 
   // Name of keys for runtime metadata.
   namespace KeyName {
-    const char MDVersion[]                = "amd.MDVersion";            // Runtime metadata version
-    const char Language[]                 = "amd.Language";             // Language
-    const char LanguageVersion[]          = "amd.LanguageVersion";      // Language version
-    const char Kernels[]                  = "amd.Kernels";              // Kernels
-    const char KernelName[]               = "amd.KernelName";           // Kernel name
-    const char Args[]                     = "amd.Args";                 // Kernel arguments
-    const char ArgSize[]                  = "amd.ArgSize";              // Kernel arg size
-    const char ArgAlign[]                 = "amd.ArgAlign";             // Kernel arg alignment
-    const char ArgTypeName[]              = "amd.ArgTypeName";          // Kernel type name
-    const char ArgName[]                  = "amd.ArgName";              // Kernel name
-    const char ArgKind[]                  = "amd.ArgKind";              // Kernel argument kind
-    const char ArgValueType[]             = "amd.ArgValueType";         // Kernel argument value type
-    const char ArgAddrQual[]              = "amd.ArgAddrQual";          // Kernel argument address qualifier
-    const char ArgAccQual[]               = "amd.ArgAccQual";           // Kernel argument access qualifier
-    const char ArgIsConst[]               = "amd.ArgIsConst";           // Kernel argument is const qualified
-    const char ArgIsRestrict[]            = "amd.ArgIsRestrict";        // Kernel argument is restrict qualified
-    const char ArgIsVolatile[]            = "amd.ArgIsVolatile";        // Kernel argument is volatile qualified
-    const char ArgIsPipe[]                = "amd.ArgIsPipe";            // Kernel argument is pipe qualified
-    const char ReqdWorkGroupSize[]        = "amd.ReqdWorkGroupSize";    // Required work group size
-    const char WorkGroupSizeHint[]        = "amd.WorkGroupSizeHint";    // Work group size hint
-    const char VecTypeHint[]              = "amd.VecTypeHint";          // Vector type hint
-    const char KernelIndex[]              = "amd.KernelIndex";          // Kernel index for device enqueue
-    const char NoPartialWorkGroups[]      = "amd.NoPartialWorkGroups";  // No partial work groups
-    const char PrintfInfo[]               = "amd.PrintfInfo";           // Prinf function call information
-    const char ArgActualAcc[]             = "amd.ArgActualAcc";         // The actual kernel argument access qualifier
-    const char ArgPointeeAlign[]          = "amd.ArgPointeeAlign";      // Alignment of pointee type
-  }
+
+    // Runtime metadata version
+    const char MDVersion[] = "amd.MDVersion";
+
+    // Instruction set architecture information
+    const char IsaInfo[] = "amd.IsaInfo";
+    // Wavefront size
+    const char IsaInfoWavefrontSize[] = "amd.IsaInfoWavefrontSize";
+    // Local memory size in bytes
+    const char IsaInfoLocalMemorySize[] = "amd.IsaInfoLocalMemorySize";
+    // Number of execution units per compute unit
+    const char IsaInfoEUsPerCU[] = "amd.IsaInfoEUsPerCU";
+    // Maximum number of waves per execution unit
+    const char IsaInfoMaxWavesPerEU[] = "amd.IsaInfoMaxWavesPerEU";
+    // Maximum flat work group size
+    const char IsaInfoMaxFlatWorkGroupSize[] = "amd.IsaInfoMaxFlatWorkGroupSize";
+    // SGPR allocation granularity
+    const char IsaInfoSGPRAllocGranule[] = "amd.IsaInfoSGPRAllocGranule";
+    // Total number of SGPRs
+    const char IsaInfoTotalNumSGPRs[] = "amd.IsaInfoTotalNumSGPRs";
+    // Addressable number of SGPRs
+    const char IsaInfoAddressableNumSGPRs[] = "amd.IsaInfoAddressableNumSGPRs";
+    // VGPR allocation granularity
+    const char IsaInfoVGPRAllocGranule[] = "amd.IsaInfoVGPRAllocGranule";
+    // Total number of VGPRs
+    const char IsaInfoTotalNumVGPRs[] = "amd.IsaInfoTotalNumVGPRs";
+    // Addressable number of VGPRs
+    const char IsaInfoAddressableNumVGPRs[] = "amd.IsaInfoAddressableNumVGPRs";
+
+    // Language
+    const char Language[] = "amd.Language";
+    // Language version
+    const char LanguageVersion[] = "amd.LanguageVersion";
+
+    // Kernels
+    const char Kernels[] = "amd.Kernels";
+    // Kernel name
+    const char KernelName[] = "amd.KernelName";
+    // Kernel arguments
+    const char Args[] = "amd.Args";
+    // Kernel argument size in bytes
+    const char ArgSize[] = "amd.ArgSize";
+    // Kernel argument alignment
+    const char ArgAlign[] = "amd.ArgAlign";
+    // Kernel argument type name
+    const char ArgTypeName[] = "amd.ArgTypeName";
+    // Kernel argument name
+    const char ArgName[] = "amd.ArgName";
+    // Kernel argument kind
+    const char ArgKind[] = "amd.ArgKind";
+    // Kernel argument value type
+    const char ArgValueType[] = "amd.ArgValueType";
+    // Kernel argument address qualifier
+    const char ArgAddrQual[] = "amd.ArgAddrQual";
+    // Kernel argument access qualifier
+    const char ArgAccQual[] = "amd.ArgAccQual";
+    // Kernel argument is const qualified
+    const char ArgIsConst[] = "amd.ArgIsConst";
+    // Kernel argument is restrict qualified
+    const char ArgIsRestrict[] = "amd.ArgIsRestrict";
+    // Kernel argument is volatile qualified
+    const char ArgIsVolatile[] = "amd.ArgIsVolatile";
+    // Kernel argument is pipe qualified
+    const char ArgIsPipe[] = "amd.ArgIsPipe";
+    // Required work group size
+    const char ReqdWorkGroupSize[] = "amd.ReqdWorkGroupSize";
+    // Work group size hint
+    const char WorkGroupSizeHint[] = "amd.WorkGroupSizeHint";
+    // Vector type hint
+    const char VecTypeHint[] = "amd.VecTypeHint";
+    // Kernel index for device enqueue
+    const char KernelIndex[] = "amd.KernelIndex";
+    // No partial work groups
+    const char NoPartialWorkGroups[] = "amd.NoPartialWorkGroups";
+    // Prinf function call information
+    const char PrintfInfo[] = "amd.PrintfInfo";
+    // The actual kernel argument access qualifier
+    const char ArgActualAcc[] = "amd.ArgActualAcc";
+    // Alignment of pointee type
+    const char ArgPointeeAlign[] = "amd.ArgPointeeAlign";
+
+  } // end namespace KeyName
 
   namespace KernelArg {
+
     enum Kind : uint8_t {
       ByValue                 = 0,
       GlobalBuffer            = 1,
@@ -123,7 +178,8 @@ namespace RuntimeMD {
       Generic    = 4,
       Region     = 5,
     };
-  } // namespace KernelArg
+
+  } // end namespace KernelArg
 
   // Invalid values are used to indicate an optional key should not be emitted.
   const uint8_t INVALID_ADDR_QUAL     = 0xff;
@@ -131,28 +187,30 @@ namespace RuntimeMD {
   const uint32_t INVALID_KERNEL_INDEX = ~0U;
 
   namespace KernelArg {
+
     // In-memory representation of kernel argument information.
     struct Metadata {
-      uint32_t Size;
-      uint32_t Align;
-      uint32_t PointeeAlign;
-      uint8_t Kind;
-      uint16_t ValueType;
+      uint32_t Size = 0;
+      uint32_t Align = 0;
+      uint32_t PointeeAlign = 0;
+      uint8_t Kind = 0;
+      uint16_t ValueType = 0;
       std::string TypeName;
       std::string Name;
-      uint8_t AddrQual;
-      uint8_t AccQual;
-      uint8_t IsVolatile;
-      uint8_t IsConst;
-      uint8_t IsRestrict;
-      uint8_t IsPipe;
-      Metadata() : Size(0), Align(0), PointeeAlign(0), Kind(0), ValueType(0),
-          AddrQual(INVALID_ADDR_QUAL), AccQual(INVALID_ACC_QUAL), IsVolatile(0),
-          IsConst(0), IsRestrict(0), IsPipe(0) {}
+      uint8_t AddrQual = INVALID_ADDR_QUAL;
+      uint8_t AccQual = INVALID_ACC_QUAL;
+      uint8_t IsVolatile = 0;
+      uint8_t IsConst = 0;
+      uint8_t IsRestrict = 0;
+      uint8_t IsPipe = 0;
+
+      Metadata() = default;
     };
-  }
+
+  } // end namespace KernelArg
 
   namespace Kernel {
+
     // In-memory representation of kernel information.
     struct Metadata {
       std::string Name;
@@ -161,21 +219,58 @@ namespace RuntimeMD {
       std::vector<uint32_t> ReqdWorkGroupSize;
       std::vector<uint32_t> WorkGroupSizeHint;
       std::string VecTypeHint;
-      uint32_t KernelIndex;
-      uint8_t NoPartialWorkGroups;
+      uint32_t KernelIndex = INVALID_KERNEL_INDEX;
+      uint8_t NoPartialWorkGroups = 0;
       std::vector<KernelArg::Metadata> Args;
-      Metadata() : KernelIndex(INVALID_KERNEL_INDEX), NoPartialWorkGroups(0) {}
+
+      Metadata() = default;
     };
-  }
+
+  } // end namespace Kernel
+
+  namespace IsaInfo {
+
+    /// \brief In-memory representation of instruction set architecture
+    /// information.
+    struct Metadata {
+      /// \brief Wavefront size.
+      unsigned WavefrontSize = 0;
+      /// \brief Local memory size in bytes.
+      unsigned LocalMemorySize = 0;
+      /// \brief Number of execution units per compute unit.
+      unsigned EUsPerCU = 0;
+      /// \brief Maximum number of waves per execution unit.
+      unsigned MaxWavesPerEU = 0;
+      /// \brief Maximum flat work group size.
+      unsigned MaxFlatWorkGroupSize = 0;
+      /// \brief SGPR allocation granularity.
+      unsigned SGPRAllocGranule = 0;
+      /// \brief Total number of SGPRs.
+      unsigned TotalNumSGPRs = 0;
+      /// \brief Addressable number of SGPRs.
+      unsigned AddressableNumSGPRs = 0;
+      /// \brief VGPR allocation granularity.
+      unsigned VGPRAllocGranule = 0;
+      /// \brief Total number of VGPRs.
+      unsigned TotalNumVGPRs = 0;
+      /// \brief Addressable number of VGPRs.
+      unsigned AddressableNumVGPRs = 0;
+
+      Metadata() = default;
+    };
+
+  } // end namespace IsaInfo
 
   namespace Program {
+
     // In-memory representation of program information.
     struct Metadata {
       std::vector<uint8_t> MDVersionSeq;
+      IsaInfo::Metadata IsaInfo;
       std::vector<std::string> PrintfInfo;
       std::vector<Kernel::Metadata> Kernels;
 
-      explicit Metadata(){}
+      explicit Metadata() = default;
 
       // Construct from an YAML string.
       explicit Metadata(const std::string &YAML);
@@ -186,8 +281,10 @@ namespace RuntimeMD {
       // Convert from YAML string.
       static Metadata fromYAML(const std::string &S);
     };
-  }
-} // namespace RuntimeMD
-} // namespace AMDGPU
+
+  } //end namespace Program
+
+} // end namespace RuntimeMD
+} // end namespace AMDGPU
 
 #endif // LLVM_LIB_TARGET_AMDGPU_AMDGPURUNTIMEMETADATA_H

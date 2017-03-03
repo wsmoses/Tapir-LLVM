@@ -1087,18 +1087,23 @@ BranchInst *llvm::SerializeDetachedCFG(DetachInst *DI, DominatorTree *DT) {
       Reattaches.push_back(cast<ReattachInst>(Pred->getTerminator()));
     }
   }
+  // TODO: It's possible to detach a CFG that does not terminate with a
+  // reattach.  For example, optimizations can create detached CFG's that are
+  // terminated by unreachable terminators only.  Some of these special cases
+  // lead to problems with other passes, however, and this check will identify
+  // those special cases early while we sort out those issues.
   assert(!Reattaches.empty() && "No reattach found for detach.");
 
   // Replace each reattach with branches to the continuation.
   for (ReattachInst *RI : Reattaches) {
-    BranchInst *Replacement = BranchInst::Create(Continuation, RI);
-    Replacement->setDebugLoc(RI->getDebugLoc());
+    BranchInst *ReplacementBr = BranchInst::Create(Continuation, RI);
+    ReplacementBr->setDebugLoc(RI->getDebugLoc());
     RI->eraseFromParent();
   }
 
   // Replace the new detach with a branch to the detached CFG.
-  BranchInst *Replacement = BranchInst::Create(Detached, DI);
-  Replacement->setDebugLoc(DI->getDebugLoc());
+  BranchInst *ReplacementBr = BranchInst::Create(Detached, DI);
+  ReplacementBr->setDebugLoc(DI->getDebugLoc());
   DI->eraseFromParent();
 
   // Update the dominator tree.
@@ -1106,7 +1111,7 @@ BranchInst *llvm::SerializeDetachedCFG(DetachInst *DI, DominatorTree *DT) {
     if (DT->dominates(Detacher, Continuation) && 1 == ReattachesFound)
       DT->changeImmediateDominator(Continuation, SingleReattacher);
 
-  return Replacement;
+  return ReplacementBr;
 }
 
 /// GetDetachedCtx - Get the entry basic block to the detached context
@@ -2177,7 +2182,7 @@ bool llvm::recognizeBSwapOrBitReverseIdiom(
 void llvm::maybeMarkSanitizerLibraryCallNoBuiltin(
     CallInst *CI, const TargetLibraryInfo *TLI) {
   Function *F = CI->getCalledFunction();
-  LibFunc::Func Func;
+  LibFunc Func;
   if (F && !F->hasLocalLinkage() && F->hasName() &&
       TLI->getLibFunc(F->getName(), Func) && TLI->hasOptimizedCodeGen(Func) &&
       !F->doesNotAccessMemory())

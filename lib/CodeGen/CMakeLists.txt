@@ -23,6 +23,7 @@ add_llvm_library(LLVMCodeGen
   ExpandISelPseudos.cpp
   ExpandPostRAPseudos.cpp
   FaultMaps.cpp
+  FEntryInserter.cpp
   FuncletLayout.cpp
   GCMetadata.cpp
   GCMetadataPrinter.cpp
@@ -36,6 +37,7 @@ add_llvm_library(LLVMCodeGen
   InterleavedAccessPass.cpp
   IntrinsicLowering.cpp
   LatencyPriorityQueue.cpp
+  LazyMachineBlockFrequencyInfo.cpp
   LexicalScopes.cpp
   LiveDebugValues.cpp
   LiveDebugVariables.cpp
@@ -46,6 +48,7 @@ add_llvm_library(LLVMCodeGen
   LiveRangeCalc.cpp
   LiveRangeEdit.cpp
   LiveRegMatrix.cpp
+  LiveRegUnits.cpp
   LiveStackAnalysis.cpp
   LiveVariables.cpp
   LLVMTargetMachine.cpp
@@ -70,6 +73,7 @@ add_llvm_library(LLVMCodeGen
   MachineLoopInfo.cpp
   MachineModuleInfo.cpp
   MachineModuleInfoImpls.cpp
+  MachineOptimizationRemarkEmitter.cpp
   MachinePassRegistry.cpp
   MachinePipeliner.cpp
   MachinePostDominators.cpp
@@ -147,7 +151,7 @@ add_llvm_library(LLVMCodeGen
   ${LLVM_MAIN_INCLUDE_DIR}/llvm/CodeGen
   ${LLVM_MAIN_INCLUDE_DIR}/llvm/CodeGen/PBQP
 
-  LINK_LIBS ${PTHREAD_LIB}
+  LINK_LIBS ${LLVM_PTHREAD_LIB}
 
   DEPENDS
   intrinsics_gen

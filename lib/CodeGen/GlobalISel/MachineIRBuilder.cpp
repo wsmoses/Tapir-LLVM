@@ -15,6 +15,7 @@
 #include "llvm/CodeGen/MachineInstr.h"
 #include "llvm/CodeGen/MachineInstrBuilder.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
+#include "llvm/IR/DebugInfo.h"
 #include "llvm/Target/TargetInstrInfo.h"
 #include "llvm/Target/TargetOpcodes.h"
 #include "llvm/Target/TargetSubtargetInfo.h"
@@ -54,7 +55,7 @@ void MachineIRBuilder::setInsertPt(MachineBasicBlock &MBB,
 
 void MachineIRBuilder::recordInsertions(
     std::function<void(MachineInstr *)> Inserted) {
-  InsertedInstr = Inserted;
+  InsertedInstr = std::move(Inserted);
 }
 
 void MachineIRBuilder::stopRecordingInsertions() {
@@ -80,6 +81,66 @@ MachineInstrBuilder MachineIRBuilder::insertInstr(MachineInstrBuilder MIB) {
   if (InsertedInstr)
     InsertedInstr(MIB);
   return MIB;
+}
+
+MachineInstrBuilder MachineIRBuilder::buildDirectDbgValue(
+    unsigned Reg, const MDNode *Variable, const MDNode *Expr) {
+  assert(isa<DILocalVariable>(Variable) && "not a variable");
+  assert(cast<DIExpression>(Expr)->isValid() && "not an expression");
+  assert(cast<DILocalVariable>(Variable)->isValidLocationForIntrinsic(DL) &&
+         "Expected inlined-at fields to agree");
+  return buildInstr(TargetOpcode::DBG_VALUE)
+      .addReg(Reg, RegState::Debug)
+      .addReg(0, RegState::Debug)
+      .addMetadata(Variable)
+      .addMetadata(Expr);
+}
+
+MachineInstrBuilder MachineIRBuilder::buildIndirectDbgValue(
+    unsigned Reg, unsigned Offset, const MDNode *Variable, const MDNode *Expr) {
+  assert(isa<DILocalVariable>(Variable) && "not a variable");
+  assert(cast<DIExpression>(Expr)->isValid() && "not an expression");
+  assert(cast<DILocalVariable>(Variable)->isValidLocationForIntrinsic(DL) &&
+         "Expected inlined-at fields to agree");
+  return buildInstr(TargetOpcode::DBG_VALUE)
+      .addReg(Reg, RegState::Debug)
+      .addImm(Offset)
+      .addMetadata(Variable)
+      .addMetadata(Expr);
+}
+
+MachineInstrBuilder MachineIRBuilder::buildFIDbgValue(int FI,
+                                                      const MDNode *Variable,
+                                                      const MDNode *Expr) {
+  assert(isa<DILocalVariable>(Variable) && "not a variable");
+  assert(cast<DIExpression>(Expr)->isValid() && "not an expression");
+  assert(cast<DILocalVariable>(Variable)->isValidLocationForIntrinsic(DL) &&
+         "Expected inlined-at fields to agree");
+  return buildInstr(TargetOpcode::DBG_VALUE)
+      .addFrameIndex(FI)
+      .addImm(0)
+      .addMetadata(Variable)
+      .addMetadata(Expr);
+}
+
+MachineInstrBuilder MachineIRBuilder::buildConstDbgValue(const Constant &C,
+                                                         unsigned Offset,
+                                                         const MDNode *Variable,
+                                                         const MDNode *Expr) {
+  assert(isa<DILocalVariable>(Variable) && "not a variable");
+  assert(cast<DIExpression>(Expr)->isValid() && "not an expression");
+  assert(cast<DILocalVariable>(Variable)->isValidLocationForIntrinsic(DL) &&
+         "Expected inlined-at fields to agree");
+  auto MIB = buildInstr(TargetOpcode::DBG_VALUE);
+  if (auto *CI = dyn_cast<ConstantInt>(&C)) {
+    if (CI->getBitWidth() > 64)
+      MIB.addCImm(CI);
+    else
+      MIB.addImm(CI->getZExtValue());
+  } else
+    MIB.addFPImm(&cast<ConstantFP>(C));
+
+  return MIB.addImm(Offset).addMetadata(Variable).addMetadata(Expr);
 }
 
 MachineInstrBuilder MachineIRBuilder::buildFrameIndex(unsigned Res, int Idx) {
@@ -126,6 +187,17 @@ MachineInstrBuilder MachineIRBuilder::buildGEP(unsigned Res, unsigned Op0,
       .addUse(Op1);
 }
 
+MachineInstrBuilder MachineIRBuilder::buildPtrMask(unsigned Res, unsigned Op0,
+                                                   uint32_t NumBits) {
+  assert(MRI->getType(Res).isPointer() &&
+         MRI->getType(Res) == MRI->getType(Op0) && "type mismatch");
+
+  return buildInstr(TargetOpcode::G_PTR_MASK)
+      .addDef(Res)
+      .addUse(Op0)
+      .addImm(NumBits);
+}
+
 MachineInstrBuilder MachineIRBuilder::buildSub(unsigned Res, unsigned Op0,
                                                unsigned Op1) {
   assert((MRI->getType(Res).isScalar() || MRI->getType(Res).isVector()) &&
@@ -152,8 +224,25 @@ MachineInstrBuilder MachineIRBuilder::buildMul(unsigned Res, unsigned Op0,
       .addUse(Op1);
 }
 
+MachineInstrBuilder MachineIRBuilder::buildAnd(unsigned Res, unsigned Op0,
+                                               unsigned Op1) {
+  assert((MRI->getType(Res).isScalar() || MRI->getType(Res).isVector()) &&
+         "invalid operand type");
+  assert(MRI->getType(Res) == MRI->getType(Op0) &&
+         MRI->getType(Res) == MRI->getType(Op1) && "type mismatch");
+
+  return buildInstr(TargetOpcode::G_AND)
+      .addDef(Res)
+      .addUse(Op0)
+      .addUse(Op1);
+}
+
 MachineInstrBuilder MachineIRBuilder::buildBr(MachineBasicBlock &Dest) {
   return buildInstr(TargetOpcode::G_BR).addMBB(&Dest);
+}
+
+MachineInstrBuilder MachineIRBuilder::buildBrIndirect(unsigned Tgt) {
+  return buildInstr(TargetOpcode::G_BRINDIRECT).addUse(Tgt);
 }
 
 MachineInstrBuilder MachineIRBuilder::buildCopy(unsigned Res, unsigned Op) {
@@ -256,6 +345,17 @@ MachineInstrBuilder MachineIRBuilder::buildSExtOrTrunc(unsigned Res,
   unsigned Opcode = TargetOpcode::COPY;
   if (MRI->getType(Res).getSizeInBits() > MRI->getType(Op).getSizeInBits())
     Opcode = TargetOpcode::G_SEXT;
+  else if (MRI->getType(Res).getSizeInBits() < MRI->getType(Op).getSizeInBits())
+    Opcode = TargetOpcode::G_TRUNC;
+
+  return buildInstr(Opcode).addDef(Res).addUse(Op);
+}
+
+MachineInstrBuilder MachineIRBuilder::buildZExtOrTrunc(unsigned Res,
+                                                       unsigned Op) {
+  unsigned Opcode = TargetOpcode::COPY;
+  if (MRI->getType(Res).getSizeInBits() > MRI->getType(Op).getSizeInBits())
+    Opcode = TargetOpcode::G_ZEXT;
   else if (MRI->getType(Res).getSizeInBits() < MRI->getType(Op).getSizeInBits())
     Opcode = TargetOpcode::G_TRUNC;
 

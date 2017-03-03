@@ -40,7 +40,7 @@ class VOP2_MADKe <bits<6> op, VOPProfile P> : Enc64 {
 class VOP2_SDWAe <bits<6> op, VOPProfile P> : VOP_SDWAe <P> {
   bits<8> vdst;
   bits<8> src1;
-  
+
   let Inst{8-0}   = 0xf9; // sdwa
   let Inst{16-9}  = !if(P.HasSrc1, src1{7-0}, 0);
   let Inst{24-17} = !if(P.EmitDst, vdst{7-0}, 0);
@@ -119,8 +119,7 @@ multiclass VOP2Inst <string opName,
   def _e64 : VOP3_Pseudo <opName, P, getVOP2Pat64<node, P>.ret>,
              Commutable_REV<revOp#"_e64", !eq(revOp, opName)>;
 
-  def _sdwa : VOP2_SDWA_Pseudo <opName, P>,
-              Commutable_REV<revOp#"_sdwa", !eq(revOp, opName)>;
+  def _sdwa : VOP2_SDWA_Pseudo <opName, P>;
 }
 
 // TODO: add SDWA pseudo instructions for VOP2bInst and VOP2eInst
@@ -134,10 +133,10 @@ multiclass VOP2bInst <string opName,
     let Uses = !if(useSGPRInput, [VCC, EXEC], [EXEC]), Defs = [VCC] in {
       def _e32 : VOP2_Pseudo <opName, P>,
                  Commutable_REV<revOp#"_e32", !eq(revOp, opName)>;
-      
-      def _sdwa : VOP2_SDWA_Pseudo <opName, P>,
-              Commutable_REV<revOp#"_sdwa", !eq(revOp, opName)>;
+
+      def _sdwa : VOP2_SDWA_Pseudo <opName, P>;
     }
+
     def _e64 : VOP3_Pseudo <opName, P, getVOP2Pat64<node, P>.ret>,
                Commutable_REV<revOp#"_e64", !eq(revOp, opName)>;
   }
@@ -154,6 +153,7 @@ multiclass VOP2eInst <string opName,
       def _e32 : VOP2_Pseudo <opName, P>,
                  Commutable_REV<revOp#"_e32", !eq(revOp, opName)>;
     }
+
     def _e64 : VOP3_Pseudo <opName, P, getVOP2Pat64<node, P>.ret>,
                Commutable_REV<revOp#"_e64", !eq(revOp, opName)>;
   }
@@ -183,13 +183,13 @@ class VOP_MAC <ValueType vt> : VOPProfile <[vt, vt, vt, vt]> {
   let Ins32 = (ins Src0RC32:$src0, Src1RC32:$src1, VGPR_32:$src2);
   let Ins64 = getIns64<Src0RC64, Src1RC64, RegisterOperand<VGPR_32>, 3,
                        HasModifiers, Src0Mod, Src1Mod, Src2Mod>.ret;
-  let InsDPP = (ins FP32InputMods:$src0_modifiers, Src0DPP:$src0,
-                    FP32InputMods:$src1_modifiers, Src1DPP:$src1,
+  let InsDPP = (ins Src0ModDPP:$src0_modifiers, Src0DPP:$src0,
+                    Src1ModDPP:$src1_modifiers, Src1DPP:$src1,
                     VGPR_32:$src2, // stub argument
                     dpp_ctrl:$dpp_ctrl, row_mask:$row_mask,
                     bank_mask:$bank_mask, bound_ctrl:$bound_ctrl);
-  let InsSDWA = (ins FP32InputMods:$src0_modifiers, Src0SDWA:$src0,
-                     FP32InputMods:$src1_modifiers, Src1SDWA:$src1,
+  let InsSDWA = (ins Src0ModSDWA:$src0_modifiers, Src0SDWA:$src0,
+                     Src1ModSDWA:$src1_modifiers, Src1SDWA:$src1,
                      VGPR_32:$src2, // stub argument
                      clampmod:$clamp, dst_sel:$dst_sel, dst_unused:$dst_unused,
                      src0_sel:$src0_sel, src1_sel:$src1_sel);
@@ -494,6 +494,14 @@ def : Pat <
   (V_CNDMASK_B32_e64 (i32 0), (i32 -1), $src)
 >;
 
+// Undo sub x, c -> add x, -c canonicalization since c is more likely
+// an inline immediate than -c.
+// TODO: Also do for 64-bit.
+def : Pat<
+  (add i16:$src0, (i16 NegSubInlineConst16:$src1)),
+  (V_SUB_U16_e64 $src0, NegSubInlineConst16:$src1)
+>;
+
 } // End Predicates = [isVI]
 
 //===----------------------------------------------------------------------===//
@@ -646,7 +654,7 @@ multiclass Base_VOP2_Real_e32e64_vi <bits<6> op> :
   VOP2_Real_e64_vi<{0, 1, 0, 0, op{5-0}}>;
 
 } // End AssemblerPredicates = [isVI], DecoderNamespace = "VI"
- 
+
 multiclass VOP2_SDWA_Real <bits<6> op> {
   def _sdwa_vi :
     VOP_SDWA_Real <!cast<VOP2_SDWA_Pseudo>(NAME#"_sdwa")>,

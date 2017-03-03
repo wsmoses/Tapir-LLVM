@@ -1219,14 +1219,14 @@ LLVMTypeRef LLVMX86MMXType(void);
         macro(SwitchInst)                   \
         macro(UnreachableInst)              \
         macro(ResumeInst)                   \
+        macro(DetachInst)                   \
+        macro(ReattachInst)                 \
+        macro(SyncInst)                     \
         macro(CleanupReturnInst)            \
         macro(CatchReturnInst)              \
       macro(FuncletPadInst)                 \
         macro(CatchPadInst)                 \
         macro(CleanupPadInst)               \
-        macro(DetachInst)                   \
-        macro(ReattachInst)                 \
-        macro(SyncInst)                     \
       macro(UnaryInstruction)               \
         macro(AllocaInst)                   \
         macro(CastInst)                     \

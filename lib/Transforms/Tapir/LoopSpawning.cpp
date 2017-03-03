@@ -15,7 +15,6 @@
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/Statistic.h"
-// #include "llvm/Analysis/LoopPass.h"
 #include "llvm/Analysis/LoopInfo.h"
 #include "llvm/Analysis/OptimizationDiagnosticInfo.h"
 #include "llvm/Analysis/ScalarEvolution.h"
@@ -294,19 +293,25 @@ static void emitMissedWarning(Function *F, Loop *L,
   //           << LoopSpawningHints::printStrategy(LH.getStrategy()));
   switch (LH.getStrategy()) {
   case LoopSpawningHints::ST_DAC:
-    emitLoopSpawningWarning(
-        F->getContext(), *F, L->getStartLoc(),
-        "failed to use divide-and-conquer loop spawning");
+    ORE->emit(DiagnosticInfoOptimizationFailure(
+                  DEBUG_TYPE, "FailedRequestedSpawning",
+                  L->getStartLoc(), L->getHeader())
+              << "Tapir loop not transformed: "
+              << "failed to use divide-and-conquer loop spawning");
     break;
   case LoopSpawningHints::ST_SEQ:
-    emitLoopSpawningWarning(
-        F->getContext(), *F, L->getStartLoc(),
-        "transformation disabled");
+    ORE->emit(DiagnosticInfoOptimizationFailure(
+                  DEBUG_TYPE, "SpawningDisabled",
+                  L->getStartLoc(), L->getHeader())
+              << "Tapir loop not transformed: "
+              << "loop-spawning transformation disabled");
     break;
   case LoopSpawningHints::ST_END:
-    emitLoopSpawningWarning(
-        F->getContext(), *F, L->getStartLoc(),
-        "unknown spawning strategy");
+    ORE->emit(DiagnosticInfoOptimizationFailure(
+                  DEBUG_TYPE, "FailedRequestedSpawning",
+                  L->getStartLoc(), L->getHeader())
+              << "Tapir loop not transformed: "
+              << "unknown loop-spawning strategy");
     break;
   }
 }

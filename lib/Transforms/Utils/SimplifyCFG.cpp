@@ -22,6 +22,7 @@
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/Analysis/AssumptionCache.h"
 #include "llvm/Analysis/ConstantFolding.h"
 #include "llvm/Analysis/EHPersonalities.h"
 #include "llvm/Analysis/InstructionSimplify.h"
@@ -1275,13 +1276,12 @@ static bool HoistThenElseCodeToIf(BranchInst *BI,
                            LLVMContext::MD_mem_parallel_loop_access};
     combineMetadata(I1, I2, KnownIDs);
 
-    // If the debug loc for I1 and I2 are different, as we are combining them
-    // into one instruction, we do not want to select debug loc randomly from 
-    // I1 or I2.
-    if (!isa<CallInst>(I1) &&  I1->getDebugLoc() != I2->getDebugLoc())
+    // I1 and I2 are being combined into a single instruction.  Its debug
+    // location is the merged locations of the original instructions.
+    if (!isa<CallInst>(I1))
       I1->setDebugLoc(
           DILocation::getMergedLocation(I1->getDebugLoc(), I2->getDebugLoc()));
- 
+
     I2->eraseFromParent();
     Changed = true;
 
@@ -1437,6 +1437,14 @@ static bool canSinkInstructions(
     if (isa<PHINode>(I) || I->isEHPad() || isa<AllocaInst>(I) ||
         I->getType()->isTokenTy())
       return false;
+
+    // Conservatively return false if I is an inline-asm instruction. Sinking
+    // and merging inline-asm instructions can potentially create arguments
+    // that cannot satisfy the inline-asm constraints.
+    if (const auto *C = dyn_cast<CallInst>(I))
+      if (C->isInlineAsm())
+        return false;
+
     // Everything must have only one use too, apart from stores which
     // have no uses.
     if (!isa<StoreInst>(I) && !I->hasOneUse())
@@ -1539,7 +1547,7 @@ static bool sinkLastInstruction(ArrayRef<BasicBlock*> Blocks) {
         }))
       return false;
   }
-  
+
   // We don't need to do any more checking here; canSinkLastInstruction should
   // have done it all for us.
   SmallVector<Value*, 4> NewOperands;
@@ -1574,12 +1582,20 @@ static bool sinkLastInstruction(ArrayRef<BasicBlock*> Blocks) {
     I0->getOperandUse(O).set(NewOperands[O]);
   I0->moveBefore(&*BBEnd->getFirstInsertionPt());
 
-  // Update metadata and IR flags.
+  // The debug location for the "common" instruction is the merged locations of
+  // all the commoned instructions.  We start with the original location of the
+  // "common" instruction and iteratively merge each location in the loop below.
+  const DILocation *Loc = I0->getDebugLoc();
+
+  // Update metadata and IR flags, and merge debug locations.
   for (auto *I : Insts)
     if (I != I0) {
+      Loc = DILocation::getMergedLocation(Loc, I->getDebugLoc());
       combineMetadataForCSE(I0, I);
       I0->andIRFlags(I);
     }
+  if (!isa<CallInst>(I0))
+    I0->setDebugLoc(Loc);
 
   if (!isa<StoreInst>(I0)) {
     // canSinkLastInstruction checked that all instructions were used by
@@ -1638,7 +1654,7 @@ namespace {
     bool isValid() const {
       return !Fail;
     }
-    
+
     void operator -- () {
       if (Fail)
         return;
@@ -1684,7 +1700,7 @@ static bool SinkThenElseCodeToEnd(BranchInst *BI1) {
   //      /    \
   //    [f(1)] [if]
   //      |     | \
-  //      |     |  \
+  //      |     |  |
   //      |  [f(2)]|
   //       \    | /
   //        [ end ]
@@ -1722,7 +1738,7 @@ static bool SinkThenElseCodeToEnd(BranchInst *BI1) {
   }
   if (UnconditionalPreds.size() < 2)
     return false;
-  
+
   bool Changed = false;
   // We take a two-step approach to tail sinking. First we scan from the end of
   // each block upwards in lockstep. If the n'th instruction from the end of each
@@ -1752,7 +1768,7 @@ static bool SinkThenElseCodeToEnd(BranchInst *BI1) {
     unsigned NumPHIInsts = NumPHIdValues / UnconditionalPreds.size();
     if ((NumPHIdValues % UnconditionalPreds.size()) != 0)
         NumPHIInsts++;
-    
+
     return NumPHIInsts <= 1;
   };
 
@@ -1775,7 +1791,7 @@ static bool SinkThenElseCodeToEnd(BranchInst *BI1) {
     }
     if (!Profitable)
       return false;
-    
+
     DEBUG(dbgs() << "SINK: Splitting edge\n");
     // We have a conditional edge and we're going to sink some instructions.
     // Insert a new block postdominating all blocks we're going to sink from.
@@ -1785,7 +1801,7 @@ static bool SinkThenElseCodeToEnd(BranchInst *BI1) {
       return false;
     Changed = true;
   }
-  
+
   // Now that we've analyzed all potential sinking candidates, perform the
   // actual sink. We iteratively sink the last non-terminator of the source
   // blocks into their common successor unless doing so would require too
@@ -1811,7 +1827,7 @@ static bool SinkThenElseCodeToEnd(BranchInst *BI1) {
       DEBUG(dbgs() << "SINK: stopping here, too many PHIs would be created!\n");
       break;
     }
-    
+
     if (!sinkLastInstruction(UnconditionalPreds))
       return Changed;
     NumSinkCommons++;
@@ -2063,6 +2079,9 @@ static bool SpeculativelyExecuteBB(BranchInst *BI, BasicBlock *ThenBB,
     Value *S = Builder.CreateSelect(
         BrCond, TrueV, FalseV, TrueV->getName() + "." + FalseV->getName(), BI);
     SpeculatedStore->setOperand(0, S);
+    SpeculatedStore->setDebugLoc(
+        DILocation::getMergedLocation(
+          BI->getDebugLoc(), SpeculatedStore->getDebugLoc()));
   }
 
   // Metadata can be dependent on the condition we are hoisting above.
@@ -2132,7 +2151,8 @@ static bool BlockIsSimpleEnoughToThreadThrough(BasicBlock *BB) {
 /// If we have a conditional branch on a PHI node value that is defined in the
 /// same block as the branch and if any PHI entries are constants, thread edges
 /// corresponding to that entry to be branches to their ultimate destination.
-static bool FoldCondBranchOnPHI(BranchInst *BI, const DataLayout &DL) {
+static bool FoldCondBranchOnPHI(BranchInst *BI, const DataLayout &DL,
+                                AssumptionCache *AC) {
   BasicBlock *BB = BI->getParent();
   PHINode *PN = dyn_cast<PHINode>(BI->getCondition());
   // NOTE: we currently cannot transform this case if the PHI node is used
@@ -2224,6 +2244,11 @@ static bool FoldCondBranchOnPHI(BranchInst *BI, const DataLayout &DL) {
       // Insert the new instruction into its new home.
       if (N)
         EdgeBB->getInstList().insert(InsertPt, N);
+
+      // Register the new instruction with the assumption cache if necessary.
+      if (auto *II = dyn_cast_or_null<IntrinsicInst>(N))
+        if (II->getIntrinsicID() == Intrinsic::assume)
+          AC->registerAssumption(II);
     }
 
     // Loop over all of the edges from PredBB to BB, changing them to branch
@@ -2236,7 +2261,7 @@ static bool FoldCondBranchOnPHI(BranchInst *BI, const DataLayout &DL) {
       }
 
     // Recurse, simplifying any other constants.
-    return FoldCondBranchOnPHI(BI, DL) | true;
+    return FoldCondBranchOnPHI(BI, DL, AC) | true;
   }
 
   return false;
@@ -5818,7 +5843,7 @@ bool SimplifyCFGOpt::SimplifyCondBranch(BranchInst *BI, IRBuilder<> &Builder) {
   // through this block if any PHI node entries are constants.
   if (PHINode *PN = dyn_cast<PHINode>(BI->getCondition()))
     if (PN->getParent() == BI->getParent())
-      if (FoldCondBranchOnPHI(BI, DL))
+      if (FoldCondBranchOnPHI(BI, DL, AC))
         return SimplifyCFG(BB, TTI, BonusInstThreshold, AC) | true;
 
   // Scan predecessor blocks for conditional branches.
@@ -5915,34 +5940,33 @@ static bool removeUndefIntroducingPredecessor(BasicBlock *BB) {
   return false;
 }
 
-
 /// If BB immediately syncs and BB's predecessor detaches, serialize
 /// the sync and detach.  This will allow normal serial
 /// optimization passes to remove the blocks appropriately.  Return
 /// false if BB does not terminate with a reattach.
-static bool serializeDetachesToImmediateSync(BasicBlock *BB) {
+static bool serializeDetachToImmediateSync(BasicBlock *BB) {
   Instruction *I = BB->getFirstNonPHIOrDbgOrLifetime();
   if (isa<SyncInst>(I)) {
     // This block is empty
     bool Changed = false;
-    SmallSet<DetachInst *, 16> DetachPreds;
+    SmallSet<DetachInst *, 4> DetachPreds;
     for (BasicBlock *PredBB : predecessors(BB)) {
       if (DetachInst *DI = dyn_cast<DetachInst>(PredBB->getTerminator())) {
         DetachPreds.insert(DI);
       }
       if (ReattachInst *RI = dyn_cast<ReattachInst>(PredBB->getTerminator())) {
         // Replace the reattach with an unconditional branch.
-        IRBuilder<> Builder(RI);
-        Builder.CreateBr(BB);
+        BranchInst *ReplacementBr = BranchInst::Create(BB, RI);
+        ReplacementBr->setDebugLoc(RI->getDebugLoc());
         RI->eraseFromParent();
         Changed = true;
       }
     }
     for (DetachInst *DI : DetachPreds) {
-      BasicBlock *Detached = DI->getSuccessor(0);
+      BasicBlock *Detached = DI->getDetached();
       BB->removePredecessor(DI->getParent());
-      IRBuilder<> Builder(DI);
-      Builder.CreateBr(Detached);
+      BranchInst *ReplacementBr = BranchInst::Create(Detached, DI);
+      ReplacementBr->setDebugLoc(DI->getDebugLoc());
       DI->eraseFromParent();
       Changed = true;
     }
@@ -5968,22 +5992,49 @@ static bool serializeTrivialDetachedBlock(BasicBlock *BB) {
     // All predecessors detach BB, so we can serialize
     for (BasicBlock *PredBB : predecessors(BB)) {
       DetachInst *DI = dyn_cast<DetachInst>(PredBB->getTerminator());
-      BasicBlock *Detached = DI->getSuccessor(0);
-      BasicBlock *Continue = DI->getSuccessor(1);
+      BasicBlock *Detached = DI->getDetached();
+      BasicBlock *Continue = DI->getContinue();
       assert(RI->getSuccessor(0) == Continue &&
              "Reattach destination does not match continue block of associated detach.");
       // Remove the predecessor through the detach from the continue
       // block.
       Continue->removePredecessor(PredBB);
       // Serialize the detach: replace it with an unconditional branch.
-      IRBuilder<> Builder(DI);
-      Builder.CreateBr(Detached);
+      BranchInst *ReplacementBr = BranchInst::Create(Detached, DI);
+      ReplacementBr->setDebugLoc(DI->getDebugLoc());
       DI->eraseFromParent();
     }
     // Serialize the reattach: replace it with an unconditional branch.
-    IRBuilder<> Builder(RI);
-    Builder.CreateBr(RI->getSuccessor(0));
+    BranchInst *ReplacementBr = BranchInst::Create(RI->getSuccessor(0), RI);
+    ReplacementBr->setDebugLoc(RI->getDebugLoc());
     RI->eraseFromParent();
+    return true;
+  }
+  return false;
+}
+
+/// If BB detaches an CFG that cannot reach the continuation, serialize the
+/// detach.  Assuming the CFG is valid, this scenario arises when the detached
+/// CFG is terminated by unreachable instructions.
+static bool serializeDetachOfUnreachable(BasicBlock *BB) {
+  // This method assumes that the detached CFG is valid.
+  Instruction *I = BB->getTerminator();
+  if (DetachInst *DI = dyn_cast<DetachInst>(I)) {
+    // Check if continuation of the detach is not reached by reattach
+    // instructions.  If the detached CFG is valid, then the detached CFG must
+    // be terminated by unreachable instructions.
+    BasicBlock *Continue = DI->getContinue();
+    for (BasicBlock *PredBB : predecessors(Continue))
+      if (isa<ReattachInst>(PredBB->getTerminator()))
+        return false;
+    // TODO: Add stronger checks to make sure the detached CFG is valid.
+    // Remove the predecessor through the detach from the continue
+    // block.
+    Continue->removePredecessor(BB);
+    // Replace the detach with a branch to the detached block.
+    BranchInst *ReplacementBr = BranchInst::Create(DI->getDetached(), DI);
+    ReplacementBr->setDebugLoc(DI->getDebugLoc());
+    DI->eraseFromParent();
     return true;
   }
   return false;
@@ -6016,7 +6067,8 @@ bool SimplifyCFGOpt::run(BasicBlock *BB) {
 
   // Check for and remove trivial detached blocks.
   Changed |= serializeTrivialDetachedBlock(BB);
-  Changed |= serializeDetachesToImmediateSync(BB);
+  Changed |= serializeDetachToImmediateSync(BB);
+  Changed |= serializeDetachOfUnreachable(BB);
 
   // Merge basic blocks into their predecessor if there is only one distinct
   // pred, and if there is only one distinct successor of the predecessor, and

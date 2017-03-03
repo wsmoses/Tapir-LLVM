@@ -93,9 +93,10 @@ void AMDGPUTargetAsmStreamer::EmitAMDGPUHsaProgramScopeGlobal(
   OS << "\t.amdgpu_hsa_program_global " << GlobalName << '\n';
 }
 
-void AMDGPUTargetAsmStreamer::EmitRuntimeMetadata(Module &M) {
+void AMDGPUTargetAsmStreamer::EmitRuntimeMetadata(const FeatureBitset &Features,
+                                                  const Module &M) {
   OS << "\t.amdgpu_runtime_metadata\n";
-  OS << getRuntimeMDYAMLString(M);
+  OS << getRuntimeMDYAMLString(Features, M);
   OS << "\n\t.end_amdgpu_runtime_metadata\n";
 }
 
@@ -116,10 +117,9 @@ MCELFStreamer &AMDGPUTargetELFStreamer::getStreamer() {
   return static_cast<MCELFStreamer &>(Streamer);
 }
 
-void
-AMDGPUTargetELFStreamer::EmitAMDGPUNote(const MCExpr* DescSZ,
-                                        PT_NOTE::NoteType Type,
-                              std::function<void(MCELFStreamer &)> EmitDesc) {
+void AMDGPUTargetELFStreamer::EmitAMDGPUNote(
+    const MCExpr *DescSZ, PT_NOTE::NoteType Type,
+    function_ref<void(MCELFStreamer &)> EmitDesc) {
   auto &S = getStreamer();
   auto &Context = S.getContext();
 
@@ -160,7 +160,7 @@ AMDGPUTargetELFStreamer::EmitDirectiveHSACodeObjectISA(uint32_t Major,
                                                        StringRef ArchName) {
   uint16_t VendorNameSize = VendorName.size() + 1;
   uint16_t ArchNameSize = ArchName.size() + 1;
-  
+
   unsigned DescSZ = sizeof(VendorNameSize) + sizeof(ArchNameSize) +
     sizeof(Major) + sizeof(Minor) + sizeof(Stepping) +
     VendorNameSize + ArchNameSize;
@@ -237,6 +237,7 @@ void AMDGPUTargetELFStreamer::EmitRuntimeMetadata(StringRef Metadata) {
   );
 }
 
-void AMDGPUTargetELFStreamer::EmitRuntimeMetadata(Module &M) {
-  EmitRuntimeMetadata(getRuntimeMDYAMLString(M));
+void AMDGPUTargetELFStreamer::EmitRuntimeMetadata(const FeatureBitset &Features,
+                                                  const Module &M) {
+  EmitRuntimeMetadata(getRuntimeMDYAMLString(Features, M));
 }

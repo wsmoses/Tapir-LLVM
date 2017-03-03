@@ -193,8 +193,8 @@ Function *llvm::CreateHelper(const SetVector<Value *> &Inputs,
     NewFunc->setOnlyAccessesArgMemory();
   }
 
-  // // Inherit the calling convention from the parent.
-  // NewFunc->setCallingConv(OldFunc->getCallingConv());
+  // Inherit the calling convention from the parent.
+  NewFunc->setCallingConv(OldFunc->getCallingConv());
 
   // The new function needs a root node because other nodes can branch to the
   // head of the region, but the entry node of a function cannot have preds.

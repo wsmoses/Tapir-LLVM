@@ -658,9 +658,9 @@ define <16 x i32> @test13(<16 x float>%a, <16 x float>%b)
 define <16 x i32> @test14(<16 x i32>%a, <16 x i32>%b) {
 ; CHECK-LABEL: test14:
 ; CHECK:       ## BB#0:
-; CHECK-NEXT:    vpsubd	%zmm1, %zmm0, %zmm2
+; CHECK-NEXT:    vpsubd %zmm1, %zmm0, %zmm2
 ; CHECK-NEXT:    vpcmpgtd %zmm0, %zmm2, %k1
-; CHECK-NEXT:    vpsubd	%zmm1, %zmm0, %zmm0 {%k1} {z}
+; CHECK-NEXT:    vpsubd %zmm1, %zmm0, %zmm0 {%k1} {z}
 ; CHECK-NEXT:    retq
   %sub_r = sub <16 x i32> %a, %b
   %cmp.i2.i = icmp sgt <16 x i32> %sub_r, %a
@@ -673,9 +673,9 @@ define <16 x i32> @test14(<16 x i32>%a, <16 x i32>%b) {
 define <8 x i64> @test15(<8 x i64>%a, <8 x i64>%b) {
 ; CHECK-LABEL: test15:
 ; CHECK:       ## BB#0:
-; CHECK-NEXT:    vpsubq	%zmm1, %zmm0, %zmm2
+; CHECK-NEXT:    vpsubq %zmm1, %zmm0, %zmm2
 ; CHECK-NEXT:    vpcmpgtq %zmm0, %zmm2, %k1
-; CHECK-NEXT:    vpsubq	%zmm1, %zmm0, %zmm0 {%k1} {z}
+; CHECK-NEXT:    vpsubq %zmm1, %zmm0, %zmm0 {%k1} {z}
 ; CHECK-NEXT:    retq
   %sub_r = sub <8 x i64> %a, %b
   %cmp.i2.i = icmp sgt <8 x i64> %sub_r, %a
@@ -858,8 +858,7 @@ define <8 x i32>@test28(<8 x i64> %x, <8 x i64> %y, <8 x i64> %x1, <8 x i64> %y1
 ; KNL-NEXT:    vpcmpgtq %zmm1, %zmm0, %k0
 ; KNL-NEXT:    vpcmpgtq %zmm3, %zmm2, %k1
 ; KNL-NEXT:    kxnorw %k1, %k0, %k1
-; KNL-NEXT:    vpternlogd $255, %zmm0, %zmm0, %zmm0
-; KNL-NEXT:    vmovdqa64 %zmm0, %zmm0 {%k1} {z}
+; KNL-NEXT:    vpternlogq $255, %zmm0, %zmm0, %zmm0 {%k1} {z}
 ; KNL-NEXT:    vpmovqd %zmm0, %ymm0
 ; KNL-NEXT:    retq
 ;
@@ -883,8 +882,7 @@ define <16 x i8>@test29(<16 x i32> %x, <16 x i32> %y, <16 x i32> %x1, <16 x i32>
 ; KNL-NEXT:    vpcmpgtd %zmm1, %zmm0, %k0
 ; KNL-NEXT:    vpcmpgtd %zmm3, %zmm2, %k1
 ; KNL-NEXT:    kxorw %k1, %k0, %k1
-; KNL-NEXT:    vpternlogd $255, %zmm0, %zmm0, %zmm0
-; KNL-NEXT:    vmovdqa32 %zmm0, %zmm0 {%k1} {z}
+; KNL-NEXT:    vpternlogd $255, %zmm0, %zmm0, %zmm0 {%k1} {z}
 ; KNL-NEXT:    vpmovdb %zmm0, %xmm0
 ; KNL-NEXT:    retq
 ;
@@ -1228,11 +1226,7 @@ define <2 x i64> @test46(<2 x float> %x, <2 x float> %y) #0 {
 ; KNL-LABEL: test46:
 ; KNL:       ## BB#0:
 ; KNL-NEXT:    vcmpeqps %xmm1, %xmm0, %xmm0
-; KNL-NEXT:    vpmovzxdq {{.*#+}} xmm0 = xmm0[0],zero,xmm0[1],zero
-; KNL-NEXT:    vpsllq $32, %xmm0, %xmm0
-; KNL-NEXT:    vpsrad $31, %xmm0, %xmm1
-; KNL-NEXT:    vpshufd {{.*#+}} xmm0 = xmm0[1,1,3,3]
-; KNL-NEXT:    vpblendd {{.*#+}} xmm0 = xmm0[0],xmm1[1],xmm0[2],xmm1[3]
+; KNL-NEXT:    vpmovsxdq %xmm0, %xmm0
 ; KNL-NEXT:    vpand {{.*}}(%rip), %xmm0, %xmm0
 ; KNL-NEXT:    retq
 ;

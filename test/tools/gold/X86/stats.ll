@@ -2,6 +2,14 @@
 
 ; RUN: llvm-as %s -o %t.o
 ; RUN: %gold -plugin %llvmshlibdir/LLVMgold.so  -shared \
+; RUN:    -m elf_x86_64 \
+; RUN:    -plugin-opt=-stats %t.o -o %t2 2>&1 | FileCheck %s
+
+; RUN: llvm-as %s -o %t.o
+; RUN: %gold -plugin %llvmshlibdir/LLVMgold.so  -shared \
+; RUN:    -m elf_x86_64 \
+; RUN:    -plugin-opt=thinlto \
+; RUN:    -plugin-opt=thinlto-index-only \
 ; RUN:    -plugin-opt=-stats %t.o -o %t2 2>&1 | FileCheck %s
 
 ; CHECK: Statistics Collected

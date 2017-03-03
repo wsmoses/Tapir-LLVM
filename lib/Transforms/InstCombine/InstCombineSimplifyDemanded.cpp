@@ -30,18 +30,20 @@ static bool ShrinkDemandedConstant(Instruction *I, unsigned OpNo,
   assert(I && "No instruction?");
   assert(OpNo < I->getNumOperands() && "Operand index too large");
 
-  // If the operand is not a constant integer, nothing to do.
-  ConstantInt *OpC = dyn_cast<ConstantInt>(I->getOperand(OpNo));
-  if (!OpC) return false;
+  // The operand must be a constant integer or splat integer.
+  Value *Op = I->getOperand(OpNo);
+  const APInt *C;
+  if (!match(Op, m_APInt(C)))
+    return false;
 
   // If there are no bits set that aren't demanded, nothing to do.
-  Demanded = Demanded.zextOrTrunc(OpC->getValue().getBitWidth());
-  if ((~Demanded & OpC->getValue()) == 0)
+  Demanded = Demanded.zextOrTrunc(C->getBitWidth());
+  if ((~Demanded & *C) == 0)
     return false;
 
   // This instruction is producing bits that are not demanded. Shrink the RHS.
-  Demanded &= OpC->getValue();
-  I->setOperand(OpNo, ConstantInt::get(OpC->getType(), Demanded));
+  Demanded &= *C;
+  I->setOperand(OpNo, ConstantInt::get(Op->getType(), Demanded));
 
   return true;
 }
@@ -114,9 +116,10 @@ Value *InstCombiner::SimplifyDemandedUseBits(Value *V, APInt DemandedMask,
       KnownOne.getBitWidth() == BitWidth &&
       "Value *V, DemandedMask, KnownZero and KnownOne "
       "must have same BitWidth");
-  if (ConstantInt *CI = dyn_cast<ConstantInt>(V)) {
-    // We know all of the bits for a constant!
-    KnownOne = CI->getValue() & DemandedMask;
+  const APInt *C;
+  if (match(V, m_APInt(C))) {
+    // We know all of the bits for a scalar constant or a splat vector constant!
+    KnownOne = *C & DemandedMask;
     KnownZero = ~KnownOne & DemandedMask;
     return nullptr;
   }
@@ -1469,6 +1472,84 @@ Value *InstCombiner::SimplifyDemandedVectorElts(Value *V, APInt DemandedElts,
                                         Depth + 1);
       if (TmpV) { II->setArgOperand(1, TmpV); MadeChange = true; }
 
+      break;
+    }
+
+    case Intrinsic::x86_sse2_packssdw_128:
+    case Intrinsic::x86_sse2_packsswb_128:
+    case Intrinsic::x86_sse2_packuswb_128:
+    case Intrinsic::x86_sse41_packusdw:
+    case Intrinsic::x86_avx2_packssdw:
+    case Intrinsic::x86_avx2_packsswb:
+    case Intrinsic::x86_avx2_packusdw:
+    case Intrinsic::x86_avx2_packuswb:
+    case Intrinsic::x86_avx512_packssdw_512:
+    case Intrinsic::x86_avx512_packsswb_512:
+    case Intrinsic::x86_avx512_packusdw_512:
+    case Intrinsic::x86_avx512_packuswb_512: {
+      auto *Ty0 = II->getArgOperand(0)->getType();
+      unsigned InnerVWidth = Ty0->getVectorNumElements();
+      assert(VWidth == (InnerVWidth * 2) && "Unexpected input size");
+
+      unsigned NumLanes = Ty0->getPrimitiveSizeInBits() / 128;
+      unsigned VWidthPerLane = VWidth / NumLanes;
+      unsigned InnerVWidthPerLane = InnerVWidth / NumLanes;
+
+      // Per lane, pack the elements of the first input and then the second.
+      // e.g.
+      // v8i16 PACK(v4i32 X, v4i32 Y) - (X[0..3],Y[0..3])
+      // v32i8 PACK(v16i16 X, v16i16 Y) - (X[0..7],Y[0..7]),(X[8..15],Y[8..15])
+      for (int OpNum = 0; OpNum != 2; ++OpNum) {
+        APInt OpDemandedElts(InnerVWidth, 0);
+        for (unsigned Lane = 0; Lane != NumLanes; ++Lane) {
+          unsigned LaneIdx = Lane * VWidthPerLane;
+          for (unsigned Elt = 0; Elt != InnerVWidthPerLane; ++Elt) {
+            unsigned Idx = LaneIdx + Elt + InnerVWidthPerLane * OpNum;
+            if (DemandedElts[Idx])
+              OpDemandedElts.setBit((Lane * InnerVWidthPerLane) + Elt);
+          }
+        }
+
+        // Demand elements from the operand.
+        auto *Op = II->getArgOperand(OpNum);
+        APInt OpUndefElts(InnerVWidth, 0);
+        TmpV = SimplifyDemandedVectorElts(Op, OpDemandedElts, OpUndefElts,
+                                          Depth + 1);
+        if (TmpV) {
+          II->setArgOperand(OpNum, TmpV);
+          MadeChange = true;
+        }
+
+        // Pack the operand's UNDEF elements, one lane at a time.
+        OpUndefElts = OpUndefElts.zext(VWidth);
+        for (unsigned Lane = 0; Lane != NumLanes; ++Lane) {
+          APInt LaneElts = OpUndefElts.lshr(InnerVWidthPerLane * Lane);
+          LaneElts = LaneElts.getLoBits(InnerVWidthPerLane);
+          LaneElts = LaneElts.shl(InnerVWidthPerLane * (2 * Lane + OpNum));
+          UndefElts |= LaneElts;
+        }
+      }
+      break;
+    }
+
+    // PSHUFB
+    case Intrinsic::x86_ssse3_pshuf_b_128:
+    case Intrinsic::x86_avx2_pshuf_b:
+    case Intrinsic::x86_avx512_pshuf_b_512:
+    // PERMILVAR
+    case Intrinsic::x86_avx_vpermilvar_ps:
+    case Intrinsic::x86_avx_vpermilvar_ps_256:
+    case Intrinsic::x86_avx512_vpermilvar_ps_512:
+    case Intrinsic::x86_avx_vpermilvar_pd:
+    case Intrinsic::x86_avx_vpermilvar_pd_256:
+    case Intrinsic::x86_avx512_vpermilvar_pd_512:
+    // PERMV
+    case Intrinsic::x86_avx2_permd:
+    case Intrinsic::x86_avx2_permps: {
+      Value *Op1 = II->getArgOperand(1);
+      TmpV = SimplifyDemandedVectorElts(Op1, DemandedElts, UndefElts,
+                                        Depth + 1);
+      if (TmpV) { II->setArgOperand(1, TmpV); MadeChange = true; }
       break;
     }
 

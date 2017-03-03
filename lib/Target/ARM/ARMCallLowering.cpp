@@ -17,7 +17,9 @@
 
 #include "ARMBaseInstrInfo.h"
 #include "ARMISelLowering.h"
+#include "ARMSubtarget.h"
 
+#include "llvm/CodeGen/Analysis.h"
 #include "llvm/CodeGen/GlobalISel/MachineIRBuilder.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
 
@@ -30,21 +32,26 @@ using namespace llvm;
 ARMCallLowering::ARMCallLowering(const ARMTargetLowering &TLI)
     : CallLowering(&TLI) {}
 
-static bool isSupportedType(const DataLayout DL, const ARMTargetLowering &TLI,
+static bool isSupportedType(const DataLayout &DL, const ARMTargetLowering &TLI,
                             Type *T) {
-  EVT VT = TLI.getValueType(DL, T);
-  if (!VT.isSimple() || !VT.isInteger() || VT.isVector())
+  EVT VT = TLI.getValueType(DL, T, true);
+  if (!VT.isSimple() || VT.isVector())
     return false;
 
   unsigned VTSize = VT.getSimpleVT().getSizeInBits();
-  return VTSize == 8 || VTSize == 16 || VTSize == 32;
+
+  if (VTSize == 64)
+    // FIXME: Support i64 too
+    return VT.isFloatingPoint();
+
+  return VTSize == 1 || VTSize == 8 || VTSize == 16 || VTSize == 32;
 }
 
 namespace {
 struct FuncReturnHandler : public CallLowering::ValueHandler {
   FuncReturnHandler(MachineIRBuilder &MIRBuilder, MachineRegisterInfo &MRI,
-                    MachineInstrBuilder &MIB)
-      : ValueHandler(MIRBuilder, MRI), MIB(MIB) {}
+                    MachineInstrBuilder &MIB, CCAssignFn *AssignFn)
+    : ValueHandler(MIRBuilder, MRI, AssignFn), MIB(MIB) {}
 
   unsigned getStackAddress(uint64_t Size, int64_t Offset,
                            MachinePointerInfo &MPO) override {
@@ -56,14 +63,11 @@ struct FuncReturnHandler : public CallLowering::ValueHandler {
     assert(VA.isRegLoc() && "Value shouldn't be assigned to reg");
     assert(VA.getLocReg() == PhysReg && "Assigning to the wrong reg?");
 
-    assert(VA.getValVT().getSizeInBits() <= 32 && "Unsupported value size");
-    assert(VA.getLocVT().getSizeInBits() == 32 && "Unsupported location size");
+    assert(VA.getValVT().getSizeInBits() <= 64 && "Unsupported value size");
+    assert(VA.getLocVT().getSizeInBits() <= 64 && "Unsupported location size");
 
-    assert(VA.getLocInfo() != CCValAssign::SExt &&
-           VA.getLocInfo() != CCValAssign::ZExt &&
-           "ABI extensions not supported yet");
-
-    MIRBuilder.buildCopy(PhysReg, ValVReg);
+    unsigned ExtReg = extendRegister(ValVReg, VA);
+    MIRBuilder.buildCopy(PhysReg, ExtReg);
     MIB.addUse(PhysReg, RegState::Implicit);
   }
 
@@ -72,9 +76,59 @@ struct FuncReturnHandler : public CallLowering::ValueHandler {
     llvm_unreachable("Don't know how to assign a value to an address yet");
   }
 
+  unsigned assignCustomValue(const CallLowering::ArgInfo &Arg,
+                             ArrayRef<CCValAssign> VAs) override {
+    CCValAssign VA = VAs[0];
+    assert(VA.needsCustom() && "Value doesn't need custom handling");
+    assert(VA.getValVT() == MVT::f64 && "Unsupported type");
+
+    CCValAssign NextVA = VAs[1];
+    assert(NextVA.needsCustom() && "Value doesn't need custom handling");
+    assert(NextVA.getValVT() == MVT::f64 && "Unsupported type");
+
+    assert(VA.getValNo() == NextVA.getValNo() &&
+           "Values belong to different arguments");
+
+    assert(VA.isRegLoc() && "Value should be in reg");
+    assert(NextVA.isRegLoc() && "Value should be in reg");
+
+    unsigned NewRegs[] = {MRI.createGenericVirtualRegister(LLT::scalar(32)),
+                          MRI.createGenericVirtualRegister(LLT::scalar(32))};
+
+    MIRBuilder.buildExtract(NewRegs, {0, 32}, Arg.Reg);
+
+    bool IsLittle = MIRBuilder.getMF().getSubtarget<ARMSubtarget>().isLittle();
+    if (!IsLittle)
+      std::swap(NewRegs[0], NewRegs[1]);
+
+    assignValueToReg(NewRegs[0], VA.getLocReg(), VA);
+    assignValueToReg(NewRegs[1], NextVA.getLocReg(), NextVA);
+
+    return 1;
+  }
+
   MachineInstrBuilder &MIB;
 };
 } // End anonymous namespace.
+
+void ARMCallLowering::splitToValueTypes(const ArgInfo &OrigArg,
+                                        SmallVectorImpl<ArgInfo> &SplitArgs,
+                                        const DataLayout &DL,
+                                        MachineRegisterInfo &MRI) const {
+  const ARMTargetLowering &TLI = *getTLI<ARMTargetLowering>();
+  LLVMContext &Ctx = OrigArg.Ty->getContext();
+
+  SmallVector<EVT, 4> SplitVTs;
+  SmallVector<uint64_t, 4> Offsets;
+  ComputeValueVTs(TLI, DL, OrigArg.Ty, SplitVTs, &Offsets, 0);
+
+  assert(SplitVTs.size() == 1 && "Unsupported type");
+
+  // Even if there is no splitting to do, we still want to replace the original
+  // type (e.g. pointer type -> integer).
+  SplitArgs.emplace_back(OrigArg.Reg, SplitVTs[0].getTypeForEVT(Ctx),
+                         OrigArg.Flags, OrigArg.IsFixed);
+}
 
 /// Lower the return value for the already existing \p Ret. This assumes that
 /// \p MIRBuilder's insertion point is correct.
@@ -93,21 +147,23 @@ bool ARMCallLowering::lowerReturnVal(MachineIRBuilder &MIRBuilder,
   if (!isSupportedType(DL, TLI, Val->getType()))
     return false;
 
+  SmallVector<ArgInfo, 4> SplitVTs;
+  ArgInfo RetInfo(VReg, Val->getType());
+  setArgFlags(RetInfo, AttributeSet::ReturnIndex, DL, F);
+  splitToValueTypes(RetInfo, SplitVTs, DL, MF.getRegInfo());
+
   CCAssignFn *AssignFn =
       TLI.CCAssignFnForReturn(F.getCallingConv(), F.isVarArg());
 
-  ArgInfo RetInfo(VReg, Val->getType());
-  setArgFlags(RetInfo, AttributeSet::ReturnIndex, DL, F);
-
-  FuncReturnHandler RetHandler(MIRBuilder, MF.getRegInfo(), Ret);
-  return handleAssignments(MIRBuilder, AssignFn, RetInfo, RetHandler);
+  FuncReturnHandler RetHandler(MIRBuilder, MF.getRegInfo(), Ret, AssignFn);
+  return handleAssignments(MIRBuilder, SplitVTs, RetHandler);
 }
 
 bool ARMCallLowering::lowerReturn(MachineIRBuilder &MIRBuilder,
                                   const Value *Val, unsigned VReg) const {
   assert(!Val == !VReg && "Return value without a vreg");
 
-  auto Ret = AddDefaultPred(MIRBuilder.buildInstrNoInsert(ARM::BX_RET));
+  auto Ret = MIRBuilder.buildInstrNoInsert(ARM::BX_RET).add(predOps(ARMCC::AL));
 
   if (!lowerReturnVal(MIRBuilder, Val, VReg, Ret))
     return false;
@@ -118,12 +174,14 @@ bool ARMCallLowering::lowerReturn(MachineIRBuilder &MIRBuilder,
 
 namespace {
 struct FormalArgHandler : public CallLowering::ValueHandler {
-  FormalArgHandler(MachineIRBuilder &MIRBuilder, MachineRegisterInfo &MRI)
-      : ValueHandler(MIRBuilder, MRI) {}
+  FormalArgHandler(MachineIRBuilder &MIRBuilder, MachineRegisterInfo &MRI,
+                   CCAssignFn AssignFn)
+      : ValueHandler(MIRBuilder, MRI, AssignFn) {}
 
   unsigned getStackAddress(uint64_t Size, int64_t Offset,
                            MachinePointerInfo &MPO) override {
-    assert(Size == 4 && "Unsupported size");
+    assert((Size == 1 || Size == 2 || Size == 4 || Size == 8) &&
+           "Unsupported size");
 
     auto &MFI = MIRBuilder.getMF().getFrameInfo();
 
@@ -139,7 +197,17 @@ struct FormalArgHandler : public CallLowering::ValueHandler {
 
   void assignValueToAddress(unsigned ValVReg, unsigned Addr, uint64_t Size,
                             MachinePointerInfo &MPO, CCValAssign &VA) override {
-    assert(Size == 4 && "Unsupported size");
+    assert((Size == 1 || Size == 2 || Size == 4 || Size == 8) &&
+           "Unsupported size");
+
+    if (VA.getLocInfo() == CCValAssign::SExt ||
+        VA.getLocInfo() == CCValAssign::ZExt) {
+      // If the argument is zero- or sign-extended by the caller, its size
+      // becomes 4 bytes, so that's what we should load.
+      Size = 4;
+      assert(MRI.getType(ValVReg).isScalar() && "Only scalars supported atm");
+      MRI.setType(ValVReg, LLT::scalar(32));
+    }
 
     auto MMO = MIRBuilder.getMF().getMachineMemOperand(
         MPO, MachineMemOperand::MOLoad, Size, /* Alignment */ 0);
@@ -151,11 +219,43 @@ struct FormalArgHandler : public CallLowering::ValueHandler {
     assert(VA.isRegLoc() && "Value shouldn't be assigned to reg");
     assert(VA.getLocReg() == PhysReg && "Assigning to the wrong reg?");
 
-    assert(VA.getValVT().getSizeInBits() <= 32 && "Unsupported value size");
-    assert(VA.getLocVT().getSizeInBits() == 32 && "Unsupported location size");
+    assert(VA.getValVT().getSizeInBits() <= 64 && "Unsupported value size");
+    assert(VA.getLocVT().getSizeInBits() <= 64 && "Unsupported location size");
 
+    // The caller should handle all necesary extensions.
     MIRBuilder.getMBB().addLiveIn(PhysReg);
     MIRBuilder.buildCopy(ValVReg, PhysReg);
+  }
+
+  unsigned assignCustomValue(const llvm::ARMCallLowering::ArgInfo &Arg,
+                             ArrayRef<CCValAssign> VAs) override {
+    CCValAssign VA = VAs[0];
+    assert(VA.needsCustom() && "Value doesn't need custom handling");
+    assert(VA.getValVT() == MVT::f64 && "Unsupported type");
+
+    CCValAssign NextVA = VAs[1];
+    assert(NextVA.needsCustom() && "Value doesn't need custom handling");
+    assert(NextVA.getValVT() == MVT::f64 && "Unsupported type");
+
+    assert(VA.getValNo() == NextVA.getValNo() &&
+           "Values belong to different arguments");
+
+    assert(VA.isRegLoc() && "Value should be in reg");
+    assert(NextVA.isRegLoc() && "Value should be in reg");
+
+    unsigned NewRegs[] = {MRI.createGenericVirtualRegister(LLT::scalar(32)),
+                          MRI.createGenericVirtualRegister(LLT::scalar(32))};
+
+    assignValueToReg(NewRegs[0], VA.getLocReg(), VA);
+    assignValueToReg(NewRegs[1], NextVA.getLocReg(), NextVA);
+
+    bool IsLittle = MIRBuilder.getMF().getSubtarget<ARMSubtarget>().isLittle();
+    if (!IsLittle)
+      std::swap(NewRegs[0], NewRegs[1]);
+
+    MIRBuilder.buildSequence(Arg.Reg, NewRegs, {0, 32});
+
+    return 1;
   }
 };
 } // End anonymous namespace
@@ -170,21 +270,23 @@ bool ARMCallLowering::lowerFormalArguments(MachineIRBuilder &MIRBuilder,
   if (F.isVarArg())
     return false;
 
-  auto DL = MIRBuilder.getMF().getDataLayout();
+  auto &MF = MIRBuilder.getMF();
+  auto DL = MF.getDataLayout();
   auto &TLI = *getTLI<ARMTargetLowering>();
 
+  auto Subtarget = TLI.getSubtarget();
+
+  if (Subtarget->isThumb())
+    return false;
+
+  // FIXME: Support soft float (when we're ready to generate libcalls)
+  if (Subtarget->useSoftFloat() || !Subtarget->hasVFP2())
+    return false;
+
   auto &Args = F.getArgumentList();
-  unsigned ArgIdx = 0;
-  for (auto &Arg : Args) {
-    ArgIdx++;
+  for (auto &Arg : Args)
     if (!isSupportedType(DL, TLI, Arg.getType()))
       return false;
-
-    // FIXME: This check as well as ArgIdx are going away as soon as we support
-    // loading values < 32 bits.
-    if (ArgIdx > 4 && Arg.getType()->getIntegerBitWidth() != 32)
-      return false;
-  }
 
   CCAssignFn *AssignFn =
       TLI.CCAssignFnForCall(F.getCallingConv(), F.isVarArg());
@@ -194,10 +296,46 @@ bool ARMCallLowering::lowerFormalArguments(MachineIRBuilder &MIRBuilder,
   for (auto &Arg : Args) {
     ArgInfo AInfo(VRegs[Idx], Arg.getType());
     setArgFlags(AInfo, Idx + 1, DL, F);
-    ArgInfos.push_back(AInfo);
+    splitToValueTypes(AInfo, ArgInfos, DL, MF.getRegInfo());
     Idx++;
   }
 
-  FormalArgHandler ArgHandler(MIRBuilder, MIRBuilder.getMF().getRegInfo());
-  return handleAssignments(MIRBuilder, AssignFn, ArgInfos, ArgHandler);
+  FormalArgHandler ArgHandler(MIRBuilder, MIRBuilder.getMF().getRegInfo(),
+                              AssignFn);
+  return handleAssignments(MIRBuilder, ArgInfos, ArgHandler);
+}
+
+bool ARMCallLowering::lowerCall(MachineIRBuilder &MIRBuilder,
+                                const MachineOperand &Callee,
+                                const ArgInfo &OrigRet,
+                                ArrayRef<ArgInfo> OrigArgs) const {
+  const MachineFunction &MF = MIRBuilder.getMF();
+  const TargetRegisterInfo *TRI = MF.getSubtarget().getRegisterInfo();
+
+  if (MF.getSubtarget<ARMSubtarget>().genLongCalls())
+    return false;
+
+  // FIXME: Support calling functions with arguments.
+  if (OrigArgs.size() > 0)
+    return false;
+
+  // FIXME: Support calling functions with return types.
+  if (!OrigRet.Ty->isVoidTy())
+    return false;
+
+  MIRBuilder.buildInstr(ARM::ADJCALLSTACKDOWN)
+      .addImm(0)
+      .add(predOps(ARMCC::AL));
+
+  MIRBuilder.buildInstr(ARM::BLX)
+      .add(Callee)
+      // FIXME: Don't hardcode the calling conv here...
+      .addRegMask(TRI->getCallPreservedMask(MF, CallingConv::ARM_AAPCS));
+
+  MIRBuilder.buildInstr(ARM::ADJCALLSTACKUP)
+      .addImm(0)
+      .addImm(0)
+      .add(predOps(ARMCC::AL));
+
+  return true;
 }

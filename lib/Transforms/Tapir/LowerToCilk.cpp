@@ -84,7 +84,7 @@ static inline void inlineCilkFunctions(Function &F) {
   }
 
   if (verifyFunction(F, &errs())) {
-    F.dump();
+    DEBUG(F.dump());
     assert(0);
   }
 }
@@ -115,7 +115,7 @@ SmallVectorImpl<Function *>
   }
 
   if (verifyFunction(F, &errs())) {
-    F.dump();
+    DEBUG(F.dump());
     assert(0);
   }
 
@@ -157,6 +157,7 @@ bool LowerTapirToCilk::runOnModule(Module &M) {
       for (BasicBlock &BB : *Helper)
         if (isa<DetachInst>(BB.getTerminator()))
           WorkList.push_back(Helper);
+    delete NewHelpers;
   }
   return Changed;
 }

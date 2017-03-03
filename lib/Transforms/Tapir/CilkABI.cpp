@@ -872,8 +872,8 @@ bool llvm::cilk::verifyDetachedCFG(const DetachInst &detach, bool error) {
     } else if (llvm::isa<UnreachableInst>(term)) {
       continue;
     } else {
-      term->dump();
-      term->getParent()->getParent()->dump();
+      DEBUG(term->dump());
+      DEBUG(term->getParent()->getParent()->dump());
       if (error)
         assert(0 && "Detached block did not absolutely terminate in reattach");
       return false;
@@ -954,8 +954,8 @@ bool llvm::cilk::populateDetachedCFG(const DetachInst &detach, DominatorTree &DT
     } else if (llvm::isa<UnreachableInst>(term)) {
       continue;
     } else {
-      term->dump();
-      term->getParent()->getParent()->dump();
+      DEBUG(term->dump());
+      DEBUG(term->getParent()->getParent()->dump());
       if (error) assert( 0 && "Detached block did not absolutely terminate in reattach");
       return false;
     }
@@ -1025,7 +1025,7 @@ Function* llvm::cilk::extractDetachBodyToFunction(DetachInst& detach, DominatorT
 
   CodeExtractor extractor(ArrayRef<BasicBlock*>(blocks), &DT);
   if (!extractor.isEligible()) {
-    for(auto& a : blocks)a->dump();
+    DEBUG(for(auto& a : blocks) a->dump());
     assert(0 && "Code not able to be extracted!");
   }
 
@@ -1060,6 +1060,7 @@ Function* llvm::cilk::extractDetachBodyToFunction(DetachInst& detach, DominatorT
 
     // Use a fast calling convention for the helper.
     extracted->setCallingConv(CallingConv::Fast);
+    // extracted->setCallingConv(F.getCallingConv());
 
     extracted->addFnAttr(Attribute::NoInline);
   }
@@ -1072,7 +1073,7 @@ Function* llvm::cilk::extractDetachBodyToFunction(DetachInst& detach, DominatorT
     TopCall = Builder.CreateCall(extracted, Inputs.getArrayRef());
     // Use a fast calling convention for the helper.
     TopCall->setCallingConv(CallingConv::Fast);
-    // TopCall->setCallingConv(Helper->getCallingConv());
+    // TopCall->setCallingConv(extracted->getCallingConv());
     TopCall->setDebugLoc(detach.getDebugLoc());
   }
   if (call)

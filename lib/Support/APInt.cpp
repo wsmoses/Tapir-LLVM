@@ -205,7 +205,7 @@ APInt& APInt::operator++() {
 
 /// This function subtracts a single "digit" (64-bit word), y, from
 /// the multi-digit integer array, x[], propagating the borrowed 1 value until
-/// no further borrowing is neeeded or it runs out of "digits" in x.  The result
+/// no further borrowing is needed or it runs out of "digits" in x.  The result
 /// is 1 if "borrowing" exhausted the digits in x, or 0 if x was not exhausted.
 /// In other words, if y > x then this function returns 1, otherwise 0.
 /// @returns the borrow out of the subtraction
@@ -424,6 +424,18 @@ APInt& APInt::operator&=(const APInt& RHS) {
   return *this;
 }
 
+APInt &APInt::operator&=(uint64_t RHS) {
+  if (isSingleWord()) {
+    VAL &= RHS;
+    return *this;
+  }
+  pVal[0] &= RHS;
+  unsigned numWords = getNumWords();
+  for (unsigned i = 1; i < numWords; ++i)
+    pVal[i] = 0;
+  return *this;
+}
+
 APInt& APInt::operator|=(const APInt& RHS) {
   assert(BitWidth == RHS.BitWidth && "Bit widths must be the same");
   if (isSingleWord()) {
@@ -440,13 +452,12 @@ APInt& APInt::operator^=(const APInt& RHS) {
   assert(BitWidth == RHS.BitWidth && "Bit widths must be the same");
   if (isSingleWord()) {
     VAL ^= RHS.VAL;
-    this->clearUnusedBits();
     return *this;
   }
   unsigned numWords = getNumWords();
   for (unsigned i = 0; i < numWords; ++i)
     pVal[i] ^= RHS.pVal[i];
-  return clearUnusedBits();
+  return *this;
 }
 
 APInt APInt::AndSlowCase(const APInt& RHS) const {
@@ -471,10 +482,7 @@ APInt APInt::XorSlowCase(const APInt& RHS) const {
   for (unsigned i = 0; i < numWords; ++i)
     val[i] = pVal[i] ^ RHS.pVal[i];
 
-  APInt Result(val, getBitWidth());
-  // 0^0==1 so clear the high bits in case they got set.
-  Result.clearUnusedBits();
-  return Result;
+  return APInt(val, getBitWidth());
 }
 
 APInt APInt::operator*(const APInt& RHS) const {
@@ -1244,8 +1252,21 @@ APInt APInt::shlSlowCase(unsigned shiftAmt) const {
   return Result;
 }
 
+// Calculate the rotate amount modulo the bit width.
+static unsigned rotateModulo(unsigned BitWidth, const APInt &rotateAmt) {
+  unsigned rotBitWidth = rotateAmt.getBitWidth();
+  APInt rot = rotateAmt;
+  if (rotBitWidth < BitWidth) {
+    // Extend the rotate APInt, so that the urem doesn't divide by 0.
+    // e.g. APInt(1, 32) would give APInt(1, 0).
+    rot = rotateAmt.zext(BitWidth);
+  }
+  rot = rot.urem(APInt(rot.getBitWidth(), BitWidth));
+  return rot.getLimitedValue(BitWidth);
+}
+
 APInt APInt::rotl(const APInt &rotateAmt) const {
-  return rotl((unsigned)rotateAmt.getLimitedValue(BitWidth));
+  return rotl(rotateModulo(BitWidth, rotateAmt));
 }
 
 APInt APInt::rotl(unsigned rotateAmt) const {
@@ -1256,7 +1277,7 @@ APInt APInt::rotl(unsigned rotateAmt) const {
 }
 
 APInt APInt::rotr(const APInt &rotateAmt) const {
-  return rotr((unsigned)rotateAmt.getLimitedValue(BitWidth));
+  return rotr(rotateModulo(BitWidth, rotateAmt));
 }
 
 APInt APInt::rotr(unsigned rotateAmt) const {
@@ -2245,14 +2266,15 @@ std::string APInt::toString(unsigned Radix = 10, bool Signed = true) const {
   return S.str();
 }
 
-
+#if !defined(NDEBUG) || defined(LLVM_ENABLE_DUMP)
 LLVM_DUMP_METHOD void APInt::dump() const {
   SmallString<40> S, U;
   this->toStringUnsigned(U);
   this->toStringSigned(S);
   dbgs() << "APInt(" << BitWidth << "b, "
-         << U << "u " << S << "s)";
+         << U << "u " << S << "s)\n";
 }
+#endif
 
 void APInt::print(raw_ostream &OS, bool isSigned) const {
   SmallString<40> S;

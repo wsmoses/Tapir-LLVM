@@ -13,11 +13,13 @@
 
 #include "CodeViewDebug.h"
 #include "llvm/ADT/TinyPtrVector.h"
+#include "llvm/DebugInfo/CodeView/CVTypeDumper.h"
 #include "llvm/DebugInfo/CodeView/CVTypeVisitor.h"
 #include "llvm/DebugInfo/CodeView/CodeView.h"
 #include "llvm/DebugInfo/CodeView/Line.h"
 #include "llvm/DebugInfo/CodeView/SymbolRecord.h"
-#include "llvm/DebugInfo/CodeView/TypeDumper.h"
+#include "llvm/DebugInfo/CodeView/TypeDatabase.h"
+#include "llvm/DebugInfo/CodeView/TypeDumpVisitor.h"
 #include "llvm/DebugInfo/CodeView/TypeIndex.h"
 #include "llvm/DebugInfo/CodeView/TypeRecord.h"
 #include "llvm/DebugInfo/CodeView/TypeVisitorCallbacks.h"
@@ -467,7 +469,8 @@ void CodeViewDebug::emitTypeInformation() {
     CommentPrefix += ' ';
   }
 
-  CVTypeDumper CVTD(nullptr, /*PrintRecordBytes=*/false);
+  TypeDatabase TypeDB;
+  CVTypeDumper CVTD(TypeDB);
   TypeTable.ForEachRecord([&](TypeIndex Index, ArrayRef<uint8_t> Record) {
     if (OS.isVerboseAsm()) {
       // Emit a block comment describing the type record for readability.
@@ -475,8 +478,8 @@ void CodeViewDebug::emitTypeInformation() {
       raw_svector_ostream CommentOS(CommentBlock);
       ScopedPrinter SP(CommentOS);
       SP.setPrefix(CommentPrefix);
-      CVTD.setPrinter(&SP);
-      Error E = CVTD.dump(Record);
+      TypeDumpVisitor TDV(TypeDB, &SP, false);
+      Error E = CVTD.dump(Record, TDV);
       if (E) {
         logAllUnhandledErrors(std::move(E), errs(), "error: ");
         llvm_unreachable("produced malformed type record");
@@ -801,7 +804,7 @@ void CodeViewDebug::emitDebugInfoForFunction(const Function *GV,
     OS.AddComment("Function type index");
     OS.EmitIntValue(getFuncIdForSubprogram(GV->getSubprogram()).getIndex(), 4);
     OS.AddComment("Function section relative address");
-    OS.EmitCOFFSecRel32(Fn);
+    OS.EmitCOFFSecRel32(Fn, /*Offset=*/0);
     OS.AddComment("Function section index");
     OS.EmitCOFFSectionIndex(Fn);
     OS.AddComment("Flags");
@@ -1011,14 +1014,7 @@ void CodeViewDebug::collectVariableInfo(const DISubprogram *SP) {
   }
 }
 
-void CodeViewDebug::beginFunction(const MachineFunction *MF) {
-  assert(!CurFn && "Can't process two functions at once!");
-
-  if (!Asm || !MMI->hasDebugInfo() || !MF->getFunction()->getSubprogram())
-    return;
-
-  DebugHandlerBase::beginFunction(MF);
-
+void CodeViewDebug::beginFunctionImpl(const MachineFunction *MF) {
   const Function *GV = MF->getFunction();
   assert(FnDebugInfo.count(GV) == false);
   CurFn = &FnDebugInfo[GV];
@@ -2112,17 +2108,12 @@ void CodeViewDebug::emitLocalVariable(const LocalVariable &Var) {
   }
 }
 
-void CodeViewDebug::endFunction(const MachineFunction *MF) {
-  if (!Asm || !CurFn)  // We haven't created any debug info for this function.
-    return;
-
+void CodeViewDebug::endFunctionImpl(const MachineFunction *MF) {
   const Function *GV = MF->getFunction();
   assert(FnDebugInfo.count(GV));
   assert(CurFn == &FnDebugInfo[GV]);
 
   collectVariableInfo(GV->getSubprogram());
-
-  DebugHandlerBase::endFunction(MF);
 
   // Don't emit anything if we don't have any line tables.
   if (!CurFn->HaveLineInfo) {
@@ -2279,7 +2270,7 @@ void CodeViewDebug::emitDebugInfoForGlobal(const DIGlobalVariable *DIGV,
   OS.AddComment("Type");
   OS.EmitIntValue(getCompleteTypeIndex(DIGV->getType()).getIndex(), 4);
   OS.AddComment("DataOffset");
-  OS.EmitCOFFSecRel32(GVSym);
+  OS.EmitCOFFSecRel32(GVSym, /*Offset=*/0);
   OS.AddComment("Segment");
   OS.EmitCOFFSectionIndex(GVSym);
   OS.AddComment("Name");
