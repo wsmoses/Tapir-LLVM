@@ -18,12 +18,19 @@
 namespace llvm {
 class Pass;
 class ModulePass;
+class FunctionPass;
 
 //===----------------------------------------------------------------------===//
 //
 // LoopSpawning - Create a loop spawning pass.
 //
 Pass *createLoopSpawningPass();
+
+//===----------------------------------------------------------------------===//
+//
+// Dougie - Do Dougie's Pass
+//
+FunctionPass *createDougiePass();
 
 //===----------------------------------------------------------------------===//
 //
