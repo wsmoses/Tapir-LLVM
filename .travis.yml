@@ -4,8 +4,12 @@ dist: xerus
 
 addons:
   apt:
+    sources:
+    - george-edison55-precise-backports
     packages:
     - libcilkrts5
+    - cmake
+    - cmake-data
 
 compiler:
   - clang
