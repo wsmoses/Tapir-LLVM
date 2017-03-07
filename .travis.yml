@@ -28,6 +28,7 @@ compiler:
   - gcc
 
 script:
+  - cd tools && git clone https://github.com/wsmoses/Cilk-Clang clang && cd ..
   - mkdir build
   - cd build
   - cmake ..
