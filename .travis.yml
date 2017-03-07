@@ -2,7 +2,8 @@ language: cpp
 
 addons:
   apt:
-    libcilkrts5
+    packages:
+    - libcilkrts5
 
 compiler:
   - clang
