@@ -18,6 +18,8 @@ before_install:
   - cmake .
   - make
   - sudo make install
+  - cd ..
+  - rm -rf cmake-3.7.2
 
 after_success:
   - $CC --version
