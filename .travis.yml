@@ -1,15 +1,24 @@
 language: cpp
 
-dist: xerus
+dist: trusty
+sudo: required
 
 addons:
   apt:
-    sources:
-    - george-edison55-precise-backports
     packages:
-    - libcilkrts5
     - cmake
-    - cmake-data
+    - git
+
+before_install:
+  - git clone https://bitbucket.org/intelcilkruntime/intel-cilk-runtime.git && cd intel-cilk-runtime
+  - libtoolize
+  - aclocal
+  - automake --add-missing
+  - autoconf
+  - make -j
+  - sudo make install -j
+  - cd ..
+  - rm -rf intel-cilk-runtime
 
 compiler:
   - clang
