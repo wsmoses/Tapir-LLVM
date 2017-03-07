@@ -5,6 +5,8 @@ sudo: required
 
 addons:
   apt:
+    sources:
+    - george-edison55-precise-cmake-3.x
     packages:
     - cmake
     - git
