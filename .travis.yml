@@ -31,8 +31,8 @@ after_success:
   - automake --add-missing
   - autoconf
   - ./configure
-  - make
-  - sudo make install
+  - make -j2
+  - sudo make install -j2
   - cd ..
   - rm -rf intel-cilk-runtime
 
@@ -41,8 +41,8 @@ script:
   - mkdir build
   - cd build
   - cmake .. -DLLVM_TARGETS_TO_BUILD=X86 -DLLVM_OPTIMIZE_TABLEGEN=1 -DCMAKE_BUILD_TYPE=$BUILD
-  - make
-  - sudo make install
+  - make -j2 clang
+  - sudo make install -j2 clang
   - cd ..
   - export CC="clang"
   - export CXX="clang++"
