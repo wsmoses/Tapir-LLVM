@@ -12,6 +12,7 @@ addons:
     - tar
 
 before_install:
+  - echo "Starting pre install" && pwd
   - wget https://cmake.org/files/v3.7/cmake-3.7.2.tar.gz
   - tar -xzf cmake-3.7.2.tar.gz
   - cd cmake-3.7.2
@@ -20,6 +21,7 @@ before_install:
   - sudo make install
   - cd ..
   - rm -rf cmake-3.7.2
+  - echo "Ending pre install" && pwd
 
 after_success:
   - $CC --version
@@ -39,12 +41,16 @@ compiler:
   - gcc
 
 script:
+  - echo "Starting script" && pwd
   - cd tools && git clone https://github.com/wsmoses/Cilk-Clang clang && cd ..
+  - echo "Making build" && pwd
   - mkdir build
   - cd build
+  - echo "Starting cmake" && pwd
   - cmake ..
   - make
   - sudo make install
   - cd ..
   - export CC="clang"
   - export CXX="clang++"
+  - echo "Ending script" && pwd
