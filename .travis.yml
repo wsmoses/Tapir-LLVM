@@ -16,8 +16,8 @@ before_install:
   - tar -xzf cmake-3.7.2.tar.gz
   - cd cmake-3.7.2
   - cmake .
-  - make -j
-  - sudo make -j install
+  - make
+  - sudo make install
 
 after_success:
   - $CC --version
@@ -27,8 +27,8 @@ after_success:
   - automake --add-missing
   - autoconf
   - ./configure
-  - make -j
-  - sudo make install -j
+  - make
+  - sudo make install
   - cd ..
   - rm -rf intel-cilk-runtime
 
@@ -41,8 +41,8 @@ script:
   - mkdir build
   - cd build
   - cmake ..
-  - make -j
-  - sudo make -j install
+  - make
+  - sudo make install
   - cd ..
   - export CC="clang"
   - export CXX="clang++"
