@@ -5,12 +5,19 @@ sudo: required
 
 addons:
   apt:
-    sources:
-    - sourceline: 'ppa:george-edison55/cmake-3.x'
     packages:
     - cmake
     - git
     - make
+    - tar
+
+before_install:
+  - wget https://cmake.org/files/v3.7/cmake-3.7.2.tar.gz
+  - tar -xzf cmake-3.7.2.tar.gz
+  - cd cmake-3.7.2
+  - cmake .
+  - make -j
+  - sudo make -j install
 
 after_success:
   - $CC --version
