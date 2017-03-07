@@ -21,8 +21,7 @@ addons:
 
 before_install:
   - wget https://cmake.org/files/v3.7/cmake-3.7.2-Linux-x86_64.tar.gz
-  - tar -zxf cmake-3.7.2-Linux-x86_64.tar.gz
-  - sudo cp -r cmake-3.7.2-Linux-x86_64/* /usr/local/
+  - sudo tar --directory=/usr/local -zxf cmake-3.7.2-Linux-x86_64.tar.gz --strip-components 1
 
 after_success:
   - $CC --version
