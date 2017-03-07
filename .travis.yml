@@ -16,6 +16,7 @@ before_install:
   - aclocal
   - automake --add-missing
   - autoconf
+  - ./configure
   - make -j
   - sudo make install -j
   - cd ..
