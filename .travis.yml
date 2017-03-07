@@ -10,7 +10,8 @@ addons:
     - git
     - make
 
-before_install:
+after_success:
+  - $CC --version
   - git clone https://bitbucket.org/intelcilkruntime/intel-cilk-runtime.git && cd intel-cilk-runtime
   - libtoolize
   - aclocal
@@ -29,4 +30,9 @@ compiler:
 script:
   - mkdir build
   - cd build
-  - cmake .. && make -j
+  - cmake ..
+  - make -j
+  - sudo make -j install
+  - cd ..
+  - export CC="clang"
+  - export CXX="clang++"
