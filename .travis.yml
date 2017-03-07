@@ -8,6 +8,7 @@ addons:
     packages:
     - cmake
     - git
+    - make
 
 before_install:
   - git clone https://bitbucket.org/intelcilkruntime/intel-cilk-runtime.git && cd intel-cilk-runtime
