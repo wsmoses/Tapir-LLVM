@@ -1176,7 +1176,7 @@ bool DACLoopSpawning::processLoop() {
       RemapInstruction(&II, VMap, RF_IgnoreMissingLocals,
                        /*TypeMapper=*/nullptr, /*Materializer=*/nullptr);
   }
-  
+
   // If the loop limit is constant, then rewrite the loop latch
   // condition to use the end-iteration argument.
   if (isa<Constant>(LimitVar)) {
@@ -1826,7 +1826,7 @@ void LoopSpawningImpl::addTapirLoop(Loop *L, SmallVectorImpl<Loop *> &V) {
                                       L->getStartLoc(), L->getHeader())
              << "marked loop is not a valid Tapir loop");
   }
-    
+
   for (Loop *InnerL : *L)
     addTapirLoop(InnerL, V);
 }
