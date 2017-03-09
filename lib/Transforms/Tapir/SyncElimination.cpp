@@ -12,6 +12,7 @@
 #include "llvm/ADT/SmallSet.h"
 
 #include <deque>
+#include <map>
 
 using namespace llvm;
 
@@ -32,10 +33,52 @@ struct SyncElimination : public FunctionPass {
   // We promise.
 
   // Rosetta-finding code
-  // TODO
+
+  void findRosetta(const BasicBlock &BB, BasicBlockSet &OutputSet) {
+    assert(isa<SyncInst>(BB.getTerminator()));
+
+    BasicBlockSet Visited;
+    BasicBlockDeque Frontier;
+    std::map<const BasicBlock *, int> DetachLevel;
+
+    DetachLevel[&BB] = 0;
+    Frontier.push_back(&BB);
+
+    while (!Frontier.empty()) {
+      const BasicBlock *Current = Frontier.front();
+      Frontier.pop_front();
+
+      for (const BasicBlock *Pred: predecessors(Current)) {
+        if (Visited.count(Pred) > 0) {
+          continue;
+        }
+
+        if (isa<SyncInst>(Pred->getTerminator())) {
+          continue;
+        }
+
+        Visited.insert(Pred);
+
+        DetachLevel[Pred] = DetachLevel[Current];
+
+        if (isa<ReattachInst>(Pred->getTerminator())) {
+          DetachLevel[Pred] ++;
+        } else if (isa<DetachInst>(Pred->getTerminator())) {
+          DetachLevel[Pred] --;
+        }
+
+        if (DetachLevel[Pred] > 0) {
+          OutputSet.insert(Pred);
+        }
+
+        if (DetachLevel[Pred] >= 0) {
+          Frontier.push_back(Pred);
+        }
+      }
+    }
+  }
 
   // Vegas-finding code
-  //
   //
   // We run BFS starting from the sync block, following all foward edges, and stop a branch whenever
   // we hit another sync block.
@@ -57,8 +100,8 @@ struct SyncElimination : public FunctionPass {
           continue;
         }
 
-        OutputSet.insert(Succ);
         Visited.insert(Succ);
+        OutputSet.insert(Succ);
 
         // We need to include blocks whose terminator is another sync.
         // Therefore we still insert the block into OutputSet in this case.
@@ -77,7 +120,13 @@ struct SyncElimination : public FunctionPass {
 
     BasicBlockSet RosettaSet, VegasSet;
 
+    findRosetta(BB, RosettaSet);
     findVegas(BB, VegasSet);
+
+    errs() << "SyncElimination:     Blocks found in the Rosetta set: " << "\n";
+    for (const BasicBlock *BB: RosettaSet) {
+      errs() << "SyncElimination:         " + BB->getName() << "\n";
+    }
 
     errs() << "SyncElimination:     Blocks found in the Vegas set: " << "\n";
     for (const BasicBlock *BB: VegasSet) {
