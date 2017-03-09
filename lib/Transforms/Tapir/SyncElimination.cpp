@@ -1,4 +1,4 @@
-//===- TailRecursionElimination.cpp - Eliminate Tail Calls ----------------===//
+//===- SyncElimination.cpp - Eliminate unnecessary sync calls ----------------===//
 
 #include "llvm/Transforms/Tapir.h"
 
@@ -12,15 +12,13 @@
 using namespace llvm;
 
 namespace {
+
 struct SyncElimination : public FunctionPass {
   static char ID; // Pass identification, replacement for typeid
-  SyncElimination() : FunctionPass(ID) {
-    //initializeSyncEliminationPass(*PassRegistry::getPassRegistry());
-  }
+
+  SyncElimination() : FunctionPass(ID) {}
 
   void getAnalysisUsage(AnalysisUsage &AU) const override {
-    //AU.addRequired<TargetTransformInfoWrapperPass>();
-    //AU.addPreserved<GlobalsAAWrapperPass>();
   }
 
   bool runOnFunction(Function &F) override {
@@ -37,33 +35,13 @@ struct SyncElimination : public FunctionPass {
     return true;
   }
 };
+
 }
 
 char SyncElimination::ID = 0;
 static RegisterPass<SyncElimination> X("sync-elimination", "Do sync-elimination's pass", false, false);
-//INITIALIZE_PASS_BEGIN(SyncElimination, "sync-elimination", "Do sync-elimination's pass",
-//                      false, false)
-//INITIALIZE_PASS_DEPENDENCY(TargetTransformInfoWrapperPass)
-//INITIALIZE_PASS_END(SyncElimination, "sync-elimination", "Do sync-elimination's pass",
-//                    false, false)
 
 // Public interface to the SyncElimination pass
 FunctionPass *llvm::createSyncEliminationPass() {
   return new SyncElimination();
 }
-
-/*
-PreservedAnalyses TailCallElimPass::run(Function &F,
-                                        FunctionAnalysisManager &AM) {
-
-  TargetTransformInfo &TTI = AM.getResult<TargetIRAnalysis>(F);
-
-  bool Changed = eliminateTailRecursion(F, &TTI);
-
-  if (!Changed)
-    return PreservedAnalyses::all();
-  PreservedAnalyses PA;
-  PA.preserve<GlobalsAA>();
-  return PA;
-}
-*/
