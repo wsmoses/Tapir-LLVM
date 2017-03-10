@@ -1057,7 +1057,7 @@ BranchInst *llvm::SerializeDetachedCFG(DetachInst *DI, DominatorTree *DT) {
   BasicBlock *Continuation = DI->getContinue();
 
   assert(Detached->getSinglePredecessor() &&
-         "Detach instruction does not have just one predecessor.");
+         "Detached block has multiple predecessors.");
 
   // Get the detach edge from DI.
   BasicBlockEdge DetachEdge(Detacher, Detached);
@@ -1117,6 +1117,11 @@ BranchInst *llvm::SerializeDetachedCFG(DetachInst *DI, DominatorTree *DT) {
 /// GetDetachedCtx - Get the entry basic block to the detached context
 /// that contains the specified block.
 ///
+BasicBlock *llvm::GetDetachedCtx(BasicBlock *BB) {
+  return const_cast<BasicBlock *>(
+      GetDetachedCtx(const_cast<const BasicBlock *>(BB)));
+}
+
 const BasicBlock *llvm::GetDetachedCtx(const BasicBlock *BB) {
   // Traverse the CFG backwards until we either reach the entry block
   // of the function or we find a detach instruction that detaches the
@@ -1144,8 +1149,9 @@ const BasicBlock *llvm::GetDetachedCtx(const BasicBlock *BB) {
       if (isa<DetachInst>(PredBB->getTerminator())) {
         const DetachInst *DI = cast<DetachInst>(PredBB->getTerminator());
         if (DI->getDetached() == CurrBB)
-          // Return the entry of this detached sub-CFG.
-          return PredBB;
+          // Return the current block, which is the entry of this detached
+          // sub-CFG.
+          return CurrBB;
       }
 
       // Otherwise, add the predecessor block to the work list to
