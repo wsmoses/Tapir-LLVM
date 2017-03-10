@@ -731,7 +731,7 @@ bool makeFunctionDetachable(Function &extracted,
     }
   }
   if (!SimpleHelper)
-    dbgs() << "Detachable helper function itself detaches.\n";
+    DEBUG(dbgs() << "Detachable helper function itself detaches.\n");
 
   BasicBlock::iterator II = extracted.getEntryBlock().getFirstInsertionPt();
   AllocaInst* curinst;
@@ -973,14 +973,14 @@ Function* llvm::cilk::extractDetachBodyToFunction(DetachInst& detach, DominatorT
   BasicBlock* Continue = detach.getContinue();
 
   SmallPtrSet<BasicBlock *, 32> functionPieces;
-  SmallVector<BasicBlock *, 32 > reattachB;
+  SmallVector<BasicBlock *, 32> reattachB;
 
   // if (!Spawned->getUniquePredecessor())
   //   dbgs() << *Spawned;
-  // assert(Spawned->getUniquePredecessor() &&
-  //        "Entry block of detached CFG has multiple predecessors.");
-  // assert(Spawned->getUniquePredecessor() == Detacher &&
-  //        "Broken CFG.");
+  assert(Spawned->getUniquePredecessor() &&
+         "Entry block of detached CFG has multiple predecessors.");
+  assert(Spawned->getUniquePredecessor() == Detacher &&
+         "Broken CFG.");
 
   // if (getNumPred(Spawned) > 1) {
   //   dbgs() << "Found multiple predecessors to a detached-CFG entry block "
@@ -1081,36 +1081,25 @@ Function* llvm::cilk::extractDetachBodyToFunction(DetachInst& detach, DominatorT
   
   // Move allocas in the newly cloned detached CFG to the entry block of the
   // helper.
-  std::vector<AllocaInst*> Allocas;
-
-  SmallPtrSet<BasicBlock*, 32> blocksInDetachedScope;
-  std::deque<BasicBlock*> blocksToVisit;
-  blocksToVisit.emplace_back(&extracted->getEntryBlock());
-  while (blocksToVisit.size() != 0) {
-    BasicBlock* block = blocksToVisit.back();
-    blocksToVisit.pop_back();
-    if(blocksInDetachedScope.insert(block).second) {
-      const TerminatorInst* term = block->getTerminator();
-      if (const DetachInst* det = dyn_cast<const DetachInst>(term)) {
-        blocksToVisit.emplace_back(det->getContinue());
-      } else {
-        for (unsigned i=0; i<term->getNumSuccessors(); i++) {
-          blocksToVisit.emplace_back(term->getSuccessor(i));
-        }
-      }
+  {
+    // Collect reattach instructions.
+    SmallVector<Instruction *, 4> ReattachPoints;
+    for (pred_iterator PI = pred_begin(Continue), PE = pred_end(Continue);
+         PI != PE; ++PI) {
+      BasicBlock *Pred = *PI;
+      if (!isa<ReattachInst>(Pred->getTerminator())) continue;
+      if (functionPieces.count(Pred))
+        ReattachPoints.push_back(cast<BasicBlock>(VMap[Pred])->getTerminator());
     }
-  }
 
-  blocksInDetachedScope.erase(&extracted->getEntryBlock());
+    // Move allocas in cloned detached block to entry of helper function.
+    BasicBlock *ClonedDetachedBlock = cast<BasicBlock>(VMap[Spawned]);
+    MoveStaticAllocasInClonedBlock(extracted, ClonedDetachedBlock,
+                                   ReattachPoints);
 
-  for (BasicBlock* BB : blocksInDetachedScope)
-    for (BasicBlock::iterator I = BB->begin(), E = --BB->end(); I != E; ++I)
-      if (AllocaInst *AI = dyn_cast<AllocaInst>(I))
-        if (isa<Constant>(AI->getArraySize()))
-          Allocas.push_back(AI);
-
-  for (AllocaInst *AI : Allocas) {
-    AI->moveBefore(extracted->getEntryBlock().getTerminator());
+    // We should not need to add new llvm.stacksave/llvm.stackrestore
+    // intrinsics, because calling and returning from the helper will
+    // automatically manage the stack.
   }
 
   return extracted;
@@ -1147,12 +1136,9 @@ Function *llvm::cilk::createDetach(DetachInst &detach,
   // removing the outlined detached-CFG is left to subsequent DCE.
   BranchInst *ContinueBr;
   {
-    // Create a new branch to the continuation.
-    IRBuilder<> Builder(&detach);
-    ContinueBr = Builder.CreateBr(Continue);
-    ContinueBr->setDebugLoc(detach.getDebugLoc());
-    // Erase the old detach instruction.
-    detach.eraseFromParent();
+    // Replace the detach with a branch to the continuation.
+    ContinueBr = BranchInst::Create(Continue);
+    ReplaceInstWithInst(&detach, ContinueBr);
 
     // Rewrite phis in the detached block.
     BasicBlock::iterator BI = Spawned->begin();

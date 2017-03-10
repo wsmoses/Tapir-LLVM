@@ -57,6 +57,15 @@ Function *CreateHelper(const SetVector<Value *> &Inputs,
                        ClonedCodeInfo *CodeInfo = nullptr,
                        ValueMapTypeRemapper *TypeMapper = nullptr,
                        ValueMaterializer *Materializer = nullptr);
+
+// Move static allocas in a cloned block into the entry block of helper.  Leave
+// lifetime markers behind for those static allocas.  Returns true if the cloned
+// block still contains dynamic allocas, which cannot be moved.
+bool MoveStaticAllocasInClonedBlock(
+    Function *Helper,
+    BasicBlock *ClonedBlock,
+    SmallVectorImpl<Instruction *> &ClonedExitPoints);
+
 } // End llvm namespace
 
 #endif

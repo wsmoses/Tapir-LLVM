@@ -14,8 +14,10 @@
 
 #include "llvm/Transforms/Tapir/Outline.h"
 #include "llvm/IR/DebugInfo.h"
+#include "llvm/IR/DIBuilder.h"
 #include "llvm/IR/IntrinsicInst.h"
 #include "llvm/Transforms/Utils/Cloning.h"
+#include "llvm/Transforms/Utils/Local.h"
 using namespace llvm;
 
 #define DEBUG_TYPE "outlining"
@@ -220,4 +222,134 @@ Function *llvm::CreateHelper(const SetVector<Value *> &Inputs,
   ReturnInst::Create(Header->getContext(), NewExit);
   
   return NewFunc;
+}
+
+/// Return the result of AI->isStaticAlloca() if AI were moved to the entry
+/// block. Allocas used in inalloca calls and allocas of dynamic array size
+/// cannot be static.
+/// (Borrowed from Transforms/Utils/InlineFunction.cpp)
+static bool allocaWouldBeStaticInEntry(const AllocaInst *AI) {
+  return isa<Constant>(AI->getArraySize()) && !AI->isUsedWithInAlloca();
+}
+
+// Check whether this Value is used by a lifetime intrinsic.
+static bool isUsedByLifetimeMarker(Value *V) {
+  for (User *U : V->users()) {
+    if (IntrinsicInst *II = dyn_cast<IntrinsicInst>(U)) {
+      switch (II->getIntrinsicID()) {
+      default: break;
+      case Intrinsic::lifetime_start:
+      case Intrinsic::lifetime_end:
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+// Check whether the given alloca already has
+// lifetime.start or lifetime.end intrinsics.
+static bool hasLifetimeMarkers(AllocaInst *AI) {
+  Type *Ty = AI->getType();
+  Type *Int8PtrTy = Type::getInt8PtrTy(Ty->getContext(),
+                                       Ty->getPointerAddressSpace());
+  if (Ty == Int8PtrTy)
+    return isUsedByLifetimeMarker(AI);
+
+  // Do a scan to find all the casts to i8*.
+  for (User *U : AI->users()) {
+    if (U->getType() != Int8PtrTy) continue;
+    if (U->stripPointerCasts() != AI) continue;
+    if (isUsedByLifetimeMarker(U))
+      return true;
+  }
+  return false;
+}
+
+// Move static allocas in a cloned block into the entry block of helper.  Leave
+// lifetime markers behind for those static allocas.  Returns true if the cloned
+// block still contains dynamic allocas, which cannot be moved.
+bool llvm::MoveStaticAllocasInClonedBlock(
+    Function *Helper,
+    BasicBlock *ClonedBlock,
+    SmallVectorImpl<Instruction *> &ClonedExitPoints) {
+  SmallVector<AllocaInst *, 4> StaticAllocas;
+  bool ContainsDynamicAllocas = false;
+  BasicBlock::iterator InsertPoint = Helper->begin()->begin();
+  for (BasicBlock::iterator I = ClonedBlock->begin(),
+         E = ClonedBlock->end(); I != E; ) {
+    AllocaInst *AI = dyn_cast<AllocaInst>(I++);
+    if (!AI) continue;
+
+    if (!allocaWouldBeStaticInEntry(AI)) {
+      ContainsDynamicAllocas = true;
+      continue;
+    }
+
+    StaticAllocas.push_back(AI);
+
+    // Scan for the block of allocas that we can move over, and move them
+    // all at once.
+    while (isa<AllocaInst>(I) &&
+           allocaWouldBeStaticInEntry(cast<AllocaInst>(I))) {
+      StaticAllocas.push_back(cast<AllocaInst>(I));
+      ++I;
+    }
+
+    // Transfer all of the allocas over in a block.  Using splice means
+    // that the instructions aren't removed from the symbol table, then
+    // reinserted.
+    Helper->getEntryBlock().getInstList().splice(
+        InsertPoint, ClonedBlock->getInstList(), AI->getIterator(), I);
+  }
+  // Move any dbg.declares describing the allocas into the entry basic block.
+  DIBuilder DIB(*Helper->getParent());
+  for (auto &AI : StaticAllocas)
+    replaceDbgDeclareForAlloca(AI, AI, DIB, /*Deref=*/false);
+
+  // Leave lifetime markers for the static alloca's, scoping them to the
+  // from cloned block to cloned exit.
+  if (!StaticAllocas.empty()) {
+    IRBuilder<> Builder(&ClonedBlock->front());
+    for (unsigned ai = 0, ae = StaticAllocas.size(); ai != ae; ++ai) {
+      AllocaInst *AI = StaticAllocas[ai];
+      // Don't mark swifterror allocas. They can't have bitcast uses.
+      if (AI->isSwiftError())
+        continue;
+
+      // If the alloca is already scoped to something smaller than the whole
+      // function then there's no need to add redundant, less accurate markers.
+      if (hasLifetimeMarkers(AI))
+        continue;
+
+      // Try to determine the size of the allocation.
+      ConstantInt *AllocaSize = nullptr;
+      if (ConstantInt *AIArraySize =
+          dyn_cast<ConstantInt>(AI->getArraySize())) {
+        auto &DL = Helper->getParent()->getDataLayout();
+        Type *AllocaType = AI->getAllocatedType();
+        uint64_t AllocaTypeSize = DL.getTypeAllocSize(AllocaType);
+        uint64_t AllocaArraySize = AIArraySize->getLimitedValue();
+
+        // Don't add markers for zero-sized allocas.
+        if (AllocaArraySize == 0)
+          continue;
+
+        // Check that array size doesn't saturate uint64_t and doesn't
+        // overflow when it's multiplied by type size.
+        if (AllocaArraySize != ~0ULL &&
+            UINT64_MAX / AllocaArraySize >= AllocaTypeSize) {
+          AllocaSize = ConstantInt::get(Type::getInt64Ty(AI->getContext()),
+                                        AllocaArraySize * AllocaTypeSize);
+        }
+      }
+
+      Builder.CreateLifetimeStart(AI, AllocaSize);
+      for (Instruction *ExitPoint : ClonedExitPoints) {
+        IRBuilder<>(ExitPoint).CreateLifetimeEnd(AI, AllocaSize);
+      }
+    }
+  }
+
+  return ContainsDynamicAllocas;
 }

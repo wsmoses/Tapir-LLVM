@@ -720,9 +720,6 @@ void DACLoopSpawning::implementDACIterSpawnOnHelper(Function *Helper,
                            DT, LI);
     RecurCont->getTerminator()->replaceUsesOfWith(RecurTerm->getSuccessor(0),
                                                   DACHead);
-    // Builder.SetInsertPoint(&(RecurCont->front()));
-    // Builder.CreateBr(DACHead);
-    // RecurCont->getTerminator()->eraseFromParent();
   }
 
   // Compute mid iteration in RecurHead.
@@ -1209,10 +1206,54 @@ bool DACLoopSpawning::processLoop() {
   if (verifyFunction(*Helper, &dbgs()))
     return false;
 
+  // Update allocas in cloned loop body.
+  {
+    // Collect reattach instructions.
+    SmallVector<Instruction *, 4> ReattachPoints;
+    for (pred_iterator PI = pred_begin(Latch), PE = pred_end(Latch);
+         PI != PE; ++PI) {
+      BasicBlock *Pred = *PI;
+      if (!isa<ReattachInst>(Pred->getTerminator())) continue;
+      if (L->contains(Pred))
+        ReattachPoints.push_back(cast<BasicBlock>(VMap[Pred])->getTerminator());
+    }
+    // The cloned loop should be serialized by this point.
+    BasicBlock *ClonedLoopBodyEntry =
+      cast<BasicBlock>(VMap[Header])->getSingleSuccessor();
+    assert(ClonedLoopBodyEntry &&
+           "Head of cloned loop body has multiple successors.");
+    bool ContainsDynamicAllocas =
+      MoveStaticAllocasInClonedBlock(Helper, ClonedLoopBodyEntry,
+                                     ReattachPoints);
+
+    // If the cloned loop contained dynamic alloca instructions, wrap the cloned
+    // loop with llvm.stacksave/llvm.stackrestore intrinsics.
+    if (ContainsDynamicAllocas) {
+      Module *M = Helper->getParent();
+      // Get the two intrinsics we care about.
+      Function *StackSave = Intrinsic::getDeclaration(M, Intrinsic::stacksave);
+      Function *StackRestore =
+        Intrinsic::getDeclaration(M,Intrinsic::stackrestore);
+
+      // Insert the llvm.stacksave.
+      CallInst *SavedPtr = IRBuilder<>(&*ClonedLoopBodyEntry,
+                                       ClonedLoopBodyEntry->begin())
+                             .CreateCall(StackSave, {}, "savedstack");
+
+      // Insert a call to llvm.stackrestore before the reattaches in the
+      // original Tapir loop.
+      for (Instruction *ExitPoint : ReattachPoints)
+        IRBuilder<>(ExitPoint).CreateCall(StackRestore, SavedPtr);
+    }
+  }
+
+  if (verifyFunction(*Helper, &dbgs()))
+    return false;
+
   // Add call to new helper function in original function.
   {
     // Setup arguments for call.
-    SetVector<Value*> TopCallArgs;
+    SetVector<Value *> TopCallArgs;
     // Add start iteration 0.
     assert(CanonicalSCEV->getStart()->isZero() &&
            "Canonical IV does not start at zero.");
@@ -1235,6 +1276,34 @@ bool DACLoopSpawning::processLoop() {
     TopCall->setDebugLoc(Header->getTerminator()->getDebugLoc());
     // // Update CG graph with the call we just added.
     // CG[F]->addCalledFunction(TopCall, CG[Helper]);
+  }
+
+  // Remove sync of loop in parent.
+  {
+    // Start searching for the sync instruction for this loop from the loop's
+    // designated exit block.
+    BasicBlock *SyncBlock = ExitBlock;
+    // Scan the unique chain of blocks dominated by the exit block until a block
+    // terminated by a sync is found.  If the chain ends before then, exit
+    // early.
+    while (SyncBlock &&
+           isa<BranchInst>(SyncBlock->getTerminator())) {
+      BasicBlock *SuccBB = SyncBlock->getSingleSuccessor();
+      if (!SuccBB ||
+          SyncBlock != SuccBB->getSinglePredecessor())
+        SyncBlock = nullptr;
+      else
+        SyncBlock = SuccBB;
+    }
+    // If the sync for this loop is found, serialize that sync.
+    if (SyncBlock) {
+      if (SyncInst *SI = dyn_cast<SyncInst>(SyncBlock->getTerminator())) {
+        ReplaceInstWithInst(SI, BranchInst::Create(SI->getSuccessor(0)));
+        // BranchInst *ReplacementBr = BranchInst::Create(SI->getSuccessor(0), SI);
+        // ReplacementBr->setDebugLoc(SI->getDebugLoc());
+        // SI->eraseFromParent();
+      }
+    }
   }
 
   ++LoopsConvertedToDAC;

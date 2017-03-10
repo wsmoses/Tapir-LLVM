@@ -1579,16 +1579,16 @@ bool llvm::InlineFunction(CallSite CS, InlineFunctionInfo &IFI,
         !isa<ConstantTokenNone>(CallSiteUnwindDestToken);
   }
 
-  // Determine if the detached context of the call instruction is
-  // simply its parent function.  If not, then we won't move alloca's
-  // to the entry block.
-  bool DetachedCtxIsFunction;
+  // Get the entry block of the detached context into which we're inlining.  If
+  // we move allocas from the inlined code, we must move them to this block.
+  BasicBlock *DetachedCtxEntryBlock;
   {
-    const BasicBlock *CallingBlock = TheCall->getParent();
-    const BasicBlock *ThisCallFunctionEntry =
-      &(CallingBlock->getParent()->getEntryBlock());
-    DetachedCtxIsFunction =
-      (ThisCallFunctionEntry == GetDetachedCtx(CallingBlock));
+    BasicBlock *CallingBlock = TheCall->getParent();
+    DetachedCtxEntryBlock = GetDetachedCtx(CallingBlock);
+    assert(((&(CallingBlock->getParent()->getEntryBlock()) ==
+             DetachedCtxEntryBlock) ||
+            DetachedCtxEntryBlock->getSinglePredecessor()) &&
+           "Entry block of detached context has multiple predecessors.");
   }
 
   // Get an iterator to the last basic block in the function, which will have
@@ -1750,7 +1750,8 @@ bool llvm::InlineFunction(CallSite CS, InlineFunctionInfo &IFI,
   // calculate which instruction they should be inserted before.  We insert the
   // instructions at the end of the current alloca list.
   {
-    BasicBlock::iterator InsertPoint = Caller->begin()->begin();
+    // BasicBlock::iterator InsertPoint = Caller->begin()->begin();
+    BasicBlock::iterator InsertPoint = DetachedCtxEntryBlock->begin();
     for (BasicBlock::iterator I = FirstNewBlock->begin(),
          E = FirstNewBlock->end(); I != E; ) {
       AllocaInst *AI = dyn_cast<AllocaInst>(I++);
@@ -1763,7 +1764,7 @@ bool llvm::InlineFunction(CallSite CS, InlineFunctionInfo &IFI,
         continue;
       }
 
-      if (!DetachedCtxIsFunction || !allocaWouldBeStaticInEntry(AI))
+      if (!allocaWouldBeStaticInEntry(AI))
         continue;
       
       // Keep track of the static allocas that we inline into the caller.
@@ -1780,7 +1781,9 @@ bool llvm::InlineFunction(CallSite CS, InlineFunctionInfo &IFI,
       // Transfer all of the allocas over in a block.  Using splice means
       // that the instructions aren't removed from the symbol table, then
       // reinserted.
-      Caller->getEntryBlock().getInstList().splice(
+      // Caller->getEntryBlock().getInstList().splice(
+      //     InsertPoint, FirstNewBlock->getInstList(), AI->getIterator(), I);
+      DetachedCtxEntryBlock->getInstList().splice(
           InsertPoint, FirstNewBlock->getInstList(), AI->getIterator(), I);
     }
     // Move any dbg.declares describing the allocas into the entry basic block.

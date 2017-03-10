@@ -5687,6 +5687,14 @@ static bool TryToMergeLandingPad(LandingPadInst *LPad, BranchInst *BI,
   return false;
 }
 
+static bool BlockIsEntryOfDetachedCtx(const BasicBlock *BB) {
+  if (const BasicBlock *PredBB = BB->getSinglePredecessor())
+    if (const DetachInst *DI = dyn_cast<DetachInst>(PredBB->getTerminator()))
+      if (DI->getDetached() == BB)
+        return true;
+  return false;
+}
+
 bool SimplifyCFGOpt::SimplifyUncondBranch(BranchInst *BI,
                                           IRBuilder<> &Builder) {
   BasicBlock *BB = BI->getParent();
@@ -5702,6 +5710,7 @@ bool SimplifyCFGOpt::SimplifyUncondBranch(BranchInst *BI,
   // in the back-end.)
   BasicBlock::iterator I = BB->getFirstNonPHIOrDbg()->getIterator();
   if (I->isTerminator() && BB != &BB->getParent()->getEntryBlock() &&
+      !BlockIsEntryOfDetachedCtx(BB) &&
       (!LoopHeaders || !LoopHeaders->count(BB)) &&
       TryToSimplifyUncondBranchFromEmptyBlock(BB))
     return true;
@@ -5956,18 +5965,14 @@ static bool serializeDetachToImmediateSync(BasicBlock *BB) {
       }
       if (ReattachInst *RI = dyn_cast<ReattachInst>(PredBB->getTerminator())) {
         // Replace the reattach with an unconditional branch.
-        BranchInst *ReplacementBr = BranchInst::Create(BB, RI);
-        ReplacementBr->setDebugLoc(RI->getDebugLoc());
-        RI->eraseFromParent();
+        ReplaceInstWithInst(RI, BranchInst::Create(BB));
         Changed = true;
       }
     }
     for (DetachInst *DI : DetachPreds) {
       BasicBlock *Detached = DI->getDetached();
       BB->removePredecessor(DI->getParent());
-      BranchInst *ReplacementBr = BranchInst::Create(Detached, DI);
-      ReplacementBr->setDebugLoc(DI->getDebugLoc());
-      DI->eraseFromParent();
+      ReplaceInstWithInst(DI, BranchInst::Create(Detached));
       Changed = true;
     }
     return Changed;
@@ -6000,14 +6005,10 @@ static bool serializeTrivialDetachedBlock(BasicBlock *BB) {
       // block.
       Continue->removePredecessor(PredBB);
       // Serialize the detach: replace it with an unconditional branch.
-      BranchInst *ReplacementBr = BranchInst::Create(Detached, DI);
-      ReplacementBr->setDebugLoc(DI->getDebugLoc());
-      DI->eraseFromParent();
+      ReplaceInstWithInst(DI, BranchInst::Create(Detached));
     }
     // Serialize the reattach: replace it with an unconditional branch.
-    BranchInst *ReplacementBr = BranchInst::Create(RI->getSuccessor(0), RI);
-    ReplacementBr->setDebugLoc(RI->getDebugLoc());
-    RI->eraseFromParent();
+    ReplaceInstWithInst(RI, BranchInst::Create(RI->getSuccessor(0)));
     return true;
   }
   return false;
@@ -6032,9 +6033,7 @@ static bool serializeDetachOfUnreachable(BasicBlock *BB) {
     // block.
     Continue->removePredecessor(BB);
     // Replace the detach with a branch to the detached block.
-    BranchInst *ReplacementBr = BranchInst::Create(DI->getDetached(), DI);
-    ReplacementBr->setDebugLoc(DI->getDebugLoc());
-    DI->eraseFromParent();
+    ReplaceInstWithInst(DI, BranchInst::Create(DI->getDetached()));
     return true;
   }
   return false;
