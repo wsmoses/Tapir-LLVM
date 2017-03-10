@@ -131,45 +131,51 @@ static bool mergeEmptyReturnBlocks(Function &F) {
 static bool removeUselessSyncs(Function &F) {
   bool Changed = false;
   // Scan all the blocks in the function
-  check:
+ check:
   for (Function::iterator BBI = F.begin(), E = F.end(); BBI != E; ) {
     BasicBlock *BB = &*BBI++;
     if (SyncInst *Sync = dyn_cast<SyncInst>(BB->getTerminator())) {
+      // Walk the CFG backwards to try to find a reaching detach instruction.
       bool ReachingDetach = false;
       SmallPtrSet<BasicBlock *, 32> Visited;
       SmallVector<BasicBlock *, 32> WorkList;
       WorkList.push_back(BB);
       while (!WorkList.empty()) {
-	      BasicBlock *PBB = WorkList.pop_back_val();
-	      if (!Visited.insert(PBB).second)
-	        continue;
+        BasicBlock *PBB = WorkList.pop_back_val();
+        if (!Visited.insert(PBB).second)
+          continue;
 
-	      for (pred_iterator PI = pred_begin(PBB), PE = pred_end(PBB); PI != PE; ++PI) {
-	        BasicBlock *Pred = *PI;
-	        TerminatorInst *PT = Pred->getTerminator();
-	        if (isa<DetachInst>(PT)) {
-	          if (PT->getSuccessor(0) == Pred)
-	            continue;
-	          else // PT->getSuccessor(1) == Pred
-	            ReachingDetach = true;
-	        }
-	        if (ReachingDetach)
-	          break;
+        for (pred_iterator PI = pred_begin(PBB), PE = pred_end(PBB);
+             PI != PE; ++PI) {
+          BasicBlock *Pred = *PI;
+          TerminatorInst *PT = Pred->getTerminator();
+          // Stop the traversal at the entry block of a detached CFG.
+          if (isa<DetachInst>(PT)) {
+            if (PT->getSuccessor(0) == Pred)
+              continue;
+            else // PT->getSuccessor(1) == Pred
+              // This detach reaches the sync through the continuation edge.
+              ReachingDetach = true;
+          }
+          if (ReachingDetach)
+            break;
 
-	        if (isa<ReattachInst>(PT) || isa<SyncInst>(PT))
-	          continue;
+          // Ignore predecessors via a reattach, which belong to child detached
+          // contexts.  Also ignore sync instructions, which sync detached
+          // contexts before Sync executes.
+          if (isa<ReattachInst>(PT) || isa<SyncInst>(PT))
+            continue;
 
-	        WorkList.push_back(Pred);
-	      }
+          WorkList.push_back(Pred);
+        }
       }
 
+      // If no detach reaches this sync, then this sync can be removed.
       if (!ReachingDetach) {
-        BasicBlock* suc = Sync->getSuccessor(0);
-        IRBuilder<> Builder(Sync);
-        Builder.CreateBr(suc);
-        Sync->eraseFromParent();
+        BasicBlock* Succ = Sync->getSuccessor(0);
+        ReplaceInstWithInst(Sync, BranchInst::Create(Succ));
         Changed = true;
-        if (MergeBlockIntoPredecessor(suc)) goto check;
+        if (MergeBlockIntoPredecessor(Succ)) goto check;
       }
     }
   }
