@@ -113,9 +113,11 @@ struct SyncElimination : public FunctionPass {
     }
   }
 
-  // Entry point code
+  bool isSyncEliminationLegal() {
+    // TODO implement
+  }
 
-  void processSyncInstBlock(BasicBlock &BB) {
+  bool processSyncInstBlock(BasicBlock &BB) {
     errs() << "SyncElimination: Found sync block: " << BB.getName() << "\n";
 
     BasicBlockSet RosettaSet, VegasSet;
@@ -132,6 +134,17 @@ struct SyncElimination : public FunctionPass {
     for (const BasicBlock *BB: VegasSet) {
       errs() << "SyncElimination:         " + BB->getName() << "\n";
     }
+
+    if (isSyncEliminationLegal()) {
+      SyncInst *Sync = dyn_cast<SyncInst>(BB->getTerminator());
+      assert(Sync != NULL);
+      BasicBlock* suc = Sync->getSuccessor(0);
+      IRBuilder<> Builder(Sync);
+      Builder.CreateBr(suc);
+      Sync->eraseFromParent();
+      return true;
+    }
+    return false;
   }
 
   bool runOnFunction(Function &F) override {
@@ -141,11 +154,20 @@ struct SyncElimination : public FunctionPass {
     errs() << "SyncElimination: Found function: " << F.getName() << "\n";
     F.setName("sync-elimination_"+F.getName());
 
-    for (BasicBlock &block: F)
-      if (isa<SyncInst>(block.getTerminator()))
-        processSyncInstBlock(block);
+    bool ChangedAny = false;
+    for (bool Changed = false; Changed; Changed = false) {
+      for (BasicBlock &block: F) {
+        if (isa<SyncInst>(block.getTerminator())) {
+          if (processSyncInstBlock(block)) {
+            Changed = true;
+            ChangedAny = true;
+            break;
+          }
+        }
+      }
+    }
 
-    return true;
+    return ChangedAny;
   }
 };
 
