@@ -16,6 +16,8 @@
 
 #include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/Analysis/AssumptionCache.h"
+#include "llvm/IR/Dominators.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/Module.h"
@@ -65,6 +67,15 @@ bool MoveStaticAllocasInClonedBlock(
     Function *Helper,
     BasicBlock *ClonedBlock,
     SmallVectorImpl<Instruction *> &ClonedExitPoints);
+
+// Add alignment assumptions to parameters of outlined function, based on known
+// alignment data in the caller.
+void AddAlignmentAssumptions(const Function *Caller,
+                             const SetVector<Value *> &Inputs,
+                             ValueToValueMapTy &VMap,
+                             const Instruction *CallSite,
+                             AssumptionCache *AC,
+                             DominatorTree *DT);
 
 } // End llvm namespace
 

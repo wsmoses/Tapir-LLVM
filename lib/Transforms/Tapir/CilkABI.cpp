@@ -17,6 +17,8 @@
 #include "llvm/Transforms/Tapir/CilkABI.h"
 #include "llvm/IR/DebugInfoMetadata.h"
 #include "llvm/Transforms/Tapir/Outline.h"
+#include "llvm/Transforms/Utils/Local.h"
+
 using namespace llvm;
 
 #define DEBUG_TYPE "cilkabi"
@@ -964,13 +966,15 @@ bool llvm::cilk::populateDetachedCFG(const DetachInst &detach, DominatorTree &DT
 }
 
 //Returns true if success
-Function* llvm::cilk::extractDetachBodyToFunction(DetachInst& detach, DominatorTree& DT,
-						  llvm::CallInst** call) {
-  BasicBlock* Detacher = detach.getParent();
-  Function& F = *(Detacher->getParent());
+Function *llvm::cilk::extractDetachBodyToFunction(DetachInst &detach,
+                                                  DominatorTree &DT,
+                                                  AssumptionCache &AC,
+                                                  CallInst **call) {
+  BasicBlock *Detacher = detach.getParent();
+  Function &F = *(Detacher->getParent());
 
-  BasicBlock* Spawned  = detach.getDetached();
-  BasicBlock* Continue = detach.getContinue();
+  BasicBlock *Spawned  = detach.getDetached();
+  BasicBlock *Continue = detach.getContinue();
 
   SmallPtrSet<BasicBlock *, 32> functionPieces;
   SmallVector<BasicBlock *, 32> reattachB;
@@ -1001,7 +1005,7 @@ Function* llvm::cilk::extractDetachBodyToFunction(DetachInst& detach, DominatorT
   if (!populateDetachedCFG(detach, DT, functionPieces, reattachB, true)) return nullptr;
 
   functionPieces.erase(Spawned);
-  std::vector<BasicBlock*> blocks(functionPieces.begin(), functionPieces.end());
+  std::vector<BasicBlock *> blocks(functionPieces.begin(), functionPieces.end());
   blocks.insert( blocks.begin(), Spawned );
   functionPieces.insert(Spawned);
 
@@ -1030,7 +1034,7 @@ Function* llvm::cilk::extractDetachBodyToFunction(DetachInst& detach, DominatorT
   }
 
   // Get the inputs and outputs for the detached CFG.
-  SetVector<Value*> Inputs, Outputs;
+  SetVector<Value *> Inputs, Outputs;
   extractor.findInputsOutputs(Inputs, Outputs);
   assert(Outputs.empty() &&
          "All results from detached CFG should be passed by memory already.");
@@ -1064,6 +1068,10 @@ Function* llvm::cilk::extractDetachBodyToFunction(DetachInst& detach, DominatorT
 
     extracted->addFnAttr(Attribute::NoInline);
   }
+
+  // Add alignment assumptions to arguments of helper, based on alignment of
+  // values in old function.
+  AddAlignmentAssumptions(&F, Inputs, VMap, &detach, &AC, &DT);
 
   // Add call to new helper function in original function.
   CallInst *TopCall;
@@ -1107,7 +1115,8 @@ Function* llvm::cilk::extractDetachBodyToFunction(DetachInst& detach, DominatorT
 
 Function *llvm::cilk::createDetach(DetachInst &detach,
                                    ValueToValueMapTy &DetachCtxToStackFrame,
-                                   DominatorTree &DT, bool instrument) {
+                                   DominatorTree &DT, AssumptionCache &AC,
+                                   bool instrument) {
   BasicBlock *detB = detach.getParent();
   Function &F = *(detB->getParent());
 
@@ -1129,7 +1138,7 @@ Function *llvm::cilk::createDetach(DetachInst &detach,
   // dbgs() << *detB << *(detach.getDetached());
 
   CallInst *cal = nullptr;
-  Function *extracted = extractDetachBodyToFunction(detach, DT, &cal);
+  Function *extracted = extractDetachBodyToFunction(detach, DT, AC, &cal);
   assert(extracted && "could not extract detach body to function");
 
   // Unlink the detached CFG in the original function.  The heavy lifting of

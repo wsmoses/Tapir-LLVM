@@ -357,14 +357,14 @@ namespace cilk {
 			   SmallVectorImpl<BasicBlock *> &reattachB,
 			   bool replace, bool error = true);
 
-  Function *extractDetachBodyToFunction(DetachInst& detach,
-                                        DominatorTree& DT,
-					llvm::CallInst** call = nullptr);
+  Function *extractDetachBodyToFunction(DetachInst &detach,
+                                        DominatorTree &DT, AssumptionCache &AC,
+                                        CallInst **call = nullptr);
 
   Function *createDetach(DetachInst &detach,
                          ValueToValueMapTy &DetachCtxToStackFrame,
-                         DominatorTree &DT,
-			 bool instrument = false);
+                         DominatorTree &DT, AssumptionCache &AC,
+                         bool instrument = false);
 
 }  // end of cilk namespace
 }  // end of llvm namespace

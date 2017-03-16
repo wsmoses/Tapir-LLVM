@@ -18,6 +18,7 @@
 #include "llvm/IR/IntrinsicInst.h"
 #include "llvm/Transforms/Utils/Cloning.h"
 #include "llvm/Transforms/Utils/Local.h"
+
 using namespace llvm;
 
 #define DEBUG_TYPE "outlining"
@@ -352,4 +353,34 @@ bool llvm::MoveStaticAllocasInClonedBlock(
   }
 
   return ContainsDynamicAllocas;
+}
+
+// Add alignment assumptions to parameters of outlined function, based on known
+// alignment data in the caller.
+void llvm::AddAlignmentAssumptions(const Function *Caller,
+                                   const SetVector<Value *> &Inputs,
+                                   ValueToValueMapTy &VMap,
+                                   const Instruction *CallSite,
+                                   AssumptionCache *AC,
+                                   DominatorTree *DT) {
+  auto &DL = Caller->getParent()->getDataLayout();
+  for (Value *ArgVal : Inputs) {
+    // Ignore arguments to non-pointer types
+    if (!ArgVal->getType()->isPointerTy()) continue;
+    Argument *Arg = cast<Argument>(VMap[ArgVal]);
+    // Ignore arguments to non-pointer types
+    if (!Arg->getType()->isPointerTy()) continue;
+    // If the argument already has an alignment attribute, skip it.
+    if (Arg->getParamAlignment()) continue;
+    // Get any known alignment information for this argument's value.
+    unsigned Align = getKnownAlignment(ArgVal, DL, CallSite, AC, DT);
+    // If we have alignment data, add it as an attribute to the outlined
+    // function's parameter.
+    if (Align) {
+      AttrBuilder B;
+      B.addAlignmentAttr(Align);
+      Arg->addAttr(AttributeSet::get(Arg->getContext(), Arg->getArgNo() + 1,
+                                     B));
+    }
+  }
 }

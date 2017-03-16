@@ -324,9 +324,10 @@ public:
 
   LoopOutline(Loop *OrigLoop, ScalarEvolution &SE,
               LoopInfo *LI, DominatorTree *DT,
+              AssumptionCache *AC,
               OptimizationRemarkEmitter &ORE)
-    : OrigLoop(OrigLoop), SE(SE), LI(LI), DT(DT), ORE(ORE),
-      ExitBlock(nullptr)
+      : OrigLoop(OrigLoop), SE(SE), LI(LI), DT(DT), AC(AC), ORE(ORE),
+        ExitBlock(nullptr)
   {
     TerminatorInst *TI = OrigLoop->getLoopLatch()->getTerminator();
     if (2 != TI->getNumSuccessors())
@@ -356,6 +357,8 @@ protected:
   LoopInfo *LI;
   /// Dominator tree.
   DominatorTree *DT;
+  /// Assumption cache.
+  AssumptionCache *AC;
   /// Interface to emit optimization remarks.
   OptimizationRemarkEmitter &ORE;
 
@@ -389,8 +392,9 @@ public:
 
   DACLoopSpawning(Loop *OrigLoop, ScalarEvolution &SE,
                   LoopInfo *LI, DominatorTree *DT,
+                  AssumptionCache *AC,
                   OptimizationRemarkEmitter &ORE)
-      : LoopOutline(OrigLoop, SE, LI, DT, ORE)
+      : LoopOutline(OrigLoop, SE, LI, DT, AC, ORE)
   {}
 
   bool processLoop();
@@ -425,8 +429,9 @@ class CilkABILoopSpawning : public LoopOutline {
 public:
   CilkABILoopSpawning(Loop *OrigLoop, ScalarEvolution &SE,
                       LoopInfo *LI, DominatorTree *DT,
+                      AssumptionCache *AC,
                       OptimizationRemarkEmitter &ORE)
-      : LoopOutline(OrigLoop, SE, LI, DT, ORE)
+      : LoopOutline(OrigLoop, SE, LI, DT, AC, ORE)
   {}
 
   bool processLoop();
@@ -468,8 +473,9 @@ struct LoopSpawningImpl {
                    LoopInfo &LI,
                    ScalarEvolution &SE,
                    DominatorTree &DT,
+                   AssumptionCache &AC,
                    OptimizationRemarkEmitter &ORE)
-      : F(F), LI(LI), SE(SE), DT(DT), ORE(ORE) {}
+      : F(F), LI(LI), SE(SE), DT(DT), AC(AC), ORE(ORE) {}
 
   bool run();
 
@@ -488,7 +494,7 @@ private:
   // const TargetTransformInfo *TTI;
   // const TargetLibraryInfo *TLI;
   // AliasAnalysis *AA;
-  // AssumptionCache *AC;
+  AssumptionCache &AC;
   OptimizationRemarkEmitter &ORE;
 };
 } // end anonymous namespace
@@ -996,13 +1002,14 @@ bool DACLoopSpawning::processLoop() {
   /// Clone the loop into a new function.
 
   // Get the inputs and outputs for the Loop blocks.
-  SetVector<Value*> Inputs, Outputs;
-  SetVector<Value*> BodyInputs, BodyOutputs;
+  SetVector<Value *> Inputs, Outputs;
+  SetVector<Value *> BodyInputs, BodyOutputs;
   ValueToValueMapTy VMap, InputMap;
   std::vector<BasicBlock *> LoopBlocks;
 
   // Add start iteration, end iteration, and grainsize to inputs.
   {
+    // TODO?: Replace with LoopBlocksDFS call.
     LoopBlocks = L->getBlocks();
     // Add exit blocks terminated by unreachable.  There should not be any other
     // exit blocks in the loop.
@@ -1063,7 +1070,7 @@ bool DACLoopSpawning::processLoop() {
 
     // Put all of the inputs together, and clear redundant inputs from
     // the set for the loop body.
-    SmallVector<Value*, 8> BodyInputsToRemove;
+    SmallVector<Value *, 8> BodyInputsToRemove;
     for (Value *V : BodyInputs)
       if (!Inputs.count(V))
         Inputs.insert(V);
@@ -1249,6 +1256,11 @@ bool DACLoopSpawning::processLoop() {
 
   if (verifyFunction(*Helper, &dbgs()))
     return false;
+
+  // Add alignment assumptions to arguments of helper, based on alignment of
+  // values in old function.
+  AddAlignmentAssumptions(Header->getParent(), Inputs, VMap,
+                          Preheader->getTerminator(), AC, DT);
 
   // Add call to new helper function in original function.
   {
@@ -1999,8 +2011,8 @@ bool LoopSpawningImpl::processLoop(Loop *L) {
     {
       DebugLoc DLoc = L->getStartLoc();
       BasicBlock *Header = L->getHeader();
-      DACLoopSpawning DLS(L, SE, &LI, &DT, ORE);
-      // CilkABILoopSpawning DLS(L, SE, &LI, &DT, ORE);
+      DACLoopSpawning DLS(L, SE, &LI, &DT, &AC, ORE);
+      // CilkABILoopSpawning DLS(L, SE, &LI, &DT, &AC, ORE);
       // DACLoopSpawning DLS(L, SE, LI, DT, TLI, TTI, ORE);
       if (DLS.processLoop()) {
         DEBUG({
@@ -2080,12 +2092,12 @@ PreservedAnalyses LoopSpawningPass::run(Function &F,
   // auto &TTI = AM.getResult<TargetIRAnalysis>(F);
   // auto &TLI = AM.getResult<TargetLibraryAnalysis>(M);
   // auto &AA = AM.getResult<AAManager>(F);
-  // auto &AC = AM.getResult<AssumptionAnalysis>(F);
+  auto &AC = AM.getResult<AssumptionAnalysis>(F);
   auto &ORE =
     AM.getResult<OptimizationRemarkEmitterAnalysis>(F);
   // OptimizationRemarkEmitter ORE(F);
 
-  bool Changed = LoopSpawningImpl(F, LI, SE, DT, ORE).run();
+  bool Changed = LoopSpawningImpl(F, LI, SE, DT, AC, ORE).run();
 
   AM.invalidate<ScalarEvolutionAnalysis>(F);
 
@@ -2123,11 +2135,11 @@ struct LoopSpawning : public FunctionPass {
     // auto *TLI = TLIP ? &TLIP->getTLI() : nullptr;
     // auto *TLI = &getAnalysis<TargetLibraryInfoWrapperPass>().getTLI();
     // auto *AA = &getAnalysis<AAResultsWrapperPass>(*F).getAAResults();
-    // auto *AC = &getAnalysis<AssumptionCacheTracker>().getAssumptionCache(*F);
+    auto &AC = getAnalysis<AssumptionCacheTracker>().getAssumptionCache(F);
     auto &ORE =
       getAnalysis<OptimizationRemarkEmitterWrapperPass>().getORE();
     // OptimizationRemarkEmitter ORE(F);
-    return LoopSpawningImpl(F, LI, SE, DT, ORE).run();
+    return LoopSpawningImpl(F, LI, SE, DT, AC, ORE).run();
   }
 
   // bool runOnModule(Module &M) override {

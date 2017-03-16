@@ -13,6 +13,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/Transforms/Tapir/CilkABI.h"
+#include "llvm/Analysis/AssumptionCache.h"
 #include "llvm/IR/Verifier.h"
 #include "llvm/Transforms/Utils/Cloning.h"
 #include "llvm/Transforms/Tapir.h"
@@ -47,17 +48,20 @@ struct LowerTapirToCilk : public ModulePass {
   bool runOnModule(Module &M) override;
 
   void getAnalysisUsage(AnalysisUsage &AU) const override {
+    AU.addRequired<AssumptionCacheTracker>();
     AU.addRequired<DominatorTreeWrapperPass>();
   }
 private:
   ValueToValueMapTy DetachCtxToStackFrame;
-  SmallVectorImpl<Function *> *processFunction(Function &F, DominatorTree &DT);
+  SmallVectorImpl<Function *> *processFunction(Function &F, DominatorTree &DT,
+                                               AssumptionCache &AC);
 };
 }  // End of anonymous namespace
 
 char LowerTapirToCilk::ID = 0;
 INITIALIZE_PASS_BEGIN(LowerTapirToCilk, "tapir2cilk",
                       "Simple Lowering of Tapir to Cilk ABI", false, false)
+INITIALIZE_PASS_DEPENDENCY(AssumptionCacheTracker)
 INITIALIZE_PASS_DEPENDENCY(DominatorTreeWrapperPass)
 INITIALIZE_PASS_END(LowerTapirToCilk, "tapir2cilk",
                     "Simple Lowering of Tapir to Cilk ABI", false, false)
@@ -90,7 +94,8 @@ static inline void inlineCilkFunctions(Function &F) {
 }
 
 SmallVectorImpl<Function *>
-*LowerTapirToCilk::processFunction(Function &F, DominatorTree &DT) {
+*LowerTapirToCilk::processFunction(Function &F, DominatorTree &DT,
+                                   AssumptionCache &AC) {
   if (fastCilk && F.getName()=="main") {
     IRBuilder<> start(F.getEntryBlock().getFirstNonPHIOrDbg());
     auto m = start.CreateCall(CILKRTS_FUNC(init, *F.getParent()));
@@ -104,7 +109,7 @@ SmallVectorImpl<Function *>
     if (DetachInst* DI = dyn_cast_or_null<DetachInst>(I->getTerminator())) {
       // Lower a detach instruction, and collect the helper function generated
       // in this process for executing the detached task.
-      Function *Helper = cilk::createDetach(*DI, DetachCtxToStackFrame, DT,
+      Function *Helper = cilk::createDetach(*DI, DetachCtxToStackFrame, DT, AC,
                                             ClInstrumentCilk || Instrument);
       NewHelpers->push_back(Helper);
     } else if (SyncInst* SI = dyn_cast_or_null<SyncInst>(I->getTerminator())) {
@@ -149,7 +154,9 @@ bool LowerTapirToCilk::runOnModule(Module &M) {
     Function *F = WorkList.back();
     WorkList.pop_back();
     DominatorTree &DT = getAnalysis<DominatorTreeWrapperPass>(*F).getDomTree();
-    SmallVectorImpl<Function *> *NewHelpers = processFunction(*F, DT);
+    AssumptionCacheTracker &ACT = getAnalysis<AssumptionCacheTracker>();
+    SmallVectorImpl<Function *> *NewHelpers =
+      processFunction(*F, DT, ACT.getAssumptionCache(*F));
     Changed |= !NewHelpers->empty();
     // Check the generated helper functions to see if any need to be processed,
     // that is, to see if any of them themselves detach a subtask.
