@@ -180,7 +180,12 @@ struct SyncElimination : public FunctionPass {
     F.setName("sync-elimination_"+F.getName());
 
     bool ChangedAny = false;
-    for (bool Changed = false; Changed; Changed = false) {
+
+    while (true) {
+      errs() << "You'd better get here. " << "\n";
+
+      bool Changed = false;
+
       for (BasicBlock &block: F) {
         if (isa<SyncInst>(block.getTerminator())) {
           if (processSyncInstBlock(block)) {
@@ -189,6 +194,10 @@ struct SyncElimination : public FunctionPass {
             break;
           }
         }
+      }
+
+      if (!Changed) {
+        break;
       }
     }
 
