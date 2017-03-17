@@ -177,7 +177,6 @@ struct SyncElimination : public FunctionPass {
       return false;
 
     errs() << "SyncElimination: Found function: " << F.getName() << "\n";
-    F.setName("sync-elimination_"+F.getName());
 
     bool ChangedAny = false;
 
