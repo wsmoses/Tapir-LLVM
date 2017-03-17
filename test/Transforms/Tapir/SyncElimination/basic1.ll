@@ -14,7 +14,7 @@ sync.continue:                                    ; preds = %entry
   ret void
 
 ; CHECK: @_Z4funcv
-; CHECK-NOT: sync
+; CHECK-NOT: sync label %sync.continue
 ; CHECK: ret void
 }
 
