@@ -2,12 +2,14 @@
 
 #include "llvm/Transforms/Tapir.h"
 
+#include "llvm/Analysis/AliasAnalysis.h"
 #include "llvm/Pass.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/IR/Instruction.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/Function.h"
+#include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/CFG.h"
 #include "llvm/ADT/SmallSet.h"
 
@@ -27,6 +29,7 @@ struct SyncElimination : public FunctionPass {
   SyncElimination() : FunctionPass(ID) {}
 
   void getAnalysisUsage(AnalysisUsage &AU) const override {
+    AU.addRequired<AAResultsWrapperPass>();
   }
 
   // We will explain what Rosetta and Vegas are later. Or rename them.
@@ -113,8 +116,28 @@ struct SyncElimination : public FunctionPass {
     }
   }
 
-  bool isSyncEliminationLegal() {
-    // TODO implement
+  bool isSyncEliminationLegal(const BasicBlockSet &RosettaSet, const BasicBlockSet &VegasSet) {
+    AliasAnalysis *AA = &getAnalysis<AAResultsWrapperPass>().getAAResults();
+
+    for (const BasicBlock *RBB : RosettaSet) {
+      for (const Instruction &RI : *RBB) {
+        for (const BasicBlock *VBB : VegasSet) {
+          for (const Instruction &VI : *VBB) {
+            ImmutableCallSite RC(&RI), VC(&VI);
+
+            if (!RC ||
+                !VC ||
+                AA->getModRefInfo(RC, VC) != MRI_NoModRef ||
+                AA->getModRefInfo(VC, RC) != MRI_NoModRef) {
+              errs() << "SyncElimination:     Conflict found between " << RI << " and " << VI << "\n";
+              return false;
+            }
+          }
+        }
+      }
+    }
+
+    return true;
   }
 
   bool processSyncInstBlock(BasicBlock &BB) {
@@ -135,15 +158,17 @@ struct SyncElimination : public FunctionPass {
       errs() << "SyncElimination:         " + BB->getName() << "\n";
     }
 
-    if (isSyncEliminationLegal()) {
-      SyncInst *Sync = dyn_cast<SyncInst>(BB->getTerminator());
+    if (isSyncEliminationLegal(RosettaSet, VegasSet)) {
+      SyncInst *Sync = dyn_cast<SyncInst>(BB.getTerminator());
       assert(Sync != NULL);
       BasicBlock* suc = Sync->getSuccessor(0);
       IRBuilder<> Builder(Sync);
       Builder.CreateBr(suc);
       Sync->eraseFromParent();
+      errs() << "SyncElimination:     A sync is removed. " << "\n";
       return true;
     }
+
     return false;
   }
 
