@@ -2,4 +2,5 @@
 
 void func() {
   cilk_sync;
+  cilk_sync;
 }

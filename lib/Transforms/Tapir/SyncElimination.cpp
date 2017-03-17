@@ -46,6 +46,7 @@ struct SyncElimination : public FunctionPass {
 
     DetachLevel[&BB] = 0;
     Frontier.push_back(&BB);
+    OutputSet.insert(&BB);
 
     while (!Frontier.empty()) {
       const BasicBlock *Current = Frontier.front();
