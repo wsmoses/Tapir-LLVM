@@ -19,7 +19,7 @@ det.cont:                                         ; preds = %det.achd, %entry
 
 ; CHECK: @_Z4funcv
 ; CHECK-NOT: sync label %sync.continue
-; CHECK sync.continue
+; CHECK: sync.continue
 
 sync.continue:                                    ; preds = %det.cont
   sync label %sync.continue1
