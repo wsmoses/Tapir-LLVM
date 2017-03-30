@@ -713,8 +713,8 @@ void PassManagerBuilder::populateModulePassManager(legacy::PassManagerBase& MPM)
     MPM.add(createBarrierNoopPass());
   }
   prepopulateModulePassManager(MPM);
-  // if (ParallelLevel == 0 || ParallelLevel == 3)
-  //   addExtensionsToPM(EP_TapirLate, MPM);
+  if (ParallelLevel == 0)
+    addExtensionsToPM(EP_TapirLate, MPM);
   addExtensionsToPM(EP_OptimizerLast, MPM);
 }
 
