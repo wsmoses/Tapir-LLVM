@@ -8,7 +8,8 @@ target triple = "x86_64-unknown-linux-gnu"
 ; Function Attrs: noinline nounwind uwtable
 define void @_Z4funcv() #0 {
 entry:
-; CHECK: sync label %sync.continue
+; CHECK: @_Z4funcv
+; CHECK-NOT: sync label %sync.continue
   sync label %sync.continue
 
 sync.continue:                                    ; preds = %entry

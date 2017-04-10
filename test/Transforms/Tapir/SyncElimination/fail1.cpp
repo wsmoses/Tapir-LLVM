@@ -6,6 +6,4 @@ void func() {
     a = 1;
   }
   cilk_sync;
-  a = 2;
-  cilk_sync;
 }
