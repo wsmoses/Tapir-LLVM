@@ -32,6 +32,37 @@ struct SyncElimination : public FunctionPass {
     AU.addRequired<AAResultsWrapperPass>();
   }
 
+  bool runOnFunction(Function &F) override {
+    if (skipFunction(F))
+      return false;
+
+    errs() << "SyncElimination: Found function: " << F.getName() << "\n";
+
+    bool ChangedAny = false;
+
+    while (true) {
+      bool Changed = false;
+
+      for (BasicBlock &block: F) {
+        if (isa<SyncInst>(block.getTerminator())) {
+          if (processSyncInstBlock(block)) {
+            Changed = true;
+            ChangedAny = true;
+            break;
+          }
+        }
+      }
+
+      if (!Changed) {
+        break;
+      }
+    }
+
+    return ChangedAny;
+  }
+
+private:
+
   // We will explain what Rosetta and Vegas are later. Or rename them.
   // We promise.
 
@@ -117,27 +148,75 @@ struct SyncElimination : public FunctionPass {
     }
   }
 
+  bool willMod(const ModRefInfo &Info) {
+    return (Info == MRI_Mod || Info == MRI_ModRef);
+  }
+
+  bool instTouchesMemory(const Instruction &Inst) {
+    return Inst.getOpcode() == Instruction::Load ||
+           Inst.getOpcode() == Instruction::Store ||
+           Inst.getOpcode() == Instruction::VAArg ||
+           Inst.getOpcode() == Instruction::AtomicCmpXchg ||
+           Inst.getOpcode() == Instruction::AtomicRMW;
+  }
+
+  // FIXME: we can do better
+  void checkBlowUp(const Instruction &Inst) {
+    if (Inst.isFenceLike() || Inst.getOpcode() == Instruction::PtrToInt) {
+      llvm_unreachable("BOOOOOOOOOOOOOOOOOOOOOOOOM! not supported (yet)");
+    }
+  }
+
   bool isSyncEliminationLegal(const BasicBlockSet &RosettaSet, const BasicBlockSet &VegasSet) {
     AliasAnalysis *AA = &getAnalysis<AAResultsWrapperPass>().getAAResults();
 
     for (const BasicBlock *RBB : RosettaSet) {
       for (const Instruction &RI : *RBB) {
+        checkBlowUp(RI);
+
+        if (RI.getOpcode() == Instruction::Sync) {
+          continue;
+        }
+
         for (const BasicBlock *VBB : VegasSet) {
           for (const Instruction &VI : *VBB) {
-            ImmutableCallSite RC(&RI), VC(&VI);
+            checkBlowUp(VI);
 
-            if (isa<SyncInst>(RI)) {
+            if (VI.getOpcode() == Instruction::Sync) {
               continue;
             }
 
-            if (!RC ||
-                !VC ||
-                AA->getModRefInfo(RC, VC) != MRI_NoModRef ||
-                AA->getModRefInfo(VC, RC) != MRI_NoModRef) {
-              errs() << "SyncElimination:     Conflict found between " << RI << " and " << VI << "\n";
-              if (!RC) errs () << "RC was null \n";
-              if (!VC) errs () << "VC was null \n";
-              return false;
+            ImmutableCallSite RC(&RI), VC(&VI);
+
+            if (!!RC) {
+              // If RI is a call/invoke
+              if (instTouchesMemory(VI) &&
+                  AA->getModRefInfo(const_cast<Instruction *>(&VI), RC) != MRI_NoModRef) {
+                errs() << "SyncElimination:     Conflict found between " << RI << " and " << VI << "\n";
+                return false;
+              }
+            } else if (!!VC) {
+              // If VI is a call/invoke
+              if (instTouchesMemory(RI) &&
+                  AA->getModRefInfo(const_cast<Instruction *>(&RI), VC) != MRI_NoModRef) {
+                errs() << "SyncElimination:     Conflict found between " << RI << " and " << VI << "\n";
+                return false;
+              }
+            } else {
+              if (!instTouchesMemory(VI) || !instTouchesMemory(RI)) {
+                continue;
+              }
+
+              // If neither instruction is a call/invoke
+              MemoryLocation VML = MemoryLocation::get(&VI);
+              MemoryLocation RML = MemoryLocation::get(&RI);
+
+              if (AA->alias(RML, VML) && (willMod(AA->getModRefInfo(&RI, RML)) || willMod(AA->getModRefInfo(&VI, VML)))) {
+                // If the two memory location can potentially be aliasing each other, and
+                // at least one instruction modifies its memory location.
+                errs() << "SyncElimination:     Conflict found between " << RI << " and " << VI << "\n";
+                return false;
+              }
             }
           }
         }
@@ -177,37 +256,6 @@ struct SyncElimination : public FunctionPass {
     }
 
     return false;
-  }
-
-  bool runOnFunction(Function &F) override {
-    if (skipFunction(F))
-      return false;
-
-    errs() << "SyncElimination: Found function: " << F.getName() << "\n";
-
-    bool ChangedAny = false;
-
-    while (true) {
-      errs() << "You'd better get here. " << "\n";
-
-      bool Changed = false;
-
-      for (BasicBlock &block: F) {
-        if (isa<SyncInst>(block.getTerminator())) {
-          if (processSyncInstBlock(block)) {
-            Changed = true;
-            ChangedAny = true;
-            break;
-          }
-        }
-      }
-
-      if (!Changed) {
-        break;
-      }
-    }
-
-    return ChangedAny;
   }
 };
 
