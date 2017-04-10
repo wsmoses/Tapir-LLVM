@@ -126,11 +126,17 @@ struct SyncElimination : public FunctionPass {
           for (const Instruction &VI : *VBB) {
             ImmutableCallSite RC(&RI), VC(&VI);
 
+            if (isa<SyncInst>(RI)) {
+              continue;
+            }
+
             if (!RC ||
                 !VC ||
                 AA->getModRefInfo(RC, VC) != MRI_NoModRef ||
                 AA->getModRefInfo(VC, RC) != MRI_NoModRef) {
               errs() << "SyncElimination:     Conflict found between " << RI << " and " << VI << "\n";
+              if (!RC) errs () << "RC was null \n";
+              if (!VC) errs () << "VC was null \n";
               return false;
             }
           }
