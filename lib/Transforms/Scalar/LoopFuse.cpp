@@ -181,7 +181,7 @@ bool LoopFuse::DependenceLegal(Loop &L1, Loop &L2) {
 
   // Check dependences.
   DEBUG(dbgs() << "Loop fused on versioned path. Checking dependences...\n");
-  LAI = &LAA->getInfo(FusedLoop, ValueToValueMap());
+  LAI = &LAA->getInfo(FusedLoop);
   DEBUG(LAI->print(dbgs()));
 
   auto Dependences = LAI->getDepChecker().getDependences();
@@ -489,7 +489,7 @@ bool LoopFuse::run(Loop &L1, Loop &L2) {
   }
 
   if (LFuseVerify) {
-    LI->verify();
+    LI->verify(*DT);
     DT->verifyDomTree();
   }
 
@@ -538,7 +538,7 @@ bool LoopFuse::runOnFunction(Function &F) {
   }
 
   if (LFuseVerify) {
-    LI->verify();
+    LI->verify(*DT);
     DT->verifyDomTree();
     assert((!verifyFunction(F, &dbgs())) && "Function verification failed!");
   }
