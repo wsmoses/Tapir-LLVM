@@ -14,17 +14,21 @@ int g(int x) {
     return x * x + 3;
 }
 
+int r1[N];
+int r2[N];
+
 int main(void)
 {
     int sum = 0;
 
     cilk_for (int i=0; i<N; i++) {
-        sum += f(i);
+        r1[i] = f(i) + g(i);
     }
 
     cilk_for (int i=0; i<N; i++) {
-        sum += g(i);
+        r2[i] = f(i) - g(i);
     }
 
-    printf("%d\n", sum);
+    printf("%d %d\n", r1[N / 2], r2[N / 2]);
+    return
 }
