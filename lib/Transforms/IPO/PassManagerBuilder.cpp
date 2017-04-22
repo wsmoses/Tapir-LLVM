@@ -118,7 +118,7 @@ static cl::opt<bool> EnableLoopLoadElim(
     cl::desc("Enable the LoopLoadElimination Pass"));
 
 static cl::opt<bool> EnableLoopFuse(
-    "enable-loop-fuse", cl::init(false), cl::Hidden,
+    "enable-loop-fuse", cl::init(true), cl::Hidden,
     cl::desc("Enable the new, experimental LoopFusion Pass"));
 
 static cl::opt<bool>
