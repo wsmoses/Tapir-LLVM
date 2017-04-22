@@ -117,6 +117,10 @@ static cl::opt<bool> EnableLoopLoadElim(
     "enable-loop-load-elim", cl::init(true), cl::Hidden,
     cl::desc("Enable the LoopLoadElimination Pass"));
 
+static cl::opt<bool> EnableLoopFuse(
+    "enable-loop-fuse", cl::init(false), cl::Hidden,
+    cl::desc("Enable the new, experimental LoopFusion Pass"));
+
 static cl::opt<bool>
     EnablePrepareForThinLTO("prepare-for-thinlto", cl::init(false), cl::Hidden,
                             cl::desc("Enable preparation for ThinLTO."));
@@ -574,6 +578,9 @@ void PassManagerBuilder::prepopulateModulePassManager(
   // currently only performed for loops marked with the metadata
   // llvm.loop.distribute=true or when -enable-loop-distribute is specified.
   MPM.add(createLoopDistributePass());
+
+  if (EnableLoopFuse)
+    MPM.add(createLoopFusePass());
 
   MPM.add(createLoopVectorizePass(DisableUnrollLoops, LoopVectorize));
 
