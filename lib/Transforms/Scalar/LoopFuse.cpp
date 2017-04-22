@@ -10,7 +10,7 @@
 /// Fuse two adjacent loops to improve cache locality. Loops are multi-versioned
 /// and unconditionally fused along one version to check for dependence
 /// legality. Legality decides whether to keep the original version or the fused
-/// version or both versions with runtime checks. LoopAccessAnalysis is used to
+/// version or both versions with runtime checks. LoopAccessLegacyAnalysis is used to
 /// check dependence legality.
 //
 //===----------------------------------------------------------------------===//
@@ -505,7 +505,7 @@ void PopulateInnermostLoopsOf(Loop &L, SmallVectorImpl<Loop *> &Loops) {
 
 bool LoopFuse::runOnFunction(Function &F) {
   LI = &getAnalysis<LoopInfoWrapperPass>().getLoopInfo();
-  LAA = &getAnalysis<LoopAccessAnalysis>();
+  LAA = &getAnalysis<LoopAccessLegacyAnalysis>();
   DT = &getAnalysis<DominatorTreeWrapperPass>().getDomTree();
   SE = &getAnalysis<ScalarEvolutionWrapperPass>().getSE();
 
@@ -550,7 +550,7 @@ char LoopFuse::ID;
 
 INITIALIZE_PASS_BEGIN(LoopFuse, "loop-fuse", "Loop Fusion", false, false)
 INITIALIZE_PASS_DEPENDENCY(LoopInfoWrapperPass)
-INITIALIZE_PASS_DEPENDENCY(LoopAccessAnalysis)
+INITIALIZE_PASS_DEPENDENCY(LoopAccessLegacyAnalysis)
 INITIALIZE_PASS_DEPENDENCY(DominatorTreeWrapperPass)
 INITIALIZE_PASS_DEPENDENCY(ScalarEvolutionWrapperPass)
 INITIALIZE_PASS_END(LoopFuse, "loop-fuse", "Loop Fusion", false, false)

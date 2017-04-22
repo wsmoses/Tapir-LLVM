@@ -46,7 +46,7 @@ public:
 private:
   // Analyses used.
   LoopInfo *LI;
-  LoopAccessAnalysis *LAA;
+  LoopAccessLegacyAnalysis *LAA;
   DominatorTree *DT;
   ScalarEvolution *SE;
 
@@ -99,7 +99,7 @@ public:
   }
 
   // Initialization interface when this pass is used as a utility.
-  LoopFuse(LoopInfo *_LI, LoopAccessAnalysis *_LAA, DominatorTree *_DT,
+  LoopFuse(LoopInfo *_LI, LoopAccessLegacyAnalysis *_LAA, DominatorTree *_DT,
            ScalarEvolution *_SE)
       : FunctionPass(ID), LI(_LI), LAA(_LAA), DT(_DT), SE(_SE) {}
 
@@ -116,7 +116,7 @@ public:
 
   void getAnalysisUsage(AnalysisUsage &AU) const override {
     AU.addRequired<LoopInfoWrapperPass>();
-    AU.addRequired<LoopAccessAnalysis>();
+    AU.addRequired<LoopAccessLegacyAnalysis>();
     AU.addRequired<DominatorTreeWrapperPass>();
     AU.addRequired<ScalarEvolutionWrapperPass>();
 
