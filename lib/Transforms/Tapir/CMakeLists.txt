@@ -1,6 +1,8 @@
 add_llvm_library(LLVMTapirOpts
   CilkABI.cpp
-  DougiePass.cpp
+  SmallBlock.cpp
+  RedundantSpawn.cpp
+  SpawnRestructure.cpp
   LowerToCilk.cpp
   LoopSpawning.cpp
   Outline.cpp
