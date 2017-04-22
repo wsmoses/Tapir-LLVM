@@ -162,7 +162,8 @@ private:
 
   // FIXME: we can do better
   void checkBlowUp(const Instruction &Inst) {
-    if (Inst.isFenceLike() || Inst.getOpcode() == Instruction::PtrToInt) {
+    if (isa<FenceInst>(Inst)) {
+      errs() << Inst << "\n";
       llvm_unreachable("BOOOOOOOOOOOOOOOOOOOOOOOOM! not supported (yet)");
     }
   }
