@@ -30,5 +30,6 @@ int main(void)
     }
 
     printf("%d %d\n", r1[N / 2], r2[N / 2]);
+
     return 0;
 }
