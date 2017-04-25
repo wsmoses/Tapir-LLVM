@@ -290,9 +290,11 @@ static Function *Get__cilkrts_detach(Module &M) {
 /// With exceptions disabled in the compiler, the function
 /// does not call __cilkrts_rethrow()
 static Function *GetCilkSyncFn(Module &M, bool instrument = false) {
-  Function *Fn = 0;
+  Function *Fn = nullptr;
 
-  if (GetOrCreateFunction<cilk_func>("__cilk_sync", M, Fn, Function::InternalLinkage, /*doesNotThrow*/false))
+  if (GetOrCreateFunction<cilk_func>("__cilk_sync", M, Fn,
+                                     Function::InternalLinkage,
+                                     /*doesNotThrow*/false))
     return Fn;
 
   // If we get here we need to add the function body
@@ -301,11 +303,13 @@ static Function *GetCilkSyncFn(Module &M, bool instrument = false) {
   Function::arg_iterator args = Fn->arg_begin();
   Value *SF = &*args;
 
-  BasicBlock *Entry = BasicBlock::Create(Ctx, "cilk.sync.test", Fn),
-    *SaveState = BasicBlock::Create(Ctx, "cilk.sync.savestate", Fn),
-    *SyncCall = BasicBlock::Create(Ctx, "cilk.sync.runtimecall", Fn),
-    *Excepting = BasicBlock::Create(Ctx, "cilk.sync.excepting", Fn),
-    *Exit = BasicBlock::Create(Ctx, "cilk.sync.end", Fn);
+  BasicBlock *Entry = BasicBlock::Create(Ctx, "cilk.sync.test", Fn);
+  BasicBlock *SaveState = BasicBlock::Create(Ctx, "cilk.sync.savestate", Fn);
+  BasicBlock *SyncCall = BasicBlock::Create(Ctx, "cilk.sync.runtimecall", Fn);
+  BasicBlock *Excepting = BasicBlock::Create(Ctx, "cilk.sync.excepting", Fn);
+  // TODO: Detect whether exceptions are needed.
+  BasicBlock *Rethrow = BasicBlock::Create(Ctx, "cilk.sync.rethrow", Fn);
+  BasicBlock *Exit = BasicBlock::Create(Ctx, "cilk.sync.end", Fn);
 
   // Entry
   {
@@ -354,7 +358,25 @@ static Function *GetCilkSyncFn(Module &M, bool instrument = false) {
   // Excepting
   {
     IRBuilder<> B(Excepting);
-    B.CreateBr(Exit);
+    if (Rethrow) {
+      Value *Flags = LoadField(B, SF, StackFrameBuilder::flags,
+                               /*isVolatile=*/true);
+      Flags = B.CreateAnd(Flags,
+                          ConstantInt::get(Flags->getType(),
+                                           CILK_FRAME_EXCEPTING));
+      Value *Zero = ConstantInt::get(Flags->getType(), 0);
+      Value *CanExcept = B.CreateICmpEQ(Flags, Zero);
+      B.CreateCondBr(CanExcept, Exit, Rethrow);
+    } else {
+      B.CreateBr(Exit);
+    }
+  }
+
+  // Rethrow
+  if (Rethrow) {
+    IRBuilder<> B(Rethrow);
+    B.CreateCall(CILKRTS_FUNC(rethrow, M), SF)->setDoesNotReturn();
+    B.CreateUnreachable();
   }
 
   // Exit
@@ -399,7 +421,7 @@ static Function *GetCilkSyncFn(Module &M, bool instrument = false) {
 ///     w->current_stack_frame = sf;
 /// }
 static Function *Get__cilkrts_enter_frame_1(Module &M) {
-  Function *Fn = 0;
+  Function *Fn = nullptr;
 
   if (GetOrCreateFunction<cilk_func>("__cilkrts_enter_frame_1", M, Fn))
     return Fn;
@@ -413,11 +435,12 @@ static Function *Get__cilkrts_enter_frame_1(Module &M) {
   BasicBlock *FastPath = BasicBlock::Create(Ctx, "fastpath", Fn);
   BasicBlock *Cont = BasicBlock::Create(Ctx, "cont", Fn);
 
-  llvm::PointerType *WorkerPtrTy = TypeBuilder<__cilkrts_worker*, false>::get(Ctx);
+  llvm::PointerType *WorkerPtrTy =
+    TypeBuilder<__cilkrts_worker*, false>::get(Ctx);
   StructType *SFTy = StackFrameBuilder::get(Ctx);
 
   // Block  (Entry)
-  CallInst *W = 0;
+  CallInst *W = nullptr;
   {
     IRBuilder<> B(Entry);
     if (fastCilk)
@@ -429,7 +452,7 @@ static Function *Get__cilkrts_enter_frame_1(Module &M) {
     B.CreateCondBr(Cond, SlowPath, FastPath);
   }
   // Block  (SlowPath)
-  CallInst *Wslow = 0;
+  CallInst *Wslow = nullptr;
   {
     IRBuilder<> B(SlowPath);
     Wslow = B.CreateCall(CILKRTS_FUNC(bind_thread_1, M));
@@ -484,7 +507,7 @@ static Function *Get__cilkrts_enter_frame_1(Module &M) {
 ///     w->current_stack_frame = sf;
 /// }
 static Function *Get__cilkrts_enter_frame_fast_1(Module &M) {
-  Function *Fn = 0;
+  Function *Fn = nullptr;
 
   if (GetOrCreateFunction<cilk_func>("__cilkrts_enter_frame_fast_1", M, Fn))
     return Fn;
@@ -562,7 +585,7 @@ static Function *Get__cilkrts_enter_frame_fast_1(Module &M) {
 ///     __cilkrts_leave_frame(sf);
 /// }
 static Function *GetCilkParentEpilogue(Module &M, bool instrument = false) {
-  Function *Fn = 0;
+  Function *Fn = nullptr;
 
   if (GetOrCreateFunction<cilk_func>("__cilk_parent_epilogue", M, Fn))
     return Fn;
@@ -658,7 +681,7 @@ Value* GetOrInitCilkStackFrame(Function& F, ValueToValueMapTy &DetachCtxToStackF
     II++;
   } while (curinst != alloc);
   Value *StackSave;
-  IRBuilder<> IRB( &(F.getEntryBlock()), II );
+  IRBuilder<> IRB(&(F.getEntryBlock()), II);
 
   if (instrument) {
     Type *Int8PtrTy = IRB.getInt8PtrTy();
@@ -782,6 +805,7 @@ bool makeFunctionDetachable(Function &extracted,
       IRB.CreateCall(CILK_CSI_FUNC(detach_end, *M));
   }
 
+  // Handle returns
   ReturnInst* Ret = nullptr;
   for (BasicBlock &BB : extracted) {
     TerminatorInst* TI = BB.getTerminator();
@@ -796,9 +820,34 @@ bool makeFunctionDetachable(Function &extracted,
   /*
      __cilkrts_pop_frame(&sf);
      if (sf->flags)
-     __cilkrts_leave_frame(&sf);
+       __cilkrts_leave_frame(&sf);
   */
   CallInst::Create(GetCilkParentEpilogue(*M, instrument), args, "", Ret);
+
+  // Handle resumes
+  for (BasicBlock &BB : extracted) {
+    if (!isa<ResumeInst>(BB.getTerminator()))
+      continue;
+    ResumeInst *RI = cast<ResumeInst>(BB.getTerminator());
+    /*
+      sf.flags = sf.flags | CILK_FRAME_EXCEPTING;
+      sf.except_data = Exn;
+     */
+    IRBuilder<> B(RI);
+    Value *Exn = B.CreateExtractValue(RI->getValue(), ArrayRef<unsigned>(0));
+    Value *Flags = LoadField(B, SF, StackFrameBuilder::flags,
+                             /*isVolatile=*/true);
+    Flags = B.CreateOr(Flags,
+                       ConstantInt::get(Flags->getType(),
+                                        CILK_FRAME_EXCEPTING));
+    StoreField(B, Exn, SF, StackFrameBuilder::except_data);
+    /*
+      __cilkrts_pop_frame(&sf);
+      if (sf->flags)
+        __cilkrts_leave_frame(&sf);
+    */
+    CallInst::Create(GetCilkParentEpilogue(*M, instrument), args, "", RI);
+  }
 
   return true;
 }
@@ -809,9 +858,9 @@ bool makeFunctionDetachable(Function &extracted,
 Value* llvm::cilk::GetOrCreateWorker8(Function &F) {
   // Value* W8 = F.getValueSymbolTable()->lookup(worker8_name);
   // if (W8) return W8;
-  IRBuilder<> b(F.getEntryBlock().getFirstNonPHIOrDbgOrLifetime());
-  Value* P0 = b.CreateCall(CILKRTS_FUNC(get_nworkers, *F.getParent()));
-  Value* P8 = b.CreateMul(P0, ConstantInt::get(P0->getType(), 8), worker8_name);
+  IRBuilder<> B(F.getEntryBlock().getFirstNonPHIOrDbgOrLifetime());
+  Value *P0 = B.CreateCall(CILKRTS_FUNC(get_nworkers, *F.getParent()));
+  Value *P8 = B.CreateMul(P0, ConstantInt::get(P0->getType(), 8), worker8_name);
   return P8;
 }
 
@@ -827,141 +876,220 @@ void llvm::cilk::createSync(SyncInst &SI, ValueToValueMapTy &DetachCtxToStackFra
   CallInst *CI = CallInst::Create(GetCilkSyncFn(M, instrument), args, "",
                                   /*insert before*/&SI);
   CI->setDebugLoc(SI.getDebugLoc());
-  auto Succ = SI.getSuccessor(0);
+  BasicBlock *Succ = SI.getSuccessor(0);
   SI.eraseFromParent();
   BranchInst::Create(Succ, CI->getParent());
 }
 
-bool llvm::cilk::verifyDetachedCFG(const DetachInst &detach, bool error) {
+bool llvm::cilk::verifyDetachedCFG(const DetachInst &Detach, DominatorTree &DT,
+                                   bool error) {
+  BasicBlock *Spawned  = Detach.getDetached();
+  BasicBlock *Continue = Detach.getContinue();
+  BasicBlockEdge DetachEdge(Detach.getParent(), Spawned);
+
   SmallVector<BasicBlock *, 32> Todo;
-
   SmallPtrSet<BasicBlock *, 32> functionPieces;
-  SmallVector<BasicBlock *, 32> reattachB;
-
-  BasicBlock *Spawned  = detach.getDetached();
-  BasicBlock *Continue = detach.getContinue();
+  SmallVector<BasicBlock *, 4> WorkListEH;
   Todo.push_back(Spawned);
 
-  while (Todo.size() > 0) {
+  while (!Todo.empty()) {
     BasicBlock *BB = Todo.pop_back_val();
 
     if (!functionPieces.insert(BB).second)
       continue;
 
-    TerminatorInst* term = BB->getTerminator();
-    if (term == nullptr) return false;
-    if (ReattachInst* inst = llvm::dyn_cast<ReattachInst>(term)) {
+    TerminatorInst* Term = BB->getTerminator();
+    if (Term == nullptr) return false;
+    if (ReattachInst* Inst = dyn_cast<ReattachInst>(Term)) {
       //only analyze reattaches going to the same continuation
-      if (inst->getSuccessor(0) != Continue) continue;
+      if (Inst->getSuccessor(0) != Continue) continue;
       continue;
-    } else if (DetachInst* inst = llvm::dyn_cast<DetachInst>(term)) {
-      assert(inst != &detach && "Found recursive detach!");
-      Todo.emplace_back(inst->getSuccessor(0));
-      Todo.emplace_back(inst->getSuccessor(1));
+    } else if (DetachInst* Inst = dyn_cast<DetachInst>(Term)) {
+      assert(Inst != &Detach && "Found recursive Detach!");
+      Todo.push_back(Inst->getSuccessor(0));
+      Todo.push_back(Inst->getSuccessor(1));
       continue;
-    } else if (SyncInst* inst = llvm::dyn_cast<SyncInst>(term)) {
+    } else if (SyncInst* Inst = dyn_cast<SyncInst>(Term)) {
       //only sync inner elements, consider as branch
-      Todo.emplace_back(inst->getSuccessor(0));
+      Todo.push_back(Inst->getSuccessor(0));
       continue;
-    } else if (BranchInst* inst = llvm::dyn_cast<BranchInst>(term)) {
-      for (unsigned idx = 0, max = inst->getNumSuccessors(); idx < max; idx++)
-        Todo.emplace_back(inst->getSuccessor(idx));
+    } else if (isa<BranchInst>(Term)) {
+      for (BasicBlock *Succ : successors(BB)) {
+        if (!DT.dominates(DetachEdge, Succ))
+          // We assume that this block is an exception-handling block and save
+          // it for later processing.
+          WorkListEH.push_back(Succ);
+        else
+          Todo.push_back(Succ);
+      }
       continue;
-    } else if (SwitchInst* inst = llvm::dyn_cast<SwitchInst>(term)) {
-      for (unsigned idx = 0, max = inst->getNumSuccessors(); idx < max; idx++)
-        Todo.emplace_back(inst->getSuccessor(idx));
+    } else if (isa<SwitchInst>(Term)) {
+      for (BasicBlock *Succ : successors(BB)) {
+        if (!DT.dominates(DetachEdge, Succ))
+          // We assume that this block is an exception-handling block and save
+          // it for later processing.
+          WorkListEH.push_back(Succ);
+        else
+          Todo.push_back(Succ);
+      }
       continue;
-    } else if (llvm::isa<UnreachableInst>(term)) {
+    } else if (InvokeInst *Inst = dyn_cast<InvokeInst>(Term)) {
+      Todo.push_back(Inst->getNormalDest());
+      BasicBlock *UnwindDest = Inst->getUnwindDest();
+      if (!DT.dominates(DetachEdge, UnwindDest))
+        WorkListEH.push_back(UnwindDest);
+      else
+        Todo.push_back(UnwindDest);
+    } else if (isa<UnreachableInst>(Term) || isa<ResumeInst>(Term)) {
       continue;
     } else {
-      DEBUG(term->dump());
-      DEBUG(term->getParent()->getParent()->dump());
-      if (error)
-        assert(0 && "Detached block did not absolutely terminate in reattach");
+      DEBUG(Term->dump());
+      DEBUG(Term->getParent()->getParent()->dump());
+      assert(!error && "Detached block did not absolutely terminate in reattach");
       return false;
+    }
+  }
+  {
+    SmallPtrSet<BasicBlock *, 4> Visited;
+    while (!WorkListEH.empty()) {
+      BasicBlock *BB = WorkListEH.pop_back_val();
+      if (!Visited.insert(BB).second)
+        continue;
+
+      // Make sure that the control flow through these exception-handling blocks
+      // cannot re-enter the blocks being outlined.
+      assert(!functionPieces.count(BB) &&
+             "EH blocks for a detached region reenter that region.");
+
+      // Make sure that the control flow through these exception-handling blocks
+      // doesn't perform an ordinary return.
+      assert(!isa<ReturnInst>(BB->getTerminator()) &&
+             "EH block terminated by return.");
+
+      // Make sure that the control flow through these exception-handling blocks
+      // doesn't reattach to the detached CFG's continuation.
+      if (ReattachInst *RI = dyn_cast<ReattachInst>(BB->getTerminator()))
+        assert(RI->getSuccessor(0) != Continue &&
+               "Exit block reaches a reattach to the continuation.");
+
+      for (BasicBlock *Succ : successors(BB))
+        WorkListEH.push_back(Succ);
     }
   }
   return true;
 }
 
-size_t llvm::cilk::getNumPred(BasicBlock* BB) {
-  size_t cnt = 0;
-  for (auto it = pred_begin(BB), et = pred_end(BB); it != et; ++it) {
-    cnt++;
-  }
-  return cnt;
-}
+bool llvm::cilk::populateDetachedCFG(
+    const DetachInst &Detach, DominatorTree &DT,
+    SmallPtrSetImpl<BasicBlock *> &functionPieces,
+    SmallVectorImpl<BasicBlock *> &reattachB,
+    SmallPtrSetImpl<BasicBlock *> &ExitBlocks,
+    bool replace, bool error) {
+  SmallVector<BasicBlock *, 32> Todo;
+  SmallVector<BasicBlock *, 4> WorkListEH;
 
-bool llvm::cilk::populateDetachedCFG(const DetachInst &detach, DominatorTree &DT,
-				     SmallPtrSetImpl<BasicBlock *> &functionPieces,
-				     SmallVectorImpl<BasicBlock *> &reattachB,
-				     bool replace, bool error) {
-  SmallVector<BasicBlock *, 32> todo;
+  BasicBlock *Spawned  = Detach.getDetached();
+  BasicBlock *Continue = Detach.getContinue();
+  BasicBlockEdge DetachEdge(Detach.getParent(), Spawned);
+  Todo.push_back(Spawned);
 
-  BasicBlock* Spawned  = detach.getDetached();
-  BasicBlock* Continue = detach.getContinue();
-  todo.push_back(Spawned);
-
-  while (todo.size() > 0) {
-    BasicBlock* BB = todo.pop_back_val();
+  while (!Todo.empty()) {
+    BasicBlock *BB = Todo.pop_back_val();
 
     if (!functionPieces.insert(BB).second)
       continue;
 
-    TerminatorInst* term = BB->getTerminator();
-    if (term == nullptr) return false;
-    if (isa<ReattachInst>(term)) {
-      //only analyze reattaches going to the same continuation
-      if (term->getSuccessor(0) != Continue) continue;
+    TerminatorInst *Term = BB->getTerminator();
+    if (Term == nullptr) return false;
+    if (isa<ReattachInst>(Term)) {
+      // only analyze reattaches going to the same continuation
+      if (Term->getSuccessor(0) != Continue) continue;
       if (replace) {
         BranchInst* toReplace = BranchInst::Create(Continue);
-        ReplaceInstWithInst(term, toReplace);
+        ReplaceInstWithInst(Term, toReplace);
         reattachB.push_back(BB);
       }
       continue;
-    } else if (isa<DetachInst>(term)) {
-      assert( term != &detach && "Found recursive detach!" );
-      todo.emplace_back(term->getSuccessor(0));
-      todo.emplace_back(term->getSuccessor(1));
+    } else if (isa<DetachInst>(Term)) {
+      assert(Term != &Detach && "Found recursive detach!");
+      Todo.push_back(Term->getSuccessor(0));
+      Todo.push_back(Term->getSuccessor(1));
       continue;
-    } else if(isa<SyncInst>(term)) {
+    } else if (isa<SyncInst>(Term)) {
       //only sync inner elements, consider as branch
-      todo.emplace_back(term->getSuccessor(0));
+      Todo.push_back(Term->getSuccessor(0));
       continue;
-    } else if (llvm::isa<BranchInst>(term) || llvm::isa<SwitchInst>(term)) {
-      for( unsigned idx = 0, max = term->getNumSuccessors(); idx < max; idx++ ) {
-        BasicBlock* suc0 = term->getSuccessor(idx);
-        int np = getNumPred(suc0);
-        if (isa<UnreachableInst>(suc0->getTerminator()) && suc0->size() == 1 && np>1) {
-          BasicBlock* suc = BasicBlock::Create(suc0->getContext(), "unreachable", suc0->getParent());
-          suc->moveAfter(BB);
-          IRBuilder<> b(suc);
-          b.CreateUnreachable();
-          term->setSuccessor(idx, suc);
-          DT.addNewBlock(suc, BB);
-          BasicBlock* dom = nullptr;
-          for (auto it = pred_begin(suc0), et = pred_end(suc0); it != et; ++it) {
-            if (dom==nullptr) dom = *it;
-            else dom = DT.findNearestCommonDominator(dom, *it);
-          }
-          assert (dom);
-          DT.changeImmediateDominator(suc0, dom);
-          DT.verifyDomTree();
-          suc0 = suc;
-        }
+    } else if (InvokeInst *II = dyn_cast_or_null<InvokeInst>(Term)) {
+      Todo.push_back(II->getNormalDest());
 
-        todo.emplace_back(suc0);
+      BasicBlock *UnwindDest = II->getUnwindDest();
+      if (!DT.dominates(DetachEdge, UnwindDest)) {
+        ExitBlocks.insert(UnwindDest);
+        WorkListEH.push_back(UnwindDest);
+      } else {
+        Todo.push_back(UnwindDest);
       }
+    } else if (isa<BranchInst>(Term) || isa<SwitchInst>(Term)) {
+      for (BasicBlock *Succ : successors(BB)) {
+        if (!DT.dominates(DetachEdge, Succ)) {
+          // We assume that this block is an exception-handling block and save
+          // it for later processing.
+          ExitBlocks.insert(Succ);
+          WorkListEH.push_back(Succ);
+        } else {
+          Todo.push_back(Succ);
+        }
+      }
+      // We don't bother cloning unreachable exits from the detached CFG at this
+      // point.  We're cloning the entire detached CFG anyway when we outline
+      // the function.
       continue;
-    } else if (llvm::isa<UnreachableInst>(term)) {
+    } else if (isa<UnreachableInst>(Term) || isa<ResumeInst>(Term)) {
       continue;
     } else {
-      DEBUG(term->dump());
-      DEBUG(term->getParent()->getParent()->dump());
-      if (error) assert( 0 && "Detached block did not absolutely terminate in reattach");
+      DEBUG(Term->dump());
+      DEBUG(Term->getParent()->getParent()->dump());
+      assert(!error && "Detached block did not absolutely terminate in reattach");
       return false;
     }
   }
+
+  {
+    SmallPtrSet<BasicBlock *, 4> Visited;
+    while (!WorkListEH.empty()) {
+      BasicBlock *BB = WorkListEH.pop_back_val();
+      if (!Visited.insert(BB).second)
+        continue;
+
+      // Make sure that the control flow through these exception-handling blocks
+      // cannot re-enter the blocks being outlined.
+      assert(!functionPieces.count(BB) &&
+             "EH blocks for a detached region reenter that region.");
+
+      // Make sure that the control flow through these exception-handling blocks
+      // doesn't perform an ordinary return.
+      assert(!isa<ReturnInst>(BB->getTerminator()) &&
+             "EH block terminated by return.");
+
+      // Make sure that the control flow through these exception-handling blocks
+      // doesn't reattach to the detached CFG's continuation.
+      if (ReattachInst *RI = dyn_cast<ReattachInst>(BB->getTerminator()))
+        assert(RI->getSuccessor(0) != Continue &&
+               "Exit block reaches a reattach to the continuation.");
+
+      // if (isa<ResumeInst>(BB-getTerminator()))
+      //   ResumeBlocks.push_back(BB);
+
+      for (BasicBlock *Succ : successors(BB))
+        WorkListEH.push_back(Succ);
+    }
+
+    // Visited now contains exception-handling blocks that we want to clone as
+    // part of outlining.
+    for (BasicBlock *EHBlock : Visited)
+      functionPieces.insert(EHBlock);
+  }
+
   return true;
 }
 
@@ -978,6 +1106,7 @@ Function *llvm::cilk::extractDetachBodyToFunction(DetachInst &detach,
 
   SmallPtrSet<BasicBlock *, 32> functionPieces;
   SmallVector<BasicBlock *, 32> reattachB;
+  SmallPtrSet<BasicBlock *, 4> ExitBlocks;
 
   // if (!Spawned->getUniquePredecessor())
   //   dbgs() << *Spawned;
@@ -1002,16 +1131,20 @@ Function *llvm::cilk::extractDetachBodyToFunction(DetachInst &detach,
   //   Spawned = ts;
   // }
 
-  if (!populateDetachedCFG(detach, DT, functionPieces, reattachB, true)) return nullptr;
+  if (!populateDetachedCFG(detach, DT, functionPieces, reattachB,
+                           ExitBlocks, true))
+    return nullptr;
 
-  functionPieces.erase(Spawned);
-  std::vector<BasicBlock *> blocks(functionPieces.begin(), functionPieces.end());
-  blocks.insert( blocks.begin(), Spawned );
-  functionPieces.insert(Spawned);
+  // functionPieces.erase(Spawned);
+  // std::vector<BasicBlock *> blocks(functionPieces.begin(), functionPieces.end());
+  // blocks.insert(blocks.begin(), Spawned);
+  // functionPieces.insert(Spawned);
 
   // Check the spawned block's predecessors.
-  for (BasicBlock* BB: blocks) {
+  for (BasicBlock *BB : functionPieces) {
     int detached_count = 0;
+    if (ExitBlocks.count(BB))
+      continue;
     for (pred_iterator PI = pred_begin(BB), E = pred_end(BB); PI != E; ++PI) {
       BasicBlock *Pred = *PI;
       if (detached_count == 0 && BB == Spawned && Pred == detach.getParent()) {
@@ -1023,19 +1156,10 @@ Function *llvm::cilk::extractDetachBodyToFunction(DetachInst &detach,
     }
   }
 
-  // Instruction *inst = 0, *inst0 = 0;
-  // Instruction* add = 0;
-  // std::vector<Instruction*> moveToFront;
-
-  CodeExtractor extractor(ArrayRef<BasicBlock*>(blocks), &DT);
-  if (!extractor.isEligible()) {
-    DEBUG(for(auto& a : blocks) a->dump());
-    assert(0 && "Code not able to be extracted!");
-  }
-
   // Get the inputs and outputs for the detached CFG.
   SetVector<Value *> Inputs, Outputs;
-  extractor.findInputsOutputs(Inputs, Outputs);
+  findInputsOutputs(functionPieces, Inputs, Outputs, &ExitBlocks);
+  // extractor.findInputsOutputs(Inputs, Outputs);
   assert(Outputs.empty() &&
          "All results from detached CFG should be passed by memory already.");
 
@@ -1054,11 +1178,13 @@ Function *llvm::cilk::extractDetachBodyToFunction(DetachInst &detach,
       MD[SP->getFile()].reset(SP->getFile());
     }
 
+    std::vector<BasicBlock *> blocks(functionPieces.begin(), functionPieces.end());
+
     extracted = CreateHelper(Inputs, Outputs, blocks,
                              Spawned, Detacher, Continue,
                              VMap, F.getParent(),
                              /*ModuleLevelChanges=*/false, Returns, ".d2c",
-                             nullptr, nullptr, nullptr);
+                             &ExitBlocks, nullptr, nullptr, nullptr);
 
     assert(Returns.empty() && "Returns cloned when cloning detached CFG.");
 

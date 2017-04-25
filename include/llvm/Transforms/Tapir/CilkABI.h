@@ -1,4 +1,4 @@
-//===- llvm/Transforms/CilkABI.h - Interface to the Cilk Plus runtime --*- C++ -*--===//
+//===- CilkABI.h - Interface to the Intel Cilk Plus runtime ----*- C++ -*--===//
 //
 //                     The LLVM Compiler Infrastructure
 //
@@ -22,48 +22,22 @@
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/Dominators.h"
 #include "llvm/IR/Function.h"
-#include "llvm/IR/Module.h"
-#include "llvm/IR/Intrinsics.h"
-#include "llvm/IR/Instructions.h"
-#include "llvm/Transforms/Utils/UnifyFunctionExitNodes.h"
-#include "llvm/Transforms/Utils/BasicBlockUtils.h"
-
-#include "llvm/Transforms/Utils/Cloning.h"
-#include "llvm/Transforms/Utils/CodeExtractor.h"
-#include "llvm/Transforms/Utils/ValueMapper.h"
-#include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/InlineAsm.h"
+#include "llvm/IR/InstIterator.h"
+#include "llvm/IR/Instructions.h"
+#include "llvm/IR/Intrinsics.h"
+#include "llvm/IR/IRBuilder.h"
+#include "llvm/IR/Module.h"
 #include "llvm/IR/TypeBuilder.h"
 #include "llvm/IR/ValueSymbolTable.h"
-
-#include "llvm/IR/InstIterator.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Transforms/Utils/UnifyFunctionExitNodes.h"
+#include "llvm/Transforms/Utils/BasicBlockUtils.h"
+#include "llvm/Transforms/Utils/Cloning.h"
+#include "llvm/Transforms/Utils/ValueMapper.h"
 #include <deque>
 
 extern llvm::cl::opt<bool> fastCilk;
-
-static inline size_t getNonPhiSize(llvm::BasicBlock* b){
-    int bad = 0;
-    llvm::BasicBlock::iterator i = b->begin();
-    while (llvm::isa<llvm::PHINode>(i) ) { ++i; bad++; }
-    return b->size() - bad;
-}
-
-static inline llvm::Instruction* getFirstPostPHI(llvm::BasicBlock* b){
-    llvm::BasicBlock::iterator i = b->begin();
-    while (llvm::isa<llvm::PHINode>(i) ) { ++i; }
-    return &(*i);
-}
-
-static inline llvm::Instruction* getLastNonTerm(llvm::BasicBlock* b){
-    llvm::Instruction* inst = nullptr;
-    llvm::BasicBlock::iterator i = b->begin();
-    while (i != b->end()) {
-      if(!llvm::isa<llvm::TerminatorInst>(i)) inst = &(*i);
-      ++i;
-    }
-    return inst;
-}
 
 namespace {
 
@@ -116,6 +90,7 @@ typedef void (__cilkrts_init)();
 typedef void (__cilkrts_enter_frame_1)(__cilkrts_stack_frame *sf);
 typedef void (__cilkrts_enter_frame_fast_1)(__cilkrts_stack_frame *sf);
 typedef void (__cilkrts_leave_frame)(__cilkrts_stack_frame *sf);
+typedef void (__cilkrts_rethrow)(__cilkrts_stack_frame *sf);
 typedef void (__cilkrts_sync)(__cilkrts_stack_frame *sf);
 typedef void (__cilkrts_detach)(__cilkrts_stack_frame *sf);
 typedef void (__cilkrts_pop_frame)(__cilkrts_stack_frame *sf);
@@ -169,6 +144,8 @@ static llvm::Function *Get__cilkrts_get_nworkers(llvm::Module& M) {
 DEFAULT_GET_CILKRTS_FUNC(init)
 #pragma GCC diagnostic ignored "-Wunused-function"
 DEFAULT_GET_CILKRTS_FUNC(sync)
+#pragma GCC diagnostic ignored "-Wunused-function"
+DEFAULT_GET_CILKRTS_FUNC(rethrow)
 #pragma GCC diagnostic ignored "-Wunused-function"
 DEFAULT_GET_CILKRTS_FUNC(leave_frame)
 #pragma GCC diagnostic ignored "-Wunused-function"
@@ -346,25 +323,27 @@ public:
 namespace llvm {
 namespace cilk {
 
-  Value *GetOrCreateWorker8(Function &F);
-  void createSync(SyncInst &inst, ValueToValueMapTy &DetachCtxToStackFrame,
-                  bool instrument = false);
-  bool verifyDetachedCFG(const DetachInst &detach, bool error = true);
-  size_t getNumPred(BasicBlock *BB);
+Value *GetOrCreateWorker8(Function &F);
+void createSync(SyncInst &inst, ValueToValueMapTy &DetachCtxToStackFrame,
+                bool instrument = false);
 
-  bool populateDetachedCFG(const DetachInst &detach, DominatorTree &DT,
-			   SmallPtrSetImpl<BasicBlock *> &functionPieces,
-			   SmallVectorImpl<BasicBlock *> &reattachB,
-			   bool replace, bool error = true);
+bool verifyDetachedCFG(const DetachInst &Detach, DominatorTree &DT,
+                       bool error = true);
 
-  Function *extractDetachBodyToFunction(DetachInst &detach,
-                                        DominatorTree &DT, AssumptionCache &AC,
-                                        CallInst **call = nullptr);
+bool populateDetachedCFG(const DetachInst &Detach, DominatorTree &DT,
+                         SmallPtrSetImpl<BasicBlock *> &functionPieces,
+                         SmallVectorImpl<BasicBlock *> &reattachB,
+                         SmallPtrSetImpl<BasicBlock *> &ExitBlocks,
+                         bool replace, bool error = true);
 
-  Function *createDetach(DetachInst &detach,
-                         ValueToValueMapTy &DetachCtxToStackFrame,
-                         DominatorTree &DT, AssumptionCache &AC,
-                         bool instrument = false);
+Function *extractDetachBodyToFunction(DetachInst &Detach,
+                                      DominatorTree &DT, AssumptionCache &AC,
+                                      CallInst **call = nullptr);
+
+Function *createDetach(DetachInst &Detach,
+                       ValueToValueMapTy &DetachCtxToStackFrame,
+                       DominatorTree &DT, AssumptionCache &AC,
+                       bool instrument = false);
 
 }  // end of cilk namespace
 }  // end of llvm namespace

@@ -338,13 +338,12 @@ public:
         BB.printAsOperand(*OS, true, MST);
         *OS << "\n";
       }
-      /*
-      if (const DetachInst* det = dyn_cast<DetachInst>(&I->back())) {
-        if (!llvm::cilk::verifyDetachedCFG(*det)) {
-          OS << "Invalid end to detached CFG\n";
-          return true;
-        }
-      }*/
+      // if (const DetachInst* Det = dyn_cast<DetachInst>(&I->back())) {
+      //   if (!cilk::verifyDetachedCFG(*Det, DT)) {
+      //     OS << "Invalid end to detached CFG\n";
+      //     return true;
+      //   }
+      // }
       return false;
     }
 

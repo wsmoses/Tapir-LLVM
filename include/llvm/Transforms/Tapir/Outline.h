@@ -26,9 +26,19 @@
 
 namespace llvm {
 
-// Clone Blocks into NewFunc, transforming the old arguments into references to
-// VMap values.
-//
+typedef SetVector<Value *> ValueSet;
+
+/// Find the inputs and outputs for a function outlined from the gives set of
+/// basic blocks.
+void findInputsOutputs(const SmallPtrSetImpl<BasicBlock *> &Blocks,
+                       ValueSet &Inputs,
+                       ValueSet &Outputs,
+                       const SmallPtrSetImpl<BasicBlock *> *ExitBlocks =
+                       nullptr);
+
+/// Clone Blocks into NewFunc, transforming the old arguments into references to
+/// VMap values.
+///
 /// TODO: Fix the std::vector part of the type of this function.
 void CloneIntoFunction(Function *NewFunc, const Function *OldFunc,
                        std::vector<BasicBlock *> Blocks,
@@ -36,6 +46,7 @@ void CloneIntoFunction(Function *NewFunc, const Function *OldFunc,
                        bool ModuleLevelChanges,
                        SmallVectorImpl<ReturnInst *> &Returns,
                        const StringRef NameSuffix,
+                       SmallPtrSetImpl<BasicBlock *> *ExitBlocks = nullptr,
                        ClonedCodeInfo *CodeInfo = nullptr,
                        ValueMapTypeRemapper *TypeMapper = nullptr,
                        ValueMaterializer *Materializer = nullptr);
@@ -45,8 +56,8 @@ void CloneIntoFunction(Function *NewFunc, const Function *OldFunc,
 /// Outputs as follows: f(in0, ..., inN, out0, ..., outN)
 ///
 /// TODO: Fix the std::vector part of the type of this function.
-Function *CreateHelper(const SetVector<Value *> &Inputs,
-                       const SetVector<Value *> &Outputs,
+Function *CreateHelper(const ValueSet &Inputs,
+                       const ValueSet &Outputs,
                        std::vector<BasicBlock *> Blocks,
                        BasicBlock *Header,
                        const BasicBlock *OldEntry,
@@ -56,13 +67,14 @@ Function *CreateHelper(const SetVector<Value *> &Inputs,
                        bool ModuleLevelChanges,
                        SmallVectorImpl<ReturnInst *> &Returns,
                        const StringRef NameSuffix,
+                       SmallPtrSetImpl<BasicBlock *> *ExitBlocks = nullptr,
                        ClonedCodeInfo *CodeInfo = nullptr,
                        ValueMapTypeRemapper *TypeMapper = nullptr,
                        ValueMaterializer *Materializer = nullptr);
 
-// Move static allocas in a cloned block into the entry block of helper.  Leave
-// lifetime markers behind for those static allocas.  Returns true if the cloned
-// block still contains dynamic allocas, which cannot be moved.
+/// Move static allocas in a cloned block into the entry block of helper.  Leave
+/// lifetime markers behind for those static allocas.  Returns true if the
+/// cloned block still contains dynamic allocas, which cannot be moved.
 bool MoveStaticAllocasInClonedBlock(
     Function *Helper,
     BasicBlock *ClonedBlock,
@@ -71,7 +83,7 @@ bool MoveStaticAllocasInClonedBlock(
 // Add alignment assumptions to parameters of outlined function, based on known
 // alignment data in the caller.
 void AddAlignmentAssumptions(const Function *Caller,
-                             const SetVector<Value *> &Inputs,
+                             const ValueSet &Inputs,
                              ValueToValueMapTy &VMap,
                              const Instruction *CallSite,
                              AssumptionCache *AC,

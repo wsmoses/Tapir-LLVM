@@ -16,6 +16,7 @@
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/Analysis/LoopInfo.h"
+#include "llvm/Analysis/LoopIterator.h"
 #include "llvm/Analysis/OptimizationDiagnosticInfo.h"
 #include "llvm/Analysis/ScalarEvolution.h"
 #include "llvm/Analysis/ScalarEvolutionExpander.h"
@@ -329,6 +330,7 @@ public:
       : OrigLoop(OrigLoop), SE(SE), LI(LI), DT(DT), AC(AC), ORE(ORE),
         ExitBlock(nullptr)
   {
+    // Use the loop latch to determine the canonical exit block for this loop.
     TerminatorInst *TI = OrigLoop->getLoopLatch()->getTerminator();
     if (2 != TI->getNumSuccessors())
       return;
@@ -348,6 +350,7 @@ protected:
 
   /// The original loop.
   Loop *OrigLoop;
+
   /// A wrapper around ScalarEvolution used to add runtime SCEV checks. Applies
   /// dynamic knowledge to simplify SCEV expressions and converts them to a
   /// more usable form.
@@ -362,9 +365,9 @@ protected:
   /// Interface to emit optimization remarks.
   OptimizationRemarkEmitter &ORE;
 
-  /// The exit block of this loop.  We compute our own exit block,
-  /// based on the latch, to deal with blocks terminated by
-  /// unreachable.
+  /// The exit block of this loop.  We compute our own exit block, based on the
+  /// latch, and handle other exit blocks (i.e., for exception handling) in a
+  /// special manner.
   BasicBlock *ExitBlock;
 
 // private:
@@ -812,6 +815,93 @@ void DACLoopSpawning::implementDACIterSpawnOnHelper(Function *Helper,
   }
 }
 
+/// Helper routine to get all exit blocks of a loop that are unreachable.
+static void getUnreachableExits(
+    Loop *L, const BasicBlock *DesignatedExitBlock,
+    SmallVectorImpl<BasicBlock *> &UnreachableExits) {
+  SmallVector<BasicBlock *, 4> ExitBlocks;
+  L->getExitBlocks(ExitBlocks);
+
+  for (BasicBlock *Exit : ExitBlocks) {
+    if (Exit == DesignatedExitBlock) continue;
+    if (isa<UnreachableInst>(Exit->getTerminator()))
+      UnreachableExits.push_back(Exit);
+  }
+}
+
+/// Helper routine to get all blocks involved in terminating a loop early due to
+/// an exception.
+static void getExceptionHandlingExits(Loop *L,
+                                      SmallVectorImpl<BasicBlock *> &EHExits,
+                                      SmallVectorImpl<BasicBlock *> &Resumes) {
+  BasicBlock *Header = L->getHeader();
+  BasicBlock *Latch = L->getLoopLatch();
+
+  // Collect the unwind destinations of any blocks in the loop.
+  SmallVector<BasicBlock *, 4> WorkList;
+  SmallVector<BasicBlock *, 4> WorkListEH;
+  std::vector<BasicBlock *> LoopBlocks = L->getBlocks();
+  for (BasicBlock *BB : LoopBlocks) {
+    if (BB == Header) continue;
+    if (BB == Latch) continue;
+    if (InvokeInst *II = dyn_cast<InvokeInst>(BB->getTerminator())) {
+      BasicBlock *UD = II->getUnwindDest();
+      if (!L->contains(UD)) {
+        EHExits.push_back(UD);
+        WorkListEH.push_back(UD);
+      } else {
+        WorkList.push_back(UD);
+      }
+    }
+  }
+
+  // Collect exit blocks of the loop that are reachable from those unwind
+  // destinations.
+  SmallPtrSet<BasicBlock *, 4> Visited;
+  while (!WorkList.empty()) {
+    BasicBlock *BB = WorkList.pop_back_val();
+    if (!Visited.insert(BB).second)
+      continue;
+
+    if (BB == Latch) continue;
+
+    for (BasicBlock *Succ : successors(BB)) {
+      if (!L->contains(Succ)) {
+        EHExits.push_back(Succ);
+        WorkListEH.push_back(Succ);
+      } else {
+        WorkList.push_back(Succ);
+      }
+    }
+  }
+
+  // EHExits now contains the frontier of exit blocks from the loop that are
+  // reachable from the unwind destinations of invokes within the loop.
+
+  // Traverse the CFG from these frontier blocks to find all blocks involved in
+  // exception-handling exit code.
+  SmallPtrSet<BasicBlock *, 4> VisitedEH;
+  while (!WorkListEH.empty()) {
+    BasicBlock *BB = WorkListEH.pop_back_val();
+    if (!VisitedEH.insert(BB).second)
+      continue;
+
+    // Check that the exception handling blocks do not reenter the loop.
+    assert(!L->contains(BB) &&
+           "Exception handling blocks re-enter loop from unwind.");
+
+    // Keep track of the blocks terminated by resumes separately.  We'll want to
+    // add syncs to these blocks.
+    if (isa<ResumeInst>(BB->getTerminator()))
+      Resumes.push_back(BB);
+    else
+      for (BasicBlock *Succ : successors(BB)) {
+        EHExits.push_back(Succ);
+        WorkListEH.push_back(Succ);
+      }
+  }
+}
+
 /// Top-level call to convert loop to spawn its iterations in a
 /// divide-and-conquer fashion.
 bool DACLoopSpawning::processLoop() {
@@ -821,9 +911,17 @@ bool DACLoopSpawning::processLoop() {
   BasicBlock *Preheader = L->getLoopPreheader();
   BasicBlock *Latch = L->getLoopLatch();
 
+  DEBUG({
+      LoopBlocksDFS DFS(L);
+      DFS.perform(LI);
+      dbgs() << "Blocks in loop (from DFS):\n";
+      for (BasicBlock *BB : make_range(DFS.beginRPO(), DFS.endRPO()))
+        dbgs() << *BB;
+    });
+
   using namespace ore;
 
-  // Check the exit blocks of the loop.
+  // Check that this loop has a valid exit block after the latch.
   if (!ExitBlock) {
     DEBUG(dbgs() << "LS loop does not contain valid exit block after latch.\n");
     ORE.emit(OptimizationRemarkAnalysis(LS_NAME, "InvalidLatchExit",
@@ -833,11 +931,36 @@ bool DACLoopSpawning::processLoop() {
     return false;
   }
 
+  // Get special exits from this loop.
+  SmallVector<BasicBlock *, 4> UnreachableExits;
+  SmallVector<BasicBlock *, 4> EHExits;
+  SmallVector<BasicBlock *, 4> Resumes;
+  getUnreachableExits(L, ExitBlock, UnreachableExits);
+  getExceptionHandlingExits(L, EHExits, Resumes);
+
+  // Check the exit blocks of the loop.
   SmallVector<BasicBlock *, 4> ExitBlocks;
   L->getExitBlocks(ExitBlocks);
+
   for (const BasicBlock *Exit : ExitBlocks) {
     if (Exit == ExitBlock) continue;
-    if (!isa<UnreachableInst>(Exit->getTerminator())) {
+    if (Exit->isLandingPad()) {
+      DEBUG({
+          const LandingPadInst *LPI = Exit->getLandingPadInst();
+          dbgs() << "landing pad found: " << *LPI << "\n";
+          for (const User *U : LPI->users())
+            dbgs() << "\tuser " << *U << "\n";
+        });
+    }
+  }
+  SmallPtrSet<BasicBlock *, 4> HandledExits;
+  for (BasicBlock *BB : UnreachableExits)
+    HandledExits.insert(BB);
+  for (BasicBlock *BB : EHExits)
+    HandledExits.insert(BB);
+  for (BasicBlock *Exit : ExitBlocks) {
+    if (Exit == ExitBlock) continue;
+    if (!HandledExits.count(Exit)) {
       DEBUG(dbgs() << "LS loop contains a bad exit block " << *Exit);
       ORE.emit(OptimizationRemarkAnalysis(LS_NAME, "BadExit",
                                           L->getStartLoc(),
@@ -852,13 +975,9 @@ bool DACLoopSpawning::processLoop() {
 
   DEBUG(dbgs() << "LS loop header:" << *Header);
   DEBUG(dbgs() << "LS loop latch:" << *Latch);
-
-  // DEBUG(dbgs() << "LS SE backedge taken count: " << *(SE.getBackedgeTakenCount(L)) << "\n");
-  // DEBUG(dbgs() << "LS SE max backedge taken count: " << *(SE.getMaxBackedgeTakenCount(L)) << "\n");
   DEBUG(dbgs() << "LS SE exit count: " << *(SE.getExitCount(L, Latch)) << "\n");
 
   /// Get loop limit.
-  // const SCEV *Limit = SE.getBackedgeTakenCount(L);
   const SCEV *Limit = SE.getExitCount(L, Latch);
   DEBUG(dbgs() << "LS Loop limit: " << *Limit << "\n");
   // PredicatedScalarEvolution PSE(SE, *L);
@@ -892,7 +1011,7 @@ bool DACLoopSpawning::processLoop() {
   const SCEVAddRecExpr *CanonicalSCEV =
     cast<const SCEVAddRecExpr>(SE.getSCEV(CanonicalIV));
 
-  // Remove all IV's other can CanonicalIV.
+  // Remove all IV's other than CanonicalIV.
   // First, check that we can do this.
   bool CanRemoveIVs = true;
   for (BasicBlock::iterator II = Header->begin(); isa<PHINode>(II); ++II) {
@@ -933,6 +1052,10 @@ bool DACLoopSpawning::processLoop() {
       PHINode *PN = cast<PHINode>(II);
       if (PN == CanonicalIV) continue;
       const SCEV *S = SE.getSCEV(PN);
+      DEBUG(dbgs() << "Removing the IV " << *PN << " (" << *S << ")\n");
+      ORE.emit(OptimizationRemarkAnalysis(LS_NAME, "RemoveIV", PN)
+               << "removing the IV "
+               << NV("PHINode", PN));
       Value *NewIV = Exp.expandCodeFor(S, S->getType(), CanonicalIV);
       PN->replaceAllUsesWith(NewIV);
       IVsToRemove.push_back(PN);
@@ -962,8 +1085,20 @@ bool DACLoopSpawning::processLoop() {
       });
     if (ConstantInt *C =
         dyn_cast<ConstantInt>(PN->getIncomingValueForBlock(Preheader))) {
-      if (C->isZero())
+      if (C->isZero()) {
+        DEBUG({
+            if (PN != CanonicalIV) {
+              const SCEVAddRecExpr *PNSCEV =
+                dyn_cast<const SCEVAddRecExpr>(SE.getSCEV(PN));
+              dbgs() << "Saving the canonical IV " << *PN << " (" << *PNSCEV << ")\n";
+            }
+          });
+        if (PN != CanonicalIV)
+          ORE.emit(OptimizationRemarkAnalysis(LS_NAME, "SaveIV", PN)
+                   << "saving the canonical the IV "
+                   << NV("PHINode", PN));
         IVs.push_back(PN);
+      }
     } else {
       AllCanonical = false;
       DEBUG(dbgs() << "Remaining non-canonical PHI Node found: " << *PN <<
@@ -1006,22 +1141,42 @@ bool DACLoopSpawning::processLoop() {
   SetVector<Value *> BodyInputs, BodyOutputs;
   ValueToValueMapTy VMap, InputMap;
   std::vector<BasicBlock *> LoopBlocks;
+  SmallPtrSet<BasicBlock *, 4> ExitsToSplit;
 
   // Add start iteration, end iteration, and grainsize to inputs.
   {
-    // TODO?: Replace with LoopBlocksDFS call.
     LoopBlocks = L->getBlocks();
-    // Add exit blocks terminated by unreachable.  There should not be any other
-    // exit blocks in the loop.
-    SmallSet<BasicBlock *, 4> UnreachableExit;
-    for (BasicBlock *Exit : ExitBlocks) {
-      if (Exit == ExitBlock) continue;
-      assert(isa<UnreachableInst>(Exit->getTerminator()) &&
-             "Found problematic exit block.");
-      UnreachableExit.insert(Exit);
+    // // Add exit blocks terminated by unreachable.  There should not be any other
+    // // exit blocks in the loop.
+    // SmallSet<BasicBlock *, 4> UnreachableExits;
+    // for (BasicBlock *Exit : ExitBlocks) {
+    //   if (Exit == ExitBlock) continue;
+    //   assert(isa<UnreachableInst>(Exit->getTerminator()) &&
+    //          "Found problematic exit block.");
+    //   UnreachableExits.insert(Exit);
+    // }
+
+    // Add unreachable and exception-handling exits to the set of loop blocks to
+    // clone.
+    DEBUG({
+        dbgs() << "Handled exits of loop:";
+        for (BasicBlock *HE : HandledExits)
+          dbgs() << *HE;
+      });
+    for (BasicBlock *HE : HandledExits)
+      LoopBlocks.push_back(HE);
+    {
+      const DetachInst *DI = cast<DetachInst>(Header->getTerminator());
+      BasicBlockEdge DetachEdge(Header, DI->getDetached());
+      for (BasicBlock *HE : HandledExits)
+        if (!DT || !DT->dominates(DetachEdge, HE))
+          ExitsToSplit.insert(HE);
+      DEBUG({
+          dbgs() << "Loop exits to split:";
+          for (BasicBlock *ETS : ExitsToSplit)
+            dbgs() << *ETS;
+        });
     }
-    for (BasicBlock *BB : UnreachableExit)
-      LoopBlocks.push_back(BB);
 
     // DEBUG({
     //     dbgs() << "LoopBlocks: ";
@@ -1032,8 +1187,14 @@ bool DACLoopSpawning::processLoop() {
     //   });
 
     // Get the inputs and outputs for the loop body.
-    CodeExtractor Ext(LoopBlocks, DT);
-    Ext.findInputsOutputs(BodyInputs, BodyOutputs);
+    {
+      // CodeExtractor Ext(LoopBlocks, DT);
+      // Ext.findInputsOutputs(BodyInputs, BodyOutputs);
+      SmallPtrSet<BasicBlock *, 32> Blocks;
+      for (BasicBlock *BB : LoopBlocks)
+        Blocks.insert(BB);
+      findInputsOutputs(Blocks, BodyInputs, BodyOutputs, &ExitsToSplit);
+    }
 
     // Add argument for start of CanonicalIV.
     DEBUG({
@@ -1090,7 +1251,7 @@ bool DACLoopSpawning::processLoop() {
         dbgs() << "EL output: " << *V << "\n";
     });
 
-
+  // Clone the loop blocks into a new helper function.
   Function *Helper;
   {
     SmallVector<ReturnInst *, 4> Returns;  // Ignore returns cloned.
@@ -1106,11 +1267,11 @@ bool DACLoopSpawning::processLoop() {
       MD[SP->getFile()].reset(SP->getFile());
     }
 
-    Helper = CreateHelper(Inputs, Outputs, LoopBlocks/*L->getBlocks()*/,
-                          Header, Preheader, /*L->getExitBlock()*/ ExitBlock,
+    Helper = CreateHelper(Inputs, Outputs, LoopBlocks,
+                          Header, Preheader, ExitBlock,
                           VMap, Header->getParent()->getParent(),
                           /*ModuleLevelChanges=*/false, Returns, ".ls",
-                          nullptr, nullptr, nullptr);
+                          &ExitsToSplit, nullptr, nullptr, nullptr);
 
     assert(Returns.empty() && "Returns cloned when cloning loop.");
 
@@ -1120,8 +1281,9 @@ bool DACLoopSpawning::processLoop() {
   }
 
   // Add a sync to the helper's return.
+  BasicBlock *HelperHeader = cast<BasicBlock>(VMap[Header]);
   {
-    BasicBlock *HelperExit = cast<BasicBlock>(VMap[ExitBlock/*L->getExitBlock()*/]);
+    BasicBlock *HelperExit = cast<BasicBlock>(VMap[ExitBlock]);
     assert(isa<ReturnInst>(HelperExit->getTerminator()));
     BasicBlock *NewHelperExit = SplitBlock(HelperExit,
                                            HelperExit->getTerminator(),
@@ -1130,10 +1292,24 @@ bool DACLoopSpawning::processLoop() {
     SyncInst *NewSync = Builder.CreateSync(NewHelperExit);
     // Set debug info of new sync to match that of terminator of the header of
     // the cloned loop.
-    BasicBlock *HelperHeader = cast<BasicBlock>(VMap[Header]);
     NewSync->setDebugLoc(HelperHeader->getTerminator()->getDebugLoc());
     HelperExit->getTerminator()->eraseFromParent();
   }
+
+  // // Add syncs to the helper's cloned resume blocks.
+  // for (BasicBlock *BB : Resumes) {
+  //   BasicBlock *HelperResume = cast<BasicBlock>(VMap[BB]);
+  //   assert(isa<ResumeInst>(HelperResume->getTerminator()));
+  //   BasicBlock *NewHelperResume = SplitBlock(HelperResume,
+  //                                            HelperResume->getTerminator(),
+  //                                            DT, LI);
+  //   IRBuilder<> Builder(&(HelperResume->front()));
+  //   SyncInst *NewSync = Builder.CreateSync(NewHelperResume);
+  //   // Set debug info of new sync to match that of terminator of the header of
+  //   // the cloned loop.
+  //   NewSync->setDebugLoc(HelperHeader->getTerminator()->getDebugLoc());
+  //   HelperResume->getTerminator()->eraseFromParent();
+  // }
 
   BasicBlock *NewPreheader = cast<BasicBlock>(VMap[Preheader]);
   PHINode *NewCanonicalIV = cast<PHINode>(VMap[CanonicalIV]);
@@ -1543,17 +1719,22 @@ bool CilkABILoopSpawning::processLoop() {
   // Add start iteration, end iteration, and grainsize to inputs.
   {
     LoopBlocks = L->getBlocks();
-    // Add exit blocks terminated by unreachable.  There should not be any other
-    // exit blocks in the loop.
-    SmallSet<BasicBlock *, 4> UnreachableExit;
-    for (BasicBlock *Exit : ExitBlocks) {
-      if (Exit == ExitBlock) continue;
-      assert(isa<UnreachableInst>(Exit->getTerminator()) &&
-             "Found problematic exit block.");
-      UnreachableExit.insert(Exit);
-    }
-    for (BasicBlock *BB : UnreachableExit)
-      LoopBlocks.push_back(BB);
+    // // Add exit blocks terminated by unreachable.  There should not be any other
+    // // exit blocks in the loop.
+    // SmallSet<BasicBlock *, 4> UnreachableExits;
+    // for (BasicBlock *Exit : ExitBlocks) {
+    //   if (Exit == ExitBlock) continue;
+    //   assert(isa<UnreachableInst>(Exit->getTerminator()) &&
+    //          "Found problematic exit block.");
+    //   UnreachableExits.insert(Exit);
+    // }
+
+    // // Add unreachable and exception-handling exits to the set of loop blocks to
+    // // clone.
+    // for (BasicBlock *BB : UnreachableExits)
+    //   LoopBlocks.push_back(BB);
+    // for (BasicBlock *BB : EHExits)
+    //   LoopBlocks.push_back(BB);
 
     // DEBUG({
     //     dbgs() << "LoopBlocks: ";
@@ -1564,8 +1745,14 @@ bool CilkABILoopSpawning::processLoop() {
     //   });
 
     // Get the inputs and outputs for the loop body.
-    CodeExtractor Ext(LoopBlocks, DT);
-    Ext.findInputsOutputs(BodyInputs, BodyOutputs);
+    {
+      // CodeExtractor Ext(LoopBlocks, DT);
+      // Ext.findInputsOutputs(BodyInputs, BodyOutputs);
+      SmallPtrSet<BasicBlock *, 32> Blocks;
+      for (BasicBlock *BB : LoopBlocks)
+        Blocks.insert(BB);
+      findInputsOutputs(Blocks, BodyInputs, BodyOutputs);
+    }
 
     // Add argument for start of CanonicalIV.
     DEBUG({
@@ -1889,6 +2076,10 @@ bool LoopSpawningImpl::isTapirLoop(const Loop *L) {
   return true;
 }
 
+/// This routine recursively examines all descendants of the specified loop and
+/// adds all Tapir loops in that tree to the vector.  This routine performs a
+/// pre-order traversal of the tree of loops and pushes each Tapir loop found
+/// onto the end of the vector.
 void LoopSpawningImpl::addTapirLoop(Loop *L, SmallVectorImpl<Loop *> &V) {
   if (isTapirLoop(L)) {
     V.push_back(L);
@@ -1940,6 +2131,8 @@ bool LoopSpawningImpl::run() {
   // and can invalidate iterators across the loops.
   SmallVector<Loop *, 8> Worklist;
 
+  // Examine all top-level loops in this function, and call addTapirLoop to push
+  // those loops onto the work list.
   for (Loop *L : LI)
     addTapirLoop(L, Worklist);
 
@@ -1948,12 +2141,17 @@ bool LoopSpawningImpl::run() {
   // Now walk the identified inner loops.
   bool Changed = false;
   while (!Worklist.empty())
+    // Process the work list of loops backwards.  For each tree of loops in this
+    // function, addTapirLoop pushed those loops onto the work list according to
+    // a pre-order tree traversal.  Therefore, processing the work list
+    // backwards leads us to process innermost loops first.
     Changed |= processLoop(Worklist.pop_back_val());
 
   // Process each loop nest in the function.
   return Changed;
 }
 
+// Top-level routine to process a given loop.
 bool LoopSpawningImpl::processLoop(Loop *L) {
 #ifndef NDEBUG
   const std::string DebugLocStr = getDebugLocString(L);
@@ -1971,15 +2169,6 @@ bool LoopSpawningImpl::processLoop(Loop *L) {
   DEBUG(dbgs() << "LS: Loop hints:"
                << " strategy = " << Hints.printStrategy(Hints.getStrategy())
                << "\n");
-
-  // if (LoopSpawningHints::ST_SEQ == Hints.getStrategy()) {
-  //   DEBUG(dbgs() << "LS: Loop hints prevent transformation.\n");
-  //   emitMissedWarning(F, L, Hints, ORE);
-  //   return false;
-  // } else {
-  //   dbgs() << "LS: " << *L << " with hint "
-  //          << LoopSpawningHints::printStrategy(Hints.getStrategy()) << "\n";
-  // }
 
   using namespace ore;
 

@@ -23,6 +23,58 @@ using namespace llvm;
 
 #define DEBUG_TYPE "outlining"
 
+/// definedInRegion - Return true if the specified value is defined in the
+/// extracted region.
+static bool definedInRegion(const SmallPtrSetImpl<BasicBlock *> &Blocks,
+                            Value *V) {
+  if (Instruction *I = dyn_cast<Instruction>(V))
+    if (Blocks.count(I->getParent()))
+      return true;
+  return false;
+}
+
+/// definedInCaller - Return true if the specified value is defined in the
+/// function being code extracted, but not in the region being extracted.
+/// These values must be passed in as live-ins to the function.
+static bool definedInCaller(const SmallPtrSetImpl<BasicBlock *> &Blocks,
+                            Value *V) {
+  if (isa<Argument>(V)) return true;
+  if (Instruction *I = dyn_cast<Instruction>(V))
+    if (!Blocks.count(I->getParent()))
+      return true;
+  return false;
+}
+
+void llvm::findInputsOutputs(const SmallPtrSetImpl<BasicBlock *> &Blocks,
+                             ValueSet &Inputs,
+                             ValueSet &Outputs,
+                             const SmallPtrSetImpl<BasicBlock *> *ExitBlocks) {
+  for (BasicBlock *BB : Blocks) {
+    // If a used value is defined outside the region, it's an input.  If an
+    // instruction is used outside the region, it's an output.
+    for (Instruction &II : *BB) {
+      for (User::op_iterator OI = II.op_begin(), OE = II.op_end(); OI != OE;
+           ++OI) {
+        // The PHI nodes each exit block will be updated after the exit block is
+        // cloned, so we don't want to count their uses of values defined
+        // outside the region.
+        if (ExitBlocks->count(BB))
+          if (PHINode *PN = dyn_cast<PHINode>(&II))
+            if (!Blocks.count(PN->getIncomingBlock(*OI)))
+              continue;
+        if (definedInCaller(Blocks, *OI))
+          Inputs.insert(*OI);
+      }
+
+      for (User *U : II.users())
+        if (!definedInRegion(Blocks, U)) {
+          Outputs.insert(&II);
+          break;
+        }
+    }
+  }
+}
+
 // Clone Blocks into NewFunc, transforming the old arguments into references to
 // VMap values.
 //
@@ -33,12 +85,23 @@ void llvm::CloneIntoFunction(Function *NewFunc, const Function *OldFunc,
                              bool ModuleLevelChanges,
                              SmallVectorImpl<ReturnInst *> &Returns,
                              const StringRef NameSuffix,
+                             SmallPtrSetImpl<BasicBlock *> *ExitBlocks,
                              ClonedCodeInfo *CodeInfo,
                              ValueMapTypeRemapper *TypeMapper,
                              ValueMaterializer *Materializer) {
+  // Get the predecessors of the exit blocks
+  SmallPtrSet<const BasicBlock *, 4> ExitBlockPreds, ClonedEBPreds;
+  for (BasicBlock *EB : *ExitBlocks)
+    for (BasicBlock *Pred : predecessors(EB))
+      ExitBlockPreds.insert(Pred);
+
   // Loop over all of the basic blocks in the function, cloning them as
   // appropriate.
   for (const BasicBlock *BB : Blocks) {
+    // Record all exit block predecessors that are cloned.
+    if (ExitBlockPreds.count(BB))
+      ClonedEBPreds.insert(BB);
+
     // Create a new basic block and copy instructions into it!
     BasicBlock *CBB = CloneBasicBlock(BB, VMap, NameSuffix, NewFunc, CodeInfo);
 
@@ -61,7 +124,35 @@ void llvm::CloneIntoFunction(Function *NewFunc, const Function *OldFunc,
     if (ReturnInst *RI = dyn_cast<ReturnInst>(CBB->getTerminator()))
       Returns.push_back(RI);
   }
-  
+
+  // For each exit block, clean up its phi nodes to exclude predecessors that
+  // were not cloned.
+  if (ExitBlocks) {
+    for (BasicBlock *EB : *ExitBlocks) {
+      // dbgs() << "Exit block:" << *EB;
+      // Get the predecessors of this exit block that were not cloned.
+      SmallVector<BasicBlock *, 4> PredNotCloned;
+      for (BasicBlock *Pred : predecessors(EB)) {
+        if (!ClonedEBPreds.count(Pred)) {
+          // dbgs() << "\tpred not cloned: " << Pred->getName() << "\n";
+          PredNotCloned.push_back(Pred);
+        // } else {
+        //   dbgs() << "Pred " << Pred->getName() << " maps to " << VMap[Pred]->getName() << "\n";
+        }
+      }
+      // Iterate over the phi nodes in the cloned exit block and remove incoming
+      // values from predecessors that were not cloned.
+      BasicBlock *ClonedEB = cast<BasicBlock>(VMap[EB]);
+      BasicBlock::iterator BI = ClonedEB->begin();
+      while (PHINode *PN = dyn_cast<PHINode>(BI)) {
+        for (BasicBlock *DeadPred : PredNotCloned)
+          if (PN->getBasicBlockIndex(DeadPred) > -1)
+            PN->removeIncomingValue(DeadPred);
+        ++BI;
+      }
+    }
+  }
+
   // Loop over all of the instructions in the function, fixing up operand
   // references as we go.  This uses VMap to do all the hard work.
   for (const BasicBlock *BB : Blocks) {
@@ -80,8 +171,8 @@ void llvm::CloneIntoFunction(Function *NewFunc, const Function *OldFunc,
 /// Outputs as follows: f(in0, ..., inN, out0, ..., outN)
 ///
 /// TODO: Fix the std::vector part of the type of this function.
-Function *llvm::CreateHelper(const SetVector<Value *> &Inputs,
-                             const SetVector<Value *> &Outputs,
+Function *llvm::CreateHelper(const ValueSet &Inputs,
+                             const ValueSet &Outputs,
                              std::vector<BasicBlock *> Blocks,
                              BasicBlock *Header,
                              const BasicBlock *OldEntry,
@@ -91,6 +182,7 @@ Function *llvm::CreateHelper(const SetVector<Value *> &Inputs,
                              bool ModuleLevelChanges,
                              SmallVectorImpl<ReturnInst *> &Returns,
                              const StringRef NameSuffix,
+                             SmallPtrSetImpl<BasicBlock *> *ExitBlocks,
                              ClonedCodeInfo *CodeInfo,
                              ValueMapTypeRemapper *TypeMapper,
                              ValueMaterializer *Materializer) {
@@ -215,7 +307,8 @@ Function *llvm::CreateHelper(const SetVector<Value *> &Inputs,
 
   // Clone Blocks into the new function.
   CloneIntoFunction(NewFunc, OldFunc, Blocks, VMap, ModuleLevelChanges,
-		    Returns, NameSuffix, CodeInfo, TypeMapper, Materializer);
+		    Returns, NameSuffix, ExitBlocks, CodeInfo, TypeMapper,
+                    Materializer);
 
   // Add a branch in the new function to the cloned Header.
   BranchInst::Create(cast<BasicBlock>(VMap[Header]), NewEntry);
@@ -358,7 +451,7 @@ bool llvm::MoveStaticAllocasInClonedBlock(
 // Add alignment assumptions to parameters of outlined function, based on known
 // alignment data in the caller.
 void llvm::AddAlignmentAssumptions(const Function *Caller,
-                                   const SetVector<Value *> &Inputs,
+                                   const ValueSet &Inputs,
                                    ValueToValueMapTy &VMap,
                                    const Instruction *CallSite,
                                    AssumptionCache *AC,
