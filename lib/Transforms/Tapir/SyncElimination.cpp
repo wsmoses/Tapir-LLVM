@@ -84,6 +84,8 @@ private:
       Frontier.pop_front();
 
       for (const BasicBlock *Pred: predecessors(Current)) {
+        // TODO@jiahao: Investigate potential issues with continue edges here.
+
         if (Visited.count(Pred) > 0) {
           continue;
         }
