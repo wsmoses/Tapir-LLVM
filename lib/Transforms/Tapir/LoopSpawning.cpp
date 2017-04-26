@@ -829,6 +829,41 @@ static void getUnreachableExits(
   }
 }
 
+/// Helper routine to get all exit blocks of a loop that are unreachable.
+static void getEHExits(
+    Loop *L, const BasicBlock *DesignatedExitBlock,
+    SmallVectorImpl<BasicBlock *> &EHExits) {
+  SmallVector<BasicBlock *, 4> ExitBlocks;
+  L->getExitBlocks(ExitBlocks);
+
+  SmallVector<BasicBlock *, 4> WorkList;
+  for (BasicBlock *Exit : ExitBlocks) {
+    if (Exit == DesignatedExitBlock) continue;
+    // if (isa<UnreachableInst>(Exit->getTerminator()))
+    //   continue;
+    EHExits.push_back(Exit);
+    WorkList.push_back(Exit);
+  }
+
+  // Traverse the CFG from these frontier blocks to find all blocks involved in
+  // exception-handling exit code.
+  SmallPtrSet<BasicBlock *, 4> Visited;
+  while (!WorkList.empty()) {
+    BasicBlock *BB = WorkList.pop_back_val();
+    if (!Visited.insert(BB).second)
+      continue;
+
+    // Check that the exception handling blocks do not reenter the loop.
+    assert(!L->contains(BB) &&
+           "Exception handling blocks re-enter loop from unwind.");
+
+    for (BasicBlock *Succ : successors(BB)) {
+      EHExits.push_back(Succ);
+      WorkList.push_back(Succ);
+    }
+  }
+}
+
 /// Helper routine to get all blocks involved in terminating a loop early due to
 /// an exception.
 static void getExceptionHandlingExits(Loop *L,
@@ -932,11 +967,14 @@ bool DACLoopSpawning::processLoop() {
   }
 
   // Get special exits from this loop.
-  SmallVector<BasicBlock *, 4> UnreachableExits;
+  // SmallVector<BasicBlock *, 4> UnreachableExits;
   SmallVector<BasicBlock *, 4> EHExits;
-  SmallVector<BasicBlock *, 4> Resumes;
-  getUnreachableExits(L, ExitBlock, UnreachableExits);
-  getExceptionHandlingExits(L, EHExits, Resumes);
+  // SmallVector<BasicBlock *, 4> Resumes;
+  // SmallVector<BasicBlock *, 4> OtherExits;
+  // getUnreachableExits(L, ExitBlock, UnreachableExits);
+  // getExceptionHandlingExits(L, EHExits, Resumes);
+  // getOtherExits(L, ExitBlock, OtherExits);
+  getEHExits(L, ExitBlock, EHExits);
 
   // Check the exit blocks of the loop.
   SmallVector<BasicBlock *, 4> ExitBlocks;
@@ -954,10 +992,12 @@ bool DACLoopSpawning::processLoop() {
     }
   }
   SmallPtrSet<BasicBlock *, 4> HandledExits;
-  for (BasicBlock *BB : UnreachableExits)
-    HandledExits.insert(BB);
+  // for (BasicBlock *BB : UnreachableExits)
+  //   HandledExits.insert(BB);
   for (BasicBlock *BB : EHExits)
     HandledExits.insert(BB);
+  // for (BasicBlock *BB : OtherExits)
+  //   HandledExits.insert(BB);
   for (BasicBlock *Exit : ExitBlocks) {
     if (Exit == ExitBlock) continue;
     if (!HandledExits.count(Exit)) {
