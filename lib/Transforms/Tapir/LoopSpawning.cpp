@@ -816,31 +816,14 @@ void DACLoopSpawning::implementDACIterSpawnOnHelper(Function *Helper,
 }
 
 /// Helper routine to get all exit blocks of a loop that are unreachable.
-static void getUnreachableExits(
-    Loop *L, const BasicBlock *DesignatedExitBlock,
-    SmallVectorImpl<BasicBlock *> &UnreachableExits) {
-  SmallVector<BasicBlock *, 4> ExitBlocks;
-  L->getExitBlocks(ExitBlocks);
-
-  for (BasicBlock *Exit : ExitBlocks) {
-    if (Exit == DesignatedExitBlock) continue;
-    if (isa<UnreachableInst>(Exit->getTerminator()))
-      UnreachableExits.push_back(Exit);
-  }
-}
-
-/// Helper routine to get all exit blocks of a loop that are unreachable.
-static void getEHExits(
-    Loop *L, const BasicBlock *DesignatedExitBlock,
-    SmallVectorImpl<BasicBlock *> &EHExits) {
+static void getEHExits(Loop *L, const BasicBlock *DesignatedExitBlock,
+                       SmallVectorImpl<BasicBlock *> &EHExits) {
   SmallVector<BasicBlock *, 4> ExitBlocks;
   L->getExitBlocks(ExitBlocks);
 
   SmallVector<BasicBlock *, 4> WorkList;
   for (BasicBlock *Exit : ExitBlocks) {
     if (Exit == DesignatedExitBlock) continue;
-    // if (isa<UnreachableInst>(Exit->getTerminator()))
-    //   continue;
     EHExits.push_back(Exit);
     WorkList.push_back(Exit);
   }
@@ -855,85 +838,12 @@ static void getEHExits(
 
     // Check that the exception handling blocks do not reenter the loop.
     assert(!L->contains(BB) &&
-           "Exception handling blocks re-enter loop from unwind.");
+           "Exception handling blocks re-enter loop.");
 
     for (BasicBlock *Succ : successors(BB)) {
       EHExits.push_back(Succ);
       WorkList.push_back(Succ);
     }
-  }
-}
-
-/// Helper routine to get all blocks involved in terminating a loop early due to
-/// an exception.
-static void getExceptionHandlingExits(Loop *L,
-                                      SmallVectorImpl<BasicBlock *> &EHExits,
-                                      SmallVectorImpl<BasicBlock *> &Resumes) {
-  BasicBlock *Header = L->getHeader();
-  BasicBlock *Latch = L->getLoopLatch();
-
-  // Collect the unwind destinations of any blocks in the loop.
-  SmallVector<BasicBlock *, 4> WorkList;
-  SmallVector<BasicBlock *, 4> WorkListEH;
-  std::vector<BasicBlock *> LoopBlocks = L->getBlocks();
-  for (BasicBlock *BB : LoopBlocks) {
-    if (BB == Header) continue;
-    if (BB == Latch) continue;
-    if (InvokeInst *II = dyn_cast<InvokeInst>(BB->getTerminator())) {
-      BasicBlock *UD = II->getUnwindDest();
-      if (!L->contains(UD)) {
-        EHExits.push_back(UD);
-        WorkListEH.push_back(UD);
-      } else {
-        WorkList.push_back(UD);
-      }
-    }
-  }
-
-  // Collect exit blocks of the loop that are reachable from those unwind
-  // destinations.
-  SmallPtrSet<BasicBlock *, 4> Visited;
-  while (!WorkList.empty()) {
-    BasicBlock *BB = WorkList.pop_back_val();
-    if (!Visited.insert(BB).second)
-      continue;
-
-    if (BB == Latch) continue;
-
-    for (BasicBlock *Succ : successors(BB)) {
-      if (!L->contains(Succ)) {
-        EHExits.push_back(Succ);
-        WorkListEH.push_back(Succ);
-      } else {
-        WorkList.push_back(Succ);
-      }
-    }
-  }
-
-  // EHExits now contains the frontier of exit blocks from the loop that are
-  // reachable from the unwind destinations of invokes within the loop.
-
-  // Traverse the CFG from these frontier blocks to find all blocks involved in
-  // exception-handling exit code.
-  SmallPtrSet<BasicBlock *, 4> VisitedEH;
-  while (!WorkListEH.empty()) {
-    BasicBlock *BB = WorkListEH.pop_back_val();
-    if (!VisitedEH.insert(BB).second)
-      continue;
-
-    // Check that the exception handling blocks do not reenter the loop.
-    assert(!L->contains(BB) &&
-           "Exception handling blocks re-enter loop from unwind.");
-
-    // Keep track of the blocks terminated by resumes separately.  We'll want to
-    // add syncs to these blocks.
-    if (isa<ResumeInst>(BB->getTerminator()))
-      Resumes.push_back(BB);
-    else
-      for (BasicBlock *Succ : successors(BB)) {
-        EHExits.push_back(Succ);
-        WorkListEH.push_back(Succ);
-      }
   }
 }
 
@@ -967,13 +877,7 @@ bool DACLoopSpawning::processLoop() {
   }
 
   // Get special exits from this loop.
-  // SmallVector<BasicBlock *, 4> UnreachableExits;
   SmallVector<BasicBlock *, 4> EHExits;
-  // SmallVector<BasicBlock *, 4> Resumes;
-  // SmallVector<BasicBlock *, 4> OtherExits;
-  // getUnreachableExits(L, ExitBlock, UnreachableExits);
-  // getExceptionHandlingExits(L, EHExits, Resumes);
-  // getOtherExits(L, ExitBlock, OtherExits);
   getEHExits(L, ExitBlock, EHExits);
 
   // Check the exit blocks of the loop.
@@ -992,12 +896,8 @@ bool DACLoopSpawning::processLoop() {
     }
   }
   SmallPtrSet<BasicBlock *, 4> HandledExits;
-  // for (BasicBlock *BB : UnreachableExits)
-  //   HandledExits.insert(BB);
   for (BasicBlock *BB : EHExits)
     HandledExits.insert(BB);
-  // for (BasicBlock *BB : OtherExits)
-  //   HandledExits.insert(BB);
   for (BasicBlock *Exit : ExitBlocks) {
     if (Exit == ExitBlock) continue;
     if (!HandledExits.count(Exit)) {
