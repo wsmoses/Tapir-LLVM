@@ -185,11 +185,12 @@ bool LoopFuse::DependenceLegal(Loop &L1, Loop &L2) {
   DEBUG(LAI->print(dbgs()));
 
   auto Dependences = LAI->getDepChecker().getDependences();
-  if (!Dependences || Dependences->empty()) {
-    DEBUG(dbgs() << "Failed to get dependences to check fusion legality!"
-                 << " Skipping...\n");
-    return false;
-  }
+  // TODO@jiahao: Investigate.
+  // if (!Dependences || Dependences->empty()) {
+  //   DEBUG(dbgs() << "Failed to get dependences to check fusion legality!"
+  //                << " Skipping...\n");
+  //   return false;
+  // }
 
   // Fusion is illegal if there is a backward dependence between memory accesses
   // whose source was in L1 and sink was in L2. ClonedBBs1 and ClonedBBs2
