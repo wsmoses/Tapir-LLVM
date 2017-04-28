@@ -11,7 +11,7 @@ int f(int x) {
 
 __attribute__((always_inline))
 int g(int x) {
-    return x * x + 3;
+    return x + 3;
 }
 
 int r1[N];
@@ -22,11 +22,11 @@ int main(void)
     int sum = 0;
 
     cilk_for (int i=0; i<N; i++) {
-        r1[i] = f(i) + g(i);
+        r1[i] = f(i) * g(i);
     }
 
     cilk_for (int i=0; i<N; i++) {
-        r2[i] = f(i) - g(i);
+        r2[i] = f(i) / g(i);
     }
 
     printf("%d %d\n", r1[N / 2], r2[N / 2]);
