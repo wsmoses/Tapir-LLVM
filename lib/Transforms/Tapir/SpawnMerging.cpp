@@ -60,6 +60,19 @@ struct SpawnMerging : public FunctionPass {
   }
 
 private:
+
+  BasicBlock *getSpawnExitBlock(BasicBlock &DetachBlock) {
+    // TODO implement
+  }
+
+  void replaceTerminatorWithBranch(BasicBlock &BB) {
+    TerminatorInst *terminator = BB->getTerminator();
+    BasicBlock *successor = terminator->getSuccessor(0);
+    IRBuilder<> Builder(terminator);
+    Builder.CreateBr(successor);
+    terminator->eraseFromParent();
+  }
+
   bool processBlock(BasicBlock &BB) {
     errs() << "SpawnMerging: Found sync block: " << BB.getName() << "\n";
 
@@ -83,13 +96,11 @@ private:
     BBDetach.setSuccessor(1, EndBlock);
 
     // Don't reattach after the first spawn
-    // TODO
+    BasicBlock *SpawnExitBlock = getSpawnExitBlock(BB);
+    replaceTerminatorWithBranch(SpawnExitBlock);
 
     // Don't detach after the first spawn
-    // TODO
-    // IRBuilder<> Builder(Sync);
-    // Builder.CreateBr(suc);
-    // Sync->eraseFromParent();
+    replaceTerminatorWithBranch(ContinueBlock);
 
     return true;
   }
