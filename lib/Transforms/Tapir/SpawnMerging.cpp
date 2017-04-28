@@ -61,11 +61,17 @@ struct SpawnMerging : public FunctionPass {
 
 private:
 
-  BasicBlock *getSpawnExitBlock(BasicBlock &DetachBlock) {
-    // TODO implement
+  BasicBlock *getSpawnExitBlock(BasicBlock &DetachBlock, BasicBlock &ContinueBlock) {
+    for (const BasicBlock *Pred: predecessors(&ContinueBlock)) {
+      if (isa<ReattachInst>(Pred->getTerminator())) {
+        // TODO check that DetachBlock dominates it
+        // TODO is it possible to have more than one?
+        return Pred;
+      }
+    }
   }
 
-  void replaceTerminatorWithBranch(BasicBlock &BB) {
+  void replaceTerminatorWithBranch(BasicBlock *BB) {
     TerminatorInst *terminator = BB->getTerminator();
     BasicBlock *successor = terminator->getSuccessor(0);
     IRBuilder<> Builder(terminator);
@@ -73,30 +79,30 @@ private:
     terminator->eraseFromParent();
   }
 
-  bool processBlock(BasicBlock &BB) {
-    errs() << "SpawnMerging: Found sync block: " << BB.getName() << "\n";
+  bool processBlock(BasicBlock &DetachBlock) {
+    errs() << "SpawnMerging: Found sync block: " << DetachBlock.getName() << "\n";
 
-    if (!isa<DetachInst>(block.getTerminator())) {
+    if (!isa<DetachInst>(DetachBlock.getTerminator())) {
       errs() << "Not a detach terminated block.\n";
       return false;
     }
 
-    DetachInst *BBDetach = dyn_cast<DetachInst>(block.getTerminator());
-    BasicBlock *ContinueBlock = DetachInst->getContinue();
+    DetachInst *DetachBlockTerminator = dyn_cast<DetachInst>(DetachBlock.getTerminator());
+    BasicBlock *ContinueBlock = DetachBlockTerminator->getContinue();
 
-    if (!isa<DetachInst>(ContinueBlock.getTerminator)) {
+    if (!isa<DetachInst>(ContinueBlock->getTerminator())) {
       errs() << "Continue block is not a detach terminated block.\n";
       return false;
     }
 
-    DetachInst *ContinueBlockDetach = dyn_cast<DetachInst>(ContinueBlock.getTerminator());
+    DetachInst *ContinueBlockDetach = dyn_cast<DetachInst>(ContinueBlock->getTerminator());
     BasicBlock *EndBlock = ContinueBlockDetach->getContinue();
 
     // Reattach to the end of the second spawn
-    BBDetach.setSuccessor(1, EndBlock);
+    DetachBlockTerminator->setSuccessor(1, EndBlock);
 
     // Don't reattach after the first spawn
-    BasicBlock *SpawnExitBlock = getSpawnExitBlock(BB);
+    BasicBlock *SpawnExitBlock = getSpawnExitBlock(DetachBlock, *ContinueBlock);
     replaceTerminatorWithBranch(SpawnExitBlock);
 
     // Don't detach after the first spawn
