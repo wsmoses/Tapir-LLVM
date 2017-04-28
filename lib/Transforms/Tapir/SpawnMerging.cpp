@@ -62,13 +62,15 @@ struct SpawnMerging : public FunctionPass {
 private:
 
   BasicBlock *getSpawnExitBlock(BasicBlock &DetachBlock, BasicBlock &ContinueBlock) {
-    for (const BasicBlock *Pred: predecessors(&ContinueBlock)) {
+    for (BasicBlock *Pred: predecessors(&ContinueBlock)) {
       if (isa<ReattachInst>(Pred->getTerminator())) {
         // TODO check that DetachBlock dominates it
         // TODO is it possible to have more than one?
         return Pred;
       }
     }
+
+    llvm_unreachable("Cannot find spawn exit block. ");
   }
 
   void replaceTerminatorWithBranch(BasicBlock *BB) {
