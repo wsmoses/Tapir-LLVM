@@ -34,6 +34,12 @@ FunctionPass *createSmallBlockPass();
 
 //===----------------------------------------------------------------------===//
 //
+// SyncElimination - TODO
+//
+FunctionPass *createSyncEliminationPass();
+
+//===----------------------------------------------------------------------===//
+//
 // RedundantSpawn - Do RedundantSpawn Pass
 //
 FunctionPass *createRedundantSpawnPass();

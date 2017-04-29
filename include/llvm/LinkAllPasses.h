@@ -209,6 +209,7 @@ namespace {
       (void) llvm::createSmallBlockPass();
       (void) llvm::createRedundantSpawnPass();
       (void) llvm::createSpawnRestructurePass();
+      (void) llvm::createSyncEliminationPass();
 
       (void)new llvm::IntervalPartition();
       (void)new llvm::ScalarEvolutionWrapperPass();
