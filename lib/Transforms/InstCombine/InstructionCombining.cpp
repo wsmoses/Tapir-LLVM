@@ -2802,6 +2802,11 @@ static bool TryToSinkInstruction(Instruction *I, BasicBlock *DestBlock) {
   // We can only sink load instructions if there is nothing between the load and
   // the end of block that could change the value.
   if (I->mayReadFromMemory()) {
+    // We can't generally move an instruction that reads from memory past a
+    // detach or reattach.
+    if (isa<DetachInst>(I->getParent()->getTerminator()) ||
+        isa<ReattachInst>(I->getParent()->getTerminator()))
+      return false;
     for (BasicBlock::iterator Scan = I->getIterator(),
                               E = I->getParent()->end();
          Scan != E; ++Scan)
