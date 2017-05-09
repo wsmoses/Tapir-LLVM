@@ -116,16 +116,13 @@ static CallInst *EmitCilkSetJmp(IRBuilder<> &B, Value *SF, Module& M) {
                  ConstantInt::get(Int32Ty, 0));
 
   Value *FrameSaveSlot = GEP(B, Buf, 0);
-  B.CreateStore(FrameAddr, FrameSaveSlot);
+  B.CreateStore(FrameAddr, FrameSaveSlot, /*isVolatile=*/true);
 
   // Store stack pointer in the 2nd slot
   Value *StackAddr = B.CreateCall(Intrinsic::getDeclaration(&M, Intrinsic::stacksave));
 
   Value *StackSaveSlot = GEP(B, Buf, 2);
-  B.CreateStore(StackAddr, StackSaveSlot);
-
-  // AttrBuilder attrs;
-  // attrs.addAttribute(Attribute::AttrKind::ReturnsTwice);
+  B.CreateStore(StackAddr, StackSaveSlot, /*isVolatile=*/true);
 
   Buf = B.CreateBitCast(Buf, Int8PtrTy);
 
@@ -336,7 +333,8 @@ static Function *GetCilkSyncFn(Module &M, bool instrument = false) {
 
     // sf.parent_pedigree = sf.worker->pedigree;
     StoreField(B,
-               LoadField(B, LoadField(B, SF, StackFrameBuilder::worker),
+               LoadField(B, LoadField(B, SF, StackFrameBuilder::worker,
+                                      /*isVolatile=*/true),
                          WorkerBuilder::pedigree),
                SF, StackFrameBuilder::parent_pedigree);
 
@@ -384,7 +382,8 @@ static Function *GetCilkSyncFn(Module &M, bool instrument = false) {
     IRBuilder<> B(Exit);
 
     // ++sf.worker->pedigree.rank;
-    Value *Rank = LoadField(B, SF, StackFrameBuilder::worker);
+    Value *Rank = LoadField(B, SF, StackFrameBuilder::worker,
+                            /*isVolatile=*/true);
     Rank = GEP(B, Rank, WorkerBuilder::pedigree);
     Rank = GEP(B, Rank, PedigreeBuilder::rank);
     B.CreateStore(B.CreateAdd(B.CreateLoad(Rank),
@@ -459,7 +458,7 @@ static Function *Get__cilkrts_enter_frame_1(Module &M) {
     llvm::Type *Ty = SFTy->getElementType(StackFrameBuilder::flags);
     StoreField(B,
                ConstantInt::get(Ty, CILK_FRAME_LAST | CILK_FRAME_VERSION),
-               SF, StackFrameBuilder::flags);
+               SF, StackFrameBuilder::flags, /*isVolatile=*/true);
     B.CreateBr(Cont);
   }
   // Block  (FastPath)
@@ -468,7 +467,7 @@ static Function *Get__cilkrts_enter_frame_1(Module &M) {
     llvm::Type *Ty = SFTy->getElementType(StackFrameBuilder::flags);
     StoreField(B,
                ConstantInt::get(Ty, CILK_FRAME_VERSION),
-               SF, StackFrameBuilder::flags);
+               SF, StackFrameBuilder::flags, /*isVolatile=*/true);
     B.CreateBr(Cont);
   }
   // Block  (Cont)
@@ -483,8 +482,9 @@ static Function *Get__cilkrts_enter_frame_1(Module &M) {
                LoadField(B, W, WorkerBuilder::current_stack_frame),
                SF, StackFrameBuilder::call_parent);
 
-    StoreField(B, W, SF, StackFrameBuilder::worker);
-    StoreField(B, SF, W, WorkerBuilder::current_stack_frame);
+    StoreField(B, W, SF, StackFrameBuilder::worker, /*isVolatile=*/true);
+    StoreField(B, SF, W, WorkerBuilder::current_stack_frame,
+               /*isVolatile=*/true);
 
     B.CreateRetVoid();
   }
@@ -531,12 +531,12 @@ static Function *Get__cilkrts_enter_frame_fast_1(Module &M) {
 
   StoreField(B,
              ConstantInt::get(Ty, CILK_FRAME_VERSION),
-             SF, StackFrameBuilder::flags);
+             SF, StackFrameBuilder::flags, /*isVolatile=*/true);
   StoreField(B,
              LoadField(B, W, WorkerBuilder::current_stack_frame),
              SF, StackFrameBuilder::call_parent);
-  StoreField(B, W, SF, StackFrameBuilder::worker);
-  StoreField(B, SF, W, WorkerBuilder::current_stack_frame);
+  StoreField(B, W, SF, StackFrameBuilder::worker, /*isVolatile=*/true);
+  StoreField(B, SF, W, WorkerBuilder::current_stack_frame, /*isVolatile=*/true);
 
   B.CreateRetVoid();
 
@@ -615,7 +615,8 @@ static Function *GetCilkParentEpilogue(Module &M, bool instrument = false) {
     Value *Flags = LoadField(B, SF, StackFrameBuilder::flags,
                              /*isVolatile=*/true);
     Value *Cond = B.CreateICmpNE(Flags,
-                                 ConstantInt::get(Flags->getType(), CILK_FRAME_VERSION));
+                                 ConstantInt::get(Flags->getType(),
+                                                  CILK_FRAME_VERSION));
     B.CreateCondBr(Cond, B1, Exit);
   }
 
@@ -666,7 +667,8 @@ static AllocaInst *CreateStackFrame(Function &F) {
   return SF;
 }
 
-Value* GetOrInitCilkStackFrame(Function& F, ValueToValueMapTy &DetachCtxToStackFrame,
+Value* GetOrInitCilkStackFrame(Function& F,
+                               ValueToValueMapTy &DetachCtxToStackFrame,
                                bool Helper = true, bool instrument = false) {
   // Value* V = LookupStackFrame(F);
   Value *V = DetachCtxToStackFrame[&F];
@@ -687,13 +689,16 @@ Value* GetOrInitCilkStackFrame(Function& F, ValueToValueMapTy &DetachCtxToStackF
     Type *Int8PtrTy = IRB.getInt8PtrTy();
     Value *ThisFn = ConstantExpr::getBitCast(&F, Int8PtrTy);
     Value *ReturnAddress =
-      IRB.CreateCall(Intrinsic::getDeclaration(F.getParent(), Intrinsic::returnaddress),
+      IRB.CreateCall(Intrinsic::getDeclaration(F.getParent(),
+                                               Intrinsic::returnaddress),
                      IRB.getInt32(0));
     StackSave =
-      IRB.CreateCall(Intrinsic::getDeclaration(F.getParent(), Intrinsic::stacksave));
+      IRB.CreateCall(Intrinsic::getDeclaration(F.getParent(),
+                                               Intrinsic::stacksave));
     if (Helper) {
       Value *begin_args[3] = { alloc, ThisFn, ReturnAddress };
-      IRB.CreateCall(CILK_CSI_FUNC(enter_helper_begin, *F.getParent()), begin_args);
+      IRB.CreateCall(CILK_CSI_FUNC(enter_helper_begin, *F.getParent()),
+                     begin_args);
     } else {
       Value *begin_args[4] = { IRB.getInt32(0), alloc, ThisFn, ReturnAddress };
       IRB.CreateCall(CILK_CSI_FUNC(enter_begin, *F.getParent()), begin_args);
@@ -913,7 +918,8 @@ bool llvm::cilk::verifyDetachedCFG(const DetachInst &Detach, DominatorTree &DT,
       //only sync inner elements, consider as branch
       Todo.push_back(Inst->getSuccessor(0));
       continue;
-    } else if (isa<BranchInst>(Term)) {
+    } else if (isa<BranchInst>(Term) || isa<SwitchInst>(Term) ||
+               isa<InvokeInst>(Term)) {
       for (BasicBlock *Succ : successors(BB)) {
         if (!DT.dominates(DetachEdge, Succ))
           // We assume that this block is an exception-handling block and save
@@ -923,23 +929,6 @@ bool llvm::cilk::verifyDetachedCFG(const DetachInst &Detach, DominatorTree &DT,
           Todo.push_back(Succ);
       }
       continue;
-    } else if (isa<SwitchInst>(Term)) {
-      for (BasicBlock *Succ : successors(BB)) {
-        if (!DT.dominates(DetachEdge, Succ))
-          // We assume that this block is an exception-handling block and save
-          // it for later processing.
-          WorkListEH.push_back(Succ);
-        else
-          Todo.push_back(Succ);
-      }
-      continue;
-    } else if (InvokeInst *Inst = dyn_cast<InvokeInst>(Term)) {
-      Todo.push_back(Inst->getNormalDest());
-      BasicBlock *UnwindDest = Inst->getUnwindDest();
-      if (!DT.dominates(DetachEdge, UnwindDest))
-        WorkListEH.push_back(UnwindDest);
-      else
-        Todo.push_back(UnwindDest);
     } else if (isa<UnreachableInst>(Term) || isa<ResumeInst>(Term)) {
       continue;
     } else {
@@ -1019,17 +1008,8 @@ bool llvm::cilk::populateDetachedCFG(
       //only sync inner elements, consider as branch
       Todo.push_back(Term->getSuccessor(0));
       continue;
-    } else if (InvokeInst *II = dyn_cast_or_null<InvokeInst>(Term)) {
-      Todo.push_back(II->getNormalDest());
-
-      BasicBlock *UnwindDest = II->getUnwindDest();
-      if (!DT.dominates(DetachEdge, UnwindDest)) {
-        ExitBlocks.insert(UnwindDest);
-        WorkListEH.push_back(UnwindDest);
-      } else {
-        Todo.push_back(UnwindDest);
-      }
-    } else if (isa<BranchInst>(Term) || isa<SwitchInst>(Term)) {
+    } else if (isa<BranchInst>(Term) || isa<SwitchInst>(Term) ||
+               isa<InvokeInst>(Term)) {
       for (BasicBlock *Succ : successors(BB)) {
         if (!DT.dominates(DetachEdge, Succ)) {
           // We assume that this block is an exception-handling block and save
@@ -1054,6 +1034,7 @@ bool llvm::cilk::populateDetachedCFG(
     }
   }
 
+  // Find the exit-handling blocks.
   {
     SmallPtrSet<BasicBlock *, 4> Visited;
     while (!WorkListEH.empty()) {
@@ -1080,8 +1061,10 @@ bool llvm::cilk::populateDetachedCFG(
       // if (isa<ResumeInst>(BB-getTerminator()))
       //   ResumeBlocks.push_back(BB);
 
-      for (BasicBlock *Succ : successors(BB))
+      for (BasicBlock *Succ : successors(BB)) {
+        ExitBlocks.insert(Succ);
         WorkListEH.push_back(Succ);
+      }
     }
 
     // Visited now contains exception-handling blocks that we want to clone as
