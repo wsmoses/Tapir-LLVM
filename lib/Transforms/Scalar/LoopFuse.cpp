@@ -61,6 +61,8 @@ void LoopFuse::RewritePHI(BranchInst *Br, BasicBlock *To) {
     L2                    |/
 */
 Loop *LoopFuse::FuseLoops(Loop &L1, Loop &L2) {
+  BasicBlock *L1PreHeader = L1.getLoopPreheader();
+
   PHINode *P1 = L1.getCanonicalInductionVariable();
   PHINode *P2 = L2.getCanonicalInductionVariable();
 
@@ -84,13 +86,38 @@ Loop *LoopFuse::FuseLoops(Loop &L1, Loop &L2) {
   RewritePHI(L2PHBr, Br1->getParent());
   DT->changeImmediateDominator(L2Header, L1.getLoopLatch());
 
-  BranchInst::Create(L2Header, Br1);
+  BranchInst *NewBr = BranchInst::Create(L2Header, Br1);
   Br1->eraseFromParent();
   L2PH->dropAllReferences();
   L2PHBr->eraseFromParent();
   L2PH->eraseFromParent();
   DT->eraseNode(L2PH);
   LI->removeBlock(L2PH);
+
+  // BasicBlock *Pred = nullptr;
+  // int numPredecessors = 0;
+  // for (BasicBlock *Block : predecessors(L1.getHeader())) {
+  //   numPredecessors ++;
+
+  //   if (Block == L1.getLoopLatch()) {
+  //     continue;
+  //   }
+
+  //   DEBUG(dbgs() << "=============================\n");
+  //   DEBUG(dbgs() << Block->getName() << "\n");
+  // }
+
+  // assert(numPredecessors == 2);
+
+  BasicBlock *Pred = L1PreHeader;
+  RewritePHI(NewBr, Pred);
+  PHINode *HeaderPHI = dyn_cast<PHINode>(L1.getHeader()->begin());
+  assert(HeaderPHI != nullptr);
+  auto I = P2->getParent()->begin();
+  while (PHINode *PHI = dyn_cast<PHINode>(&*I)) {
+    // PHI->moveBefore(HeaderPHI);
+    ++I;
+  }
 
   P2->replaceAllUsesWith(P1);
   P2->eraseFromParent();
