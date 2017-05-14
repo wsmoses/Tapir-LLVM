@@ -28,9 +28,33 @@ Pass *createLoopSpawningPass();
 
 //===----------------------------------------------------------------------===//
 //
-// Dougie - Do Dougie's Pass
+// SmallBlock - Do SmallBlock Pass
 //
-FunctionPass *createDougiePass();
+FunctionPass *createSmallBlockPass();
+
+//===----------------------------------------------------------------------===//
+//
+// SyncElimination - TODO
+//
+FunctionPass *createSyncEliminationPass();
+
+//===----------------------------------------------------------------------===//
+//
+// RedundantSpawn - Do RedundantSpawn Pass
+//
+FunctionPass *createRedundantSpawnPass();
+
+//===----------------------------------------------------------------------===//
+//
+// SpawnRestructure - Do SpawnRestructure Pass
+//
+FunctionPass *createSpawnRestructurePass();
+
+//===----------------------------------------------------------------------===//
+//
+// SpawnUnswitch - Do SpawnUnswitch Pass
+//
+FunctionPass *createSpawnUnswitchPass();
 
 //===----------------------------------------------------------------------===//
 //

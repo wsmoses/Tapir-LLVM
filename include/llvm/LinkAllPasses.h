@@ -206,7 +206,11 @@ namespace {
       (void) llvm::createMemDerefPrinter();
       (void) llvm::createFloat2IntPass();
       (void) llvm::createEliminateAvailableExternallyPass();
-      (void) llvm::createDougiePass();
+      (void) llvm::createSmallBlockPass();
+      (void) llvm::createRedundantSpawnPass();
+      (void) llvm::createSpawnRestructurePass();
+      (void) llvm::createSyncEliminationPass();
+      (void) llvm::createSpawnUnswitchPass();
 
       (void)new llvm::IntervalPartition();
       (void)new llvm::ScalarEvolutionWrapperPass();
