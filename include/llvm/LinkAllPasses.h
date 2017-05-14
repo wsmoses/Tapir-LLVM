@@ -210,6 +210,7 @@ namespace {
       (void) llvm::createRedundantSpawnPass();
       (void) llvm::createSpawnRestructurePass();
       (void) llvm::createSyncEliminationPass();
+      (void) llvm::createSpawnUnswitchPass();
 
       (void)new llvm::IntervalPartition();
       (void)new llvm::ScalarEvolutionWrapperPass();

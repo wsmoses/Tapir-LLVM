@@ -13,10 +13,10 @@
 using namespace llvm;
 
 namespace {
-struct SpawnRestructure : public FunctionPass {
+struct SpawnUnswitch : public FunctionPass {
   static char ID; // Pass identification, replacement for typeid
-  SpawnRestructure() : FunctionPass(ID) {
-    //initializeSpawnRestructurePass(*PassRegistry::getPassRegistry());
+  SpawnUnswitch() : FunctionPass(ID) {
+    //initializeSpawnUnswitchPass(*PassRegistry::getPassRegistry());
   }
 
   void getAnalysisUsage(AnalysisUsage &AU) const override {
@@ -28,21 +28,18 @@ struct SpawnRestructure : public FunctionPass {
     if (skipFunction(F))
       return false;
 
-    F.setName("SpawnRestructure_"+F.getName());
+    F.setName("SpawnUnswitch_"+F.getName());
 
-    for (BasicBlock &BB: F) {
-
-    }
-
+    
     return true;
   }
 };
 }
 
-char SpawnRestructure::ID = 0;
-static RegisterPass<SpawnRestructure> X("spawnrestructure", "Do SpawnRestructure pass", false, false);
+char SpawnUnswitch::ID = 0;
+static RegisterPass<SpawnUnswitch> X("spawnunswitch", "Do SpawnUnswitch pass", false, false);
 
 // Public interface to the RedundantSpawn pass
-FunctionPass *llvm::createSpawnRestructurePass() {
-  return new SpawnRestructure();
+FunctionPass *llvm::createSpawnUnswitchPass() {
+  return new SpawnUnswitch();
 }

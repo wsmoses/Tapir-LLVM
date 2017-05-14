@@ -52,6 +52,12 @@ FunctionPass *createSpawnRestructurePass();
 
 //===----------------------------------------------------------------------===//
 //
+// SpawnUnswitch - Do SpawnUnswitch Pass
+//
+FunctionPass *createSpawnUnswitchPass();
+
+//===----------------------------------------------------------------------===//
+//
 // PromoteDetachToCilk
 //
 ModulePass *createLowerTapirToCilkPass(bool DisablePostOpts = false,

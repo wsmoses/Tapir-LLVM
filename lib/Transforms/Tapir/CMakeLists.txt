@@ -3,6 +3,7 @@ add_llvm_library(LLVMTapirOpts
   SmallBlock.cpp
   RedundantSpawn.cpp
   SpawnRestructure.cpp
+  SpawnUnswitch.cpp
   SyncElimination.cpp
   LowerToCilk.cpp
   LoopSpawning.cpp
