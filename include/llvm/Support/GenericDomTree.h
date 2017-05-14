@@ -571,9 +571,15 @@ public:
   // API to update (Post)DominatorTree information based on modifications to
   // the CFG...
 
-  /// addNewBlock - Add a new node to the dominator tree information.  This
-  /// creates a new node as a child of DomBB dominator node,linking it into
-  /// the children list of the immediate dominator.
+  /// Add a new node to the dominator tree information.
+  ///
+  /// This creates a new node as a child of DomBB dominator node, linking it
+  /// into the children list of the immediate dominator.
+  ///
+  /// \param BB New node in CFG.
+  /// \param DomBB CFG node that is dominator for BB.
+  /// \returns New dominator tree node that represents new CFG node.
+  ///
   DomTreeNodeBase<NodeT> *addNewBlock(NodeT *BB, NodeT *DomBB) {
     assert(getNode(BB) == nullptr && "Block already in dominator tree!");
     DomTreeNodeBase<NodeT> *IDomNode = getNode(DomBB);
@@ -581,6 +587,31 @@ public:
     DFSInfoValid = false;
     return (DomTreeNodes[BB] = IDomNode->addChild(
                 llvm::make_unique<DomTreeNodeBase<NodeT>>(BB, IDomNode))).get();
+  }
+
+  /// Add a new node to the forward dominator tree and make it a new root.
+  ///
+  /// \param BB New node in CFG.
+  /// \returns New dominator tree node that represents new CFG node.
+  ///
+  DomTreeNodeBase<NodeT> *setNewRoot(NodeT *BB) {
+    assert(getNode(BB) == nullptr && "Block already in dominator tree!");
+    assert(!this->isPostDominator() &&
+           "Cannot change root of post-dominator tree");
+    DFSInfoValid = false;
+    auto &Roots = DominatorBase<NodeT>::Roots;
+    DomTreeNodeBase<NodeT> *NewNode = (DomTreeNodes[BB] =
+      llvm::make_unique<DomTreeNodeBase<NodeT>>(BB, nullptr)).get();
+    if (Roots.empty()) {
+      addRoot(BB);
+    } else {
+      assert(Roots.size() == 1);
+      NodeT *OldRoot = Roots.front();
+      DomTreeNodes[OldRoot] =
+        NewNode->addChild(std::move(DomTreeNodes[OldRoot]));
+      Roots[0] = BB;
+    }
+    return RootNode = NewNode;
   }
 
   /// changeImmediateDominator - This method is used to update the dominator
@@ -651,6 +682,10 @@ protected:
   friend typename GraphT::NodeRef
   Eval(DominatorTreeBaseByGraphTraits<GraphT> &DT, typename GraphT::NodeRef V,
        unsigned LastLinked);
+
+  template <class GraphT>
+  friend unsigned ReverseDFSPass(DominatorTreeBaseByGraphTraits<GraphT> &DT,
+                                 typename GraphT::NodeRef V, unsigned N);
 
   template <class GraphT>
   friend unsigned DFSPass(DominatorTreeBaseByGraphTraits<GraphT> &DT,
@@ -747,11 +782,9 @@ public:
       Calculate<FT, NodeT *>(*this, F);
     } else {
       // Initialize the roots list
-      for (typename TraitsTy::nodes_iterator I = TraitsTy::nodes_begin(&F),
-                                             E = TraitsTy::nodes_end(&F);
-           I != E; ++I)
-        if (TraitsTy::child_begin(*I) == TraitsTy::child_end(*I))
-          addRoot(*I);
+      for (auto *Node : nodes(&F))
+        if (TraitsTy::child_begin(Node) == TraitsTy::child_end(Node))
+          addRoot(Node);
 
       Calculate<FT, Inverse<NodeT *>>(*this, F);
     }

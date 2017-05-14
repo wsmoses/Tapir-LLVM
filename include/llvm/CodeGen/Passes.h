@@ -60,7 +60,9 @@ namespace llvm {
   /// as if it was just created.
   /// If EmitFallbackDiag is true, the pass will emit a
   /// DiagnosticInfoISelFallback for every MachineFunction it resets.
-  MachineFunctionPass *createResetMachineFunctionPass(bool EmitFallbackDiag);
+  /// If AbortOnFailedISel is true, abort compilation instead of resetting.
+  MachineFunctionPass *createResetMachineFunctionPass(bool EmitFallbackDiag,
+                                                      bool AbortOnFailedISel);
 
   /// createCodeGenPreparePass - Transform the code to expose more pattern
   /// matching during instruction selection.
@@ -284,6 +286,9 @@ namespace llvm {
   /// the target platform.
   extern char &XRayInstrumentationID;
 
+  /// This pass inserts FEntry calls
+  extern char &FEntryInserterID;
+
   /// \brief This pass implements the "patchable-function" attribute.
   extern char &PatchableFunctionID;
 
@@ -413,7 +418,7 @@ namespace llvm {
   Registry.registerPass(*PI, true);                                            \
   return PI;                                                                   \
   }                                                                            \
-  LLVM_DEFINE_ONCE_FLAG(Initialize##passName##PassFlag);                       \
+  static llvm::once_flag Initialize##passName##PassFlag;                       \
   void llvm::initialize##passName##Pass(PassRegistry &Registry) {              \
     llvm::call_once(Initialize##passName##PassFlag,                            \
                     initialize##passName##PassOnce, std::ref(Registry));       \

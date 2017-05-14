@@ -11,28 +11,80 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "AArch64ISelLowering.h"
 #include "AArch64CallingConvention.h"
 #include "AArch64MachineFunctionInfo.h"
+#include "AArch64ISelLowering.h"
 #include "AArch64PerfectShuffle.h"
+#include "AArch64RegisterInfo.h"
 #include "AArch64Subtarget.h"
-#include "AArch64TargetMachine.h"
-#include "AArch64TargetObjectFile.h"
 #include "MCTargetDesc/AArch64AddressingModes.h"
+#include "Utils/AArch64BaseInfo.h"
+#include "llvm/ADT/APFloat.h"
+#include "llvm/ADT/APInt.h"
+#include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/Statistic.h"
+#include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/StringRef.h"
+#include "llvm/ADT/StringSwitch.h"
+#include "llvm/ADT/Triple.h"
+#include "llvm/ADT/Twine.h"
+#include "llvm/Analysis/VectorUtils.h"
 #include "llvm/CodeGen/CallingConvLower.h"
+#include "llvm/CodeGen/MachineBasicBlock.h"
 #include "llvm/CodeGen/MachineFrameInfo.h"
+#include "llvm/CodeGen/MachineFunction.h"
+#include "llvm/CodeGen/MachineInstr.h"
 #include "llvm/CodeGen/MachineInstrBuilder.h"
+#include "llvm/CodeGen/MachineMemOperand.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
+#include "llvm/CodeGen/MachineValueType.h"
+#include "llvm/CodeGen/RuntimeLibcalls.h"
+#include "llvm/CodeGen/SelectionDAG.h"
+#include "llvm/CodeGen/SelectionDAGNodes.h"
+#include "llvm/CodeGen/ValueTypes.h"
+#include "llvm/IR/Attributes.h"
+#include "llvm/IR/Constants.h"
+#include "llvm/IR/DataLayout.h"
+#include "llvm/IR/DebugLoc.h"
+#include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/GetElementPtrTypeIterator.h"
+#include "llvm/IR/GlobalValue.h"
+#include "llvm/IR/Instruction.h"
+#include "llvm/IR/Instructions.h"
 #include "llvm/IR/Intrinsics.h"
+#include "llvm/IR/IRBuilder.h"
+#include "llvm/IR/Module.h"
+#include "llvm/IR/OperandTraits.h"
 #include "llvm/IR/Type.h"
+#include "llvm/IR/Use.h"
+#include "llvm/IR/Value.h"
+#include "llvm/MC/MCRegisterInfo.h"
+#include "llvm/Support/Casting.h"
+#include "llvm/Support/CodeGen.h"
 #include "llvm/Support/CommandLine.h"
+#include "llvm/Support/Compiler.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/MathExtras.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/Target/TargetCallingConv.h"
+#include "llvm/Target/TargetInstrInfo.h"
+#include "llvm/Target/TargetMachine.h"
 #include "llvm/Target/TargetOptions.h"
+#include <algorithm>
+#include <bitset>
+#include <cassert>
+#include <cctype>
+#include <cstdint>
+#include <cstdlib>
+#include <iterator>
+#include <limits>
+#include <tuple>
+#include <utility>
+#include <vector>
+
 using namespace llvm;
 
 #define DEBUG_TYPE "aarch64-lower"
@@ -59,7 +111,6 @@ static const MVT MVT_CC = MVT::i32;
 AArch64TargetLowering::AArch64TargetLowering(const TargetMachine &TM,
                                              const AArch64Subtarget &STI)
     : TargetLowering(TM), Subtarget(&STI) {
-
   // AArch64 doesn't have comparisons which set GPRs or setcc instructions, so
   // we have to make something up. Arbitrarily, choose ZeroOrOne.
   setBooleanContents(ZeroOrOneBooleanContent);
@@ -109,6 +160,8 @@ AArch64TargetLowering::AArch64TargetLowering(const TargetMachine &TM,
   setOperationAction(ISD::SETCC, MVT::i64, Custom);
   setOperationAction(ISD::SETCC, MVT::f32, Custom);
   setOperationAction(ISD::SETCC, MVT::f64, Custom);
+  setOperationAction(ISD::BITREVERSE, MVT::i32, Legal);
+  setOperationAction(ISD::BITREVERSE, MVT::i64, Legal);
   setOperationAction(ISD::BRCOND, MVT::Other, Expand);
   setOperationAction(ISD::BR_CC, MVT::i32, Custom);
   setOperationAction(ISD::BR_CC, MVT::i64, Custom);
@@ -217,7 +270,6 @@ AArch64TargetLowering::AArch64TargetLowering(const TargetMachine &TM,
   // AArch64 doesn't have {U|S}MUL_LOHI.
   setOperationAction(ISD::UMUL_LOHI, MVT::i64, Expand);
   setOperationAction(ISD::SMUL_LOHI, MVT::i64, Expand);
-
 
   setOperationAction(ISD::CTPOP, MVT::i32, Custom);
   setOperationAction(ISD::CTPOP, MVT::i64, Custom);
@@ -503,8 +555,6 @@ AArch64TargetLowering::AArch64TargetLowering(const TargetMachine &TM,
 
   setSchedulingPreference(Sched::Hybrid);
 
-  // Enable TBZ/TBNZ
-  MaskAndBranchFoldingIsLegal = true;
   EnableExtLdPromotion = true;
 
   // Set required alignment.
@@ -3104,7 +3154,8 @@ AArch64TargetLowering::LowerCall(CallLoweringInfo &CLI,
     }
 
     if (VA.isRegLoc()) {
-      if (realArgIdx == 0 && Flags.isReturned() && Outs[0].VT == MVT::i64) {
+      if (realArgIdx == 0 && Flags.isReturned() && !Flags.isSwiftSelf() &&
+          Outs[0].VT == MVT::i64) {
         assert(VA.getLocVT() == MVT::i64 &&
                "unexpected calling convention register assignment");
         assert(!Ins.empty() && Ins[0].VT == MVT::i64 &&
@@ -3632,6 +3683,7 @@ SDValue AArch64TargetLowering::LowerGlobalTLSAddress(SDValue Op,
 
   llvm_unreachable("Unexpected platform trying to use TLS");
 }
+
 SDValue AArch64TargetLowering::LowerBR_CC(SDValue Op, SelectionDAG &DAG) const {
   SDValue Chain = Op.getOperand(0);
   ISD::CondCode CC = cast<CondCodeSDNode>(Op.getOperand(1))->get();
@@ -4549,7 +4601,6 @@ SDValue AArch64TargetLowering::LowerShiftRightParts(SDValue Op,
   return DAG.getMergeValues(Ops, dl);
 }
 
-
 /// LowerShiftLeftParts - Lower SHL_PARTS, which returns two
 /// i64 values and take a 2 x i64 value to shift plus a shift amount.
 SDValue AArch64TargetLowering::LowerShiftLeftParts(SDValue Op,
@@ -5074,10 +5125,11 @@ SDValue AArch64TargetLowering::ReconstructShuffle(SDValue Op,
     int WindowBase;
     int WindowScale;
 
-    bool operator ==(SDValue OtherVec) { return Vec == OtherVec; }
     ShuffleSourceInfo(SDValue Vec)
-        : Vec(Vec), MinElt(UINT_MAX), MaxElt(0), ShuffleVec(Vec), WindowBase(0),
-          WindowScale(1) {}
+      : Vec(Vec), MinElt(std::numeric_limits<unsigned>::max()), MaxElt(0),
+          ShuffleVec(Vec), WindowBase(0), WindowScale(1) {}
+
+    bool operator ==(SDValue OtherVec) { return Vec == OtherVec; }
   };
 
   // First gather all vectors used as an immediate source for this BUILD_VECTOR
@@ -7028,7 +7080,7 @@ bool AArch64TargetLowering::getTgtMemIntrinsic(IntrinsicInfo &Info,
     return true;
   }
   case Intrinsic::aarch64_ldaxp:
-  case Intrinsic::aarch64_ldxp: {
+  case Intrinsic::aarch64_ldxp:
     Info.opc = ISD::INTRINSIC_W_CHAIN;
     Info.memVT = MVT::i128;
     Info.ptrVal = I.getArgOperand(0);
@@ -7038,9 +7090,8 @@ bool AArch64TargetLowering::getTgtMemIntrinsic(IntrinsicInfo &Info,
     Info.readMem = true;
     Info.writeMem = false;
     return true;
-  }
   case Intrinsic::aarch64_stlxp:
-  case Intrinsic::aarch64_stxp: {
+  case Intrinsic::aarch64_stxp:
     Info.opc = ISD::INTRINSIC_W_CHAIN;
     Info.memVT = MVT::i128;
     Info.ptrVal = I.getArgOperand(2);
@@ -7050,7 +7101,6 @@ bool AArch64TargetLowering::getTgtMemIntrinsic(IntrinsicInfo &Info,
     Info.readMem = false;
     Info.writeMem = true;
     return true;
-  }
   default:
     break;
   }
@@ -7265,18 +7315,6 @@ bool AArch64TargetLowering::lowerInterleavedLoad(
   return true;
 }
 
-/// \brief Get a mask consisting of sequential integers starting from \p Start.
-///
-/// I.e. <Start, Start + 1, ..., Start + NumElts - 1>
-static Constant *getSequentialMask(IRBuilder<> &Builder, unsigned Start,
-                                   unsigned NumElts) {
-  SmallVector<Constant *, 16> Mask;
-  for (unsigned i = 0; i < NumElts; i++)
-    Mask.push_back(Builder.getInt32(Start + i));
-
-  return ConstantVector::get(Mask);
-}
-
 /// \brief Lower an interleaved store into a stN intrinsic.
 ///
 /// E.g. Lower an interleaved store (Factor = 3):
@@ -7358,7 +7396,7 @@ bool AArch64TargetLowering::lowerInterleavedStore(StoreInst *SI,
   for (unsigned i = 0; i < Factor; i++) {
     if (Mask[i] >= 0) {
       Ops.push_back(Builder.CreateShuffleVector(
-        Op0, Op1, getSequentialMask(Builder, Mask[i], LaneLen)));
+          Op0, Op1, createSequentialMask(Builder, Mask[i], LaneLen, 0)));
     } else {
       unsigned StartMask = 0;
       for (unsigned j = 1; j < LaneLen; j++) {
@@ -7373,7 +7411,7 @@ bool AArch64TargetLowering::lowerInterleavedStore(StoreInst *SI,
       // In the case of all undefs we're defaulting to using elems from 0
       // Note: StartMask cannot be negative, it's checked in isReInterleaveMask
       Ops.push_back(Builder.CreateShuffleVector(
-        Op0, Op1, getSequentialMask(Builder, StartMask, LaneLen)));
+          Op0, Op1, createSequentialMask(Builder, StartMask, LaneLen, 0)));
     }
   }
 
@@ -8044,13 +8082,13 @@ static SDValue tryCombineToEXTR(SDNode *N,
 
   SDValue LHS;
   uint32_t ShiftLHS = 0;
-  bool LHSFromHi = 0;
+  bool LHSFromHi = false;
   if (!findEXTRHalf(N->getOperand(0), LHS, ShiftLHS, LHSFromHi))
     return SDValue();
 
   SDValue RHS;
   uint32_t ShiftRHS = 0;
-  bool RHSFromHi = 0;
+  bool RHSFromHi = false;
   if (!findEXTRHalf(N->getOperand(1), RHS, ShiftRHS, RHSFromHi))
     return SDValue();
 
@@ -8884,8 +8922,9 @@ static SDValue splitStoreSplat(SelectionDAG &DAG, StoreSDNode &St,
   // instructions (stp).
   SDLoc DL(&St);
   SDValue BasePtr = St.getBasePtr();
+  const MachinePointerInfo &PtrInfo = St.getPointerInfo();
   SDValue NewST1 =
-      DAG.getStore(St.getChain(), DL, SplatVal, BasePtr, St.getPointerInfo(),
+      DAG.getStore(St.getChain(), DL, SplatVal, BasePtr, PtrInfo,
                    OrigAlignment, St.getMemOperand()->getFlags());
 
   unsigned Offset = EltOffset;
@@ -8894,7 +8933,7 @@ static SDValue splitStoreSplat(SelectionDAG &DAG, StoreSDNode &St,
     SDValue OffsetPtr = DAG.getNode(ISD::ADD, DL, MVT::i64, BasePtr,
                                     DAG.getConstant(Offset, DL, MVT::i64));
     NewST1 = DAG.getStore(NewST1.getValue(0), DL, SplatVal, OffsetPtr,
-                          St.getPointerInfo(), Alignment,
+                          PtrInfo.getWithOffset(Offset), Alignment,
                           St.getMemOperand()->getFlags());
     Offset += EltOffset;
   }
@@ -9732,52 +9771,51 @@ static bool isEquivalentMaskless(unsigned CC, unsigned width,
 
   switch(CC) {
   case AArch64CC::LE:
-  case AArch64CC::GT: {
+  case AArch64CC::GT:
     if ((AddConstant == 0) ||
         (CompConstant == MaxUInt - 1 && AddConstant < 0) ||
         (AddConstant >= 0 && CompConstant < 0) ||
         (AddConstant <= 0 && CompConstant <= 0 && CompConstant < AddConstant))
       return true;
-  } break;
+    break;
   case AArch64CC::LT:
-  case AArch64CC::GE: {
+  case AArch64CC::GE:
     if ((AddConstant == 0) ||
         (AddConstant >= 0 && CompConstant <= 0) ||
         (AddConstant <= 0 && CompConstant <= 0 && CompConstant <= AddConstant))
       return true;
-  } break;
+    break;
   case AArch64CC::HI:
-  case AArch64CC::LS: {
+  case AArch64CC::LS:
     if ((AddConstant >= 0 && CompConstant < 0) ||
        (AddConstant <= 0 && CompConstant >= -1 &&
         CompConstant < AddConstant + MaxUInt))
       return true;
-  } break;
+   break;
   case AArch64CC::PL:
-  case AArch64CC::MI: {
+  case AArch64CC::MI:
     if ((AddConstant == 0) ||
         (AddConstant > 0 && CompConstant <= 0) ||
         (AddConstant < 0 && CompConstant <= AddConstant))
       return true;
-  } break;
+    break;
   case AArch64CC::LO:
-  case AArch64CC::HS: {
+  case AArch64CC::HS:
     if ((AddConstant >= 0 && CompConstant <= 0) ||
         (AddConstant <= 0 && CompConstant >= 0 &&
          CompConstant <= AddConstant + MaxUInt))
       return true;
-  } break;
+    break;
   case AArch64CC::EQ:
-  case AArch64CC::NE: {
+  case AArch64CC::NE:
     if ((AddConstant > 0 && CompConstant < 0) ||
         (AddConstant < 0 && CompConstant >= 0 &&
          CompConstant < AddConstant + MaxUInt) ||
         (AddConstant >= 0 && CompConstant >= 0 &&
          CompConstant >= AddConstant) ||
         (AddConstant <= 0 && CompConstant < 0 && CompConstant < AddConstant))
-
       return true;
-  } break;
+    break;
   case AArch64CC::VS:
   case AArch64CC::VC:
   case AArch64CC::AL:
@@ -10501,7 +10539,7 @@ Value *AArch64TargetLowering::emitLoadLinked(IRBuilder<> &Builder, Value *Addr,
   if (ValTy->getPrimitiveSizeInBits() == 128) {
     Intrinsic::ID Int =
         IsAcquire ? Intrinsic::aarch64_ldaxp : Intrinsic::aarch64_ldxp;
-    Function *Ldxr = llvm::Intrinsic::getDeclaration(M, Int);
+    Function *Ldxr = Intrinsic::getDeclaration(M, Int);
 
     Addr = Builder.CreateBitCast(Addr, Type::getInt8PtrTy(M->getContext()));
     Value *LoHi = Builder.CreateCall(Ldxr, Addr, "lohi");
@@ -10517,7 +10555,7 @@ Value *AArch64TargetLowering::emitLoadLinked(IRBuilder<> &Builder, Value *Addr,
   Type *Tys[] = { Addr->getType() };
   Intrinsic::ID Int =
       IsAcquire ? Intrinsic::aarch64_ldaxr : Intrinsic::aarch64_ldxr;
-  Function *Ldxr = llvm::Intrinsic::getDeclaration(M, Int, Tys);
+  Function *Ldxr = Intrinsic::getDeclaration(M, Int, Tys);
 
   return Builder.CreateTruncOrBitCast(
       Builder.CreateCall(Ldxr, Addr),
@@ -10527,8 +10565,7 @@ Value *AArch64TargetLowering::emitLoadLinked(IRBuilder<> &Builder, Value *Addr,
 void AArch64TargetLowering::emitAtomicCmpXchgNoStoreLLBalance(
     IRBuilder<> &Builder) const {
   Module *M = Builder.GetInsertBlock()->getParent()->getParent();
-  Builder.CreateCall(
-      llvm::Intrinsic::getDeclaration(M, Intrinsic::aarch64_clrex));
+  Builder.CreateCall(Intrinsic::getDeclaration(M, Intrinsic::aarch64_clrex));
 }
 
 Value *AArch64TargetLowering::emitStoreConditional(IRBuilder<> &Builder,
@@ -10605,6 +10642,19 @@ Value *AArch64TargetLowering::getSafeStackPointerLocation(IRBuilder<> &IRB) cons
       Type::getInt8PtrTy(IRB.getContext())->getPointerTo(0));
 }
 
+bool AArch64TargetLowering::isMaskAndCmp0FoldingBeneficial(
+    const Instruction &AndI) const {
+  // Only sink 'and' mask to cmp use block if it is masking a single bit, since
+  // this is likely to be fold the and/cmp/br into a single tbz instruction.  It
+  // may be beneficial to sink in other cases, but we would have to check that
+  // the cmp would not get folded into the br to form a cbz for these to be
+  // beneficial.
+  ConstantInt* Mask = dyn_cast<ConstantInt>(AndI.getOperand(1));
+  if (!Mask)
+    return false;
+  return Mask->getUniqueInteger().isPowerOf2();
+}
+
 void AArch64TargetLowering::initializeSplitCSR(MachineBasicBlock *Entry) const {
   // Update IsSplitCSR in AArch64unctionInfo.
   AArch64FunctionInfo *AFI = Entry->getParent()->getInfo<AArch64FunctionInfo>();
@@ -10663,4 +10713,12 @@ bool AArch64TargetLowering::isIntDivCheap(EVT VT, AttributeSet Attr) const {
   bool OptSize =
       Attr.hasAttribute(AttributeSet::FunctionIndex, Attribute::MinSize);
   return OptSize && !VT.isVector();
+}
+
+unsigned
+AArch64TargetLowering::getVaListSizeInBits(const DataLayout &DL) const {
+  if (Subtarget->isTargetDarwin())
+    return getPointerTy(DL).getSizeInBits();
+
+  return 3 * getPointerTy(DL).getSizeInBits() + 2 * 32;
 }

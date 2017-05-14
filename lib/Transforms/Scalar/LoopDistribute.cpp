@@ -31,13 +31,13 @@
 #include "llvm/Analysis/GlobalsModRef.h"
 #include "llvm/Analysis/LoopAccessAnalysis.h"
 #include "llvm/Analysis/LoopInfo.h"
-#include "llvm/Analysis/LoopPassManager.h"
 #include "llvm/Analysis/OptimizationDiagnosticInfo.h"
 #include "llvm/IR/DiagnosticInfo.h"
 #include "llvm/IR/Dominators.h"
 #include "llvm/Pass.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Transforms/Scalar/LoopPassManager.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include "llvm/Transforms/Utils/Cloning.h"
 #include "llvm/Transforms/Utils/LoopUtils.h"
@@ -812,29 +812,29 @@ private:
       const RuntimePointerChecking *RtPtrChecking) {
     SmallVector<RuntimePointerChecking::PointerCheck, 4> Checks;
 
-    std::copy_if(AllChecks.begin(), AllChecks.end(), std::back_inserter(Checks),
-                 [&](const RuntimePointerChecking::PointerCheck &Check) {
-                   for (unsigned PtrIdx1 : Check.first->Members)
-                     for (unsigned PtrIdx2 : Check.second->Members)
-                       // Only include this check if there is a pair of pointers
-                       // that require checking and the pointers fall into
-                       // separate partitions.
-                       //
-                       // (Note that we already know at this point that the two
-                       // pointer groups need checking but it doesn't follow
-                       // that each pair of pointers within the two groups need
-                       // checking as well.
-                       //
-                       // In other words we don't want to include a check just
-                       // because there is a pair of pointers between the two
-                       // pointer groups that require checks and a different
-                       // pair whose pointers fall into different partitions.)
-                       if (RtPtrChecking->needsChecking(PtrIdx1, PtrIdx2) &&
-                           !RuntimePointerChecking::arePointersInSamePartition(
-                               PtrToPartition, PtrIdx1, PtrIdx2))
-                         return true;
-                   return false;
-                 });
+    copy_if(AllChecks, std::back_inserter(Checks),
+            [&](const RuntimePointerChecking::PointerCheck &Check) {
+              for (unsigned PtrIdx1 : Check.first->Members)
+                for (unsigned PtrIdx2 : Check.second->Members)
+                  // Only include this check if there is a pair of pointers
+                  // that require checking and the pointers fall into
+                  // separate partitions.
+                  //
+                  // (Note that we already know at this point that the two
+                  // pointer groups need checking but it doesn't follow
+                  // that each pair of pointers within the two groups need
+                  // checking as well.
+                  //
+                  // In other words we don't want to include a check just
+                  // because there is a pair of pointers between the two
+                  // pointer groups that require checks and a different
+                  // pair whose pointers fall into different partitions.)
+                  if (RtPtrChecking->needsChecking(PtrIdx1, PtrIdx2) &&
+                      !RuntimePointerChecking::arePointersInSamePartition(
+                          PtrToPartition, PtrIdx1, PtrIdx2))
+                    return true;
+              return false;
+            });
 
     return Checks;
   }
@@ -946,10 +946,18 @@ PreservedAnalyses LoopDistributePass::run(Function &F,
   auto &SE = AM.getResult<ScalarEvolutionAnalysis>(F);
   auto &ORE = AM.getResult<OptimizationRemarkEmitterAnalysis>(F);
 
+  // We don't directly need these analyses but they're required for loop
+  // analyses so provide them below.
+  auto &AA = AM.getResult<AAManager>(F);
+  auto &AC = AM.getResult<AssumptionAnalysis>(F);
+  auto &TTI = AM.getResult<TargetIRAnalysis>(F);
+  auto &TLI = AM.getResult<TargetLibraryAnalysis>(F);
+
   auto &LAM = AM.getResult<LoopAnalysisManagerFunctionProxy>(F).getManager();
   std::function<const LoopAccessInfo &(Loop &)> GetLAA =
       [&](Loop &L) -> const LoopAccessInfo & {
-    return LAM.getResult<LoopAccessAnalysis>(L);
+    LoopStandardAnalysisResults AR = {AA, AC, DT, LI, SE, TLI, TTI};
+    return LAM.getResult<LoopAccessAnalysis>(L, AR);
   };
 
   bool Changed = runImpl(F, &LI, &DT, &SE, &ORE, GetLAA);

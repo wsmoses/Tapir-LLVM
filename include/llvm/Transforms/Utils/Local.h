@@ -261,6 +261,7 @@ BranchInst* SerializeDetachedCFG(DetachInst *DI, DominatorTree *DT = nullptr);
 /// Get the entry basic block to the detached context that contains
 /// the specified block.
 const BasicBlock *GetDetachedCtx(const BasicBlock *BB);
+BasicBlock *GetDetachedCtx(BasicBlock *BB);
 
 ///===---------------------------------------------------------------------===//
 ///  Dbg Intrinsic utilities

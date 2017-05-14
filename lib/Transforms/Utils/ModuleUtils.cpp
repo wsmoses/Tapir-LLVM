@@ -138,7 +138,7 @@ Function *llvm::checkCsiInterfaceFunction(Constant *FuncOrBitcast) {
       }
     }
   }
-  FuncOrBitcast->dump();
+  FuncOrBitcast->print(errs());
   std::string Err;
   raw_string_ostream Stream(Err);
   Stream << "ComprehensiveStaticInstrumentation interface function redefined: " << *FuncOrBitcast;
@@ -148,7 +148,8 @@ Function *llvm::checkCsiInterfaceFunction(Constant *FuncOrBitcast) {
 Function *llvm::checkSanitizerInterfaceFunction(Constant *FuncOrBitcast) {
   if (isa<Function>(FuncOrBitcast))
     return cast<Function>(FuncOrBitcast);
-  FuncOrBitcast->dump();
+  FuncOrBitcast->print(errs());
+  errs() << '\n';
   std::string Err;
   raw_string_ostream Stream(Err);
   Stream << "Sanitizer interface function redefined: " << *FuncOrBitcast;

@@ -368,6 +368,10 @@ LLVM-specific variables
   Enable building with zlib to support compression/uncompression in LLVM tools.
   Defaults to ON.
 
+**LLVM_ENABLE_DIA_SDK**:BOOL
+  Enable building with MSVC DIA SDK for PDB debugging support. Available
+  only with MSVC. Defaults to ON.
+
 **LLVM_USE_SANITIZER**:STRING
   Define the sanitizer used to build LLVM binaries and tests. Possible values
   are ``Address``, ``Memory``, ``MemoryWithOrigins``, ``Undefined``, ``Thread``,
@@ -377,6 +381,18 @@ LLVM-specific variables
   Add ``-flto`` or ``-flto=`` flags to the compile and link command
   lines, enabling link-time optimization. Possible values are ``Off``,
   ``On``, ``Thin`` and ``Full``. Defaults to OFF.
+
+**LLVM_USE_LINKER**:STRING
+  Add ``-fuse-ld={name}`` to the link invocation. The possible value depend on
+  your compiler, for clang the value can be an absolute path to your custom
+  linker, otherwise clang will prefix the name with ``ld.`` and apply its usual
+  search. For example to link LLVM with the Gold linker, cmake can be invoked
+  with ``-DLLVM_USE_LINKER=gold``.
+
+**LLVM_ENABLE_LLD**:BOOL
+  This option is equivalent to `-DLLVM_USE_LINKER=lld`, except during a 2-stage
+  build where a dependency is added from the first stage to the second ensuring
+  that lld is built before stage2 begins.
 
 **LLVM_PARALLEL_COMPILE_JOBS**:STRING
   Define the maximum number of concurrent compilation jobs.
@@ -453,6 +469,8 @@ LLVM-specific variables
 
 **SPHINX_EXECUTABLE**:STRING
   The path to the ``sphinx-build`` executable detected by CMake.
+  For installation instructions, see
+  http://www.sphinx-doc.org/en/latest/install.html
 
 **SPHINX_OUTPUT_HTML**:BOOL
   If enabled (and ``LLVM_ENABLE_SPHINX`` is enabled) then the targets for

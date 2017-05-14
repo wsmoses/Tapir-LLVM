@@ -32,24 +32,27 @@ static bool promoteMemoryToRegister(Function &F, DominatorTree &DT,
   std::vector<AllocaInst *> Allocas;
   bool Changed = false;
 
+  // Scan the function to get its entry block and all entry blocks of detached
+  // CFG's.  We can perform this scan for entry blocks once for the function,
+  // because this pass preserves the CFG.
+  SmallVector<BasicBlock *, 4> EntryBlocks;
+  EntryBlocks.push_back(&F.getEntryBlock());
+  for (BasicBlock &BB : F)
+    if (BasicBlock *Pred = BB.getUniquePredecessor())
+      if (DetachInst *DI = dyn_cast<DetachInst>(Pred->getTerminator()))
+        if (DI->getDetached() == &BB)
+          EntryBlocks.push_back(&BB);
+
   while (1) {
     Allocas.clear();
 
     // Find allocas that are safe to promote, by looking at all instructions in
     // the entry node
-    for (BasicBlock &BB : F) {
-      bool toRun = &BB == &F.getEntryBlock();
-      if (BasicBlock* pred = BB.getUniquePredecessor()) {
-        if (DetachInst* det = dyn_cast<DetachInst>(pred->getTerminator())) {
-          toRun |= &BB == det->getDetached();
-        }
-      }
-      if (!toRun) continue;
-      for (BasicBlock::iterator I = BB.begin(), E = --BB.end(); I != E; ++I)
+    for (BasicBlock *BB : EntryBlocks)
+      for (BasicBlock::iterator I = BB->begin(), E = --BB->end(); I != E; ++I)
         if (AllocaInst *AI = dyn_cast<AllocaInst>(I))       // Is it an alloca?
           if (isAllocaPromotable(AI, DT))
             Allocas.push_back(AI);
-    }
 
     if (Allocas.empty())
       break;
@@ -67,8 +70,9 @@ PreservedAnalyses PromotePass::run(Function &F, FunctionAnalysisManager &AM) {
   if (!promoteMemoryToRegister(F, DT, AC))
     return PreservedAnalyses::all();
 
-  // FIXME: This should also 'preserve the CFG'.
-  return PreservedAnalyses::none();
+  PreservedAnalyses PA;
+  PA.preserveSet<CFGAnalyses>();
+  return PA;
 }
 
 namespace {

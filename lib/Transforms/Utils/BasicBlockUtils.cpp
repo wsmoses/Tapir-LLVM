@@ -107,10 +107,18 @@ bool llvm::MergeBlockIntoPredecessor(BasicBlock *BB, DominatorTree *DT,
   // Don't break unwinding instructions.
   if (PredBB->getTerminator()->isExceptional())
     return false;
-
   // For now, don't break syncs.
   // TODO: Don't break syncs unless they don't sync anything.
   if (isa<SyncInst>(PredBB->getTerminator())) return false;
+  // Don't break entry blocks of detached CFG's.
+  for (pred_iterator PI = pred_begin(PredBB), PE = pred_end(PredBB);
+       PI != PE; ++PI) {
+    BasicBlock *PredPredBB = *PI;
+    if (const DetachInst *DI =
+        dyn_cast<DetachInst>(PredPredBB->getTerminator()))
+      if (DI->getDetached() == PredBB)
+        return false;
+  }
 
   succ_iterator SI(succ_begin(PredBB)), SE(succ_end(PredBB));
   BasicBlock *OnlySucc = BB;
@@ -452,7 +460,7 @@ BasicBlock *llvm::SplitBlockPredecessors(BasicBlock *BB,
 
   // The new block unconditionally branches to the old block.
   BranchInst *BI = BranchInst::Create(BB, NewBB);
-  BI->setDebugLoc(BB->getFirstNonPHI()->getDebugLoc());
+  BI->setDebugLoc(BB->getFirstNonPHIOrDbg()->getDebugLoc());
 
   // Move the edges from Preds to point to NewBB instead of BB.
   for (unsigned i = 0, e = Preds.size(); i != e; ++i) {

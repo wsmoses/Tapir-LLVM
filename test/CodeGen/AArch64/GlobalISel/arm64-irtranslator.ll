@@ -52,10 +52,10 @@ define void @allocai64() {
 ; CHECK: body:
 ;
 ; ABI/constant lowering and IR-level entry basic block.
-; CHECK: {{bb.[0-9]+}}:
+; CHECK: {{bb.[0-9]+}} (%ir-block.{{[0-9]+}}):
 ;
 ; Make sure we have one successor and only one.
-; CHECK-NEXT: successors: %[[END:bb.[0-9]+]](0x80000000)
+; CHECK-NEXT: successors: %[[END:bb.[0-9]+.end]](0x80000000)
 ;
 ; Check that we emit the correct branch.
 ; CHECK: G_BR %[[END]]
@@ -74,10 +74,10 @@ end:
 ; CHECK: body:
 ;
 ; ABI/constant lowering and IR-level entry basic block.
-; CHECK: {{bb.[0-9]+}}:
+; CHECK: {{bb.[0-9]+}} (%ir-block.{{[0-9]+}}):
 ; Make sure we have two successors
-; CHECK-NEXT: successors: %[[TRUE:bb.[0-9]+]](0x40000000),
-; CHECK:                  %[[FALSE:bb.[0-9]+]](0x40000000)
+; CHECK-NEXT: successors: %[[TRUE:bb.[0-9]+.true]](0x40000000),
+; CHECK:                  %[[FALSE:bb.[0-9]+.false]](0x40000000)
 ;
 ; CHECK: [[ADDR:%.*]](p0) = COPY %x0
 ;
@@ -97,6 +97,159 @@ define void @condbr(i1* %tstaddr) {
 true:
   ret void
 false:
+  ret void
+}
+
+; Tests for switch.
+; This gets lowered to a very straightforward sequence of comparisons for now.
+; CHECK-LABEL: name: switch
+; CHECK: body:
+;
+; CHECK: {{bb.[0-9]+.entry}}:
+; CHECK-NEXT: successors: %[[BB_CASE100:bb.[0-9]+.case100]](0x40000000), %[[BB_NOTCASE100_CHECKNEXT:bb.[0-9]+.entry]](0x40000000)
+; CHECK: %0(s32) = COPY %w0
+; CHECK: %[[reg100:[0-9]+]](s32) = G_CONSTANT i32 100
+; CHECK: %[[reg200:[0-9]+]](s32) = G_CONSTANT i32 200
+; CHECK: %[[reg0:[0-9]+]](s32) = G_CONSTANT i32 0
+; CHECK: %[[reg1:[0-9]+]](s32) = G_CONSTANT i32 1
+; CHECK: %[[reg2:[0-9]+]](s32) = G_CONSTANT i32 2
+; CHECK: %[[regicmp100:[0-9]+]](s1) = G_ICMP intpred(eq), %[[reg100]](s32), %0
+; CHECK: G_BRCOND %[[regicmp100]](s1), %[[BB_CASE100]]
+; CHECK: G_BR %[[BB_NOTCASE100_CHECKNEXT]]
+;
+; CHECK: [[BB_CASE100]]:
+; CHECK-NEXT: successors: %[[BB_RET:bb.[0-9]+.return]](0x80000000)
+; CHECK: %[[regretc100:[0-9]+]](s32) = G_ADD %0, %[[reg1]]
+; CHECK: G_BR %[[BB_RET]]
+; CHECK: [[BB_NOTCASE100_CHECKNEXT]]:
+; CHECK-NEXT: successors: %[[BB_CASE200:bb.[0-9]+.case200]](0x40000000), %[[BB_NOTCASE200_CHECKNEXT:bb.[0-9]+.entry]](0x40000000)
+; CHECK: %[[regicmp200:[0-9]+]](s1) = G_ICMP intpred(eq), %[[reg200]](s32), %0
+; CHECK: G_BRCOND %[[regicmp200]](s1), %[[BB_CASE200]]
+; CHECK: G_BR %[[BB_NOTCASE200_CHECKNEXT]]
+;
+; CHECK: [[BB_CASE200]]:
+; CHECK-NEXT: successors: %[[BB_RET:bb.[0-9]+.return]](0x80000000)
+; CHECK: %[[regretc200:[0-9]+]](s32) = G_ADD %0, %[[reg2]]
+; CHECK: G_BR %[[BB_RET]]
+; CHECK: [[BB_NOTCASE200_CHECKNEXT]]:
+; CHECK-NEXT: successors: %[[BB_DEFAULT:bb.[0-9]+.default]](0x80000000)
+; CHECK: G_BR %[[BB_DEFAULT]]
+;
+; CHECK: [[BB_DEFAULT]]:
+; CHECK-NEXT: successors: %[[BB_RET]](0x80000000)
+; CHECK: %[[regretdefault:[0-9]+]](s32) = G_ADD %0, %[[reg0]]
+; CHECK: G_BR %[[BB_RET]]
+;
+; CHECK: [[BB_RET]]:
+; CHECK-NEXT: %[[regret:[0-9]+]](s32) = PHI %[[regretdefault]](s32), %[[BB_DEFAULT]], %[[regretc100]](s32), %[[BB_CASE100]]
+; CHECK:  %w0 = COPY %[[regret]](s32)
+; CHECK:  RET_ReallyLR implicit %w0
+define i32 @switch(i32 %argc) {
+entry:
+  switch i32 %argc, label %default [
+    i32 100, label %case100
+    i32 200, label %case200
+  ]
+
+default:
+  %tmp0 = add i32 %argc, 0
+  br label %return
+
+case100:
+  %tmp1 = add i32 %argc, 1
+  br label %return
+
+case200:
+  %tmp2 = add i32 %argc, 2
+  br label %return
+
+return:
+  %res = phi i32 [ %tmp0, %default ], [ %tmp1, %case100 ], [ %tmp2, %case200 ]
+  ret i32 %res
+}
+
+  ; The switch lowering code changes the CFG, which means that the original
+  ; %entry block is no longer a predecessor for the phi instruction. We need to
+  ; use the correct lowered MachineBasicBlock instead.
+; CHECK-LABEL: name: test_cfg_remap
+
+; CHECK: bb.5.entry:
+; CHECK-NEXT: successors: %[[PHI_BLOCK:bb.[0-9]+.phi.block]]
+; CHECK: G_BR %[[PHI_BLOCK]]
+
+; CHECK: [[PHI_BLOCK]]:
+; CHECK-NEXT: PHI %{{.*}}(s32), %bb.5.entry
+define i32 @test_cfg_remap(i32 %in) {
+entry:
+  switch i32 %in, label %phi.block [i32 1, label %next
+                                    i32 57, label %other]
+
+next:
+  br label %phi.block
+
+other:
+  ret i32 undef
+
+phi.block:
+  %res = phi i32 [1, %entry], [42, %next]
+  ret i32 %res
+}
+
+; CHECK-LABEL: name: test_cfg_remap_multiple_preds
+; CHECK: PHI [[ENTRY:%.*]](s32), %bb.{{[0-9]+}}.entry, [[ENTRY]](s32), %bb.{{[0-9]+}}.entry
+define i32 @test_cfg_remap_multiple_preds(i32 %in) {
+entry:
+  switch i32 %in, label %odd [i32 1, label %next
+                              i32 57, label %other
+                              i32 128, label %phi.block
+                              i32 256, label %phi.block]
+odd:
+  unreachable
+
+next:
+  br label %phi.block
+
+other:
+  ret i32 undef
+
+phi.block:
+  %res = phi i32 [1, %entry], [1, %entry], [42, %next]
+  ret i32 12
+}
+
+; Tests for indirect br.
+; CHECK-LABEL: name: indirectbr
+; CHECK: body:
+;
+; ABI/constant lowering and IR-level entry basic block.
+; CHECK: {{bb.[0-9]+.entry}}:
+; Make sure we have one successor
+; CHECK-NEXT: successors: %[[BB_L1:bb.[0-9]+.L1]](0x80000000)
+; CHECK: G_BR %[[BB_L1]]
+;
+; Check basic block L1 has 2 successors: BBL1 and BBL2
+; CHECK: [[BB_L1]] (address-taken):
+; CHECK-NEXT: successors: %[[BB_L1]](0x40000000),
+; CHECK:                  %[[BB_L2:bb.[0-9]+.L2]](0x40000000)
+; CHECK: G_BRINDIRECT %{{[0-9]+}}(p0)
+;
+; Check basic block L2 is the return basic block
+; CHECK: [[BB_L2]] (address-taken):
+; CHECK-NEXT: RET_ReallyLR
+
+@indirectbr.L = internal unnamed_addr constant [3 x i8*] [i8* blockaddress(@indirectbr, %L1), i8* blockaddress(@indirectbr, %L2), i8* null], align 8
+
+define void @indirectbr() {
+entry:
+  br label %L1
+L1:                                               ; preds = %entry, %L1
+  %i = phi i32 [ 0, %entry ], [ %inc, %L1 ]
+  %inc = add i32 %i, 1
+  %idxprom = zext i32 %i to i64
+  %arrayidx = getelementptr inbounds [3 x i8*], [3 x i8*]* @indirectbr.L, i64 0, i64 %idxprom
+  %brtarget = load i8*, i8** %arrayidx, align 8
+  indirectbr i8* %brtarget, [label %L1, label %L2]
+L2:                                               ; preds = %L1
   ret void
 }
 
@@ -223,11 +376,11 @@ define i64* @trivial_bitcast(i8* %a) {
 
 ; CHECK-LABEL: name: trivial_bitcast_with_copy
 ; CHECK:     [[A:%[0-9]+]](p0) = COPY %x0
-; CHECK:     G_BR %[[CAST:bb\.[0-9]+]]
+; CHECK:     G_BR %[[CAST:bb\.[0-9]+.cast]]
 
 ; CHECK: [[CAST]]:
 ; CHECK:     {{%[0-9]+}}(p0) = COPY [[A]]
-; CHECK:     G_BR %[[END:bb\.[0-9]+]]
+; CHECK:     G_BR %[[END:bb\.[0-9]+.end]]
 
 ; CHECK: [[END]]:
 define i64* @trivial_bitcast_with_copy(i8* %a) {
@@ -324,8 +477,8 @@ define void @intrinsics(i32 %cur, i32 %bits) {
 }
 
 ; CHECK-LABEL: name: test_phi
-; CHECK:     G_BRCOND {{%.*}}, %[[TRUE:bb\.[0-9]+]]
-; CHECK:     G_BR %[[FALSE:bb\.[0-9]+]]
+; CHECK:     G_BRCOND {{%.*}}, %[[TRUE:bb\.[0-9]+.true]]
+; CHECK:     G_BR %[[FALSE:bb\.[0-9]+.false]]
 
 ; CHECK: [[TRUE]]:
 ; CHECK:     [[RES1:%[0-9]+]](s32) = G_LOAD
@@ -901,6 +1054,34 @@ define void @test_memcpy(i8* %dst, i8* %src, i64 %size) {
   ret void
 }
 
+declare void @llvm.memmove.p0i8.p0i8.i64(i8*, i8*, i64, i32 %align, i1 %volatile)
+define void @test_memmove(i8* %dst, i8* %src, i64 %size) {
+; CHECK-LABEL: name: test_memmove
+; CHECK: [[DST:%[0-9]+]](p0) = COPY %x0
+; CHECK: [[SRC:%[0-9]+]](p0) = COPY %x1
+; CHECK: [[SIZE:%[0-9]+]](s64) = COPY %x2
+; CHECK: %x0 = COPY [[DST]]
+; CHECK: %x1 = COPY [[SRC]]
+; CHECK: %x2 = COPY [[SIZE]]
+; CHECK: BL $memmove, csr_aarch64_aapcs, implicit-def %lr, implicit %sp, implicit %x0, implicit %x1, implicit %x2
+  call void @llvm.memmove.p0i8.p0i8.i64(i8* %dst, i8* %src, i64 %size, i32 1, i1 0)
+  ret void
+}
+
+declare void @llvm.memset.p0i8.i64(i8*, i8, i64, i32 %align, i1 %volatile)
+define void @test_memset(i8* %dst, i8 %val, i64 %size) {
+; CHECK-LABEL: name: test_memset
+; CHECK: [[DST:%[0-9]+]](p0) = COPY %x0
+; CHECK: [[SRC:%[0-9]+]](s8) = COPY %w1
+; CHECK: [[SIZE:%[0-9]+]](s64) = COPY %x2
+; CHECK: %x0 = COPY [[DST]]
+; CHECK: %w1 = COPY [[SRC]]
+; CHECK: %x2 = COPY [[SIZE]]
+; CHECK: BL $memset, csr_aarch64_aapcs, implicit-def %lr, implicit %sp, implicit %x0, implicit %w1, implicit %x2
+  call void @llvm.memset.p0i8.i64(i8* %dst, i8 %val, i64 %size, i32 1, i1 0)
+  ret void
+}
+
 declare i64 @llvm.objectsize.i64(i8*, i1)
 declare i32 @llvm.objectsize.i32(i8*, i1)
 define void @test_objectsize(i8* %addr0, i8* %addr1) {
@@ -933,7 +1114,7 @@ define void @test_large_const(i128* %addr) {
 ; correct.
 define i8* @test_const_placement() {
 ; CHECK-LABEL: name: test_const_placement
-; CHECK: bb.{{[0-9]+}}:
+; CHECK: bb.{{[0-9]+}} (%ir-block.{{[0-9]+}}):
 ; CHECK:   [[VAL_INT:%[0-9]+]](s32) = G_CONSTANT i32 42
 ; CHECK:   [[VAL:%[0-9]+]](p0) = G_INTTOPTR [[VAL_INT]](s32)
 ; CHECK:   G_BR
@@ -941,4 +1122,70 @@ define i8* @test_const_placement() {
 
 next:
   ret i8* inttoptr(i32 42 to i8*)
+}
+
+declare void @llvm.va_end(i8*)
+define void @test_va_end(i8* %list) {
+; CHECK-LABEL: name: test_va_end
+; CHECK-NOT: va_end
+; CHECK-NOT: INTRINSIC
+; CHECK: RET_ReallyLR
+  call void @llvm.va_end(i8* %list)
+  ret void
+}
+
+define void @test_va_arg(i8* %list) {
+; CHECK-LABEL: test_va_arg
+; CHECK: [[LIST:%[0-9]+]](p0) = COPY %x0
+; CHECK: G_VAARG [[LIST]](p0), 8
+; CHECK: G_VAARG [[LIST]](p0), 1
+; CHECK: G_VAARG [[LIST]](p0), 16
+
+  %v0 = va_arg i8* %list, i64
+  %v1 = va_arg i8* %list, i8
+  %v2 = va_arg i8* %list, i128
+  ret void
+}
+
+declare float @llvm.pow.f32(float, float)
+define float @test_pow_intrin(float %l, float %r) {
+; CHECK-LABEL: name: test_pow_intrin
+; CHECK: [[LHS:%[0-9]+]](s32) = COPY %s0
+; CHECK: [[RHS:%[0-9]+]](s32) = COPY %s1
+; CHECK: [[RES:%[0-9]+]](s32) = G_FPOW [[LHS]], [[RHS]]
+; CHECK: %s0 = COPY [[RES]]
+  %res = call float @llvm.pow.f32(float %l, float %r)
+  ret float %res
+}
+
+declare void @llvm.lifetime.start(i64, i8*)
+declare void @llvm.lifetime.end(i64, i8*)
+define void @test_lifetime_intrin() {
+; CHECK-LABEL: name: test_lifetime_intrin
+; CHECK: RET_ReallyLR
+  %slot = alloca i8, i32 4
+  call void @llvm.lifetime.start(i64 0, i8* %slot)
+  call void @llvm.lifetime.end(i64 0, i8* %slot)
+  ret void
+}
+
+define void @test_load_store_atomics(i8* %addr) {
+; CHECK-LABEL: name: test_load_store_atomics
+; CHECK: [[ADDR:%[0-9]+]](p0) = COPY %x0
+; CHECK: [[V0:%[0-9]+]](s8) = G_LOAD [[ADDR]](p0) :: (load unordered 1 from %ir.addr)
+; CHECK: G_STORE [[V0]](s8), [[ADDR]](p0) :: (store monotonic 1 into %ir.addr)
+; CHECK: [[V1:%[0-9]+]](s8) = G_LOAD [[ADDR]](p0) :: (load acquire 1 from %ir.addr)
+; CHECK: G_STORE [[V1]](s8), [[ADDR]](p0) :: (store release 1 into %ir.addr)
+; CHECK: [[V2:%[0-9]+]](s8) = G_LOAD [[ADDR]](p0) :: (load singlethread seq_cst 1 from %ir.addr)
+; CHECK: G_STORE [[V2]](s8), [[ADDR]](p0) :: (store singlethread monotonic 1 into %ir.addr)
+  %v0 = load atomic i8, i8* %addr unordered, align 1
+  store atomic i8 %v0, i8* %addr monotonic, align 1
+
+  %v1 = load atomic i8, i8* %addr acquire, align 1
+  store atomic i8 %v1, i8* %addr release, align 1
+
+  %v2 = load atomic i8, i8* %addr singlethread seq_cst, align 1
+  store atomic i8 %v2, i8* %addr singlethread monotonic, align 1
+
+  ret void
 }

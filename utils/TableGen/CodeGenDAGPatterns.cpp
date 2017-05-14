@@ -644,6 +644,12 @@ bool EEVT::TypeSet::EnforceSameSize(EEVT::TypeSet &VTOperand,
 
   bool MadeChange = false;
 
+  if (isCompletelyUnknown())
+    MadeChange = FillWithPossibleTypes(TP);
+
+  if (VTOperand.isCompletelyUnknown())
+    MadeChange = VTOperand.FillWithPossibleTypes(TP);
+
   // If we know one of the types, it forces the other type agree.
   if (isConcrete()) {
     MVT IVT = getConcrete();
@@ -1248,7 +1254,7 @@ static unsigned GetNumNodeResults(Record *Operator, CodeGenDAGPatterns &CDP) {
   if (Operator->isSubClassOf("ComplexPattern"))
     return 1;
 
-  Operator->dump();
+  errs() << *Operator;
   PrintFatalError("Unhandled node in GetNumNodeResults");
 }
 
@@ -2114,7 +2120,7 @@ TreePatternNode *TreePattern::ParseTreePattern(Init *TheInit, StringRef OpName){
 
   DagInit *Dag = dyn_cast<DagInit>(TheInit);
   if (!Dag) {
-    TheInit->dump();
+    TheInit->print(errs());
     error("Pattern has unexpected init kind!");
   }
   DefInit *OpDef = dyn_cast<DefInit>(Dag->getOperator());

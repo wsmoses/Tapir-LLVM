@@ -115,7 +115,7 @@ if(HAVE_LIBPTHREAD)
   set(CMAKE_THREAD_PREFER_PTHREAD TRUE)
   set(THREADS_HAVE_PTHREAD_ARG Off)
   find_package(Threads REQUIRED)
-  set(PTHREAD_LIB ${CMAKE_THREAD_LIBS_INIT})
+  set(LLVM_PTHREAD_LIB ${CMAKE_THREAD_LIBS_INIT})
 endif()
 
 # Don't look for these libraries on Windows. Also don't look for them if we're
@@ -167,7 +167,10 @@ check_symbol_exists(futimens sys/stat.h HAVE_FUTIMENS)
 check_symbol_exists(futimes sys/time.h HAVE_FUTIMES)
 check_symbol_exists(posix_fallocate fcntl.h HAVE_POSIX_FALLOCATE)
 # AddressSanitizer conflicts with lib/Support/Unix/Signals.inc
-if( HAVE_SIGNAL_H AND NOT LLVM_USE_SANITIZER MATCHES ".*Address.*")
+# Avoid sigaltstack on Apple platforms, where backtrace() cannot handle it
+# (rdar://7089625) and _Unwind_Backtrace is unusable because it cannot unwind
+# past the signal handler after an assertion failure (rdar://29866587).
+if( HAVE_SIGNAL_H AND NOT LLVM_USE_SANITIZER MATCHES ".*Address.*" AND NOT APPLE )
   check_symbol_exists(sigaltstack signal.h HAVE_SIGALTSTACK)
 endif()
 if( HAVE_SYS_UIO_H )
@@ -224,6 +227,7 @@ if( HAVE_DLFCN_H )
     list(APPEND CMAKE_REQUIRED_LIBRARIES dl)
   endif()
   check_symbol_exists(dlopen dlfcn.h HAVE_DLOPEN)
+  check_symbol_exists(dladdr dlfcn.h HAVE_DLADDR)
   if( HAVE_LIBDL )
     list(REMOVE_ITEM CMAKE_REQUIRED_LIBRARIES dl)
   endif()
@@ -313,7 +317,9 @@ else()
   endif()
 endif()
 
-check_cxx_compiler_flag("-Wno-variadic-macros" SUPPORTS_NO_VARIADIC_MACROS_FLAG)
+check_cxx_compiler_flag("-Wvariadic-macros" SUPPORTS_VARIADIC_MACROS_FLAG)
+check_cxx_compiler_flag("-Wgnu-zero-variadic-macro-arguments"
+                        SUPPORTS_GNU_ZERO_VARIADIC_MACRO_ARGUMENTS_FLAG)
 
 set(USE_NO_MAYBE_UNINITIALIZED 0)
 set(USE_NO_UNINITIALIZED 0)
@@ -450,8 +456,15 @@ if( MSVC )
   else()
     set(HAVE_DIA_SDK 0)
   endif()
+
+  option(LLVM_ENABLE_DIA_SDK "Use MSVC DIA SDK for debugging if available."
+                             ${HAVE_DIA_SDK})
+
+  if(LLVM_ENABLE_DIA_SDK AND NOT HAVE_DIA_SDK)
+    message(FATAL_ERROR "DIA SDK not found. If you have both VS 2012 and 2013 installed, you may need to uninstall the former and re-install the latter afterwards.")
+  endif()
 else()
-  set(HAVE_DIA_SDK 0)
+  set(LLVM_ENABLE_DIA_SDK 0)
 endif( MSVC )
 
 # FIXME: Signal handler return type, currently hardcoded to 'void'
@@ -476,8 +489,6 @@ if (LLVM_ENABLE_ZLIB )
     set(LLVM_ENABLE_ZLIB 0)
   endif()
 endif()
-
-set(LLVM_PREFIX ${CMAKE_INSTALL_PREFIX})
 
 if (LLVM_ENABLE_DOXYGEN)
   message(STATUS "Doxygen enabled.")
@@ -535,6 +546,9 @@ set(LLVM_BINUTILS_INCDIR "" CACHE PATH
 	"PATH to binutils/include containing plugin-api.h for gold plugin.")
 
 if(CMAKE_HOST_APPLE AND APPLE)
+  if(NOT CMAKE_XCRUN)
+    find_program(CMAKE_XCRUN NAMES xcrun)
+  endif()
   if(CMAKE_XCRUN)
     execute_process(COMMAND ${CMAKE_XCRUN} -find ld
       OUTPUT_VARIABLE LD64_EXECUTABLE

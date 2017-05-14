@@ -82,16 +82,6 @@ std::mutex Function<DerivedFunc, RetT(ArgTs...)>::NameMutex;
 template <typename DerivedFunc, typename RetT, typename... ArgTs>
 std::string Function<DerivedFunc, RetT(ArgTs...)>::Name;
 
-/// Provides a typedef for a tuple containing the decayed argument types.
-template <typename T> class FunctionArgsTuple;
-
-template <typename RetT, typename... ArgTs>
-class FunctionArgsTuple<RetT(ArgTs...)> {
-public:
-  using Type = std::tuple<typename std::decay<
-      typename std::remove_reference<ArgTs>::type>::type...>;
-};
-
 /// Allocates RPC function ids during autonegotiation.
 /// Specializations of this class must provide four members:
 ///
@@ -195,6 +185,16 @@ public:
 } // end namespace msvc_hacks
 
 #endif // _MSC_VER
+
+/// Provides a typedef for a tuple containing the decayed argument types.
+template <typename T> class FunctionArgsTuple;
+
+template <typename RetT, typename... ArgTs>
+class FunctionArgsTuple<RetT(ArgTs...)> {
+public:
+  using Type = std::tuple<typename std::decay<
+      typename std::remove_reference<ArgTs>::type>::type...>;
+};
 
 // ResultTraits provides typedefs and utilities specific to the return type
 // of functions.
@@ -339,6 +339,29 @@ public:
   using Type = Error;
 };
 
+// Traits class that strips the response function from the list of handler
+// arguments.
+template <typename FnT> class AsyncHandlerTraits;
+
+template <typename ResultT, typename... ArgTs>
+class AsyncHandlerTraits<Error(std::function<Error(Expected<ResultT>)>, ArgTs...)> {
+public:
+  using Type = Error(ArgTs...);
+  using ResultType = Expected<ResultT>;
+};
+
+template <typename... ArgTs>
+class AsyncHandlerTraits<Error(std::function<Error(Error)>, ArgTs...)> {
+public:
+  using Type = Error(ArgTs...);
+  using ResultType = Error;
+};
+
+template <typename ResponseHandlerT, typename... ArgTs>
+class AsyncHandlerTraits<Error(ResponseHandlerT, ArgTs...)> :
+    public AsyncHandlerTraits<Error(typename std::decay<ResponseHandlerT>::type,
+                                    ArgTs...)> {};
+
 // This template class provides utilities related to RPC function handlers.
 // The base case applies to non-function types (the template class is
 // specialized for function types) and inherits from the appropriate
@@ -358,15 +381,20 @@ public:
   // Return type of the handler.
   using ReturnType = RetT;
 
-  // A std::tuple wrapping the handler arguments.
-  using ArgStorage = typename FunctionArgsTuple<RetT(ArgTs...)>::Type;
+  // Call the given handler with the given arguments.
+  template <typename HandlerT, typename... TArgTs>
+  static typename WrappedHandlerReturn<RetT>::Type
+  unpackAndRun(HandlerT &Handler, std::tuple<TArgTs...> &Args) {
+    return unpackAndRunHelper(Handler, Args,
+                              llvm::index_sequence_for<TArgTs...>());
+  }
 
   // Call the given handler with the given arguments.
-  template <typename HandlerT>
-  static typename WrappedHandlerReturn<RetT>::Type
-  unpackAndRun(HandlerT &Handler, ArgStorage &Args) {
-    return unpackAndRunHelper(Handler, Args,
-                              llvm::index_sequence_for<ArgTs...>());
+  template <typename HandlerT, typename ResponderT, typename... TArgTs>
+  static Error unpackAndRunAsync(HandlerT &Handler, ResponderT &Responder,
+                                 std::tuple<TArgTs...> &Args) {
+    return unpackAndRunAsyncHelper(Handler, Responder, Args,
+                                   llvm::index_sequence_for<TArgTs...>());
   }
 
   // Call the given handler with the given arguments.
@@ -379,11 +407,11 @@ public:
     return Error::success();
   }
 
-  template <typename HandlerT>
+  template <typename HandlerT, typename... TArgTs>
   static typename std::enable_if<
       !std::is_void<typename HandlerTraits<HandlerT>::ReturnType>::value,
       typename HandlerTraits<HandlerT>::ReturnType>::type
-  run(HandlerT &Handler, ArgTs... Args) {
+  run(HandlerT &Handler, TArgTs... Args) {
     return Handler(std::move(Args)...);
   }
 
@@ -408,14 +436,30 @@ private:
         C, std::get<Indexes>(Args)...);
   }
 
-  template <typename HandlerT, size_t... Indexes>
+  template <typename HandlerT, typename ArgTuple, size_t... Indexes>
   static typename WrappedHandlerReturn<
       typename HandlerTraits<HandlerT>::ReturnType>::Type
-  unpackAndRunHelper(HandlerT &Handler, ArgStorage &Args,
+  unpackAndRunHelper(HandlerT &Handler, ArgTuple &Args,
                      llvm::index_sequence<Indexes...>) {
     return run(Handler, std::move(std::get<Indexes>(Args))...);
   }
+
+
+  template <typename HandlerT, typename ResponderT, typename ArgTuple,
+            size_t... Indexes>
+  static typename WrappedHandlerReturn<
+      typename HandlerTraits<HandlerT>::ReturnType>::Type
+  unpackAndRunAsyncHelper(HandlerT &Handler, ResponderT &Responder,
+                          ArgTuple &Args,
+                          llvm::index_sequence<Indexes...>) {
+    return run(Handler, Responder, std::move(std::get<Indexes>(Args))...);
+  }
 };
+
+// Handler traits for free functions.
+template <typename RetT, typename... ArgTs>
+class HandlerTraits<RetT(*)(ArgTs...)>
+  : public HandlerTraits<RetT(ArgTs...)> {};
 
 // Handler traits for class methods (especially call operators for lambdas).
 template <typename Class, typename RetT, typename... ArgTs>
@@ -702,7 +746,7 @@ public:
 /// sync.
 template <typename ImplT, typename ChannelT, typename FunctionIdT,
           typename SequenceNumberT>
-class RPCBase {
+class RPCEndpointBase {
 protected:
   class OrcRPCInvalid : public Function<OrcRPCInvalid, void()> {
   public:
@@ -747,7 +791,7 @@ protected:
 
 public:
   /// Construct an RPC instance on a channel.
-  RPCBase(ChannelT &C, bool LazyAutoNegotiation)
+  RPCEndpointBase(ChannelT &C, bool LazyAutoNegotiation)
       : C(C), LazyAutoNegotiation(LazyAutoNegotiation) {
     // Hold ResponseId in a special variable, since we expect Response to be
     // called relatively frequently, and want to avoid the map lookup.
@@ -758,8 +802,13 @@ public:
     auto NegotiateId = FnIdAllocator.getNegotiateId();
     RemoteFunctionIds[OrcRPCNegotiate::getPrototype()] = NegotiateId;
     Handlers[NegotiateId] = wrapHandler<OrcRPCNegotiate>(
-        [this](const std::string &Name) { return handleNegotiate(Name); },
-        LaunchPolicy());
+        [this](const std::string &Name) { return handleNegotiate(Name); });
+  }
+
+
+  /// Negotiate a function id for Func with the other end of the channel.
+  template <typename Func> Error negotiateFunction(bool Retry = false) {
+    return getRemoteFunctionId<Func>(true, Retry).takeError();
   }
 
   /// Append a call Func, does not call send on the channel.
@@ -777,7 +826,7 @@ public:
 
     // Look up the function ID.
     FunctionIdT FnId;
-    if (auto FnIdOrErr = getRemoteFunctionId<Func>())
+    if (auto FnIdOrErr = getRemoteFunctionId<Func>(LazyAutoNegotiation, false))
       FnId = *FnIdOrErr;
     else {
       // This isn't a channel error so we don't want to abandon other pending
@@ -788,33 +837,39 @@ public:
       return FnIdOrErr.takeError();
     }
 
-    // Allocate a sequence number.
-    auto SeqNo = SequenceNumberMgr.getSequenceNumber();
-    assert(!PendingResponses.count(SeqNo) &&
-           "Sequence number already allocated");
+    SequenceNumberT SeqNo; // initialized in locked scope below.
+    {
+      // Lock the pending responses map and sequence number manager.
+      std::lock_guard<std::mutex> Lock(ResponsesMutex);
 
-    // Install the user handler.
-    PendingResponses[SeqNo] =
+      // Allocate a sequence number.
+      SeqNo = SequenceNumberMgr.getSequenceNumber();
+      assert(!PendingResponses.count(SeqNo) &&
+             "Sequence number already allocated");
+
+      // Install the user handler.
+      PendingResponses[SeqNo] =
         detail::createResponseHandler<ChannelT, typename Func::ReturnType>(
             std::move(Handler));
+    }
 
     // Open the function call message.
     if (auto Err = C.startSendMessage(FnId, SeqNo)) {
       abandonPendingResponses();
-      return joinErrors(std::move(Err), C.endSendMessage());
+      return Err;
     }
 
     // Serialize the call arguments.
     if (auto Err = detail::HandlerTraits<typename Func::Type>::serializeArgs(
             C, Args...)) {
       abandonPendingResponses();
-      return joinErrors(std::move(Err), C.endSendMessage());
+      return Err;
     }
 
     // Close the function call messagee.
     if (auto Err = C.endSendMessage()) {
       abandonPendingResponses();
-      return std::move(Err);
+      return Err;
     }
 
     return Error::success();
@@ -833,8 +888,10 @@ public:
   Error handleOne() {
     FunctionIdT FnId;
     SequenceNumberT SeqNo;
-    if (auto Err = C.startReceiveMessage(FnId, SeqNo))
+    if (auto Err = C.startReceiveMessage(FnId, SeqNo)) {
+      abandonPendingResponses();
       return Err;
+    }
     if (FnId == ResponseId)
       return handleResponse(SeqNo);
     auto I = Handlers.find(FnId);
@@ -863,15 +920,52 @@ public:
     return detail::ReadArgs<ArgTs...>(Args...);
   }
 
+  /// Abandon all outstanding result handlers.
+  ///
+  /// This will call all currently registered result handlers to receive an
+  /// "abandoned" error as their argument. This is used internally by the RPC
+  /// in error situations, but can also be called directly by clients who are
+  /// disconnecting from the remote and don't or can't expect responses to their
+  /// outstanding calls. (Especially for outstanding blocking calls, calling
+  /// this function may be necessary to avoid dead threads).
+  void abandonPendingResponses() {
+    // Lock the pending responses map and sequence number manager.
+    std::lock_guard<std::mutex> Lock(ResponsesMutex);
+
+    for (auto &KV : PendingResponses)
+      KV.second->abandon();
+    PendingResponses.clear();
+    SequenceNumberMgr.reset();
+  }
+
+  /// Remove the handler for the given function.
+  /// A handler must currently be registered for this function.
+  template <typename Func>
+  void removeHandler() {
+    auto IdItr = LocalFunctionIds.find(Func::getPrototype());
+    assert(IdItr != LocalFunctionIds.end() &&
+           "Function does not have a registered handler");
+    auto HandlerItr = Handlers.find(IdItr->second);
+    assert(HandlerItr != Handlers.end() &&
+           "Function does not have a registered handler");
+    Handlers.erase(HandlerItr);
+  }
+
+  /// Clear all handlers.
+  void clearHandlers() {
+    Handlers.clear();
+  }
+
 protected:
-  // The LaunchPolicy type allows a launch policy to be specified when adding
-  // a function handler. See addHandlerImpl.
-  using LaunchPolicy = std::function<Error(std::function<Error()>)>;
+
+  FunctionIdT getInvalidFunctionId() const {
+    return FnIdAllocator.getInvalidId();
+  }
 
   /// Add the given handler to the handler map and make it available for
   /// autonegotiation and execution.
   template <typename Func, typename HandlerT>
-  void addHandlerImpl(HandlerT Handler, LaunchPolicy Launch) {
+  void addHandlerImpl(HandlerT Handler) {
 
     static_assert(detail::RPCArgTypeCheck<
                       CanDeserializeCheck, typename Func::Type,
@@ -880,32 +974,50 @@ protected:
 
     FunctionIdT NewFnId = FnIdAllocator.template allocate<Func>();
     LocalFunctionIds[Func::getPrototype()] = NewFnId;
-    Handlers[NewFnId] =
-        wrapHandler<Func>(std::move(Handler), std::move(Launch));
+    Handlers[NewFnId] = wrapHandler<Func>(std::move(Handler));
   }
 
-  // Abandon all outstanding results.
-  void abandonPendingResponses() {
-    for (auto &KV : PendingResponses)
-      KV.second->abandon();
-    PendingResponses.clear();
-    SequenceNumberMgr.reset();
+  template <typename Func, typename HandlerT>
+  void addAsyncHandlerImpl(HandlerT Handler) {
+
+    static_assert(detail::RPCArgTypeCheck<
+                      CanDeserializeCheck, typename Func::Type,
+                      typename detail::AsyncHandlerTraits<
+                        typename detail::HandlerTraits<HandlerT>::Type
+                      >::Type>::value,
+                  "");
+
+    FunctionIdT NewFnId = FnIdAllocator.template allocate<Func>();
+    LocalFunctionIds[Func::getPrototype()] = NewFnId;
+    Handlers[NewFnId] = wrapAsyncHandler<Func>(std::move(Handler));
   }
 
   Error handleResponse(SequenceNumberT SeqNo) {
-    auto I = PendingResponses.find(SeqNo);
-    if (I == PendingResponses.end()) {
-      abandonPendingResponses();
-      return orcError(OrcErrorCode::UnexpectedRPCResponse);
+    using Handler = typename decltype(PendingResponses)::mapped_type;
+    Handler PRHandler;
+
+    {
+      // Lock the pending responses map and sequence number manager.
+      std::unique_lock<std::mutex> Lock(ResponsesMutex);
+      auto I = PendingResponses.find(SeqNo);
+
+      if (I != PendingResponses.end()) {
+        PRHandler = std::move(I->second);
+        PendingResponses.erase(I);
+        SequenceNumberMgr.releaseSequenceNumber(SeqNo);
+      } else {
+        // Unlock the pending results map to prevent recursive lock.
+        Lock.unlock();
+        abandonPendingResponses();
+        return orcError(OrcErrorCode::UnexpectedRPCResponse);
+      }
     }
 
-    auto PRHandler = std::move(I->second);
-    PendingResponses.erase(I);
-    SequenceNumberMgr.releaseSequenceNumber(SeqNo);
+    assert(PRHandler &&
+           "If we didn't find a response handler we should have bailed out");
 
     if (auto Err = PRHandler->handleResponse(C)) {
       abandonPendingResponses();
-      SequenceNumberMgr.reset();
       return Err;
     }
 
@@ -915,45 +1027,43 @@ protected:
   FunctionIdT handleNegotiate(const std::string &Name) {
     auto I = LocalFunctionIds.find(Name);
     if (I == LocalFunctionIds.end())
-      return FnIdAllocator.getInvalidId();
+      return getInvalidFunctionId();
     return I->second;
   }
 
-  // Find the remote FunctionId for the given function, which must be in the
-  // RemoteFunctionIds map.
-  template <typename Func> Expected<FunctionIdT> getRemoteFunctionId() {
-    // Try to find the id for the given function.
+  // Find the remote FunctionId for the given function.
+  template <typename Func>
+  Expected<FunctionIdT> getRemoteFunctionId(bool NegotiateIfNotInMap,
+                                            bool NegotiateIfInvalid) {
+    bool DoNegotiate;
+
+    // Check if we already have a function id...
     auto I = RemoteFunctionIds.find(Func::getPrototype());
+    if (I != RemoteFunctionIds.end()) {
+      // If it's valid there's nothing left to do.
+      if (I->second != getInvalidFunctionId())
+        return I->second;
+      DoNegotiate = NegotiateIfInvalid;
+    } else
+      DoNegotiate = NegotiateIfNotInMap;
 
-    // If we have it in the map, return it.
-    if (I != RemoteFunctionIds.end())
-      return I->second;
-
-    // Otherwise, if we have auto-negotiation enabled, try to negotiate it.
-    if (LazyAutoNegotiation) {
+    // We don't have a function id for Func yet, but we're allowed to try to
+    // negotiate one.
+    if (DoNegotiate) {
       auto &Impl = static_cast<ImplT &>(*this);
       if (auto RemoteIdOrErr =
-              Impl.template callB<OrcRPCNegotiate>(Func::getPrototype())) {
-        auto &RemoteId = *RemoteIdOrErr;
-
-        // If autonegotiation indicates that the remote end doesn't support this
-        // function, return an unknown function error.
-        if (RemoteId == FnIdAllocator.getInvalidId())
-          return orcError(OrcErrorCode::UnknownRPCFunction);
-
-        // Autonegotiation succeeded and returned a valid id. Update the map and
-        // return the id.
-        RemoteFunctionIds[Func::getPrototype()] = RemoteId;
-        return RemoteId;
-      } else {
-        // Autonegotiation failed. Return the error.
+          Impl.template callB<OrcRPCNegotiate>(Func::getPrototype())) {
+        RemoteFunctionIds[Func::getPrototype()] = *RemoteIdOrErr;
+        if (*RemoteIdOrErr == getInvalidFunctionId())
+          return make_error<RPCFunctionNotSupported>(Func::getPrototype());
+        return *RemoteIdOrErr;
+      } else
         return RemoteIdOrErr.takeError();
-      }
     }
 
-    // No key was available in the map and autonegotiation wasn't enabled.
-    // Return an unknown function error.
-    return orcError(OrcErrorCode::UnknownRPCFunction);
+    // No key was available in the map and we weren't allowed to try to
+    // negotiate one, so return an unknown function error.
+    return make_error<RPCFunctionNotSupported>(Func::getPrototype());
   }
 
   using WrappedHandlerFn = std::function<Error(ChannelT &, SequenceNumberT)>;
@@ -961,12 +1071,15 @@ protected:
   // Wrap the given user handler in the necessary argument-deserialization code,
   // result-serialization code, and call to the launch policy (if present).
   template <typename Func, typename HandlerT>
-  WrappedHandlerFn wrapHandler(HandlerT Handler, LaunchPolicy Launch) {
-    return [this, Handler, Launch](ChannelT &Channel,
-                                   SequenceNumberT SeqNo) mutable -> Error {
+  WrappedHandlerFn wrapHandler(HandlerT Handler) {
+    return [this, Handler](ChannelT &Channel,
+                           SequenceNumberT SeqNo) mutable -> Error {
       // Start by deserializing the arguments.
-      auto Args = std::make_shared<
-          typename detail::HandlerTraits<HandlerT>::ArgStorage>();
+      using ArgsTuple =
+          typename detail::FunctionArgsTuple<
+            typename detail::HandlerTraits<HandlerT>::Type>::Type;
+      auto Args = std::make_shared<ArgsTuple>();
+
       if (auto Err =
               detail::HandlerTraits<typename Func::Type>::deserializeArgs(
                   Channel, *Args))
@@ -981,22 +1094,49 @@ protected:
       if (auto Err = Channel.endReceiveMessage())
         return Err;
 
-      // Build the handler/responder.
-      auto Responder = [this, Handler, Args, &Channel,
-                        SeqNo]() mutable -> Error {
-        using HTraits = detail::HandlerTraits<HandlerT>;
-        using FuncReturn = typename Func::ReturnType;
-        return detail::respond<FuncReturn>(
-            Channel, ResponseId, SeqNo, HTraits::unpackAndRun(Handler, *Args));
-      };
+      using HTraits = detail::HandlerTraits<HandlerT>;
+      using FuncReturn = typename Func::ReturnType;
+      return detail::respond<FuncReturn>(Channel, ResponseId, SeqNo,
+                                         HTraits::unpackAndRun(Handler, *Args));
+    };
+  }
 
-      // If there is an explicit launch policy then use it to launch the
-      // handler.
-      if (Launch)
-        return Launch(std::move(Responder));
+  // Wrap the given user handler in the necessary argument-deserialization code,
+  // result-serialization code, and call to the launch policy (if present).
+  template <typename Func, typename HandlerT>
+  WrappedHandlerFn wrapAsyncHandler(HandlerT Handler) {
+    return [this, Handler](ChannelT &Channel,
+                           SequenceNumberT SeqNo) mutable -> Error {
+      // Start by deserializing the arguments.
+      using AHTraits = detail::AsyncHandlerTraits<
+                         typename detail::HandlerTraits<HandlerT>::Type>;
+      using ArgsTuple =
+          typename detail::FunctionArgsTuple<typename AHTraits::Type>::Type;
+      auto Args = std::make_shared<ArgsTuple>();
 
-      // Otherwise run the handler on the listener thread.
-      return Responder();
+      if (auto Err =
+              detail::HandlerTraits<typename Func::Type>::deserializeArgs(
+                  Channel, *Args))
+        return Err;
+
+      // GCC 4.7 and 4.8 incorrectly issue a -Wunused-but-set-variable warning
+      // for RPCArgs. Void cast RPCArgs to work around this for now.
+      // FIXME: Remove this workaround once we can assume a working GCC version.
+      (void)Args;
+
+      // End receieve message, unlocking the channel for reading.
+      if (auto Err = Channel.endReceiveMessage())
+        return Err;
+
+      using HTraits = detail::HandlerTraits<HandlerT>;
+      using FuncReturn = typename Func::ReturnType;
+      auto Responder =
+        [this, SeqNo](typename AHTraits::ResultType RetVal) -> Error {
+          return detail::respond<FuncReturn>(C, ResponseId, SeqNo,
+                                             std::move(RetVal));
+        };
+
+      return HTraits::unpackAndRunAsync(Handler, Responder, *Args);
     };
   }
 
@@ -1012,6 +1152,7 @@ protected:
 
   std::map<FunctionIdT, WrappedHandlerFn> Handlers;
 
+  std::mutex ResponsesMutex;
   detail::SequenceNumberManager<SequenceNumberT> SequenceNumberMgr;
   std::map<SequenceNumberT, std::unique_ptr<detail::ResponseHandler<ChannelT>>>
       PendingResponses;
@@ -1021,68 +1162,45 @@ protected:
 
 template <typename ChannelT, typename FunctionIdT = uint32_t,
           typename SequenceNumberT = uint32_t>
-class MultiThreadedRPC
-    : public detail::RPCBase<
-          MultiThreadedRPC<ChannelT, FunctionIdT, SequenceNumberT>, ChannelT,
-          FunctionIdT, SequenceNumberT> {
+class MultiThreadedRPCEndpoint
+    : public detail::RPCEndpointBase<
+          MultiThreadedRPCEndpoint<ChannelT, FunctionIdT, SequenceNumberT>,
+          ChannelT, FunctionIdT, SequenceNumberT> {
 private:
   using BaseClass =
-      detail::RPCBase<MultiThreadedRPC<ChannelT, FunctionIdT, SequenceNumberT>,
-                      ChannelT, FunctionIdT, SequenceNumberT>;
+      detail::RPCEndpointBase<
+        MultiThreadedRPCEndpoint<ChannelT, FunctionIdT, SequenceNumberT>,
+        ChannelT, FunctionIdT, SequenceNumberT>;
 
 public:
-  MultiThreadedRPC(ChannelT &C, bool LazyAutoNegotiation)
+  MultiThreadedRPCEndpoint(ChannelT &C, bool LazyAutoNegotiation)
       : BaseClass(C, LazyAutoNegotiation) {}
-
-  /// The LaunchPolicy type allows a launch policy to be specified when adding
-  /// a function handler. See addHandler.
-  using LaunchPolicy = typename BaseClass::LaunchPolicy;
 
   /// Add a handler for the given RPC function.
   /// This installs the given handler functor for the given RPC Function, and
   /// makes the RPC function available for negotiation/calling from the remote.
-  ///
-  /// The optional LaunchPolicy argument can be used to control how the handler
-  /// is run when called:
-  ///
-  /// * If no LaunchPolicy is given, the handler code will be run on the RPC
-  ///   handler thread that is reading from the channel. This handler cannot
-  ///   make blocking RPC calls (since it would be blocking the thread used to
-  ///   get the result), but can make non-blocking calls.
-  ///
-  /// * If a LaunchPolicy is given, the user's handler will be wrapped in a
-  ///   call to serialize and send the result, and the resulting functor (with
-  ///   type 'Error()' will be passed to the LaunchPolicy. The user can then
-  ///   choose to add the wrapped handler to a work queue, spawn a new thread,
-  ///   or anything else.
   template <typename Func, typename HandlerT>
-  void addHandler(HandlerT Handler, LaunchPolicy Launch = LaunchPolicy()) {
-    return this->template addHandlerImpl<Func>(std::move(Handler),
-                                               std::move(Launch));
+  void addHandler(HandlerT Handler) {
+    return this->template addHandlerImpl<Func>(std::move(Handler));
   }
 
-  /// Negotiate a function id for Func with the other end of the channel.
-  template <typename Func> Error negotiateFunction() {
-    using OrcRPCNegotiate = typename BaseClass::OrcRPCNegotiate;
-
-    if (auto RemoteIdOrErr = callB<OrcRPCNegotiate>(Func::getPrototype())) {
-      this->RemoteFunctionIds[Func::getPrototype()] = *RemoteIdOrErr;
-      return Error::success();
-    } else
-      return RemoteIdOrErr.takeError();
+  /// Add a class-method as a handler.
+  template <typename Func, typename ClassT, typename RetT, typename... ArgTs>
+  void addHandler(ClassT &Object, RetT (ClassT::*Method)(ArgTs...)) {
+    addHandler<Func>(
+      detail::MemberFnWrapper<ClassT, RetT, ArgTs...>(Object, Method));
   }
 
-  /// Convenience method for negotiating multiple functions at once.
-  template <typename Func> Error negotiateFunctions() {
-    return negotiateFunction<Func>();
+  template <typename Func, typename HandlerT>
+  void addAsyncHandler(HandlerT Handler) {
+    return this->template addAsyncHandlerImpl<Func>(std::move(Handler));
   }
 
-  /// Convenience method for negotiating multiple functions at once.
-  template <typename Func1, typename Func2, typename... Funcs>
-  Error negotiateFunctions() {
-    if (auto Err = negotiateFunction<Func1>())
-      return Err;
-    return negotiateFunctions<Func2, Funcs...>();
+  /// Add a class-method as a handler.
+  template <typename Func, typename ClassT, typename RetT, typename... ArgTs>
+  void addAsyncHandler(ClassT &Object, RetT (ClassT::*Method)(ArgTs...)) {
+    addAsyncHandler<Func>(
+      detail::MemberFnWrapper<ClassT, RetT, ArgTs...>(Object, Method));
   }
 
   /// Return type for non-blocking call primitives.
@@ -1114,7 +1232,6 @@ public:
               return Error::success();
             },
             Args...)) {
-      this->abandonPendingResponses();
       RTraits::consumeAbandoned(FutureResult.get());
       return std::move(Err);
     }
@@ -1146,15 +1263,9 @@ public:
             typename AltRetT = typename Func::ReturnType>
   typename detail::ResultTraits<AltRetT>::ErrorReturnType
   callB(const ArgTs &... Args) {
-    if (auto FutureResOrErr = callNB<Func>(Args...)) {
-      if (auto Err = this->C.send()) {
-        this->abandonPendingResponses();
-        detail::ResultTraits<typename Func::ReturnType>::consumeAbandoned(
-            std::move(FutureResOrErr->get()));
-        return std::move(Err);
-      }
+    if (auto FutureResOrErr = callNB<Func>(Args...))
       return FutureResOrErr->get();
-    } else
+    else
       return FutureResOrErr.takeError();
   }
 
@@ -1169,25 +1280,23 @@ public:
 
 template <typename ChannelT, typename FunctionIdT = uint32_t,
           typename SequenceNumberT = uint32_t>
-class SingleThreadedRPC
-    : public detail::RPCBase<
-          SingleThreadedRPC<ChannelT, FunctionIdT, SequenceNumberT>, ChannelT,
-          FunctionIdT, SequenceNumberT> {
+class SingleThreadedRPCEndpoint
+    : public detail::RPCEndpointBase<
+          SingleThreadedRPCEndpoint<ChannelT, FunctionIdT, SequenceNumberT>,
+          ChannelT, FunctionIdT, SequenceNumberT> {
 private:
   using BaseClass =
-      detail::RPCBase<SingleThreadedRPC<ChannelT, FunctionIdT, SequenceNumberT>,
-                      ChannelT, FunctionIdT, SequenceNumberT>;
-
-  using LaunchPolicy = typename BaseClass::LaunchPolicy;
+      detail::RPCEndpointBase<
+        SingleThreadedRPCEndpoint<ChannelT, FunctionIdT, SequenceNumberT>,
+        ChannelT, FunctionIdT, SequenceNumberT>;
 
 public:
-  SingleThreadedRPC(ChannelT &C, bool LazyAutoNegotiation)
+  SingleThreadedRPCEndpoint(ChannelT &C, bool LazyAutoNegotiation)
       : BaseClass(C, LazyAutoNegotiation) {}
 
   template <typename Func, typename HandlerT>
   void addHandler(HandlerT Handler) {
-    return this->template addHandlerImpl<Func>(std::move(Handler),
-                                               LaunchPolicy());
+    return this->template addHandlerImpl<Func>(std::move(Handler));
   }
 
   template <typename Func, typename ClassT, typename RetT, typename... ArgTs>
@@ -1196,28 +1305,16 @@ public:
         detail::MemberFnWrapper<ClassT, RetT, ArgTs...>(Object, Method));
   }
 
-  /// Negotiate a function id for Func with the other end of the channel.
-  template <typename Func> Error negotiateFunction() {
-    using OrcRPCNegotiate = typename BaseClass::OrcRPCNegotiate;
-
-    if (auto RemoteIdOrErr = callB<OrcRPCNegotiate>(Func::getPrototype())) {
-      this->RemoteFunctionIds[Func::getPrototype()] = *RemoteIdOrErr;
-      return Error::success();
-    } else
-      return RemoteIdOrErr.takeError();
+  template <typename Func, typename HandlerT>
+  void addAsyncHandler(HandlerT Handler) {
+    return this->template addAsyncHandlerImpl<Func>(std::move(Handler));
   }
 
-  /// Convenience method for negotiating multiple functions at once.
-  template <typename Func> Error negotiateFunctions() {
-    return negotiateFunction<Func>();
-  }
-
-  /// Convenience method for negotiating multiple functions at once.
-  template <typename Func1, typename Func2, typename... Funcs>
-  Error negotiateFunctions() {
-    if (auto Err = negotiateFunction<Func1>())
-      return Err;
-    return negotiateFunctions<Func2, Funcs...>();
+  /// Add a class-method as a handler.
+  template <typename Func, typename ClassT, typename RetT, typename... ArgTs>
+  void addAsyncHandler(ClassT &Object, RetT (ClassT::*Method)(ArgTs...)) {
+    addAsyncHandler<Func>(
+      detail::MemberFnWrapper<ClassT, RetT, ArgTs...>(Object, Method));
   }
 
   template <typename Func, typename... ArgTs,
@@ -1239,7 +1336,6 @@ public:
               return Error::success();
             },
             Args...)) {
-      this->abandonPendingResponses();
       detail::ResultTraits<typename Func::ReturnType>::consumeAbandoned(
           std::move(Result));
       return std::move(Err);
@@ -1247,7 +1343,6 @@ public:
 
     while (!ReceivedResponse) {
       if (auto Err = this->handleOne()) {
-        this->abandonPendingResponses();
         detail::ResultTraits<typename Func::ReturnType>::consumeAbandoned(
             std::move(Result));
         return std::move(Err);
@@ -1258,24 +1353,40 @@ public:
   }
 };
 
+/// Asynchronous dispatch for a function on an RPC endpoint.
+template <typename RPCClass, typename Func>
+class RPCAsyncDispatch {
+public:
+  RPCAsyncDispatch(RPCClass &Endpoint) : Endpoint(Endpoint) {}
+
+  template <typename HandlerT, typename... ArgTs>
+  Error operator()(HandlerT Handler, const ArgTs &... Args) const {
+    return Endpoint.template appendCallAsync<Func>(std::move(Handler), Args...);
+  }
+
+private:
+  RPCClass &Endpoint;
+};
+
+/// Construct an asynchronous dispatcher from an RPC endpoint and a Func.
+template <typename Func, typename RPCEndpointT>
+RPCAsyncDispatch<RPCEndpointT, Func> rpcAsyncDispatch(RPCEndpointT &Endpoint) {
+  return RPCAsyncDispatch<RPCEndpointT, Func>(Endpoint);
+}
+
 /// \brief Allows a set of asynchrounous calls to be dispatched, and then
 ///        waited on as a group.
-template <typename RPCClass> class ParallelCallGroup {
+class ParallelCallGroup {
 public:
 
-  /// \brief Construct a parallel call group for the given RPC.
-  ParallelCallGroup(RPCClass &RPC) : RPC(RPC), NumOutstandingCalls(0) {}
-
+  ParallelCallGroup() = default;
   ParallelCallGroup(const ParallelCallGroup &) = delete;
   ParallelCallGroup &operator=(const ParallelCallGroup &) = delete;
 
   /// \brief Make as asynchronous call.
-  ///
-  /// Does not issue a send call to the RPC's channel. The channel may use this
-  /// to batch up subsequent calls. A send will automatically be sent when wait
-  /// is called.
-  template <typename Func, typename HandlerT, typename... ArgTs>
-  Error appendCall(HandlerT Handler, const ArgTs &... Args) {
+  template <typename AsyncDispatcher, typename HandlerT, typename... ArgTs>
+  Error call(const AsyncDispatcher &AsyncDispatch, HandlerT Handler,
+             const ArgTs &... Args) {
     // Increment the count of outstanding calls. This has to happen before
     // we invoke the call, as the handler may (depending on scheduling)
     // be run immediately on another thread, and we don't want the decrement
@@ -1298,38 +1409,83 @@ public:
       return Err;
     };
 
-    return RPC.template appendCallAsync<Func>(std::move(WrappedHandler),
-                                              Args...);
-  }
-
-  /// \brief Make an asynchronous call.
-  ///
-  /// The same as appendCall, but also calls send on the channel immediately.
-  /// Prefer appendCall if you are about to issue a "wait" call shortly, as
-  /// this may allow the channel to better batch the calls.
-  template <typename Func, typename HandlerT, typename... ArgTs>
-  Error call(HandlerT Handler, const ArgTs &... Args) {
-    if (auto Err = appendCall(std::move(Handler), Args...))
-      return Err;
-    return RPC.sendAppendedCalls();
+    return AsyncDispatch(std::move(WrappedHandler), Args...);
   }
 
   /// \brief Blocks until all calls have been completed and their return value
   ///        handlers run.
-  Error wait() {
-    if (auto Err = RPC.sendAppendedCalls())
-      return Err;
+  void wait() {
     std::unique_lock<std::mutex> Lock(M);
     while (NumOutstandingCalls > 0)
       CV.wait(Lock);
-    return Error::success();
   }
 
 private:
-  RPCClass &RPC;
   std::mutex M;
   std::condition_variable CV;
-  uint32_t NumOutstandingCalls;
+  uint32_t NumOutstandingCalls = 0;
+};
+
+/// @brief Convenience class for grouping RPC Functions into APIs that can be
+///        negotiated as a block.
+///
+template <typename... Funcs>
+class APICalls {
+public:
+
+  /// @brief Test whether this API contains Function F.
+  template <typename F>
+  class Contains {
+  public:
+    static const bool value = false;
+  };
+
+  /// @brief Negotiate all functions in this API.
+  template <typename RPCEndpoint>
+  static Error negotiate(RPCEndpoint &R) {
+    return Error::success();
+  }
+};
+
+template <typename Func, typename... Funcs>
+class APICalls<Func, Funcs...> {
+public:
+
+  template <typename F>
+  class Contains {
+  public:
+    static const bool value = std::is_same<F, Func>::value |
+                              APICalls<Funcs...>::template Contains<F>::value;
+  };
+
+  template <typename RPCEndpoint>
+  static Error negotiate(RPCEndpoint &R) {
+    if (auto Err = R.template negotiateFunction<Func>())
+      return Err;
+    return APICalls<Funcs...>::negotiate(R);
+  }
+
+};
+
+template <typename... InnerFuncs, typename... Funcs>
+class APICalls<APICalls<InnerFuncs...>, Funcs...> {
+public:
+
+  template <typename F>
+  class Contains {
+  public:
+    static const bool value =
+      APICalls<InnerFuncs...>::template Contains<F>::value |
+      APICalls<Funcs...>::template Contains<F>::value;
+  };
+
+  template <typename RPCEndpoint>
+  static Error negotiate(RPCEndpoint &R) {
+    if (auto Err = APICalls<InnerFuncs...>::negotiate(R))
+      return Err;
+    return APICalls<Funcs...>::negotiate(R);
+  }
+
 };
 
 } // end namespace rpc

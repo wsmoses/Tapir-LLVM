@@ -75,12 +75,47 @@ void RemoveFile(const std::string &Path) {
   unlink(Path.c_str());
 }
 
+void DiscardOutput(int Fd) {
+  FILE* Temp = fopen("/dev/null", "w");
+  if (!Temp)
+    return;
+  dup2(fileno(Temp), Fd);
+  fclose(Temp);
+}
+
+intptr_t GetHandleFromFd(int fd) {
+  return static_cast<intptr_t>(fd);
+}
+
 std::string DirName(const std::string &FileName) {
   char *Tmp = new char[FileName.size() + 1];
   memcpy(Tmp, FileName.c_str(), FileName.size() + 1);
   std::string Res = dirname(Tmp);
   delete [] Tmp;
   return Res;
+}
+
+std::string TmpDir() {
+  if (auto Env = getenv("TMPDIR"))
+    return Env;
+  return "/tmp";
+}
+
+bool IsInterestingCoverageFile(const std::string &FileName) {
+  if (FileName.find("compiler-rt/lib/") != std::string::npos)
+    return false; // sanitizer internal.
+  if (FileName.find("/usr/lib/") != std::string::npos)
+    return false;
+  if (FileName.find("/usr/include/") != std::string::npos)
+    return false;
+  if (FileName == "<null>")
+    return false;
+  return true;
+}
+
+
+void RawPrint(const char *Str) {
+  write(2, Str, strlen(Str));
 }
 
 }  // namespace fuzzer

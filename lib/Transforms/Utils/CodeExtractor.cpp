@@ -64,8 +64,7 @@ bool CodeExtractor::isBlockValidForExtraction(const BasicBlock &BB) {
 
   // Don't hoist code containing allocas, invokes, or vastarts.
   for (BasicBlock::const_iterator I = BB.begin(), E = BB.end(); I != E; ++I) {
-    if (isa<InvokeInst>(I))
-//    if (isa<AllocaInst>(I) || isa<InvokeInst>(I))
+    if (isa<AllocaInst>(I) || isa<InvokeInst>(I))
       return false;
     if (const CallInst *CI = dyn_cast<CallInst>(I))
       if (const Function *F = CI->getCalledFunction())

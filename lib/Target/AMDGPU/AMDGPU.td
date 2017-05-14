@@ -67,10 +67,22 @@ def FeatureUnalignedBufferAccess : SubtargetFeature<"unaligned-buffer-access",
   "Support unaligned global loads and stores"
 >;
 
+def FeatureTrapHandler: SubtargetFeature<"trap-handler",
+  "TrapHandler",
+  "true",
+  "Trap handler support"
+>;
+
 def FeatureUnalignedScratchAccess : SubtargetFeature<"unaligned-scratch-access",
   "UnalignedScratchAccess",
   "true",
   "Support unaligned scratch loads and stores"
+>;
+
+def FeatureApertureRegs : SubtargetFeature<"aperture-regs",
+  "HasApertureRegs",
+  "true",
+  "Has Memory Aperture Base and Size Registers"
 >;
 
 // XNACK is disabled if SH_MEM_CONFIG.ADDRESS_MODE = GPUVM on chips that support
@@ -154,6 +166,12 @@ def FeatureCIInsts : SubtargetFeature<"ci-insts",
   "Additional intstructions for CI+"
 >;
 
+def FeatureGFX9Insts : SubtargetFeature<"gfx9-insts",
+  "GFX9Insts",
+  "true",
+  "Additional intstructions for GFX9+"
+>;
+
 def FeatureSMemRealTime : SubtargetFeature<"s-memrealtime",
   "HasSMemRealTime",
   "true",
@@ -190,15 +208,21 @@ def FeatureScalarStores : SubtargetFeature<"scalar-stores",
   "Has store scalar memory instructions"
 >;
 
+def FeatureSDWA : SubtargetFeature<"sdwa",
+  "HasSDWA",
+  "true",
+  "Support SDWA (Sub-DWORD Addressing) extension"
+>;
+
+def FeatureDPP : SubtargetFeature<"dpp",
+  "HasDPP",
+  "true",
+  "Support DPP (Data Parallel Primitives) extension"
+>;
+
 //===------------------------------------------------------------===//
 // Subtarget Features (options and debugging)
 //===------------------------------------------------------------===//
-
-def FeatureFP16Denormals : SubtargetFeature<"fp16-denormals",
-  "FP16Denormals",
-  "true",
-  "Enable half precision denormal handling"
->;
 
 // Some instructions do not support denormals despite this flag. Using
 // fp32 denormals also causes instructions to run at the double
@@ -209,11 +233,28 @@ def FeatureFP32Denormals : SubtargetFeature<"fp32-denormals",
   "Enable single precision denormal handling"
 >;
 
-def FeatureFP64Denormals : SubtargetFeature<"fp64-denormals",
-  "FP64Denormals",
+// Denormal handling for fp64 and fp16 is controlled by the same
+// config register when fp16 supported.
+// TODO: Do we need a separate f16 setting when not legal?
+def FeatureFP64FP16Denormals : SubtargetFeature<"fp64-fp16-denormals",
+  "FP64FP16Denormals",
   "true",
-  "Enable double precision denormal handling",
+  "Enable double and half precision denormal handling",
   [FeatureFP64]
+>;
+
+def FeatureFP64Denormals : SubtargetFeature<"fp64-denormals",
+  "FP64FP16Denormals",
+  "true",
+  "Enable double and half precision denormal handling",
+  [FeatureFP64, FeatureFP64FP16Denormals]
+>;
+
+def FeatureFP16Denormals : SubtargetFeature<"fp16-denormals",
+  "FP64FP16Denormals",
+  "true",
+  "Enable half precision denormal handling",
+  [FeatureFP64FP16Denormals]
 >;
 
 def FeatureFPExceptions : SubtargetFeature<"fp-exceptions",
@@ -282,6 +323,12 @@ def FeatureEnableSIScheduler : SubtargetFeature<"si-scheduler",
   "Enable SI Machine Scheduler"
 >;
 
+// Unless +-flat-for-global is specified, turn on FlatForGlobal for
+// all OS-es on VI and newer hardware to avoid assertion failures due
+// to missing ADDR64 variants of MUBUF instructions.
+// FIXME: moveToVALU should be able to handle converting addr64 MUBUF
+// instructions.
+
 def FeatureFlatForGlobal : SubtargetFeature<"flat-for-global",
   "FlatForGlobal",
   "true",
@@ -337,7 +384,17 @@ def FeatureVolcanicIslands : SubtargetFeatureGeneration<"VOLCANIC_ISLANDS",
    FeatureWavefrontSize64, FeatureFlatAddressSpace, FeatureGCN,
    FeatureGCN3Encoding, FeatureCIInsts, Feature16BitInsts,
    FeatureSMemRealTime, FeatureVGPRIndexMode, FeatureMovrel,
-   FeatureScalarStores, FeatureInv2PiInlineImm
+   FeatureScalarStores, FeatureInv2PiInlineImm, FeatureSDWA,
+   FeatureDPP
+  ]
+>;
+
+def FeatureGFX9 : SubtargetFeatureGeneration<"GFX9",
+  [FeatureFP64, FeatureLocalMemorySize65536,
+   FeatureWavefrontSize64, FeatureFlatAddressSpace, FeatureGCN,
+   FeatureGCN3Encoding, FeatureCIInsts, Feature16BitInsts,
+   FeatureSMemRealTime, FeatureScalarStores, FeatureInv2PiInlineImm,
+   FeatureApertureRegs, FeatureGFX9Insts
   ]
 >;
 
@@ -392,6 +449,9 @@ def FeatureISAVersion8_1_0 : SubtargetFeatureISAVersion <8,1,0,
   [FeatureVolcanicIslands,
    FeatureLDSBankCount16,
    FeatureXNACK]>;
+
+def FeatureISAVersion9_0_0 : SubtargetFeatureISAVersion <9,0,0,[]>;
+def FeatureISAVersion9_0_1 : SubtargetFeatureISAVersion <9,0,1,[]>;
 
 //===----------------------------------------------------------------------===//
 // Debugger related subtarget features.
@@ -498,14 +558,24 @@ def isVI : Predicate <
   "Subtarget->getGeneration() >= AMDGPUSubtarget::VOLCANIC_ISLANDS">,
   AssemblerPredicate<"FeatureGCN3Encoding">;
 
+def isGFX9 : Predicate <
+  "Subtarget->getGeneration() >= AMDGPUSubtarget::GFX9">,
+  AssemblerPredicate<"FeatureGFX9Insts">;
+
+// TODO: Either the name to be changed or we simply use IsCI!
 def isCIVI : Predicate <
-  "Subtarget->getGeneration() == AMDGPUSubtarget::SEA_ISLANDS || "
-  "Subtarget->getGeneration() == AMDGPUSubtarget::VOLCANIC_ISLANDS"
->, AssemblerPredicate<"FeatureCIInsts">;
+  "Subtarget->getGeneration() >= AMDGPUSubtarget::SEA_ISLANDS">,
+  AssemblerPredicate<"FeatureCIInsts">;
 
 def HasFlatAddressSpace : Predicate<"Subtarget->hasFlatAddressSpace()">;
 
 def Has16BitInsts : Predicate<"Subtarget->has16BitInsts()">;
+
+def HasSDWA : Predicate<"Subtarget->hasSDWA()">,
+  AssemblerPredicate<"FeatureSDWA">;
+
+def HasDPP : Predicate<"Subtarget->hasDPP()">,
+  AssemblerPredicate<"FeatureDPP">;
 
 class PredicateControl {
   Predicate SubtargetPredicate;
@@ -526,5 +596,6 @@ include "Processors.td"
 include "AMDGPUInstrInfo.td"
 include "AMDGPUIntrinsics.td"
 include "AMDGPURegisterInfo.td"
+include "AMDGPURegisterBanks.td"
 include "AMDGPUInstructions.td"
 include "AMDGPUCallingConv.td"

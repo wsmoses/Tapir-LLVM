@@ -41,6 +41,10 @@ static void InterruptHandler(int, siginfo_t *, void *) {
   Fuzzer::StaticInterruptCallback();
 }
 
+static void FileSizeExceedHandler(int, siginfo_t *, void *) {
+  Fuzzer::StaticFileSizeExceedCallback();
+}
+
 static void SetSigaction(int signum,
                          void (*callback)(int, siginfo_t *, void *)) {
   struct sigaction sigact;
@@ -80,6 +84,8 @@ void SetSignalHandler(const FuzzingOptions& Options) {
     SetSigaction(SIGILL, CrashHandler);
   if (Options.HandleFpe)
     SetSigaction(SIGFPE, CrashHandler);
+  if (Options.HandleXfsz)
+    SetSigaction(SIGXFSZ, FileSizeExceedHandler);
 }
 
 void SleepSeconds(int Seconds) {
@@ -110,6 +116,14 @@ FILE *OpenProcessPipe(const char *Command, const char *Mode) {
 const void *SearchMemory(const void *Data, size_t DataLen, const void *Patt,
                          size_t PattLen) {
   return memmem(Data, DataLen, Patt, PattLen);
+}
+
+std::string DisassembleCmd(const std::string &FileName) {
+  return "objdump -d " + FileName;
+}
+
+std::string SearchRegexCmd(const std::string &Regex) {
+  return "grep '" + Regex + "'";
 }
 
 }  // namespace fuzzer

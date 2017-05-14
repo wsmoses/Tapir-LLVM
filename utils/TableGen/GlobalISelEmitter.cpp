@@ -35,6 +35,8 @@
 #include "llvm/ADT/Statistic.h"
 #include "llvm/CodeGen/MachineValueType.h"
 #include "llvm/Support/CommandLine.h"
+#include "llvm/Support/Error.h"
+#include "llvm/Support/ScopedPrinter.h"
 #include "llvm/TableGen/Error.h"
 #include "llvm/TableGen/Record.h"
 #include "llvm/TableGen/TableGenBackend.h"
@@ -44,7 +46,8 @@ using namespace llvm;
 #define DEBUG_TYPE "gisel-emitter"
 
 STATISTIC(NumPatternTotal, "Total number of patterns");
-STATISTIC(NumPatternSkipped, "Number of patterns skipped");
+STATISTIC(NumPatternImported, "Number of patterns imported from SelectionDAG");
+STATISTIC(NumPatternImportsSkipped, "Number of SelectionDAG imports skipped");
 STATISTIC(NumPatternEmitted, "Number of patterns emitted");
 
 static cl::opt<bool> WarnOnSkippedPatterns(
@@ -54,35 +57,6 @@ static cl::opt<bool> WarnOnSkippedPatterns(
     cl::init(false));
 
 namespace {
-
-class GlobalISelEmitter {
-public:
-  explicit GlobalISelEmitter(RecordKeeper &RK);
-  void run(raw_ostream &OS);
-
-private:
-  const RecordKeeper &RK;
-  const CodeGenDAGPatterns CGP;
-  const CodeGenTarget &Target;
-
-  /// Keep track of the equivalence between SDNodes and Instruction.
-  /// This is defined using 'GINodeEquiv' in the target description.
-  DenseMap<Record *, const CodeGenInstruction *> NodeEquivs;
-
-  void gatherNodeEquivs();
-  const CodeGenInstruction *findNodeEquiv(Record *N);
-
-  struct SkipReason {
-    std::string Reason;
-  };
-
-  /// Analyze pattern \p P, possibly emitting matching code for it to \p OS.
-  /// Otherwise, return a reason why this pattern was skipped for emission.
-  Optional<SkipReason> runOnPattern(const PatternToMatch &P,
-                                    raw_ostream &OS);
-};
-
-} // end anonymous namespace
 
 //===- Helper functions ---------------------------------------------------===//
 
@@ -110,110 +84,299 @@ static bool isTrivialOperatorNode(const TreePatternNode *N) {
 
 //===- Matchers -----------------------------------------------------------===//
 
-struct Matcher {
-  virtual ~Matcher() {}
-  virtual void emit(raw_ostream &OS) const = 0;
-};
+template <class PredicateTy> class PredicateListMatcher {
+private:
+  typedef std::vector<std::unique_ptr<PredicateTy>> PredicateVec;
+  PredicateVec Predicates;
 
-raw_ostream &operator<<(raw_ostream &S, const Matcher &M) {
-  M.emit(S);
-  return S;
-}
+public:
+  /// Construct a new operand predicate and add it to the matcher.
+  template <class Kind, class... Args>
+  Kind &addPredicate(Args&&... args) {
+    Predicates.emplace_back(
+        llvm::make_unique<Kind>(std::forward<Args>(args)...));
+    return *static_cast<Kind *>(Predicates.back().get());
+  }
 
-struct MatchAction {
-  virtual ~MatchAction() {}
-  virtual void emit(raw_ostream &OS) const = 0;
-};
+  typename PredicateVec::const_iterator predicates_begin() const { return Predicates.begin(); }
+  typename PredicateVec::const_iterator predicates_end() const { return Predicates.end(); }
+  iterator_range<typename PredicateVec::const_iterator> predicates() const {
+    return make_range(predicates_begin(), predicates_end());
+  }
 
-raw_ostream &operator<<(raw_ostream &S, const MatchAction &A) {
-  A.emit(S);
-  return S;
-}
+  /// Emit a C++ expression that tests whether all the predicates are met.
+  template <class... Args>
+  void emitCxxPredicateListExpr(raw_ostream &OS, Args &&... args) const {
+    if (Predicates.empty()) {
+      OS << "true";
+      return;
+    }
 
-struct MatchOpcode : public Matcher {
-  MatchOpcode(const CodeGenInstruction *I) : I(I) {}
-  const CodeGenInstruction *I;
-
-  virtual void emit(raw_ostream &OS) const {
-    OS << "I.getOpcode() == " << I->Namespace << "::" << I->TheDef->getName();
+    StringRef Separator = "";
+    for (const auto &Predicate : predicates()) {
+      OS << Separator << "(";
+      Predicate->emitCxxPredicateExpr(OS, std::forward<Args>(args)...);
+      OS << ")";
+      Separator = " &&\n";
+    }
   }
 };
 
-struct MatchRegOpType : public Matcher {
-  MatchRegOpType(unsigned OpIdx, std::string Ty)
-      : OpIdx(OpIdx), Ty(Ty) {}
-  unsigned OpIdx;
+/// Generates code to check a predicate of an operand.
+///
+/// Typical predicates include:
+/// * Operand is a particular register.
+/// * Operand is assigned a particular register bank.
+/// * Operand is an MBB.
+class OperandPredicateMatcher {
+public:
+  virtual ~OperandPredicateMatcher() {}
+
+  /// Emit a C++ expression that checks the predicate for the given operand.
+  virtual void emitCxxPredicateExpr(raw_ostream &OS,
+                                    StringRef OperandExpr) const = 0;
+};
+
+/// Generates code to check that an operand is a particular LLT.
+class LLTOperandMatcher : public OperandPredicateMatcher {
+protected:
   std::string Ty;
 
-  virtual void emit(raw_ostream &OS) const {
-    OS << "MRI.getType(I.getOperand(" << OpIdx << ").getReg()) == (" << Ty
-       << ")";
+public:
+  LLTOperandMatcher(std::string Ty) : Ty(Ty) {}
+
+  void emitCxxPredicateExpr(raw_ostream &OS,
+                            StringRef OperandExpr) const override {
+    OS << "MRI.getType(" << OperandExpr << ".getReg()) == (" << Ty << ")";
   }
 };
 
-struct MatchRegOpBank : public Matcher {
-  MatchRegOpBank(unsigned OpIdx, const CodeGenRegisterClass &RC)
-      : OpIdx(OpIdx), RC(RC) {}
-  unsigned OpIdx;
+/// Generates code to check that an operand is in a particular register bank.
+class RegisterBankOperandMatcher : public OperandPredicateMatcher {
+protected:
   const CodeGenRegisterClass &RC;
 
-  virtual void emit(raw_ostream &OS) const {
+public:
+  RegisterBankOperandMatcher(const CodeGenRegisterClass &RC) : RC(RC) {}
+
+  void emitCxxPredicateExpr(raw_ostream &OS,
+                            StringRef OperandExpr) const override {
     OS << "(&RBI.getRegBankFromRegClass(" << RC.getQualifiedName()
-       << "RegClass) == RBI.getRegBank(I.getOperand(" << OpIdx
-       << ").getReg(), MRI, TRI))";
+       << "RegClass) == RBI.getRegBank(" << OperandExpr
+       << ".getReg(), MRI, TRI))";
   }
 };
 
-struct MatchMBBOp : public Matcher {
-  MatchMBBOp(unsigned OpIdx) : OpIdx(OpIdx) {}
+/// Generates code to check that an operand is a basic block.
+class MBBOperandMatcher : public OperandPredicateMatcher {
+public:
+  void emitCxxPredicateExpr(raw_ostream &OS,
+                            StringRef OperandExpr) const override {
+    OS << OperandExpr << ".isMBB()";
+  }
+};
+
+/// Generates code to check that a set of predicates match for a particular
+/// operand.
+class OperandMatcher : public PredicateListMatcher<OperandPredicateMatcher> {
+protected:
   unsigned OpIdx;
 
-  virtual void emit(raw_ostream &OS) const {
-    OS << "I.getOperand(" << OpIdx << ").isMBB()";
+public:
+  OperandMatcher(unsigned OpIdx) : OpIdx(OpIdx) {}
+  std::string getOperandExpr(StringRef InsnVarName) const {
+    return (InsnVarName + ".getOperand(" + llvm::to_string(OpIdx) + ")").str();
+  }
+
+  /// Emit a C++ expression that tests whether the instruction named in
+  /// InsnVarName matches all the predicate and all the operands.
+  void emitCxxPredicateExpr(raw_ostream &OS, StringRef InsnVarName) const {
+    OS << "(/* Operand " << OpIdx << " */ ";
+    emitCxxPredicateListExpr(OS, getOperandExpr(InsnVarName));
+    OS << ")";
   }
 };
 
-struct MutateOpcode : public MatchAction {
-  MutateOpcode(const CodeGenInstruction *I) : I(I) {}
+/// Generates code to check a predicate on an instruction.
+///
+/// Typical predicates include:
+/// * The opcode of the instruction is a particular value.
+/// * The nsw/nuw flag is/isn't set.
+class InstructionPredicateMatcher {
+public:
+  virtual ~InstructionPredicateMatcher() {}
+
+  /// Emit a C++ expression that tests whether the instruction named in
+  /// InsnVarName matches the predicate.
+  virtual void emitCxxPredicateExpr(raw_ostream &OS,
+                                    StringRef InsnVarName) const = 0;
+};
+
+/// Generates code to check the opcode of an instruction.
+class InstructionOpcodeMatcher : public InstructionPredicateMatcher {
+protected:
   const CodeGenInstruction *I;
 
-  virtual void emit(raw_ostream &OS) const {
+public:
+  InstructionOpcodeMatcher(const CodeGenInstruction *I) : I(I) {}
+
+  void emitCxxPredicateExpr(raw_ostream &OS,
+                            StringRef InsnVarName) const override {
+    OS << InsnVarName << ".getOpcode() == " << I->Namespace
+       << "::" << I->TheDef->getName();
+  }
+};
+
+/// Generates code to check that a set of predicates and operands match for a
+/// particular instruction.
+///
+/// Typical predicates include:
+/// * Has a specific opcode.
+/// * Has an nsw/nuw flag or doesn't.
+class InstructionMatcher
+    : public PredicateListMatcher<InstructionPredicateMatcher> {
+protected:
+  std::vector<OperandMatcher> Operands;
+
+public:
+  /// Add an operand to the matcher.
+  OperandMatcher &addOperand(unsigned OpIdx) {
+    Operands.emplace_back(OpIdx);
+    return Operands.back();
+  }
+
+  /// Emit a C++ expression that tests whether the instruction named in
+  /// InsnVarName matches all the predicates and all the operands.
+  void emitCxxPredicateExpr(raw_ostream &OS, StringRef InsnVarName) const {
+    emitCxxPredicateListExpr(OS, InsnVarName);
+    for (const auto &Operand : Operands) {
+      OS << " &&\n(";
+      Operand.emitCxxPredicateExpr(OS, InsnVarName);
+      OS << ")";
+    }
+  }
+};
+
+//===- Actions ------------------------------------------------------------===//
+
+/// An action taken when all Matcher predicates succeeded for a parent rule.
+///
+/// Typical actions include:
+/// * Changing the opcode of an instruction.
+/// * Adding an operand to an instruction.
+class MatchAction {
+public:
+  virtual ~MatchAction() {}
+  virtual void emitCxxActionStmts(raw_ostream &OS) const = 0;
+};
+
+/// Generates a comment describing the matched rule being acted upon.
+class DebugCommentAction : public MatchAction {
+private:
+  const PatternToMatch &P;
+
+public:
+  DebugCommentAction(const PatternToMatch &P) : P(P) {}
+
+  virtual void emitCxxActionStmts(raw_ostream &OS) const {
+    OS << "// " << *P.getSrcPattern() << "  =>  " << *P.getDstPattern();
+  }
+};
+
+/// Generates code to set the opcode (really, the MCInstrDesc) of a matched
+/// instruction to a given Instruction.
+class MutateOpcodeAction : public MatchAction {
+private:
+  const CodeGenInstruction *I;
+
+public:
+  MutateOpcodeAction(const CodeGenInstruction *I) : I(I) {}
+
+  virtual void emitCxxActionStmts(raw_ostream &OS) const {
     OS << "I.setDesc(TII.get(" << I->Namespace << "::" << I->TheDef->getName()
        << "));";
   }
 };
 
-class MatcherEmitter {
-  const PatternToMatch &P;
+/// Generates code to check that a match rule matches.
+class RuleMatcher {
+  /// A list of matchers that all need to succeed for the current rule to match.
+  /// FIXME: This currently supports a single match position but could be
+  /// extended to support multiple positions to support div/rem fusion or
+  /// load-multiple instructions.
+  std::vector<std::unique_ptr<InstructionMatcher>> Matchers;
 
-public:
-  std::vector<std::unique_ptr<Matcher>> Matchers;
+  /// A list of actions that need to be taken when all predicates in this rule
+  /// have succeeded.
   std::vector<std::unique_ptr<MatchAction>> Actions;
 
-  MatcherEmitter(const PatternToMatch &P) : P(P) {}
+public:
+  RuleMatcher() {}
 
-  void emit(raw_ostream &OS) {
+  InstructionMatcher &addInstructionMatcher() {
+    Matchers.emplace_back(new InstructionMatcher());
+    return *Matchers.back();
+  }
+
+  template <class Kind, class... Args>
+  Kind &addAction(Args&&... args) {
+    Actions.emplace_back(llvm::make_unique<Kind>(std::forward<Args>(args)...));
+    return *static_cast<Kind *>(Actions.back().get());
+  }
+
+  void emit(raw_ostream &OS) const {
     if (Matchers.empty())
       llvm_unreachable("Unexpected empty matcher!");
 
-    OS << "  // Src: " << *P.getSrcPattern() << "\n"
-       << "  // Dst: " << *P.getDstPattern() << "\n";
-
-    OS << "  if ((" << *Matchers.front() << ")";
-    for (auto &MA : makeArrayRef(Matchers).drop_front())
-      OS << " &&\n      (" << *MA << ")";
+    // The representation supports rules that require multiple roots such as:
+    //    %ptr(p0) = ...
+    //    %elt0(s32) = G_LOAD %ptr
+    //    %1(p0) = G_ADD %ptr, 4
+    //    %elt1(s32) = G_LOAD p0 %1
+    // which could be usefully folded into:
+    //    %ptr(p0) = ...
+    //    %elt0(s32), %elt1(s32) = TGT_LOAD_PAIR %ptr
+    // on some targets but we don't need to make use of that yet.
+    assert(Matchers.size() == 1 && "Cannot handle multi-root matchers yet");
+    OS << "  if (";
+    Matchers.front()->emitCxxPredicateExpr(OS, "I");
     OS << ") {\n";
 
-    for (auto &MA : Actions)
-      OS << "    " << *MA << "\n";
+    for (const auto &MA : Actions) {
+      OS << "    ";
+      MA->emitCxxActionStmts(OS);
+      OS << "\n";
+    }
 
     OS << "    constrainSelectedInstRegOperands(I, TII, TRI, RBI);\n";
     OS << "    return true;\n";
-    OS << "  }\n";
+    OS << "  }\n\n";
   }
 };
 
 //===- GlobalISelEmitter class --------------------------------------------===//
+
+class GlobalISelEmitter {
+public:
+  explicit GlobalISelEmitter(RecordKeeper &RK);
+  void run(raw_ostream &OS);
+
+private:
+  const RecordKeeper &RK;
+  const CodeGenDAGPatterns CGP;
+  const CodeGenTarget &Target;
+
+  /// Keep track of the equivalence between SDNodes and Instruction.
+  /// This is defined using 'GINodeEquiv' in the target description.
+  DenseMap<Record *, const CodeGenInstruction *> NodeEquivs;
+
+  void gatherNodeEquivs();
+  const CodeGenInstruction *findNodeEquiv(Record *N);
+
+  /// Analyze pattern \p P, returning a matcher for it if possible.
+  /// Otherwise, return an Error explaining why we don't support it.
+  Expected<RuleMatcher> runOnPattern(const PatternToMatch &P);
+};
 
 void GlobalISelEmitter::gatherNodeEquivs() {
   assert(NodeEquivs.empty());
@@ -231,20 +394,24 @@ GlobalISelEmitter::GlobalISelEmitter(RecordKeeper &RK)
 
 //===- Emitter ------------------------------------------------------------===//
 
-Optional<GlobalISelEmitter::SkipReason>
-GlobalISelEmitter::runOnPattern(const PatternToMatch &P, raw_ostream &OS) {
+/// Helper function to let the emitter report skip reason error messages.
+static Error failedImport(const Twine &Reason) {
+  return make_error<StringError>(Reason, inconvertibleErrorCode());
+}
 
+Expected<RuleMatcher> GlobalISelEmitter::runOnPattern(const PatternToMatch &P) {
   // Keep track of the matchers and actions to emit.
-  MatcherEmitter M(P);
+  RuleMatcher M;
+  M.addAction<DebugCommentAction>(P);
 
   // First, analyze the whole pattern.
   // If the entire pattern has a predicate (e.g., target features), ignore it.
   if (!P.getPredicates()->getValues().empty())
-    return SkipReason{"Pattern has a predicate"};
+    return failedImport("Pattern has a predicate");
 
   // Physreg imp-defs require additional logic.  Ignore the pattern.
   if (!P.getDstRegs().empty())
-    return SkipReason{"Pattern defines a physical register"};
+    return failedImport("Pattern defines a physical register");
 
   // Next, analyze the pattern operators.
   TreePatternNode *Src = P.getSrcPattern();
@@ -252,48 +419,50 @@ GlobalISelEmitter::runOnPattern(const PatternToMatch &P, raw_ostream &OS) {
 
   // If the root of either pattern isn't a simple operator, ignore it.
   if (!isTrivialOperatorNode(Dst))
-    return SkipReason{"Dst pattern root isn't a trivial operator"};
+    return failedImport("Dst pattern root isn't a trivial operator");
   if (!isTrivialOperatorNode(Src))
-    return SkipReason{"Src pattern root isn't a trivial operator"};
+    return failedImport("Src pattern root isn't a trivial operator");
 
   Record *DstOp = Dst->getOperator();
   if (!DstOp->isSubClassOf("Instruction"))
-    return SkipReason{"Pattern operator isn't an instruction"};
+    return failedImport("Pattern operator isn't an instruction");
 
   auto &DstI = Target.getInstruction(DstOp);
 
   auto SrcGIOrNull = findNodeEquiv(Src->getOperator());
   if (!SrcGIOrNull)
-    return SkipReason{"Pattern operator lacks an equivalent Instruction"};
+    return failedImport("Pattern operator lacks an equivalent Instruction");
   auto &SrcGI = *SrcGIOrNull;
 
   // The operators look good: match the opcode and mutate it to the new one.
-  M.Matchers.emplace_back(new MatchOpcode(&SrcGI));
-  M.Actions.emplace_back(new MutateOpcode(&DstI));
+  InstructionMatcher &InsnMatcher = M.addInstructionMatcher();
+  InsnMatcher.addPredicate<InstructionOpcodeMatcher>(&SrcGI);
+  M.addAction<MutateOpcodeAction>(&DstI);
 
   // Next, analyze the children, only accepting patterns that don't require
   // any change to operands.
   if (Src->getNumChildren() != Dst->getNumChildren())
-    return SkipReason{"Src/dst patterns have a different # of children"};
+    return failedImport("Src/dst patterns have a different # of children");
 
   unsigned OpIdx = 0;
 
   // Start with the defined operands (i.e., the results of the root operator).
   if (DstI.Operands.NumDefs != Src->getExtTypes().size())
-    return SkipReason{"Src pattern results and dst MI defs are different"};
+    return failedImport("Src pattern results and dst MI defs are different");
 
   for (const EEVT::TypeSet &Ty : Src->getExtTypes()) {
     Record *DstIOpRec = DstI.Operands[OpIdx].Rec;
     if (!DstIOpRec->isSubClassOf("RegisterClass"))
-      return SkipReason{"Dst MI def isn't a register class"};
+      return failedImport("Dst MI def isn't a register class");
 
     auto OpTyOrNone = MVTToLLT(Ty.getConcrete());
     if (!OpTyOrNone)
-      return SkipReason{"Dst operand has an unsupported type"};
+      return failedImport("Dst operand has an unsupported type");
 
-    M.Matchers.emplace_back(new MatchRegOpType(OpIdx, *OpTyOrNone));
-    M.Matchers.emplace_back(
-        new MatchRegOpBank(OpIdx, Target.getRegisterClass(DstIOpRec)));
+    OperandMatcher &OM = InsnMatcher.addOperand(OpIdx);
+    OM.addPredicate<LLTOperandMatcher>(*OpTyOrNone);
+    OM.addPredicate<RegisterBankOperandMatcher>(
+        Target.getRegisterClass(DstIOpRec));
     ++OpIdx;
   }
 
@@ -304,53 +473,53 @@ GlobalISelEmitter::runOnPattern(const PatternToMatch &P, raw_ostream &OS) {
 
     // Patterns can reorder operands.  Ignore those for now.
     if (SrcChild->getName() != DstChild->getName())
-      return SkipReason{"Src/dst pattern children not in same order"};
+      return failedImport("Src/dst pattern children not in same order");
 
     // The only non-leaf child we accept is 'bb': it's an operator because
     // BasicBlockSDNode isn't inline, but in MI it's just another operand.
     if (!SrcChild->isLeaf()) {
       if (DstChild->isLeaf() ||
           SrcChild->getOperator() != DstChild->getOperator())
-        return SkipReason{"Src/dst pattern child operator mismatch"};
+        return failedImport("Src/dst pattern child operator mismatch");
 
       if (SrcChild->getOperator()->isSubClassOf("SDNode")) {
         auto &ChildSDNI = CGP.getSDNodeInfo(SrcChild->getOperator());
         if (ChildSDNI.getSDClassName() == "BasicBlockSDNode") {
-          M.Matchers.emplace_back(new MatchMBBOp(OpIdx++));
+          InsnMatcher.addOperand(OpIdx++).addPredicate<MBBOperandMatcher>();
           continue;
         }
       }
-      return SkipReason{"Src pattern child isn't a leaf node"};
+      return failedImport("Src pattern child isn't a leaf node");
     }
 
     if (SrcChild->getLeafValue() != DstChild->getLeafValue())
-      return SkipReason{"Src/dst pattern child leaf mismatch"};
+      return failedImport("Src/dst pattern child leaf mismatch");
 
     // Otherwise, we're looking for a bog-standard RegisterClass operand.
     if (SrcChild->hasAnyPredicate())
-      return SkipReason{"Src pattern child has predicate"};
+      return failedImport("Src pattern child has predicate");
     auto *ChildRec = cast<DefInit>(SrcChild->getLeafValue())->getDef();
     if (!ChildRec->isSubClassOf("RegisterClass"))
-      return SkipReason{"Src pattern child isn't a RegisterClass"};
+      return failedImport("Src pattern child isn't a RegisterClass");
 
     ArrayRef<EEVT::TypeSet> ChildTypes = SrcChild->getExtTypes();
     if (ChildTypes.size() != 1)
-      return SkipReason{"Src pattern child has multiple results"};
+      return failedImport("Src pattern child has multiple results");
 
     auto OpTyOrNone = MVTToLLT(ChildTypes.front().getConcrete());
     if (!OpTyOrNone)
-      return SkipReason{"Src operand has an unsupported type"};
+      return failedImport("Src operand has an unsupported type");
 
-    M.Matchers.emplace_back(new MatchRegOpType(OpIdx, *OpTyOrNone));
-    M.Matchers.emplace_back(
-        new MatchRegOpBank(OpIdx, Target.getRegisterClass(ChildRec)));
+    OperandMatcher &OM = InsnMatcher.addOperand(OpIdx);
+    OM.addPredicate<LLTOperandMatcher>(*OpTyOrNone);
+    OM.addPredicate<RegisterBankOperandMatcher>(
+        Target.getRegisterClass(ChildRec));
     ++OpIdx;
   }
 
-  // We're done with this pattern!  Emit the processed result.
-  M.emit(OS);
-  ++NumPatternEmitted;
-  return None;
+  // We're done with this pattern!  It's eligible for GISel emission; return it.
+  ++NumPatternImported;
+  return std::move(M);
 }
 
 void GlobalISelEmitter::run(raw_ostream &OS) {
@@ -362,22 +531,39 @@ void GlobalISelEmitter::run(raw_ostream &OS) {
   OS << "bool " << Target.getName()
      << "InstructionSelector::selectImpl"
         "(MachineInstr &I) const {\n  const MachineRegisterInfo &MRI = "
-        "I.getParent()->getParent()->getRegInfo();\n";
+        "I.getParent()->getParent()->getRegInfo();\n\n";
 
+  std::vector<RuleMatcher> Rules;
   // Look through the SelectionDAG patterns we found, possibly emitting some.
   for (const PatternToMatch &Pat : CGP.ptms()) {
     ++NumPatternTotal;
-    if (auto SkipReason = runOnPattern(Pat, OS)) {
+    auto MatcherOrErr = runOnPattern(Pat);
+
+    // The pattern analysis can fail, indicating an unsupported pattern.
+    // Report that if we've been asked to do so.
+    if (auto Err = MatcherOrErr.takeError()) {
       if (WarnOnSkippedPatterns) {
         PrintWarning(Pat.getSrcRecord()->getLoc(),
-                     "Skipped pattern: " + SkipReason->Reason);
+                     "Skipped pattern: " + toString(std::move(Err)));
+      } else {
+        consumeError(std::move(Err));
       }
-      ++NumPatternSkipped;
+      ++NumPatternImportsSkipped;
+      continue;
     }
+
+    Rules.push_back(std::move(MatcherOrErr.get()));
+  }
+
+  for (const auto &Rule : Rules) {
+    Rule.emit(OS);
+    ++NumPatternEmitted;
   }
 
   OS << "  return false;\n}\n";
 }
+
+} // end anonymous namespace
 
 //===----------------------------------------------------------------------===//
 
