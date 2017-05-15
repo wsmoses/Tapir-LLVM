@@ -157,6 +157,7 @@ PassManagerBuilder::PassManagerBuilder() {
     OptLevel = 2;
     SizeLevel = 0;
     ParallelLevel = 0;
+    Rhino = false;
     LibraryInfo = nullptr;
     Inliner = nullptr;
     DisableUnitAtATime = false;
