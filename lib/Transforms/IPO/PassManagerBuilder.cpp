@@ -692,8 +692,6 @@ void PassManagerBuilder::populateModulePassManager(legacy::PassManagerBase& MPM)
       case 0: llvm_unreachable("invalid");
     }
 
-    if (Rhino) llvm::errs() << "Compiling with Rhino!\n";
-    else llvm::errs() << "Rhino not found :(\n";
     MPM.add(createBarrierNoopPass());
 
     MPM.add(createIndVarSimplifyPass());
