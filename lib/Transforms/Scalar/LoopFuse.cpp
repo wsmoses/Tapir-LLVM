@@ -615,7 +615,11 @@ FunctionPass *createLoopFusePass() { return new LoopFuse(); }
 
 bool isLoopFused(Loop *L) {
   BranchInst *LatchBr = cast<BranchInst>(L->getLoopLatch()->getTerminator());
-  Constant *Value = cast<ConstantAsMetadata>(LatchBr->getMetadata("loop_fuse.is_fused")->getOperand(0))->getValue();
+  auto Metadata = LatchBr->getMetadata("loop_fuse.is_fused");
+  if (!Metadata) {
+    return false;
+  }
+  Constant *Value = cast<ConstantAsMetadata>(Metadata->getOperand(0))->getValue();
   return ((cast<ConstantInt>(Value))->getValue().getLimitedValue() == 1);
 }
 
