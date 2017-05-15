@@ -92,6 +92,11 @@ private:
     errs() << "SpawnMerging: Found sync block: " << DetachBlock.getName() << "\n";
 
     Loop* loop = LI->getLoopFor(&DetachBlock);
+    if (!loop) {
+      errs() << "Not in a loop\n";
+      return false;
+    }
+
     if (!isTapirLoop(loop)) {
       errs() << "Not a parallel loop\n";
       return false;
