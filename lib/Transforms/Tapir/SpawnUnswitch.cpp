@@ -30,7 +30,57 @@ struct SpawnUnswitch : public FunctionPass {
 
     F.setName("SpawnUnswitch_"+F.getName());
 
-    
+
+    bool effective;
+    do {
+      effective = false;
+      BasicBlock* body = nullptr;
+      BasicBlock* end = nullptr;
+
+      for (BasicBlock &BB: F) {
+        if (BB.size() == 1 && isa<ReattachInst>(BB.getTerminator())) {
+          end = BB.getSingleSuccessor();
+          int count = 0;
+          for (BasicBlock *Pred : predecessors(&BB)) {
+            for (BasicBlock *PredPred : predecessors(Pred)) {
+              if (!isa<DetachInst>(PredPred->getTerminator())) {
+                body = Pred;
+              }
+            }
+            count++;
+          }
+          if (count == 2) { // only predecessors are det.achd and if.then
+            for (BasicBlock *Pred : predecessors(&BB)) {
+              if (Pred->size() == 2 && isa<BranchInst>(Pred->getTerminator())) { // if clause only compares register contents
+                Instruction* cmp = nullptr;
+                for (Instruction &I : *Pred) {
+                  cmp = &I;
+                  break;
+                }
+                for (BasicBlock *PredPred : predecessors(Pred)) {
+                  if (isa<DetachInst>(PredPred->getTerminator())) { // outer spawn
+                    effective = true;
+                    // move cmp instruction to outside spawn
+                    Instruction *pi = PredPred->getTerminator();
+                    cmp->moveBefore(pi);
+
+                    // branch now to detach or end
+                    TerminatorInst* temp = Pred->getTerminator();
+                    BranchInst* replaceDetach = BranchInst::Create(Pred, end, ((BranchInst*)temp)->getCondition());
+                    ReplaceInstWithInst(PredPred->getTerminator(), replaceDetach);
+
+                    // detach now goes straight to body
+                    DetachInst* newDetach = DetachInst::Create(body, end);
+                    ReplaceInstWithInst(Pred->getTerminator(), newDetach);
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    } while (effective);
+
     return true;
   }
 };
