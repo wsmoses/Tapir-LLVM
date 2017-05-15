@@ -13,6 +13,7 @@
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/CFG.h"
 #include "llvm/ADT/SmallSet.h"
+#include "llvm/Transforms/Tapir/LoopSpawning.h"
 
 #include <deque>
 #include <map>
@@ -31,6 +32,7 @@ struct SpawnMerging : public FunctionPass {
 
   void getAnalysisUsage(AnalysisUsage &AU) const override {
     AU.addRequired<AAResultsWrapperPass>();
+    AU.addRequired<LoopInfoWrapperPass>();
   }
 
   bool runOnFunction(Function &F) override {
