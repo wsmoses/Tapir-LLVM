@@ -3,6 +3,7 @@
 #include "llvm/Transforms/Tapir.h"
 
 #include "llvm/Analysis/AliasAnalysis.h"
+#include "llvm/Analysis/LoopInfo.h"
 #include "llvm/Pass.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
@@ -36,6 +37,8 @@ struct SpawnMerging : public FunctionPass {
     if (skipFunction(F))
       return false;
 
+    LI = &getAnalysis<LoopInfoWrapperPass>().getLoopInfo();
+
     errs() << "SpawnMerging: Found function: " << F.getName() << "\n";
 
     bool ChangedAny = false;
@@ -61,6 +64,8 @@ struct SpawnMerging : public FunctionPass {
 
 private:
 
+  LoopInfo *LI;
+
   BasicBlock *getSpawnExitBlock(BasicBlock &DetachBlock, BasicBlock &ContinueBlock) {
     for (BasicBlock *Pred: predecessors(&ContinueBlock)) {
       if (isa<ReattachInst>(Pred->getTerminator())) {
@@ -84,8 +89,14 @@ private:
   bool processBlock(BasicBlock &DetachBlock) {
     errs() << "SpawnMerging: Found sync block: " << DetachBlock.getName() << "\n";
 
+    Loop* loop = LI->getLoopFor(&DetachBlock);
+    if (!isTapirLoop(loop)) {
+      errs() << "Not a parallel loop\n";
+      return false;
+    }
+
     if (!isa<DetachInst>(DetachBlock.getTerminator())) {
-      errs() << "SpawnMerging: Not a detach terminated block.\n";
+      errs() << "Not a detach terminated block.\n";
       return false;
     }
 
@@ -93,7 +104,7 @@ private:
     BasicBlock *ContinueBlock = DetachBlockTerminator->getContinue();
 
     if (!isa<DetachInst>(ContinueBlock->getTerminator())) {
-      errs() << "SpawnMerging: Continue block is not a detach terminated block.\n";
+      errs() << "Continue block is not a detach terminated block.\n";
       return false;
     }
 
@@ -110,7 +121,16 @@ private:
     // Don't detach after the first spawn
     replaceTerminatorWithBranch(ContinueBlock);
 
-    errs() << "SpawnMerging: Merged two spawns. YEAHHHHHHHHHHH!!! \n";
+    // Preserve continue edge correctness
+    SmallVector<Instruction *, 10> instrs;
+    for (auto instr = ContinueBlock->begin(); instr != ContinueBlock->end(); instr++) {
+      instrs.push_back(&*instr);
+    }
+    for (auto instr : instrs) {
+      if (!isa<PHINode>(instr) && !isa<TerminatorInst>(instr)) {
+        instr->moveBefore(DetachBlockTerminator);
+      }
+    }
 
     return true;
   }
