@@ -61,6 +61,8 @@ void LoopFuse::RewritePHI(BranchInst *Br, BasicBlock *To) {
     L2                    |/
 */
 Loop *LoopFuse::FuseLoops(Loop &L1, Loop &L2) {
+  BasicBlock *L1PreHeader = L1.getLoopPreheader();
+
   PHINode *P1 = L1.getCanonicalInductionVariable();
   PHINode *P2 = L2.getCanonicalInductionVariable();
 
@@ -84,13 +86,47 @@ Loop *LoopFuse::FuseLoops(Loop &L1, Loop &L2) {
   RewritePHI(L2PHBr, Br1->getParent());
   DT->changeImmediateDominator(L2Header, L1.getLoopLatch());
 
-  BranchInst::Create(L2Header, Br1);
+  BranchInst *NewBr = BranchInst::Create(L2Header, Br1);
   Br1->eraseFromParent();
   L2PH->dropAllReferences();
   L2PHBr->eraseFromParent();
   L2PH->eraseFromParent();
   DT->eraseNode(L2PH);
   LI->removeBlock(L2PH);
+
+  // BasicBlock *Pred = nullptr;
+  // int numPredecessors = 0;
+  // for (BasicBlock *Block : predecessors(L1.getHeader())) {
+  //   numPredecessors ++;
+
+  //   if (Block == L1.getLoopLatch()) {
+  //     continue;
+  //   }
+
+  //   DEBUG(dbgs() << "=============================\n");
+  //   DEBUG(dbgs() << Block->getName() << "\n");
+  // }
+
+  // assert(numPredecessors == 2);
+
+  BasicBlock *Pred = L1PreHeader;
+  RewritePHI(NewBr, Pred);
+  PHINode *HeaderPHI = dyn_cast<PHINode>(L1.getHeader()->begin());
+  assert(HeaderPHI != nullptr);
+  auto I = P2->getParent()->begin();
+  DEBUG(dbgs() << "=============================\n");
+  SmallVector<PHINode *, 5> phis;
+  while (PHINode *PHI = dyn_cast<PHINode>(&*I)) {
+    phis.push_back(PHI);
+    ++I;
+  }
+  for (auto *PHI : phis) {
+    if (PHI != P2) {
+      PHI->print(dbgs());
+      DEBUG(dbgs() << "\n");
+    }
+    PHI->moveBefore(HeaderPHI);
+  }
 
   P2->replaceAllUsesWith(P1);
   P2->eraseFromParent();
@@ -107,6 +143,13 @@ Loop *LoopFuse::FuseLoops(Loop &L1, Loop &L2) {
   // Remove L2.
   SE->forgetLoop(&L2);
   LI->markAsRemoved(&L2);
+
+  BranchInst* LatchBr = dyn_cast<BranchInst>(L1.getLoopLatch()->getTerminator());
+  assert(LatchBr != nullptr);
+  LLVMContext& C = LatchBr->getContext();
+  Type *Bool = IntegerType::get(C, 1);
+  MDNode *N = MDNode::get(C, ConstantAsMetadata::get(ConstantInt::get(Bool, 1)));
+  LatchBr->setMetadata("loop_fuse.is_fused", N);
 
   // Update DT: DT changed only at L2PH zap and was updated during zapping.
 
@@ -358,17 +401,20 @@ void LoopFuse::RemoveFusionSwitcher(Loop &L) {
   BranchInst *PHBr = dyn_cast<BranchInst>(PH->getTerminator());
   assert(PHBr->isUnconditional());
 
-  RewritePHI(PHBr, FusionSwitcher->getParent());
+  // RewritePHI(PHBr, FusionSwitcher->getParent());
 
-  PHBr->removeFromParent();
-  PHBr->insertBefore(FusionSwitcher);
-  DT->changeImmediateDominator(L.getHeader(), FusionSwitcher->getParent());
+  // PHBr->removeFromParent();
+  // PHBr->insertBefore(FusionSwitcher);
+  // DT->changeImmediateDominator(L.getHeader(), FusionSwitcher->getParent());
 
+
+  IRBuilder<> Builder(FusionSwitcher);
+  Builder.CreateBr(PH);
   FusionSwitcher->eraseFromParent();
-  PH->eraseFromParent();
-  DT->eraseNode(PH);
-  if (LI->getLoopFor(PH))
-    LI->removeBlock(PH);
+  // PH->eraseFromParent();
+  // DT->eraseNode(PH);
+  // if (LI->getLoopFor(PH))
+  //   LI->removeBlock(PH);
 }
 
 // Update the uses of defs that reach outside original loop with the defs made
@@ -524,6 +570,13 @@ bool LoopFuse::runOnFunction(Function &F) {
         ++L2;
         continue;
       }
+
+      if (!isTapirLoop(*L1) || !isTapirLoop(*L2)) {
+        DEBUG(dbgs() << "Skipping non-tapir loop(s). \n");
+        ++L2;
+        continue;
+      }
+
       if (run(**L1, **L2)) {
         // Remove L1 and L2 from Loops and add FusedLoop.
         Loops.erase(L1);
@@ -532,8 +585,9 @@ bool LoopFuse::runOnFunction(Function &F) {
         L1 = L2 = Loops.begin();
         L1e = L2e = Loops.end();
         Changed = true;
-      } else
+      } else {
         ++L2;
+      }
     }
     ++L1;
   }
@@ -558,4 +612,11 @@ INITIALIZE_PASS_END(LoopFuse, "loop-fuse", "Loop Fusion", false, false)
 
 namespace llvm {
 FunctionPass *createLoopFusePass() { return new LoopFuse(); }
+
+bool isLoopFused(Loop *L) {
+  BranchInst *LatchBr = cast<BranchInst>(L->getLoopLatch()->getTerminator());
+  Constant *Value = cast<ConstantAsMetadata>(LatchBr->getMetadata("loop_fuse.is_fused")->getOperand(0))->getValue();
+  return ((cast<ConstantInt>(Value))->getValue().getLimitedValue() == 1);
+}
+
 }

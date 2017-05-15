@@ -484,7 +484,6 @@ struct LoopSpawningImpl {
 
 private:
   void addTapirLoop(Loop *L, SmallVectorImpl<Loop *> &V);
-  bool isTapirLoop(const Loop *L);
   bool processLoop(Loop *L);
 
   Function &F;
@@ -1940,86 +1939,6 @@ bool CilkABILoopSpawning::processLoop() {
   return Helper;
 }
 
-/// Checks if this loop is a Tapir loop.  Right now we check that the loop is
-/// in a canonical form:
-/// 1) The header detaches the body.
-/// 2) The loop contains a single latch.
-/// 3) The body reattaches to the latch (which is necessary for a valid
-///    detached CFG).
-/// 4) The loop only branches to the exit block from the header or the latch.
-bool LoopSpawningImpl::isTapirLoop(const Loop *L) {
-  const BasicBlock *Header = L->getHeader();
-  const BasicBlock *Latch = L->getLoopLatch();
-  // const BasicBlock *Exit = L->getExitBlock();
-
-  // DEBUG(dbgs() << "LS checking if Tapir loop: " << *L);
-
-  // Header must be terminated by a detach.
-  if (!isa<DetachInst>(Header->getTerminator())) {
-    DEBUG(dbgs() << "LS loop header is not terminated by a detach: " << *L << "\n");
-    return false;
-  }
-
-  // Loop must have a unique latch.
-  if (nullptr == Latch) {
-    DEBUG(dbgs() << "LS loop does not have a unique latch: " << *L << "\n");
-    return false;
-  }
-
-  // // Loop must have a unique exit block.
-  // if (nullptr == Exit) {
-  //   DEBUG(dbgs() << "LS loop does not have a unique exit block: " << *L << "\n");
-  //   SmallVector<BasicBlock *, 4> ExitBlocks;
-  //   L->getUniqueExitBlocks(ExitBlocks);
-  //   for (BasicBlock *Exit : ExitBlocks)
-  //     DEBUG(dbgs() << *Exit);
-  //   return false;
-  // }
-
-  // Continuation of header terminator must be the latch.
-  const DetachInst *HeaderDetach = cast<DetachInst>(Header->getTerminator());
-  const BasicBlock *Continuation = HeaderDetach->getContinue();
-  if (Continuation != Latch) {
-    DEBUG(dbgs() << "LS continuation of detach in header is not the latch: "
-                 << *L << "\n");
-    return false;
-  }
-
-  // All other predecessors of Latch are terminated by reattach instructions.
-  for (auto PI = pred_begin(Latch), PE = pred_end(Latch);  PI != PE; ++PI) {
-    const BasicBlock *Pred = *PI;
-    if (Header == Pred) continue;
-    if (!isa<ReattachInst>(Pred->getTerminator())) {
-      DEBUG(dbgs() << "LS Latch has a predecessor that is not terminated "
-                   << "by a reattach: " << *L << "\n");
-      return false;
-    }
-  }
-
-  // Get the exit block from Latch.
-  BasicBlock *Exit = Latch->getTerminator()->getSuccessor(0);
-  if (Header == Exit)
-    Exit = Latch->getTerminator()->getSuccessor(1);
-
-  // The only predecessors of Exit inside the loop are Header and Latch.
-  for (auto PI = pred_begin(Exit), PE = pred_end(Exit);  PI != PE; ++PI) {
-    const BasicBlock *Pred = *PI;
-    if (!L->contains(Pred))
-      continue;
-    if (Header != Pred && Latch != Pred) {
-      DEBUG(dbgs() << "LS Loop branches to exit block from a block "
-                   << "other than the header or latch" << *L << "\n");
-      return false;
-    }
-  }
-
-  return true;
-}
-
-/// This routine recursively examines all descendants of the specified loop and
-/// adds all Tapir loops in that tree to the vector.  This routine performs a
-/// pre-order traversal of the tree of loops and pushes each Tapir loop found
-/// onto the end of the vector.
 void LoopSpawningImpl::addTapirLoop(Loop *L, SmallVectorImpl<Loop *> &V) {
   if (isTapirLoop(L)) {
     V.push_back(L);
@@ -2106,8 +2025,7 @@ bool LoopSpawningImpl::processLoop(Loop *L) {
 
   LoopSpawningHints Hints(L, ORE);
 
-  DEBUG(dbgs() << "LS: Loop hints:"
-               << " strategy = " << Hints.printStrategy(Hints.getStrategy())
+  DEBUG(dbgs() << "LS: Loop hints:"               << " strategy = " << Hints.printStrategy(Hints.getStrategy())
                << "\n");
 
   using namespace ore;
@@ -2357,5 +2275,81 @@ INITIALIZE_PASS_END(LoopSpawning, LS_NAME, ls_name, false, false)
 namespace llvm {
 Pass *createLoopSpawningPass() {
   return new LoopSpawning();
+}
+
+/// Checks if this loop is a Tapir loop.  Right now we check that the loop is
+/// in a canonical form:
+/// 1) The header detaches the body.
+/// 2) The loop contains a single latch.
+/// 3) The body reattaches to the latch (which is necessary for a valid
+///    detached CFG).
+/// 4) The loop only branches to the exit block from the header or the latch.
+bool isTapirLoop(const Loop *L) {
+  const BasicBlock *Header = L->getHeader();
+  const BasicBlock *Latch = L->getLoopLatch();
+  // const BasicBlock *Exit = L->getExitBlock();
+
+  // DEBUG(dbgs() << "LS checking if Tapir loop: " << *L);
+
+  // Header must be terminated by a detach.
+  if (!isa<DetachInst>(Header->getTerminator())) {
+    DEBUG(dbgs() << "LS loop header is not terminated by a detach: " << *L << "\n");
+    return false;
+  }
+
+  // Loop must have a unique latch.
+  if (nullptr == Latch) {
+    DEBUG(dbgs() << "LS loop does not have a unique latch: " << *L << "\n");
+    return false;
+  }
+
+  // // Loop must have a unique exit block.
+  // if (nullptr == Exit) {
+  //   DEBUG(dbgs() << "LS loop does not have a unique exit block: " << *L << "\n");
+  //   SmallVector<BasicBlock *, 4> ExitBlocks;
+  //   L->getUniqueExitBlocks(ExitBlocks);
+  //   for (BasicBlock *Exit : ExitBlocks)
+  //     DEBUG(dbgs() << *Exit);
+  //   return false;
+  // }
+
+  // Continuation of header terminator must be the latch.
+  const DetachInst *HeaderDetach = cast<DetachInst>(Header->getTerminator());
+  const BasicBlock *Continuation = HeaderDetach->getContinue();
+  if (Continuation != Latch) {
+    DEBUG(dbgs() << "LS continuation of detach in header is not the latch: "
+                 << *L << "\n");
+    return false;
+  }
+
+  // All other predecessors of Latch are terminated by reattach instructions.
+  for (auto PI = pred_begin(Latch), PE = pred_end(Latch);  PI != PE; ++PI) {
+    const BasicBlock *Pred = *PI;
+    if (Header == Pred) continue;
+    if (!isa<ReattachInst>(Pred->getTerminator())) {
+      DEBUG(dbgs() << "LS Latch has a predecessor that is not terminated "
+                   << "by a reattach: " << *L << "\n");
+      return false;
+    }
+  }
+
+  // Get the exit block from Latch.
+  BasicBlock *Exit = Latch->getTerminator()->getSuccessor(0);
+  if (Header == Exit)
+    Exit = Latch->getTerminator()->getSuccessor(1);
+
+  // The only predecessors of Exit inside the loop are Header and Latch.
+  for (auto PI = pred_begin(Exit), PE = pred_end(Exit);  PI != PE; ++PI) {
+    const BasicBlock *Pred = *PI;
+    if (!L->contains(Pred))
+      continue;
+    if (Header != Pred && Latch != Pred) {
+      DEBUG(dbgs() << "LS Loop branches to exit block from a block "
+                   << "other than the header or latch" << *L << "\n");
+      return false;
+    }
+  }
+
+  return true;
 }
 }

@@ -40,6 +40,12 @@ FunctionPass *createSyncEliminationPass();
 
 //===----------------------------------------------------------------------===//
 //
+// SyncElimination - TODO
+//
+FunctionPass *createSpawnMergingPass();
+
+//===----------------------------------------------------------------------===//
+//
 // RedundantSpawn - Do RedundantSpawn Pass
 //
 FunctionPass *createRedundantSpawnPass();
