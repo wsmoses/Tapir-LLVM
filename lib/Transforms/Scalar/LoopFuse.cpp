@@ -114,9 +114,18 @@ Loop *LoopFuse::FuseLoops(Loop &L1, Loop &L2) {
   PHINode *HeaderPHI = dyn_cast<PHINode>(L1.getHeader()->begin());
   assert(HeaderPHI != nullptr);
   auto I = P2->getParent()->begin();
+  DEBUG(dbgs() << "=============================\n");
+  SmallVector<PHINode *, 5> phis;
   while (PHINode *PHI = dyn_cast<PHINode>(&*I)) {
-    // PHI->moveBefore(HeaderPHI);
+    phis.push_back(PHI);
     ++I;
+  }
+  for (auto *PHI : phis) {
+    if (PHI != P2) {
+      PHI->print(dbgs());
+      DEBUG(dbgs() << "\n");
+    }
+    PHI->moveBefore(HeaderPHI);
   }
 
   P2->replaceAllUsesWith(P1);
@@ -385,17 +394,20 @@ void LoopFuse::RemoveFusionSwitcher(Loop &L) {
   BranchInst *PHBr = dyn_cast<BranchInst>(PH->getTerminator());
   assert(PHBr->isUnconditional());
 
-  RewritePHI(PHBr, FusionSwitcher->getParent());
+  // RewritePHI(PHBr, FusionSwitcher->getParent());
 
-  PHBr->removeFromParent();
-  PHBr->insertBefore(FusionSwitcher);
-  DT->changeImmediateDominator(L.getHeader(), FusionSwitcher->getParent());
+  // PHBr->removeFromParent();
+  // PHBr->insertBefore(FusionSwitcher);
+  // DT->changeImmediateDominator(L.getHeader(), FusionSwitcher->getParent());
 
+
+  IRBuilder<> Builder(FusionSwitcher);
+  Builder.CreateBr(PH);
   FusionSwitcher->eraseFromParent();
-  PH->eraseFromParent();
-  DT->eraseNode(PH);
-  if (LI->getLoopFor(PH))
-    LI->removeBlock(PH);
+  // PH->eraseFromParent();
+  // DT->eraseNode(PH);
+  // if (LI->getLoopFor(PH))
+  //   LI->removeBlock(PH);
 }
 
 // Update the uses of defs that reach outside original loop with the defs made
