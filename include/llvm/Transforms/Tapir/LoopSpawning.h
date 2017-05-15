@@ -33,6 +33,9 @@ namespace llvm {
 struct LoopSpawningPass : public PassInfoMixin<LoopSpawningPass> {
   PreservedAnalyses run(Function &F, FunctionAnalysisManager &AM);
 };
+
+bool isTapirLoop(const Loop *L);
+
 }
 
 #endif // LLVM_TRANSFORMS_TAPIR_LOOPSPAWNING_H

@@ -12,5 +12,6 @@ main_sync:
 	opt -O3 main_sync_raw.ll -S -o main_sync_o3.ll
 	opt -sync-elimination main_sync_o3.ll -S -o main_sync_sync_eliminated.ll
 	opt -simplifycfg -loop-simplify -loop-fuse main_sync_sync_eliminated.ll -S -o main_sync_loop_fused.ll
-	clang -O3 -o main_sync main_sync_loop_fused.ll
-	clang -O3 -S -emit-llvm -o main_sync.ll main_sync_loop_fused.ll
+	opt -simplifycfg -spawn-merging main_sync_loop_fused.ll -S -o main_sync_spawn_merged.ll
+	clang -O3 -o main_sync main_sync_spawn_merged.ll
+	clang -O3 -S -emit-llvm -o main_sync.ll main_sync_spawn_merged.ll

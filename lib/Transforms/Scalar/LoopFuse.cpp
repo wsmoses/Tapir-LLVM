@@ -563,6 +563,13 @@ bool LoopFuse::runOnFunction(Function &F) {
         ++L2;
         continue;
       }
+
+      if (!isTapirLoop(*L1) || !isTapirLoop(*L2)) {
+        DEBUG(dbgs() << "Skipping non-tapir loop(s). \n");
+        ++L2;
+        continue;
+      }
+
       if (run(**L1, **L2)) {
         // Remove L1 and L2 from Loops and add FusedLoop.
         Loops.erase(L1);
@@ -571,8 +578,9 @@ bool LoopFuse::runOnFunction(Function &F) {
         L1 = L2 = Loops.begin();
         L1e = L2e = Loops.end();
         Changed = true;
-      } else
+      } else {
         ++L2;
+      }
     }
     ++L1;
   }

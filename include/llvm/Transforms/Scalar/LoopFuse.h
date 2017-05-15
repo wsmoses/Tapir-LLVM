@@ -27,6 +27,7 @@
 #include "llvm/Transforms/Utils/Cloning.h"
 #include "llvm/Transforms/Utils/LoopUtils.h"
 #include "llvm/Transforms/Utils/LoopVersioning.h"
+#include "llvm/Transforms/Tapir/LoopSpawning.h"
 #include <list>
 
 namespace llvm {

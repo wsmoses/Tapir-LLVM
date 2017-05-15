@@ -85,7 +85,7 @@ private:
     errs() << "SpawnMerging: Found sync block: " << DetachBlock.getName() << "\n";
 
     if (!isa<DetachInst>(DetachBlock.getTerminator())) {
-      errs() << "Not a detach terminated block.\n";
+      errs() << "SpawnMerging: Not a detach terminated block.\n";
       return false;
     }
 
@@ -93,7 +93,7 @@ private:
     BasicBlock *ContinueBlock = DetachBlockTerminator->getContinue();
 
     if (!isa<DetachInst>(ContinueBlock->getTerminator())) {
-      errs() << "Continue block is not a detach terminated block.\n";
+      errs() << "SpawnMerging: Continue block is not a detach terminated block.\n";
       return false;
     }
 
@@ -109,6 +109,8 @@ private:
 
     // Don't detach after the first spawn
     replaceTerminatorWithBranch(ContinueBlock);
+
+    errs() << "SpawnMerging: Merged two spawns. YEAHHHHHHHHHHH!!! \n";
 
     return true;
   }
