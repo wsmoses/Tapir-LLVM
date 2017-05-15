@@ -19,6 +19,7 @@
 #include "llvm/Analysis/LoopInfo.h"
 #include "llvm/Analysis/ScalarEvolutionExpander.h"
 #include "llvm/IR/Dominators.h"
+#include "llvm/IR/Metadata.h"
 #include "llvm/IR/Verifier.h"
 #include "llvm/Pass.h"
 #include "llvm/Support/CommandLine.h"
@@ -128,4 +129,7 @@ public:
 
   static char ID;
 };
+
+bool isLoopFused(Loop *L);
+
 } // anonymous namespace

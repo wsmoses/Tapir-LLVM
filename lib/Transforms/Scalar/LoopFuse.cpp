@@ -144,6 +144,13 @@ Loop *LoopFuse::FuseLoops(Loop &L1, Loop &L2) {
   SE->forgetLoop(&L2);
   LI->markAsRemoved(&L2);
 
+  BranchInst* LatchBr = dyn_cast<BranchInst>(L1.getLoopLatch()->getTerminator());
+  assert(LatchBr != nullptr);
+  LLVMContext& C = LatchBr->getContext();
+  Type *Bool = IntegerType::get(C, 1);
+  MDNode *N = MDNode::get(C, ConstantAsMetadata::get(ConstantInt::get(Bool, 1)));
+  LatchBr->setMetadata("loop_fuse.is_fused", N);
+
   // Update DT: DT changed only at L2PH zap and was updated during zapping.
 
   return &L1;
@@ -605,4 +612,11 @@ INITIALIZE_PASS_END(LoopFuse, "loop-fuse", "Loop Fusion", false, false)
 
 namespace llvm {
 FunctionPass *createLoopFusePass() { return new LoopFuse(); }
+
+bool isLoopFused(Loop *L) {
+  BranchInst *LatchBr = cast<BranchInst>(L->getLoopLatch()->getTerminator());
+  Constant *Value = cast<ConstantAsMetadata>(LatchBr->getMetadata("loop_fuse.is_fused")->getOperand(0))->getValue();
+  return ((cast<ConstantInt>(Value))->getValue().getLimitedValue() == 1);
+}
+
 }
