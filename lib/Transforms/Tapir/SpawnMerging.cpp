@@ -14,6 +14,7 @@
 #include "llvm/IR/CFG.h"
 #include "llvm/ADT/SmallSet.h"
 #include "llvm/Transforms/Tapir/LoopSpawning.h"
+#include "llvm/Transforms/Scalar/LoopFuse.h"
 
 #include <deque>
 #include <map>
@@ -97,8 +98,8 @@ private:
       return false;
     }
 
-    if (!isTapirLoop(loop)) {
-      errs() << "Not a parallel loop\n";
+    if (!isLoopFused(loop)) {
+      errs() << "Not a fused loop\n";
       return false;
     }
 
