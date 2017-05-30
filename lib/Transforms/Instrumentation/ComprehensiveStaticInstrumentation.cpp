@@ -220,7 +220,7 @@ public:
   static Type *getType(LLVMContext &C) {
     // Must match the definition of property type in csi.h
     return CsiProperty::getCoercedType(
-        C, StructType::get(IntegerType::get(C, 64), nullptr));
+        C, StructType::get(IntegerType::get(C, 64)));
   }
   /// Return a constant value holding this property.
   Constant *getValueImpl(LLVMContext &C) const override {
@@ -243,7 +243,7 @@ public:
   static Type *getType(LLVMContext &C) {
     // Must match the definition of property type in csi.h
     return CsiProperty::getCoercedType(
-        C, StructType::get(IntegerType::get(C, 64), nullptr));
+        C, StructType::get(IntegerType::get(C, 64)));
   }
   /// Return a constant value holding this property.
   Constant *getValueImpl(LLVMContext &C) const override {
@@ -266,7 +266,7 @@ public:
   static Type *getType(LLVMContext &C) {
     // Must match the definition of property type in csi.h
     return CsiProperty::getCoercedType(
-        C, StructType::get(IntegerType::get(C, 64), nullptr));
+        C, StructType::get(IntegerType::get(C, 64)));
   }
 
   /// Return a constant value holding this property.
@@ -293,8 +293,7 @@ public:
     // Must match the definition of property type in csi.h
     return CsiProperty::getCoercedType(
         C, StructType::get(IntegerType::get(C, PropBits.IsIndirect),
-                           IntegerType::get(C, PropBits.Padding),
-                           nullptr));
+                           IntegerType::get(C, PropBits.Padding)));
   }
   /// Return a constant value holding this property.
   Constant *getValueImpl(LLVMContext &C) const override {
@@ -353,8 +352,7 @@ public:
                            IntegerType::get(C, PropBits.IsOnStack),
                            IntegerType::get(C, PropBits.MayBeCaptured),
                            IntegerType::get(C, PropBits.LoadReadBeforeWriteInBB),
-                           IntegerType::get(C, PropBits.Padding),
-                           nullptr));
+                           IntegerType::get(C, PropBits.Padding)));
   }
   /// Return a constant value holding this property.
   Constant *getValueImpl(LLVMContext &C) const override {
@@ -582,8 +580,7 @@ PointerType *FrontEndDataTable::getPointerType(LLVMContext &C) {
 StructType *FrontEndDataTable::getSourceLocStructType(LLVMContext &C) {
   return StructType::get(/* Name */ PointerType::get(IntegerType::get(C, 8), 0),
                          /* Line */ IntegerType::get(C, 32),
-                         /* File */ PointerType::get(IntegerType::get(C, 8), 0),
-                         nullptr);
+                         /* File */ PointerType::get(IntegerType::get(C, 8), 0));
 }
 
 uint64_t FrontEndDataTable::add(DILocation *Loc) {
@@ -623,7 +620,7 @@ Constant *FrontEndDataTable::insertIntoModule(Module &M) const {
 
   for (const auto it : LocalIdToSourceLocationMap) {
     const SourceLocation &E = it.second;
-    Value *Line = ConstantInt::get(Int32Ty, E.Line);
+    Constant *Line = ConstantInt::get(Int32Ty, E.Line);
     Constant *File;
     {
       Constant *FileStrConstant = ConstantDataArray::getString(C, E.File);
@@ -658,8 +655,7 @@ Constant *FrontEndDataTable::insertIntoModule(Module &M) const {
       Name =
         ConstantExpr::getGetElementPtr(GV->getValueType(), GV, GepArgs);
     }
-    FEDEntries.push_back(ConstantStruct::get(FedType, Name, Line, File,
-                                             nullptr));
+    FEDEntries.push_back(ConstantStruct::get(FedType, Name, Line, File));
   }
 
   ArrayType *FedArrayType = ArrayType::get(FedType, FEDEntries.size());
@@ -1003,16 +999,19 @@ void ComprehensiveStaticInstrumentation::initializeCsi(Module &M) {
 StructType *getUnitFedTableType(LLVMContext &C, PointerType *EntryPointerType) {
   return StructType::get(IntegerType::get(C, 64),
                          PointerType::get(IntegerType::get(C, 64), 0),
-                         EntryPointerType, nullptr);
+                         EntryPointerType);
 }
 
 Constant *fedTableToUnitFedTable(Module &M, StructType *UnitFedTableType,
                                  FrontEndDataTable &FedTable) {
   Constant *NumEntries =
       ConstantInt::get(IntegerType::get(M.getContext(), 64), FedTable.size());
+  Constant *BaseIdPtr =
+    ConstantExpr::getPointerCast(FedTable.baseId(),
+                                 Type::getInt8PtrTy(M.getContext(), 0));
   Constant *InsertedTable = FedTable.insertIntoModule(M);
-  return ConstantStruct::get(UnitFedTableType, NumEntries, FedTable.baseId(),
-                             InsertedTable, nullptr);
+  return ConstantStruct::get(UnitFedTableType, NumEntries, BaseIdPtr,
+                             InsertedTable);
 }
 
 void ComprehensiveStaticInstrumentation::finalizeCsi(Module &M) {

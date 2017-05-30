@@ -55,9 +55,9 @@ void llvm::findInputsOutputs(const SmallPtrSetImpl<BasicBlock *> &Blocks,
     for (Instruction &II : *BB) {
       for (User::op_iterator OI = II.op_begin(), OE = II.op_end(); OI != OE;
            ++OI) {
-        // The PHI nodes each exit block will be updated after the exit block is
-        // cloned, so we don't want to count their uses of values defined
-        // outside the region.
+        // The PHI nodes in each exit block will be updated after the exit block
+        // is cloned.  Hence, we don't want to count their uses of values
+        // defined outside the region.
         if (ExitBlocks->count(BB))
           if (PHINode *PN = dyn_cast<PHINode>(&II))
             if (!Blocks.count(PN->getIncomingBlock(*OI)))
@@ -95,6 +95,8 @@ void llvm::CloneIntoFunction(Function *NewFunc, const Function *OldFunc,
     for (BasicBlock *Pred : predecessors(EB))
       ExitBlockPreds.insert(Pred);
 
+  DenseMap<const MDNode *, MDNode *> DbgCache;
+
   // Loop over all of the basic blocks in the function, cloning them as
   // appropriate.
   for (const BasicBlock *BB : Blocks) {
@@ -103,7 +105,8 @@ void llvm::CloneIntoFunction(Function *NewFunc, const Function *OldFunc,
       ClonedEBPreds.insert(BB);
 
     // Create a new basic block and copy instructions into it!
-    BasicBlock *CBB = CloneBasicBlock(BB, VMap, NameSuffix, NewFunc, CodeInfo);
+    BasicBlock *CBB = CloneBasicBlock(BB, VMap, NameSuffix, NewFunc, CodeInfo,
+                                      &DbgCache);
 
     // Add basic block mapping.
     VMap[BB] = CBB;
@@ -129,17 +132,12 @@ void llvm::CloneIntoFunction(Function *NewFunc, const Function *OldFunc,
   // were not cloned.
   if (ExitBlocks) {
     for (BasicBlock *EB : *ExitBlocks) {
-      // dbgs() << "Exit block:" << *EB;
       // Get the predecessors of this exit block that were not cloned.
       SmallVector<BasicBlock *, 4> PredNotCloned;
-      for (BasicBlock *Pred : predecessors(EB)) {
-        if (!ClonedEBPreds.count(Pred)) {
-          // dbgs() << "\tpred not cloned: " << Pred->getName() << "\n";
+      for (BasicBlock *Pred : predecessors(EB))
+        if (!ClonedEBPreds.count(Pred))
           PredNotCloned.push_back(Pred);
-        // } else {
-        //   dbgs() << "Pred " << Pred->getName() << " maps to " << VMap[Pred]->getName() << "\n";
-        }
-      }
+
       // Iterate over the phi nodes in the cloned exit block and remove incoming
       // values from predecessors that were not cloned.
       BasicBlock *ClonedEB = cast<BasicBlock>(VMap[EB]);
@@ -158,12 +156,10 @@ void llvm::CloneIntoFunction(Function *NewFunc, const Function *OldFunc,
   for (const BasicBlock *BB : Blocks) {
     BasicBlock *CBB = cast<BasicBlock>(VMap[BB]);
     // Loop over all instructions, fixing each one as we find it...
-    for (Instruction &II : *CBB) {
+    for (Instruction &II : *CBB)
       RemapInstruction(&II, VMap,
                        ModuleLevelChanges ? RF_None : RF_NoModuleLevelChanges,
                        TypeMapper, Materializer);
-      
-    }
   }
 }
 
@@ -192,7 +188,7 @@ Function *llvm::CreateHelper(const ValueSet &Inputs,
   Function *OldFunc = Header->getParent();
   Type *RetTy = Type::getVoidTy(Header->getContext());
 
-  std::vector<Type*> paramTy;
+  std::vector<Type *> paramTy;
 
   // Add the types of the input values to the function's argument list
   for (Value *value : Inputs) {
@@ -219,8 +215,8 @@ Function *llvm::CreateHelper(const ValueSet &Inputs,
   Function *NewFunc = Function::Create(FTy,
 				       GlobalValue::InternalLinkage,
 				       OldFunc->getName() + "_" +
-				       Header->getName(), DestM);
-  
+				       Header->getName() + NameSuffix, DestM);
+
   // Set names for input and output arguments.
   Function::arg_iterator DestI = NewFunc->arg_begin();
   for (Value *I : Inputs)
@@ -233,10 +229,10 @@ Function *llvm::CreateHelper(const ValueSet &Inputs,
       DestI->setName(I->getName()+NameSuffix); // Copy the name over...
       VMap[I] = &*DestI++;                 // Add mapping to VMap
     }
-  
+
   // Copy all attributes other than those stored in the AttributeSet.  We need
   // to remap the parameter indices of the AttributeSet.
-  AttributeSet NewAttrs = NewFunc->getAttributes();
+  AttributeList NewAttrs = NewFunc->getAttributes();
   NewFunc->copyAttributesFrom(OldFunc);
   NewFunc->setAttributes(NewAttrs);
 
@@ -247,37 +243,52 @@ Function *llvm::CreateHelper(const ValueSet &Inputs,
                  ModuleLevelChanges ? RF_None : RF_NoModuleLevelChanges,
                  TypeMapper, Materializer));
 
-  AttributeSet OldAttrs = OldFunc->getAttributes();
+  SmallVector<AttributeSet, 4> NewArgAttrs(NewFunc->arg_size());
+  AttributeList OldAttrs = OldFunc->getAttributes();
   // Clone any argument attributes
   for (Argument &OldArg : OldFunc->args()) {
     // Check if we're passing this argument to the helper.  We check Inputs here
     // instead of the VMap to avoid potentially populating the VMap with a null
     // entry for the old argument.
     if (Inputs.count(&OldArg) || Outputs.count(&OldArg)) {
-      Argument *NewArg = dyn_cast_or_null<Argument>(VMap[&OldArg]);
-      AttributeSet attrs =
-        OldAttrs.getParamAttributes(OldArg.getArgNo() + 1);
-      if (attrs.getNumSlots() > 0)
-        NewArg->addAttr(attrs);
+      Argument *NewArg = dyn_cast<Argument>(VMap[&OldArg]);
+      NewArgAttrs[NewArg->getArgNo()] =
+          OldAttrs.getParamAttributes(OldArg.getArgNo());
     }
   }
-  NewFunc->setAttributes(
-      NewFunc->getAttributes()
-      // Ignore the return attributes of the old function.
-      // .addAttributes(NewFunc->getContext(), AttributeSet::ReturnIndex,
-      //                OldAttrs.getRetAttributes())
-      .addAttributes(NewFunc->getContext(), AttributeSet::FunctionIndex,
-                     OldAttrs.getFnAttributes()));
 
+  // Ignore the return attributes of the old function.
+  NewFunc->setAttributes(
+      AttributeList::get(NewFunc->getContext(), OldAttrs.getFnAttributes(),
+                         AttributeSet(), NewArgAttrs));
+
+  // Clone the metadata from the old function into the new.
   SmallVector<std::pair<unsigned, MDNode *>, 1> MDs;
   OldFunc->getAllMetadata(MDs);
   for (auto MD : MDs) {
-    NewFunc->addMetadata(
-        MD.first,
-        *MapMetadata(MD.second, VMap,
-                     ModuleLevelChanges ? RF_None : RF_NoModuleLevelChanges,
-                     TypeMapper, Materializer));
+    MDNode *NewMD;
+    bool MustCloneSP =
+        (MD.first == LLVMContext::MD_dbg && OldFunc->getParent() &&
+         OldFunc->getParent() == NewFunc->getParent());
+    if (MustCloneSP) {
+      auto *SP = cast<DISubprogram>(MD.second);
+      // TODO: Look for ways to refine debug information for outlined function.
+      NewMD = DISubprogram::getDistinct(
+          NewFunc->getContext(), SP->getScope(), SP->getName(),
+          SP->getLinkageName(), SP->getFile(), SP->getLine(), SP->getType(),
+          SP->isLocalToUnit(), SP->isDefinition(), SP->getScopeLine(),
+          SP->getContainingType(), SP->getVirtuality(), SP->getVirtualIndex(),
+          SP->getThisAdjustment(), SP->getFlags(), SP->isOptimized(),
+          SP->getUnit(), SP->getTemplateParams(), SP->getDeclaration(),
+          SP->getVariables(), SP->getThrownTypes());
+    } else
+      NewMD =
+          MapMetadata(MD.second, VMap,
+                      ModuleLevelChanges ? RF_None : RF_NoModuleLevelChanges,
+                      TypeMapper, Materializer);
+    NewFunc->addMetadata(MD.first, *NewMD);
   }
+
   // We assume that the Helper reads and writes its arguments.  If the parent
   // function had stronger attributes on memory access -- specifically, if the
   // parent is marked as only reading memory -- we must replace this attribute
@@ -307,14 +318,14 @@ Function *llvm::CreateHelper(const ValueSet &Inputs,
 
   // Clone Blocks into the new function.
   CloneIntoFunction(NewFunc, OldFunc, Blocks, VMap, ModuleLevelChanges,
-		    Returns, NameSuffix, ExitBlocks, CodeInfo, TypeMapper,
-                    Materializer);
+                    Returns, NameSuffix, ExitBlocks, CodeInfo,
+                    TypeMapper, Materializer);
 
   // Add a branch in the new function to the cloned Header.
   BranchInst::Create(cast<BasicBlock>(VMap[Header]), NewEntry);
   // Add a return in the new function.
   ReturnInst::Create(Header->getContext(), NewExit);
-  
+
   return NewFunc;
 }
 
@@ -469,11 +480,7 @@ void llvm::AddAlignmentAssumptions(const Function *Caller,
     unsigned Align = getKnownAlignment(ArgVal, DL, CallSite, AC, DT);
     // If we have alignment data, add it as an attribute to the outlined
     // function's parameter.
-    if (Align) {
-      AttrBuilder B;
-      B.addAlignmentAttr(Align);
-      Arg->addAttr(AttributeSet::get(Arg->getContext(), Arg->getArgNo() + 1,
-                                     B));
-    }
+    if (Align)
+      Arg->addAttr(Attribute::getWithAlignment(Arg->getContext(), Align));
   }
 }

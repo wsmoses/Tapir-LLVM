@@ -90,6 +90,11 @@ OptLevel("O",
 static cl::opt<std::string>
 TargetTriple("mtriple", cl::desc("Override target triple for module"));
 
+static cl::opt<std::string> SplitDwarfFile(
+    "split-dwarf-file",
+    cl::desc(
+        "Specify the name of the .dwo file to encode in the DWARF output"));
+
 static cl::opt<bool> NoVerify("disable-verify", cl::Hidden,
                               cl::desc("Do not verify input module"));
 
@@ -254,12 +259,16 @@ static void DiagnosticHandler(const DiagnosticInfo &DI, void *Context) {
 }
 
 static void InlineAsmDiagHandler(const SMDiagnostic &SMD, void *Context,
-                                 unsigned) {
+                                 unsigned LocCookie) {
   bool *HasError = static_cast<bool *>(Context);
   if (SMD.getKind() == SourceMgr::DK_Error)
     *HasError = true;
 
   SMD.print(nullptr, errs());
+
+  // For testing purposes, we print the LocCookie here.
+  if (LocCookie)
+    errs() << "note: !srcloc = " << LocCookie << "\n";
 }
 
 // main - Entry point for the llc compiler.
@@ -292,6 +301,8 @@ int main(int argc, char **argv) {
   initializeConstantHoistingLegacyPassPass(*Registry);
   initializeScalarOpts(*Registry);
   initializeVectorization(*Registry);
+  initializeScalarizeMaskedMemIntrinPass(*Registry);
+  initializeExpandReductionsPass(*Registry);
 
   // Register the target printer for --version.
   cl::AddExtraVersionPrinter(TargetRegistry::printRegisteredTargetsForVersion);
@@ -345,9 +356,7 @@ static bool addPass(PassManagerBase &PM, const char *argv0,
   }
 
   Pass *P;
-  if (PI->getTargetMachineCtor())
-    P = PI->getTargetMachineCtor()(&TPC.getTM<TargetMachine>());
-  else if (PI->getNormalCtor())
+  if (PI->getNormalCtor())
     P = PI->getNormalCtor()();
   else {
     errs() << argv0 << ": cannot create pass: " << PI->getPassName() << "\n";
@@ -446,6 +455,7 @@ static int compileModule(char **argv, LLVMContext &Context) {
   Options.MCOptions.AsmVerbose = AsmVerbose;
   Options.MCOptions.PreserveAsmComments = PreserveComments;
   Options.MCOptions.IASSearchPaths = IncludeDirs;
+  Options.MCOptions.SplitDwarfFile = SplitDwarfFile;
 
   std::unique_ptr<TargetMachine> Target(
       TheTarget->createTargetMachine(TheTriple.getTriple(), CPUStr, FeaturesStr,

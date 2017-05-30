@@ -415,7 +415,7 @@ EmitStageAndOperandCycleData(raw_ostream &OS,
   BypassTable += " 0, // No itinerary\n";
 
   // For each Itinerary across all processors, add a unique entry to the stages,
-  // operand cycles, and pipepine bypess tables. Then add the new Itinerary
+  // operand cycles, and pipeline bypass tables. Then add the new Itinerary
   // object with computed offsets to the ProcItinLists result.
   unsigned StageCount = 1, OperandCycleCount = 1;
   std::map<std::string, unsigned> ItinStageMap, ItinOperandMap;
@@ -917,6 +917,8 @@ void SubtargetEmitter::GenSchedClassTables(const CodeGenProcModel &ProcModel,
         SCDesc.NumMicroOps += WriteRes->getValueAsInt("NumMicroOps");
         SCDesc.BeginGroup |= WriteRes->getValueAsBit("BeginGroup");
         SCDesc.EndGroup |= WriteRes->getValueAsBit("EndGroup");
+        SCDesc.BeginGroup |= WriteRes->getValueAsBit("SingleIssue");
+        SCDesc.EndGroup |= WriteRes->getValueAsBit("SingleIssue");
 
         // Create an entry for each ProcResource listed in WriteRes.
         RecVec PRVec = WriteRes->getValueAsListOfDefs("ProcResources");

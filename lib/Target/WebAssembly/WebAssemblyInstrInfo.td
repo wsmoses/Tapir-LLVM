@@ -25,7 +25,8 @@ def HasSIMD128 : Predicate<"Subtarget->hasSIMD128()">,
 // WebAssembly-specific DAG Node Types.
 //===----------------------------------------------------------------------===//
 
-def SDT_WebAssemblyCallSeqStart : SDCallSeqStart<[SDTCisVT<0, iPTR>]>;
+def SDT_WebAssemblyCallSeqStart : SDCallSeqStart<[SDTCisVT<0, iPTR>,
+                                                  SDTCisVT<1, iPTR>]>;
 def SDT_WebAssemblyCallSeqEnd :
     SDCallSeqEnd<[SDTCisVT<0, iPTR>, SDTCisVT<1, iPTR>]>;
 def SDT_WebAssemblyCall0    : SDTypeProfile<0, -1, [SDTCisPtrTy<0>]>;
@@ -106,6 +107,9 @@ def Signature : Operand<i32> {
   let PrintMethod = "printWebAssemblySignatureOperand";
 }
 } // OperandType = "OPERAND_SIGNATURE"
+
+let OperandType = "OPERAND_TYPEINDEX" in
+def TypeIndex : Operand<i32>;
 
 } // OperandNamespace = "WebAssembly"
 

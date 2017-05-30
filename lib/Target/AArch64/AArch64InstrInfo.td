@@ -43,6 +43,11 @@ def IsBE             : Predicate<"!Subtarget->isLittleEndian()">;
 def UseAlternateSExtLoadCVTF32
     : Predicate<"Subtarget->useAlternateSExtLoadCVTF32Pattern()">;
 
+def UseNegativeImmediates
+    : Predicate<"false">, AssemblerPredicate<"!FeatureNoNegativeImmediates",
+                                             "NegativeImmediates">;
+
+
 //===----------------------------------------------------------------------===//
 // AArch64-specific DAG Nodes.
 //
@@ -151,7 +156,8 @@ def AArch64adrp          : SDNode<"AArch64ISD::ADRP", SDTIntUnaryOp, []>;
 def AArch64addlow        : SDNode<"AArch64ISD::ADDlow", SDTIntBinOp, []>;
 def AArch64LOADgot       : SDNode<"AArch64ISD::LOADgot", SDTIntUnaryOp>;
 def AArch64callseq_start : SDNode<"ISD::CALLSEQ_START",
-                                SDCallSeqStart<[ SDTCisVT<0, i32> ]>,
+                                SDCallSeqStart<[ SDTCisVT<0, i32>,
+                                                 SDTCisVT<1, i32> ]>,
                                 [SDNPHasChain, SDNPOutGlue]>;
 def AArch64callseq_end   : SDNode<"ISD::CALLSEQ_END",
                                 SDCallSeqEnd<[ SDTCisVT<0, i32>,
@@ -309,8 +315,14 @@ def AArch64umaxv    : SDNode<"AArch64ISD::UMAXV", SDT_AArch64UnaryVec>;
 // AArch64 Instruction Predicate Definitions.
 def IsDarwin  : Predicate<"Subtarget->isTargetDarwin()">;
 def IsNotDarwin: Predicate<"!Subtarget->isTargetDarwin()">;
-def ForCodeSize   : Predicate<"ForCodeSize">;
-def NotForCodeSize   : Predicate<"!ForCodeSize">;
+
+// We could compute these on a per-module basis but doing so requires accessing
+// the Function object through the <Target>Subtarget and objections were raised
+// to that (see post-commit review comments for r301750).
+let RecomputePerFunction = 1 in {
+  def ForCodeSize   : Predicate<"MF->getFunction()->optForSize()">;
+  def NotForCodeSize   : Predicate<"!MF->getFunction()->optForSize()">;
+}
 
 include "AArch64InstrFormats.td"
 
@@ -323,8 +335,9 @@ include "AArch64InstrFormats.td"
 let Defs = [SP], Uses = [SP], hasSideEffects = 1, isCodeGenOnly = 1 in {
 // We set Sched to empty list because we expect these instructions to simply get
 // removed in most cases.
-def ADJCALLSTACKDOWN : Pseudo<(outs), (ins i32imm:$amt),
-                              [(AArch64callseq_start timm:$amt)]>, Sched<[]>;
+def ADJCALLSTACKDOWN : Pseudo<(outs), (ins i32imm:$amt1, i32imm:$amt2),
+                              [(AArch64callseq_start timm:$amt1, timm:$amt2)]>,
+                              Sched<[]>;
 def ADJCALLSTACKUP : Pseudo<(outs), (ins i32imm:$amt1, i32imm:$amt2),
                             [(AArch64callseq_end timm:$amt1, timm:$amt2)]>,
                             Sched<[]>;
@@ -426,8 +439,10 @@ def MSRpstateImm1 : MSRpstateImm0_1;
 def MSRpstateImm4 : MSRpstateImm0_15;
 
 // The thread pointer (on Linux, at least, where this has been implemented) is
-// TPIDR_EL0.
-def : Pat<(AArch64threadpointer), (MRS 0xde82)>;
+// TPIDR_EL0.  Add pseudo op so we can mark it as not having any side effects.
+let hasSideEffects = 0 in
+def MOVbaseTLS : Pseudo<(outs GPR64:$dst), (ins),
+                       [(set GPR64:$dst, AArch64threadpointer)]>, Sched<[]>;
 
 // The cycle counter PMC register is PMCCNTR_EL0.
 let Predicates = [HasPerfMon] in
@@ -2579,6 +2594,11 @@ def FMOVS0 : Pseudo<(outs FPR32:$Rd), (ins), [(set f32:$Rd, (fpimm0))]>,
 def FMOVD0 : Pseudo<(outs FPR64:$Rd), (ins), [(set f64:$Rd, (fpimm0))]>,
     Sched<[WriteF]>;
 }
+// Similarly add aliases
+def : InstAlias<"fmov $Rd, #0.0", (FMOVWHr FPR16:$Rd, WZR), 0>,
+    Requires<[HasFullFP16]>;
+def : InstAlias<"fmov $Rd, #0.0", (FMOVWSr FPR32:$Rd, WZR), 0>;
+def : InstAlias<"fmov $Rd, #0.0", (FMOVXDr FPR64:$Rd, XZR), 0>;
 
 //===----------------------------------------------------------------------===//
 // Floating point conversion instruction.
@@ -2722,60 +2742,36 @@ defm FMOV : FPMoveImmediate<"fmov">;
 defm UABDL   : SIMDLongThreeVectorBHSabdl<1, 0b0111, "uabdl",
                                           int_aarch64_neon_uabd>;
 // Match UABDL in log2-shuffle patterns.
+def : Pat<(abs (v8i16 (sub (zext (v8i8 V64:$opA)),
+                           (zext (v8i8 V64:$opB))))),
+          (UABDLv8i8_v8i16 V64:$opA, V64:$opB)>;
 def : Pat<(xor (v8i16 (AArch64vashr v8i16:$src, (i32 15))),
                (v8i16 (add (sub (zext (v8i8 V64:$opA)),
                                 (zext (v8i8 V64:$opB))),
                            (AArch64vashr v8i16:$src, (i32 15))))),
           (UABDLv8i8_v8i16 V64:$opA, V64:$opB)>;
+def : Pat<(abs (v8i16 (sub (zext (extract_high_v16i8 V128:$opA)),
+                           (zext (extract_high_v16i8 V128:$opB))))),
+          (UABDLv16i8_v8i16 V128:$opA, V128:$opB)>;
 def : Pat<(xor (v8i16 (AArch64vashr v8i16:$src, (i32 15))),
                (v8i16 (add (sub (zext (extract_high_v16i8 V128:$opA)),
                                 (zext (extract_high_v16i8 V128:$opB))),
                            (AArch64vashr v8i16:$src, (i32 15))))),
           (UABDLv16i8_v8i16 V128:$opA, V128:$opB)>;
-def : Pat<(xor (v4i32 (AArch64vashr v4i32:$src, (i32 31))),
-               (v4i32 (add (sub (zext (v4i16 V64:$opA)),
-                                (zext (v4i16 V64:$opB))),
-                           (AArch64vashr v4i32:$src, (i32 31))))),
+def : Pat<(abs (v4i32 (sub (zext (v4i16 V64:$opA)),
+                           (zext (v4i16 V64:$opB))))),
           (UABDLv4i16_v4i32 V64:$opA, V64:$opB)>;
-def : Pat<(xor (v4i32 (AArch64vashr v4i32:$src, (i32 31))),
-               (v4i32 (add (sub (zext (extract_high_v8i16 V128:$opA)),
-                                (zext (extract_high_v8i16 V128:$opB))),
-                          (AArch64vashr v4i32:$src, (i32 31))))),
+def : Pat<(abs (v4i32 (sub (zext (extract_high_v8i16 V128:$opA)),
+                           (zext (extract_high_v8i16 V128:$opB))))),
           (UABDLv8i16_v4i32 V128:$opA, V128:$opB)>;
-def : Pat<(xor (v2i64 (AArch64vashr v2i64:$src, (i32 63))),
-               (v2i64 (add (sub (zext (v2i32 V64:$opA)),
-                                (zext (v2i32 V64:$opB))),
-                           (AArch64vashr v2i64:$src, (i32 63))))),
+def : Pat<(abs (v2i64 (sub (zext (v2i32 V64:$opA)),
+                           (zext (v2i32 V64:$opB))))),
           (UABDLv2i32_v2i64 V64:$opA, V64:$opB)>;
-def : Pat<(xor (v2i64 (AArch64vashr v2i64:$src, (i32 63))),
-               (v2i64 (add (sub (zext (extract_high_v4i32 V128:$opA)),
-                                (zext (extract_high_v4i32 V128:$opB))),
-                          (AArch64vashr v2i64:$src, (i32 63))))),
+def : Pat<(abs (v2i64 (sub (zext (extract_high_v4i32 V128:$opA)),
+                           (zext (extract_high_v4i32 V128:$opB))))),
           (UABDLv4i32_v2i64 V128:$opA, V128:$opB)>;
 
-defm ABS    : SIMDTwoVectorBHSD<0, 0b01011, "abs", int_aarch64_neon_abs>;
-def : Pat<(xor (v8i8 (AArch64vashr V64:$src, (i32 7))),
-               (v8i8 (add V64:$src, (AArch64vashr V64:$src, (i32 7))))),
-          (ABSv8i8 V64:$src)>;
-def : Pat<(xor (v4i16 (AArch64vashr V64:$src, (i32 15))),
-               (v4i16 (add V64:$src, (AArch64vashr V64:$src, (i32 15))))),
-          (ABSv4i16 V64:$src)>;
-def : Pat<(xor (v2i32 (AArch64vashr V64:$src, (i32 31))),
-               (v2i32 (add V64:$src, (AArch64vashr V64:$src, (i32 31))))),
-          (ABSv2i32 V64:$src)>;
-def : Pat<(xor (v16i8 (AArch64vashr V128:$src, (i32 7))),
-               (v16i8 (add V128:$src, (AArch64vashr V128:$src, (i32 7))))),
-          (ABSv16i8 V128:$src)>;
-def : Pat<(xor (v8i16 (AArch64vashr V128:$src, (i32 15))),
-               (v8i16 (add V128:$src, (AArch64vashr V128:$src, (i32 15))))),
-          (ABSv8i16 V128:$src)>;
-def : Pat<(xor (v4i32 (AArch64vashr V128:$src, (i32 31))),
-               (v4i32 (add V128:$src, (AArch64vashr V128:$src, (i32 31))))),
-          (ABSv4i32 V128:$src)>;
-def : Pat<(xor (v2i64 (AArch64vashr V128:$src, (i32 63))),
-               (v2i64 (add V128:$src, (AArch64vashr V128:$src, (i32 63))))),
-          (ABSv2i64 V128:$src)>;
-
+defm ABS    : SIMDTwoVectorBHSD<0, 0b01011, "abs", abs>;
 defm CLS    : SIMDTwoVectorBHS<0, 0b00100, "cls", int_aarch64_neon_cls>;
 defm CLZ    : SIMDTwoVectorBHS<1, 0b00100, "clz", ctlz>;
 defm CMEQ   : SIMDCmpTwoVector<0, 0b01001, "cmeq", AArch64cmeqz>;
@@ -3347,7 +3343,7 @@ def : Pat<(i64 (int_aarch64_neon_sqsub (i64 FPR64:$Rd),
 // Advanced SIMD two scalar instructions.
 //===----------------------------------------------------------------------===//
 
-defm ABS    : SIMDTwoScalarD<    0, 0b01011, "abs", int_aarch64_neon_abs>;
+defm ABS    : SIMDTwoScalarD<    0, 0b01011, "abs", abs>;
 defm CMEQ   : SIMDCmpTwoScalarD< 0, 0b01001, "cmeq", AArch64cmeqz>;
 defm CMGE   : SIMDCmpTwoScalarD< 1, 0b01000, "cmge", AArch64cmgez>;
 defm CMGT   : SIMDCmpTwoScalarD< 0, 0b01000, "cmgt", AArch64cmgtz>;
@@ -5031,7 +5027,7 @@ class SExtLoadi16CVTf64Pat<dag addrmode, dag INST>
                                0),
                              dsub)))>,
     Requires<[NotForCodeSize, UseAlternateSExtLoadCVTF32]>;
- 
+
 def : SExtLoadi16CVTf64Pat<(ro16.Wpat GPR64sp:$Rn, GPR32:$Rm, ro16.Wext:$ext),
                            (LDRHroW GPR64sp:$Rn, GPR32:$Rm, ro16.Wext:$ext)>;
 def : SExtLoadi16CVTf64Pat<(ro16.Xpat GPR64sp:$Rn, GPR64:$Rm, ro16.Xext:$ext),

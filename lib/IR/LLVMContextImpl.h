@@ -52,12 +52,12 @@ class Value;
 struct DenseMapAPIntKeyInfo {
   static inline APInt getEmptyKey() {
     APInt V(nullptr, 0);
-    V.VAL = 0;
+    V.U.VAL = 0;
     return V;
   }
   static inline APInt getTombstoneKey() {
     APInt V(nullptr, 0);
-    V.VAL = 1;
+    V.U.VAL = 1;
     return V;
   }
   static unsigned getHashValue(const APInt &Key) {
@@ -352,22 +352,26 @@ template <> struct MDNodeKeyImpl<DIDerivedType> {
   uint64_t SizeInBits;
   uint64_t OffsetInBits;
   uint32_t AlignInBits;
+  Optional<unsigned> DWARFAddressSpace;
   unsigned Flags;
   Metadata *ExtraData;
 
   MDNodeKeyImpl(unsigned Tag, MDString *Name, Metadata *File, unsigned Line,
                 Metadata *Scope, Metadata *BaseType, uint64_t SizeInBits,
-                uint32_t AlignInBits, uint64_t OffsetInBits, unsigned Flags,
+                uint32_t AlignInBits, uint64_t OffsetInBits,
+                Optional<unsigned> DWARFAddressSpace, unsigned Flags,
                 Metadata *ExtraData)
       : Tag(Tag), Name(Name), File(File), Line(Line), Scope(Scope),
         BaseType(BaseType), SizeInBits(SizeInBits), OffsetInBits(OffsetInBits),
-        AlignInBits(AlignInBits), Flags(Flags), ExtraData(ExtraData) {}
+        AlignInBits(AlignInBits), DWARFAddressSpace(DWARFAddressSpace),
+        Flags(Flags), ExtraData(ExtraData) {}
   MDNodeKeyImpl(const DIDerivedType *N)
       : Tag(N->getTag()), Name(N->getRawName()), File(N->getRawFile()),
         Line(N->getLine()), Scope(N->getRawScope()),
         BaseType(N->getRawBaseType()), SizeInBits(N->getSizeInBits()),
         OffsetInBits(N->getOffsetInBits()), AlignInBits(N->getAlignInBits()),
-        Flags(N->getFlags()), ExtraData(N->getRawExtraData()) {}
+        DWARFAddressSpace(N->getDWARFAddressSpace()), Flags(N->getFlags()),
+        ExtraData(N->getRawExtraData()) {}
 
   bool isKeyOf(const DIDerivedType *RHS) const {
     return Tag == RHS->getTag() && Name == RHS->getRawName() &&
@@ -375,7 +379,9 @@ template <> struct MDNodeKeyImpl<DIDerivedType> {
            Scope == RHS->getRawScope() && BaseType == RHS->getRawBaseType() &&
            SizeInBits == RHS->getSizeInBits() &&
            AlignInBits == RHS->getAlignInBits() &&
-           OffsetInBits == RHS->getOffsetInBits() && Flags == RHS->getFlags() &&
+           OffsetInBits == RHS->getOffsetInBits() &&
+           DWARFAddressSpace == RHS->getDWARFAddressSpace() &&
+           Flags == RHS->getFlags() &&
            ExtraData == RHS->getRawExtraData();
   }
   unsigned getHashValue() const {
@@ -546,6 +552,7 @@ template <> struct MDNodeKeyImpl<DISubprogram> {
   Metadata *TemplateParams;
   Metadata *Declaration;
   Metadata *Variables;
+  Metadata *ThrownTypes;
 
   MDNodeKeyImpl(Metadata *Scope, MDString *Name, MDString *LinkageName,
                 Metadata *File, unsigned Line, Metadata *Type,
@@ -553,7 +560,8 @@ template <> struct MDNodeKeyImpl<DISubprogram> {
                 Metadata *ContainingType, unsigned Virtuality,
                 unsigned VirtualIndex, int ThisAdjustment, unsigned Flags,
                 bool IsOptimized, Metadata *Unit, Metadata *TemplateParams,
-                Metadata *Declaration, Metadata *Variables)
+                Metadata *Declaration, Metadata *Variables,
+                Metadata *ThrownTypes)
       : Scope(Scope), Name(Name), LinkageName(LinkageName), File(File),
         Line(Line), Type(Type), IsLocalToUnit(IsLocalToUnit),
         IsDefinition(IsDefinition), ScopeLine(ScopeLine),
@@ -561,7 +569,7 @@ template <> struct MDNodeKeyImpl<DISubprogram> {
         VirtualIndex(VirtualIndex), ThisAdjustment(ThisAdjustment),
         Flags(Flags), IsOptimized(IsOptimized), Unit(Unit),
         TemplateParams(TemplateParams), Declaration(Declaration),
-        Variables(Variables) {}
+        Variables(Variables), ThrownTypes(ThrownTypes) {}
   MDNodeKeyImpl(const DISubprogram *N)
       : Scope(N->getRawScope()), Name(N->getRawName()),
         LinkageName(N->getRawLinkageName()), File(N->getRawFile()),
@@ -572,7 +580,8 @@ template <> struct MDNodeKeyImpl<DISubprogram> {
         ThisAdjustment(N->getThisAdjustment()), Flags(N->getFlags()),
         IsOptimized(N->isOptimized()), Unit(N->getRawUnit()),
         TemplateParams(N->getRawTemplateParams()),
-        Declaration(N->getRawDeclaration()), Variables(N->getRawVariables()) {}
+        Declaration(N->getRawDeclaration()), Variables(N->getRawVariables()),
+        ThrownTypes(N->getRawThrownTypes()) {}
 
   bool isKeyOf(const DISubprogram *RHS) const {
     return Scope == RHS->getRawScope() && Name == RHS->getRawName() &&
@@ -589,7 +598,8 @@ template <> struct MDNodeKeyImpl<DISubprogram> {
            Unit == RHS->getUnit() &&
            TemplateParams == RHS->getRawTemplateParams() &&
            Declaration == RHS->getRawDeclaration() &&
-           Variables == RHS->getRawVariables();
+           Variables == RHS->getRawVariables() &&
+           ThrownTypes == RHS->getRawThrownTypes();
   }
   unsigned getHashValue() const {
     // If this is a declaration inside an ODR type, only hash the type and the
@@ -689,26 +699,21 @@ template <> struct MDNodeKeyImpl<DILexicalBlockFile> {
 
 template <> struct MDNodeKeyImpl<DINamespace> {
   Metadata *Scope;
-  Metadata *File;
   MDString *Name;
-  unsigned Line;
   bool ExportSymbols;
 
-  MDNodeKeyImpl(Metadata *Scope, Metadata *File, MDString *Name, unsigned Line,
-                bool ExportSymbols)
-      : Scope(Scope), File(File), Name(Name), Line(Line),
-        ExportSymbols(ExportSymbols) {}
+  MDNodeKeyImpl(Metadata *Scope, MDString *Name, bool ExportSymbols)
+      : Scope(Scope), Name(Name), ExportSymbols(ExportSymbols) {}
   MDNodeKeyImpl(const DINamespace *N)
-      : Scope(N->getRawScope()), File(N->getRawFile()), Name(N->getRawName()),
-        Line(N->getLine()), ExportSymbols(N->getExportSymbols()) {}
+      : Scope(N->getRawScope()), Name(N->getRawName()),
+        ExportSymbols(N->getExportSymbols()) {}
 
   bool isKeyOf(const DINamespace *RHS) const {
-    return Scope == RHS->getRawScope() && File == RHS->getRawFile() &&
-           Name == RHS->getRawName() && Line == RHS->getLine() &&
+    return Scope == RHS->getRawScope() && Name == RHS->getRawName() &&
            ExportSymbols == RHS->getExportSymbols();
   }
   unsigned getHashValue() const {
-    return hash_combine(Scope, File, Name, Line);
+    return hash_combine(Scope, Name);
   }
 };
 
@@ -1113,7 +1118,7 @@ public:
   FPMapTy FPConstants;
 
   FoldingSet<AttributeImpl> AttrsSet;
-  FoldingSet<AttributeSetImpl> AttrsLists;
+  FoldingSet<AttributeListImpl> AttrsLists;
   FoldingSet<AttributeSetNode> AttrsSetNodes;
 
   StringMap<MDString, BumpPtrAllocator> MDStringCache;

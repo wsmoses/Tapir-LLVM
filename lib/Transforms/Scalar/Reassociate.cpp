@@ -982,7 +982,7 @@ static unsigned FindInOperandList(SmallVectorImpl<ValueEntry> &Ops, unsigned i,
 /// Emit a tree of add instructions, summing Ops together
 /// and returning the result.  Insert the tree before I.
 static Value *EmitAddTreeOfValues(Instruction *I,
-                                  SmallVectorImpl<WeakVH> &Ops){
+                                  SmallVectorImpl<WeakTrackingVH> &Ops) {
   if (Ops.size() == 1) return Ops.back();
 
   Value *V1 = Ops.back();
@@ -1520,8 +1520,8 @@ Value *ReassociatePass::OptimizeAdd(Instruction *I,
       if (ConstantInt *CI = dyn_cast<ConstantInt>(Factor)) {
         if (CI->isNegative() && !CI->isMinValue(true)) {
           Factor = ConstantInt::get(CI->getContext(), -CI->getValue());
-          assert(!Duplicates.count(Factor) &&
-                 "Shouldn't have two constant factors, missed a canonicalize");
+          if (!Duplicates.insert(Factor).second)
+            continue;
           unsigned Occ = ++FactorOccurrences[Factor];
           if (Occ > MaxOcc) {
             MaxOcc = Occ;
@@ -1533,8 +1533,8 @@ Value *ReassociatePass::OptimizeAdd(Instruction *I,
           APFloat F(CF->getValueAPF());
           F.changeSign();
           Factor = ConstantFP::get(CF->getContext(), F);
-          assert(!Duplicates.count(Factor) &&
-                 "Shouldn't have two constant factors, missed a canonicalize");
+          if (!Duplicates.insert(Factor).second)
+            continue;
           unsigned Occ = ++FactorOccurrences[Factor];
           if (Occ > MaxOcc) {
             MaxOcc = Occ;
@@ -1559,7 +1559,7 @@ Value *ReassociatePass::OptimizeAdd(Instruction *I,
             ? BinaryOperator::CreateAdd(MaxOccVal, MaxOccVal)
             : BinaryOperator::CreateFAdd(MaxOccVal, MaxOccVal);
 
-    SmallVector<WeakVH, 4> NewMulOps;
+    SmallVector<WeakTrackingVH, 4> NewMulOps;
     for (unsigned i = 0; i != Ops.size(); ++i) {
       // Only try to remove factors from expressions we're allowed to.
       BinaryOperator *BOp =
@@ -1582,7 +1582,7 @@ Value *ReassociatePass::OptimizeAdd(Instruction *I,
     }
 
     // No need for extra uses anymore.
-    delete DummyInst;
+    DummyInst->deleteValue();
 
     unsigned NumAddedValues = NewMulOps.size();
     Value *V = EmitAddTreeOfValues(I, NewMulOps);
@@ -1922,7 +1922,7 @@ Instruction *ReassociatePass::canonicalizeNegConstExpr(Instruction *I) {
 
   // User must be a binary operator with one or more uses.
   Instruction *User = I->user_back();
-  if (!isa<BinaryOperator>(User) || !User->hasNUsesOrMore(1))
+  if (!isa<BinaryOperator>(User) || User->use_empty())
     return nullptr;
 
   unsigned UserOpcode = User->getOpcode();

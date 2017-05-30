@@ -1,4 +1,4 @@
-//===-- DWARFDie.cpp ------------------------------------------------------===//
+//===- DWARFDie.cpp -------------------------------------------------------===//
 //
 //                     The LLVM Compiler Infrastructure
 //
@@ -7,25 +7,33 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "llvm/DebugInfo/DWARF/DWARFDie.h"
 #include "SyntaxHighlighting.h"
-#include "llvm/DebugInfo/DWARF/DWARFCompileUnit.h"
+#include "llvm/ADT/None.h"
+#include "llvm/ADT/Optional.h"
+#include "llvm/ADT/StringRef.h"
+#include "llvm/DebugInfo/DWARF/DWARFAbbreviationDeclaration.h"
 #include "llvm/DebugInfo/DWARF/DWARFContext.h"
-#include "llvm/DebugInfo/DWARF/DWARFDebugAbbrev.h"
-#include "llvm/DebugInfo/DWARF/DWARFDebugInfoEntry.h"
+#include "llvm/DebugInfo/DWARF/DWARFDebugRangeList.h"
+#include "llvm/DebugInfo/DWARF/DWARFDie.h"
 #include "llvm/DebugInfo/DWARF/DWARFFormValue.h"
-#include "llvm/Support/DataTypes.h"
-#include "llvm/Support/Debug.h"
+#include "llvm/DebugInfo/DWARF/DWARFUnit.h"
+#include "llvm/Support/DataExtractor.h"
 #include "llvm/Support/Dwarf.h"
 #include "llvm/Support/Format.h"
+#include "llvm/Support/MathExtras.h"
 #include "llvm/Support/raw_ostream.h"
+#include <algorithm>
+#include <cassert>
+#include <cinttypes>
+#include <cstdint>
+#include <string>
+#include <utility>
 
 using namespace llvm;
 using namespace dwarf;
 using namespace syntax;
 
-namespace {
- static void dumpApplePropertyAttribute(raw_ostream &OS, uint64_t Val) {
+static void dumpApplePropertyAttribute(raw_ostream &OS, uint64_t Val) {
   OS << " (";
   do {
     uint64_t Shift = countTrailingZeros(Val);
@@ -52,8 +60,8 @@ static void dumpRanges(raw_ostream &OS, const DWARFAddressRangesVector& Ranges,
     OS << '\n';
     OS.indent(Indent);
     OS << format("[0x%0*" PRIx64 " - 0x%0*" PRIx64 ")",
-                 AddressSize*2, Range.first,
-                 AddressSize*2, Range.second);
+                 AddressSize*2, Range.LowPC,
+                 AddressSize*2, Range.HighPC);
   }
 }
 
@@ -122,8 +130,6 @@ static void dumpAttribute(raw_ostream &OS, const DWARFDie &Die,
   OS << ")\n";
 }
 
-} // end anonymous namespace
-
 bool DWARFDie::isSubprogramDIE() const {
   return getTag() == DW_TAG_subprogram;
 }
@@ -140,21 +146,6 @@ DWARFDie::find(dwarf::Attribute Attr) const {
   auto AbbrevDecl = getAbbreviationDeclarationPtr();
   if (AbbrevDecl)
     return AbbrevDecl->getAttributeValue(getOffset(), Attr, *U);
-  return None;
-}
-
-Optional<DWARFFormValue>
-DWARFDie::findRecursively(dwarf::Attribute Attr) const {
-  if (!isValid())
-    return None;
-  if (auto Value = find(Attr))
-    return Value;
-  if (auto Die = getAttributeValueAsReferencedDie(DW_AT_abstract_origin))
-    if (auto Value = Die.find(Attr))
-      return Value;
-  if (auto Die = getAttributeValueAsReferencedDie(DW_AT_specification))
-    if (auto Value = Die.find(Attr))
-      return Value;
   return None;
 }
 
@@ -176,14 +167,17 @@ Optional<DWARFFormValue>
 DWARFDie::findRecursively(ArrayRef<dwarf::Attribute> Attrs) const {
   if (!isValid())
     return None;
-  if (auto Value = find(Attrs))
+  auto Die = *this;
+  if (auto Value = Die.find(Attrs))
     return Value;
-  if (auto Die = getAttributeValueAsReferencedDie(DW_AT_abstract_origin))
-    if (auto Value = Die.find(Attrs))
-      return Value;
-  if (auto Die = getAttributeValueAsReferencedDie(DW_AT_specification))
-    if (auto Value = Die.find(Attrs))
-      return Value;
+  if (auto D = Die.getAttributeValueAsReferencedDie(DW_AT_abstract_origin))
+    Die = D;
+  if (auto Value = Die.find(Attrs))
+    return Value;
+  if (auto D = Die.getAttributeValueAsReferencedDie(DW_AT_specification))
+    Die = D;
+  if (auto Value = Die.find(Attrs))
+    return Value;
   return None;
 }
 
@@ -235,9 +229,9 @@ DWARFDie::getAddressRanges() const {
     return DWARFAddressRangesVector();
   // Single range specified by low/high PC.
   uint64_t LowPC, HighPC;
-  if (getLowAndHighPC(LowPC, HighPC)) {
-    return DWARFAddressRangesVector(1, std::make_pair(LowPC, HighPC));
-  }
+  if (getLowAndHighPC(LowPC, HighPC))
+    return {{LowPC, HighPC}};
+
   // Multiple ranges from .debug_ranges section.
   auto RangesOffset = toSectionOffset(find(DW_AT_ranges));
   if (RangesOffset) {
@@ -263,7 +257,7 @@ DWARFDie::collectChildrenAddressRanges(DWARFAddressRangesVector& Ranges) const {
 
 bool DWARFDie::addressRangeContainsAddress(const uint64_t Address) const {
   for (const auto& R : getAddressRanges()) {
-    if (R.first <= Address && Address < R.second)
+    if (R.LowPC <= Address && Address < R.HighPC)
       return true;
   }
   return false;
@@ -296,10 +290,12 @@ uint64_t DWARFDie::getDeclLine() const {
 }
 
 void DWARFDie::getCallerFrame(uint32_t &CallFile, uint32_t &CallLine,
-                              uint32_t &CallColumn) const {
+                              uint32_t &CallColumn,
+                              uint32_t &CallDiscriminator) const {
   CallFile = toUnsigned(find(DW_AT_call_file), 0);
   CallLine = toUnsigned(find(DW_AT_call_line), 0);
   CallColumn = toUnsigned(find(DW_AT_call_column), 0);
+  CallDiscriminator = toUnsigned(find(DW_AT_GNU_discriminator), 0);
 }
 
 void DWARFDie::dump(raw_ostream &OS, unsigned RecurseDepth,
@@ -329,6 +325,12 @@ void DWARFDie::dump(raw_ostream &OS, unsigned RecurseDepth,
         
         // Dump all data in the DIE for the attributes.
         for (const auto &AttrSpec : AbbrevDecl->attributes()) {
+          if (AttrSpec.Form == DW_FORM_implicit_const) {
+            // We are dumping .debug_info section ,
+            // implicit_const attribute values are not really stored here,
+            // but in .debug_abbrev section. So we just skip such attrs.
+            continue;
+          }
           dumpAttribute(OS, *this, &offset, AttrSpec.Attr, AttrSpec.Form,
                         Indent);
         }
@@ -348,33 +350,6 @@ void DWARFDie::dump(raw_ostream &OS, unsigned RecurseDepth,
       OS.indent(Indent) << "NULL\n";
     }
   }
-}
-
-
-void DWARFDie::getInlinedChainForAddress(
-    const uint64_t Address, SmallVectorImpl<DWARFDie> &InlinedChain) const {
-  if (isNULL())
-    return;
-  DWARFDie DIE(*this);
-  while (DIE) {
-    // Append current DIE to inlined chain only if it has correct tag
-    // (e.g. it is not a lexical block).
-    if (DIE.isSubroutineDIE())
-      InlinedChain.push_back(DIE);
-
-    // Try to get child which also contains provided address.
-    DWARFDie Child = DIE.getFirstChild();
-    while (Child) {
-      if (Child.addressRangeContainsAddress(Address)) {
-        // Assume there is only one such child.
-        break;
-      }
-      Child = Child.getSibling();
-    }
-    DIE = Child;
-  }
-  // Reverse the obtained chain to make the root of inlined chain last.
-  std::reverse(InlinedChain.begin(), InlinedChain.end());
 }
 
 DWARFDie DWARFDie::getParent() const {

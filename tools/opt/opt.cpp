@@ -24,6 +24,7 @@
 #include "llvm/Analysis/TargetTransformInfo.h"
 #include "llvm/Bitcode/BitcodeWriterPass.h"
 #include "llvm/CodeGen/CommandFlags.h"
+#include "llvm/CodeGen/TargetPassConfig.h"
 #include "llvm/IR/DataLayout.h"
 #include "llvm/IR/DebugInfo.h"
 #include "llvm/IR/IRPrintingPasses.h"
@@ -101,6 +102,11 @@ OutputAssembly("S", cl::desc("Write output as LLVM assembly"));
 static cl::opt<bool>
     OutputThinLTOBC("thinlto-bc",
                     cl::desc("Write output as ThinLTO-ready bitcode"));
+
+static cl::opt<std::string> ThinLinkBitcodeFile(
+    "thin-link-bitcode-file", cl::value_desc("filename"),
+    cl::desc(
+        "A file in which to write minimized bitcode for the thin link only"));
 
 static cl::opt<bool>
 NoVerify("disable-verify", cl::desc("Do not run the verifier"), cl::Hidden);
@@ -268,7 +274,7 @@ static void AddOptimizationPasses(legacy::PassManagerBase &MPM,
   if (DisableInline) {
     // No inlining pass
   } else if (OptLevel > 1) {
-    Builder.Inliner = createFunctionInliningPass(OptLevel, SizeLevel);
+    Builder.Inliner = createFunctionInliningPass(OptLevel, SizeLevel, false);
   } else {
     Builder.Inliner = createAlwaysInlinerLegacyPass();
   }
@@ -381,18 +387,20 @@ int main(int argc, char **argv) {
   initializeTarget(Registry);
   // For codegen passes, only passes that do IR to IR transformation are
   // supported.
+  initializeScalarizeMaskedMemIntrinPass(Registry);
   initializeCodeGenPreparePass(Registry);
   initializeAtomicExpandPass(Registry);
   initializeRewriteSymbolsLegacyPassPass(Registry);
   initializeWinEHPreparePass(Registry);
   initializeDwarfEHPreparePass(Registry);
-  initializeSafeStackPass(Registry);
+  initializeSafeStackLegacyPassPass(Registry);
   initializeSjLjEHPreparePass(Registry);
   initializePreISelIntrinsicLoweringLegacyPassPass(Registry);
   initializeGlobalMergePass(Registry);
   initializeInterleavedAccessPass(Registry);
   initializeCountingFunctionInserterPass(Registry);
   initializeUnreachableBlockElimLegacyPassPass(Registry);
+  initializeExpandReductionsPass(Registry);
 
 #ifdef LINK_POLLY_INTO_TOOLS
   polly::initializePollyPasses(Registry);
@@ -457,6 +465,7 @@ int main(int argc, char **argv) {
 
   // Figure out what stream we are supposed to write to...
   std::unique_ptr<tool_output_file> Out;
+  std::unique_ptr<tool_output_file> ThinLinkOut;
   if (NoOutput) {
     if (!OutputFilename.empty())
       errs() << "WARNING: The -o (output filename) option is ignored when\n"
@@ -471,6 +480,15 @@ int main(int argc, char **argv) {
     if (EC) {
       errs() << EC.message() << '\n';
       return 1;
+    }
+
+    if (!ThinLinkBitcodeFile.empty()) {
+      ThinLinkOut.reset(
+          new tool_output_file(ThinLinkBitcodeFile, EC, sys::fs::F_None));
+      if (EC) {
+        errs() << EC.message() << '\n';
+        return 1;
+      }
     }
   }
 
@@ -563,6 +581,13 @@ int main(int argc, char **argv) {
     NoOutput = true;
   }
 
+  if (TM) {
+    // FIXME: We should dyn_cast this when supported.
+    auto &LTM = static_cast<LLVMTargetMachine &>(*TM);
+    Pass *TPC = LTM.createPassConfig(Passes);
+    Passes.add(TPC);
+  }
+
   // Create a new optimization pass for each one specified on the command line
   for (unsigned i = 0; i < PassList.size(); ++i) {
     if (StandardLinkOpts &&
@@ -603,9 +628,7 @@ int main(int argc, char **argv) {
 
     const PassInfo *PassInf = PassList[i];
     Pass *P = nullptr;
-    if (PassInf->getTargetMachineCtor())
-      P = PassInf->getTargetMachineCtor()(TM.get());
-    else if (PassInf->getNormalCtor())
+    if (PassInf->getNormalCtor())
       P = PassInf->getNormalCtor()();
     else
       errs() << argv[0] << ": cannot create pass: "
@@ -701,7 +724,8 @@ int main(int argc, char **argv) {
         report_fatal_error("Text output is incompatible with -module-hash");
       Passes.add(createPrintModulePass(*OS, "", PreserveAssemblyUseListOrder));
     } else if (OutputThinLTOBC)
-      Passes.add(createWriteThinLTOBitcodePass(*OS));
+      Passes.add(createWriteThinLTOBitcodePass(
+          *OS, ThinLinkOut ? &ThinLinkOut->os() : nullptr));
     else
       Passes.add(createBitcodeWriterPass(*OS, PreserveBitcodeUseListOrder,
                                          EmitSummaryIndex, EmitModuleHash));
@@ -747,6 +771,9 @@ int main(int argc, char **argv) {
 
   if (YamlFile)
     YamlFile->keep();
+
+  if (ThinLinkOut)
+    ThinLinkOut->keep();
 
   return 0;
 }

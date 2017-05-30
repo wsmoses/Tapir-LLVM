@@ -17,6 +17,7 @@
 #include "llvm/Analysis/ValueTracking.h"
 #include "llvm/IR/MDBuilder.h"
 #include "llvm/IR/PatternMatch.h"
+#include "llvm/Support/KnownBits.h"
 using namespace llvm;
 using namespace PatternMatch;
 
@@ -120,6 +121,16 @@ static Constant *getSelectFoldableConstant(Instruction *I) {
 /// We have (select c, TI, FI), and we know that TI and FI have the same opcode.
 Instruction *InstCombiner::foldSelectOpOp(SelectInst &SI, Instruction *TI,
                                           Instruction *FI) {
+  // Don't break up min/max patterns. The hasOneUse checks below prevent that
+  // for most cases, but vector min/max with bitcasts can be transformed. If the
+  // one-use restrictions are eased for other patterns, we still don't want to
+  // obfuscate min/max.
+  if ((match(&SI, m_SMin(m_Value(), m_Value())) ||
+       match(&SI, m_SMax(m_Value(), m_Value())) ||
+       match(&SI, m_UMin(m_Value(), m_Value())) ||
+       match(&SI, m_UMax(m_Value(), m_Value()))))
+    return nullptr;
+
   // If this is a cast from the same type, merge.
   if (TI->getNumOperands() == 1 && TI->isCast()) {
     Type *FIOpndTy = FI->getOperand(0)->getType();
@@ -608,7 +619,7 @@ Instruction *InstCombiner::foldSelectInstWithICmp(SelectInst &SI,
   {
     unsigned BitWidth =
         DL.getTypeSizeInBits(TrueVal->getType()->getScalarType());
-    APInt MinSignedValue = APInt::getSignBit(BitWidth);
+    APInt MinSignedValue = APInt::getSignedMinValue(BitWidth);
     Value *X;
     const APInt *Y, *C;
     bool TrueWhenUnset;
@@ -1043,8 +1054,10 @@ static Instruction *canonicalizeSelectToShuffle(SelectInst &SI) {
       // If the select condition element is false, choose from the 2nd vector.
       Mask.push_back(ConstantInt::get(Int32Ty, i + NumElts));
     } else if (isa<UndefValue>(Elt)) {
-      // If the select condition element is undef, the shuffle mask is undef.
-      Mask.push_back(UndefValue::get(Int32Ty));
+      // Undef in a select condition (choose one of the operands) does not mean
+      // the same thing as undef in a shuffle mask (any value is acceptable), so
+      // give up.
+      return nullptr;
     } else {
       // Bail out on a constant expression.
       return nullptr;
@@ -1108,8 +1121,7 @@ Instruction *InstCombiner::visitSelectInst(SelectInst &SI) {
   Value *FalseVal = SI.getFalseValue();
   Type *SelType = SI.getType();
 
-  if (Value *V =
-          SimplifySelectInst(CondVal, TrueVal, FalseVal, DL, &TLI, &DT, &AC))
+  if (Value *V = SimplifySelectInst(CondVal, TrueVal, FalseVal, SQ))
     return replaceInstUsesWith(SI, V);
 
   if (Instruction *I = canonicalizeSelectToShuffle(SI))
@@ -1372,11 +1384,11 @@ Instruction *InstCombiner::visitSelectInst(SelectInst &SI) {
   }
 
   // See if we can fold the select into a phi node if the condition is a select.
-  if (isa<PHINode>(SI.getCondition()))
+  if (auto *PN = dyn_cast<PHINode>(SI.getCondition()))
     // The true/false values have to be live in the PHI predecessor's blocks.
     if (canSelectOperandBeMappingIntoPredBlock(TrueVal, SI) &&
         canSelectOperandBeMappingIntoPredBlock(FalseVal, SI))
-      if (Instruction *NV = FoldOpIntoPhi(SI))
+      if (Instruction *NV = foldOpIntoPhi(SI, PN))
         return NV;
 
   if (SelectInst *TrueSI = dyn_cast<SelectInst>(TrueVal)) {
@@ -1464,11 +1476,11 @@ Instruction *InstCombiner::visitSelectInst(SelectInst &SI) {
   // The motivation for this call into value tracking is to take advantage of
   // the assumption cache, so make sure that is populated.
   if (!CondVal->getType()->isVectorTy() && !AC.assumptions().empty()) {
-    APInt KnownOne(1, 0), KnownZero(1, 0);
-    computeKnownBits(CondVal, KnownZero, KnownOne, 0, &SI);
-    if (KnownOne == 1)
+    KnownBits Known(1);
+    computeKnownBits(CondVal, Known, 0, &SI);
+    if (Known.One == 1)
       return replaceInstUsesWith(SI, TrueVal);
-    if (KnownZero == 1)
+    if (Known.Zero == 1)
       return replaceInstUsesWith(SI, FalseVal);
   }
 

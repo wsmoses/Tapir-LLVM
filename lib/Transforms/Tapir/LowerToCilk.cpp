@@ -149,14 +149,14 @@ bool LowerTapirToCilk::runOnModule(Module &M) {
     return false;
 
   bool Changed = false;
+  std::unique_ptr<SmallVectorImpl<Function *>> NewHelpers;
   while (!WorkList.empty()) {
     // Process the next function.
     Function *F = WorkList.back();
     WorkList.pop_back();
     DominatorTree &DT = getAnalysis<DominatorTreeWrapperPass>(*F).getDomTree();
     AssumptionCacheTracker &ACT = getAnalysis<AssumptionCacheTracker>();
-    SmallVectorImpl<Function *> *NewHelpers =
-      processFunction(*F, DT, ACT.getAssumptionCache(*F));
+    NewHelpers.reset(processFunction(*F, DT, ACT.getAssumptionCache(*F)));
     Changed |= !NewHelpers->empty();
     // Check the generated helper functions to see if any need to be processed,
     // that is, to see if any of them themselves detach a subtask.
@@ -164,7 +164,6 @@ bool LowerTapirToCilk::runOnModule(Module &M) {
       for (BasicBlock &BB : *Helper)
         if (isa<DetachInst>(BB.getTerminator()))
           WorkList.push_back(Helper);
-    delete NewHelpers;
   }
   return Changed;
 }

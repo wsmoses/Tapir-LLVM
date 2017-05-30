@@ -161,7 +161,11 @@ def main(builtinParameters = {}):
         main_with_tmp(builtinParameters)
     finally:
         if lit_tmp:
-            shutil.rmtree(lit_tmp)
+            try:
+                shutil.rmtree(lit_tmp)
+            except:
+                # FIXME: Re-try after timeout on Windows.
+                pass
 
 def main_with_tmp(builtinParameters):
     parser = argparse.ArgumentParser()
@@ -278,12 +282,9 @@ def main_with_tmp(builtinParameters):
     debug_group.add_argument("--show-tests", dest="showTests",
                       help="Show all discovered tests",
                       action="store_true", default=False)
-    debug_group.add_argument("--use-processes", dest="useProcesses",
+    debug_group.add_argument("--use-processes", dest="executionStrategy",
                       help="Run tests in parallel with processes (not threads)",
-                      action="store_true", default=True)
-    debug_group.add_argument("--use-threads", dest="useProcesses",
-                      help="Run tests in parallel with threads (not processes)",
-                      action="store_false", default=True)
+                      action="store_const", const="PROCESSES")
 
     opts = parser.parse_args()
     args = opts.test_paths
@@ -480,8 +481,7 @@ def main_with_tmp(builtinParameters):
     startTime = time.time()
     display = TestingProgressDisplay(opts, len(run.tests), progressBar)
     try:
-        run.execute_tests(display, opts.numThreads, opts.maxTime,
-                          opts.useProcesses)
+        run.execute_tests(display, opts.numThreads, opts.maxTime)
     except KeyboardInterrupt:
         sys.exit(2)
     display.finish()

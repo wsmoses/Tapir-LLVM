@@ -443,6 +443,11 @@ TEST_F(ConstantRangeTest, Multiply) {
   EXPECT_EQ(ConstantRange(APInt(8, 254), APInt(8, 255)).multiply(
               ConstantRange(APInt(8, 2), APInt(8, 4))),
             ConstantRange(APInt(8, 250), APInt(8, 253)));
+
+  // TODO: This should be return [-2, 0]
+  EXPECT_EQ(ConstantRange(APInt(8, -2)).multiply(
+              ConstantRange(APInt(8, 0), APInt(8, 2))),
+            ConstantRange(APInt(8, -2), APInt(8, 1)));
 }
 
 TEST_F(ConstantRangeTest, UMax) {
@@ -670,14 +675,14 @@ TEST(ConstantRange, MakeGuaranteedNoWrapRegion) {
     for (APInt I = NUWRegion.getLower(), E = NUWRegion.getUpper(); I != E;
          ++I) {
       bool Overflow = false;
-      I.uadd_ov(C, Overflow);
+      (void)I.uadd_ov(C, Overflow);
       EXPECT_FALSE(Overflow);
     }
 
     for (APInt I = NSWRegion.getLower(), E = NSWRegion.getUpper(); I != E;
          ++I) {
       bool Overflow = false;
-      I.sadd_ov(C, Overflow);
+      (void)I.sadd_ov(C, Overflow);
       EXPECT_FALSE(Overflow);
     }
 
@@ -685,10 +690,10 @@ TEST(ConstantRange, MakeGuaranteedNoWrapRegion) {
          ++I) {
       bool Overflow = false;
 
-      I.sadd_ov(C, Overflow);
+      (void)I.sadd_ov(C, Overflow);
       EXPECT_FALSE(Overflow);
 
-      I.uadd_ov(C, Overflow);
+      (void)I.uadd_ov(C, Overflow);
       EXPECT_FALSE(Overflow);
     }
   }
@@ -703,13 +708,13 @@ TEST(ConstantRange, MakeGuaranteedNoWrapRegion) {
       Instruction::Add, ConstantRange(32, /* isFullSet = */ true),
       OBO::NoUnsignedWrap);
   EXPECT_TRUE(NUWForAllValues.isSingleElement() &&
-              NSWForAllValues.getSingleElement()->isMinValue());
+              NUWForAllValues.getSingleElement()->isMinValue());
 
   auto NUWAndNSWForAllValues = ConstantRange::makeGuaranteedNoWrapRegion(
       Instruction::Add, ConstantRange(32, /* isFullSet = */ true),
       OBO::NoUnsignedWrap | OBO::NoSignedWrap);
   EXPECT_TRUE(NUWAndNSWForAllValues.isSingleElement() &&
-              NSWForAllValues.getSingleElement()->isMinValue());
+              NUWAndNSWForAllValues.getSingleElement()->isMinValue());
 
   ConstantRange OneToFive(APInt(32, 1), APInt(32, 6));
   EXPECT_EQ(ConstantRange::makeGuaranteedNoWrapRegion(

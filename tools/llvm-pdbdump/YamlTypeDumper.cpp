@@ -13,7 +13,6 @@
 
 #include "llvm/DebugInfo/CodeView/CVTypeVisitor.h"
 #include "llvm/DebugInfo/CodeView/EnumTables.h"
-#include "llvm/DebugInfo/CodeView/TypeDeserializer.h"
 #include "llvm/DebugInfo/CodeView/TypeRecord.h"
 #include "llvm/DebugInfo/CodeView/TypeSerializer.h"
 #include "llvm/DebugInfo/CodeView/TypeVisitorCallbackPipeline.h"
@@ -194,6 +193,13 @@ template <> struct ScalarEnumerationTraits<WindowsRTClassKind> {
   }
 };
 
+template <> struct ScalarEnumerationTraits<LabelType> {
+  static void enumeration(IO &IO, LabelType &Value) {
+    IO.enumCase(Value, "Near", LabelType::Near);
+    IO.enumCase(Value, "Far", LabelType::Far);
+  }
+};
+
 template <> struct ScalarBitSetTraits<PointerOptions> {
   static void bitset(IO &IO, PointerOptions &Options) {
     IO.bitSetCase(Options, "None", PointerOptions::None);
@@ -273,16 +279,8 @@ bool ScalarTraits<APSInt>::mustQuote(StringRef Scalar) { return false; }
 
 void MappingContextTraits<CVType, pdb::yaml::SerializationContext>::mapping(
     IO &IO, CVType &Record, pdb::yaml::SerializationContext &Context) {
-  if (IO.outputting()) {
-    codeview::TypeDeserializer Deserializer;
-
-    codeview::TypeVisitorCallbackPipeline Pipeline;
-    Pipeline.addCallbackToPipeline(Deserializer);
-    Pipeline.addCallbackToPipeline(Context.Dumper);
-
-    codeview::CVTypeVisitor Visitor(Pipeline);
-    consumeError(Visitor.visitTypeRecord(Record));
-  }
+  if (IO.outputting())
+    consumeError(codeview::visitTypeRecord(Record, Context.Dumper));
 }
 
 void MappingTraits<StringIdRecord>::mapping(IO &IO, StringIdRecord &String) {
@@ -291,7 +289,11 @@ void MappingTraits<StringIdRecord>::mapping(IO &IO, StringIdRecord &String) {
 }
 
 void MappingTraits<ArgListRecord>::mapping(IO &IO, ArgListRecord &Args) {
-  IO.mapRequired("ArgIndices", Args.StringIndices);
+  IO.mapRequired("ArgIndices", Args.ArgIndices);
+}
+
+void MappingTraits<StringListRecord>::mapping(IO &IO, StringListRecord &Strings) {
+  IO.mapRequired("StringIndices", Strings.StringIndices);
 }
 
 void MappingTraits<ClassRecord>::mapping(IO &IO, ClassRecord &Class) {
@@ -427,6 +429,10 @@ void MappingTraits<BuildInfoRecord>::mapping(IO &IO, BuildInfoRecord &Args) {
   IO.mapRequired("ArgIndices", Args.ArgIndices);
 }
 
+void MappingTraits<LabelRecord>::mapping(IO &IO, LabelRecord &R) {
+  IO.mapRequired("Mode", R.Mode);
+}
+
 void MappingTraits<NestedTypeRecord>::mapping(IO &IO,
                                               NestedTypeRecord &Nested) {
   IO.mapRequired("Type", Nested.Type);
@@ -541,26 +547,17 @@ void llvm::codeview::yaml::YamlTypeDumperCallbacks::visitKnownRecordImpl(
     // (top-level and member fields all have the exact same Yaml syntax so use
     // the same parser).
     FieldListRecordSplitter Splitter(FieldListRecords);
-    CVTypeVisitor V(Splitter);
-    consumeError(V.visitFieldListMemberStream(FieldList.Data));
-    YamlIO.mapRequired("FieldList", FieldListRecords, Context);
-  } else {
-    // If we are not outputting, then the array contains no data starting out,
-    // and is instead populated from the sequence represented by the yaml --
-    // again, using the same logic that we use for top-level records.
-    assert(Context.ActiveSerializer && "There is no active serializer!");
-    codeview::TypeVisitorCallbackPipeline Pipeline;
-    pdb::TpiHashUpdater Hasher;
-
-    // For Yaml to PDB, dump it (to fill out the record fields from the Yaml)
-    // then serialize those fields to bytes, then update their hashes.
-    Pipeline.addCallbackToPipeline(Context.Dumper);
-    Pipeline.addCallbackToPipeline(*Context.ActiveSerializer);
-    Pipeline.addCallbackToPipeline(Hasher);
-
-    codeview::CVTypeVisitor Visitor(Pipeline);
-    YamlIO.mapRequired("FieldList", FieldListRecords, Visitor);
+    consumeError(codeview::visitMemberRecordStream(FieldList.Data, Splitter));
   }
+  // Note that if we're not outputting (i.e. Yaml -> PDB) the result of this
+  // mapping gets lost, as the records are simply stored in this locally scoped
+  // vector.  What's important though is they are all sharing a single
+  // Serializer
+  // instance (in `Context.ActiveSerializer`), and that is building up a list of
+  // all the types.  The fact that we need a throwaway vector here is just to
+  // appease the YAML API to treat this as a sequence and do this mapping once
+  // for each YAML Sequence element in the input Yaml stream.
+  YamlIO.mapRequired("FieldList", FieldListRecords, Context);
 }
 
 namespace llvm {
@@ -570,29 +567,22 @@ struct MappingContextTraits<pdb::yaml::PdbTpiFieldListRecord,
                             pdb::yaml::SerializationContext> {
   static void mapping(IO &IO, pdb::yaml::PdbTpiFieldListRecord &Obj,
                       pdb::yaml::SerializationContext &Context) {
-    assert(IO.outputting());
-    codeview::TypeVisitorCallbackPipeline Pipeline;
+    if (IO.outputting())
+      consumeError(codeview::visitMemberRecord(Obj.Record, Context.Dumper));
+    else {
+      // If we are not outputting, then the array contains no data starting out,
+      // and is instead populated from the sequence represented by the yaml --
+      // again, using the same logic that we use for top-level records.
+      assert(Context.ActiveSerializer && "There is no active serializer!");
+      codeview::TypeVisitorCallbackPipeline Pipeline;
+      pdb::TpiHashUpdater Hasher;
 
-    msf::ByteStream Data(Obj.Record.Data);
-    msf::StreamReader FieldReader(Data);
-    codeview::FieldListDeserializer Deserializer(FieldReader);
-
-    // For PDB to Yaml, deserialize into a high level record type, then dump
-    // it.
-    Pipeline.addCallbackToPipeline(Deserializer);
-    Pipeline.addCallbackToPipeline(Context.Dumper);
-
-    codeview::CVTypeVisitor Visitor(Pipeline);
-    consumeError(Visitor.visitMemberRecord(Obj.Record));
-  }
-};
-
-template <>
-struct MappingContextTraits<pdb::yaml::PdbTpiFieldListRecord,
-                            codeview::CVTypeVisitor> {
-  static void mapping(IO &IO, pdb::yaml::PdbTpiFieldListRecord &Obj,
-                      codeview::CVTypeVisitor &Visitor) {
-    consumeError(Visitor.visitMemberRecord(Obj.Record));
+      Pipeline.addCallbackToPipeline(Context.Dumper);
+      Pipeline.addCallbackToPipeline(*Context.ActiveSerializer);
+      Pipeline.addCallbackToPipeline(Hasher);
+      consumeError(
+          codeview::visitMemberRecord(Obj.Record, Pipeline, VDS_BytesExternal));
+    }
   }
 };
 }

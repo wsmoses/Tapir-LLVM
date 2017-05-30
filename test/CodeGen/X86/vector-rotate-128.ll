@@ -461,6 +461,7 @@ define <8 x i16> @var_rotate_v8i16(<8 x i16> %a, <8 x i16> %b) nounwind {
 ; AVX512BW-NEXT:    vpsllvw %zmm1, %zmm0, %zmm1
 ; AVX512BW-NEXT:    vpsrlvw %zmm2, %zmm0, %zmm0
 ; AVX512BW-NEXT:    vpor %xmm0, %xmm1, %xmm0
+; AVX512BW-NEXT:    vzeroupper
 ; AVX512BW-NEXT:    retq
 ;
 ; AVX512VL-LABEL: var_rotate_v8i16:
@@ -702,6 +703,7 @@ define <16 x i8> @var_rotate_v16i8(<16 x i8> %a, <16 x i8> %b) nounwind {
 ; AVX512BW-NEXT:    vpsrlvd %zmm2, %zmm0, %zmm0
 ; AVX512BW-NEXT:    vpmovdb %zmm0, %xmm0
 ; AVX512BW-NEXT:    vpor %xmm0, %xmm1, %xmm0
+; AVX512BW-NEXT:    vzeroupper
 ; AVX512BW-NEXT:    retq
 ;
 ; AVX512VL-LABEL: var_rotate_v16i8:
@@ -716,6 +718,7 @@ define <16 x i8> @var_rotate_v16i8(<16 x i8> %a, <16 x i8> %b) nounwind {
 ; AVX512VL-NEXT:    vpsrlvd %zmm2, %zmm0, %zmm0
 ; AVX512VL-NEXT:    vpmovdb %zmm0, %xmm0
 ; AVX512VL-NEXT:    vpor %xmm0, %xmm1, %xmm0
+; AVX512VL-NEXT:    vzeroupper
 ; AVX512VL-NEXT:    retq
 ;
 ; XOP-LABEL: var_rotate_v16i8:
@@ -1085,6 +1088,7 @@ define <8 x i16> @constant_rotate_v8i16(<8 x i16> %a) nounwind {
 ; AVX512BW-NEXT:    vmovdqa {{.*#+}} xmm2 = [16,15,14,13,12,11,10,9]
 ; AVX512BW-NEXT:    vpsrlvw %zmm2, %zmm0, %zmm0
 ; AVX512BW-NEXT:    vpor %xmm0, %xmm1, %xmm0
+; AVX512BW-NEXT:    vzeroupper
 ; AVX512BW-NEXT:    retq
 ;
 ; AVX512VL-LABEL: constant_rotate_v8i16:
@@ -1272,6 +1276,7 @@ define <16 x i8> @constant_rotate_v16i8(<16 x i8> %a) nounwind {
 ; AVX512-NEXT:    vpsrlvd {{.*}}(%rip), %zmm0, %zmm0
 ; AVX512-NEXT:    vpmovdb %zmm0, %xmm0
 ; AVX512-NEXT:    vpor %xmm0, %xmm1, %xmm0
+; AVX512-NEXT:    vzeroupper
 ; AVX512-NEXT:    retq
 ;
 ; XOP-LABEL: constant_rotate_v16i8:
@@ -1529,31 +1534,20 @@ define <16 x i8> @splatconstant_rotate_v16i8(<16 x i8> %a) nounwind {
 define <2 x i64> @splatconstant_rotate_mask_v2i64(<2 x i64> %a) nounwind {
 ; SSE-LABEL: splatconstant_rotate_mask_v2i64:
 ; SSE:       # BB#0:
-; SSE-NEXT:    movdqa %xmm0, %xmm1
-; SSE-NEXT:    psllq $15, %xmm1
 ; SSE-NEXT:    psrlq $49, %xmm0
 ; SSE-NEXT:    pand {{.*}}(%rip), %xmm0
-; SSE-NEXT:    pand {{.*}}(%rip), %xmm1
-; SSE-NEXT:    por %xmm0, %xmm1
-; SSE-NEXT:    movdqa %xmm1, %xmm0
 ; SSE-NEXT:    retq
 ;
 ; AVX-LABEL: splatconstant_rotate_mask_v2i64:
 ; AVX:       # BB#0:
-; AVX-NEXT:    vpsllq $15, %xmm0, %xmm1
 ; AVX-NEXT:    vpsrlq $49, %xmm0, %xmm0
 ; AVX-NEXT:    vpand {{.*}}(%rip), %xmm0, %xmm0
-; AVX-NEXT:    vpand {{.*}}(%rip), %xmm1, %xmm1
-; AVX-NEXT:    vpor %xmm0, %xmm1, %xmm0
 ; AVX-NEXT:    retq
 ;
 ; AVX512-LABEL: splatconstant_rotate_mask_v2i64:
 ; AVX512:       # BB#0:
-; AVX512-NEXT:    vpsllq $15, %xmm0, %xmm1
 ; AVX512-NEXT:    vpsrlq $49, %xmm0, %xmm0
 ; AVX512-NEXT:    vpand {{.*}}(%rip), %xmm0, %xmm0
-; AVX512-NEXT:    vpand {{.*}}(%rip), %xmm1, %xmm1
-; AVX512-NEXT:    vpor %xmm0, %xmm1, %xmm0
 ; AVX512-NEXT:    retq
 ;
 ; XOP-LABEL: splatconstant_rotate_mask_v2i64:

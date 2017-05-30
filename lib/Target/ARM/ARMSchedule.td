@@ -89,9 +89,10 @@ def ReadMAC : SchedRead;
 // Divisions.
 def WriteDIV : SchedWrite;
 
-// Loads.
+// Loads/Stores.
 def WriteLd : SchedWrite;
 def WritePreLd : SchedWrite;
+def WriteST : SchedWrite;
 
 // Branches.
 def WriteBr : SchedWrite;
@@ -129,6 +130,17 @@ def WriteFPDIV64 : SchedWrite;
 // Square-root
 def WriteFPSQRT32 : SchedWrite;
 def WriteFPSQRT64 : SchedWrite;
+
+// Vector load and stores
+def WriteVLD1 : SchedWrite;
+def WriteVLD2 : SchedWrite;
+def WriteVLD3 : SchedWrite;
+def WriteVLD4 : SchedWrite;
+def WriteVST1 : SchedWrite;
+def WriteVST2 : SchedWrite;
+def WriteVST3 : SchedWrite;
+def WriteVST4 : SchedWrite;
+
 
 // Define TII for use in SchedVariant Predicates.
 def : PredicateProlog<[{

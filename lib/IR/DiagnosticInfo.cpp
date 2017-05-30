@@ -12,20 +12,31 @@
 // Diagnostics reporting is still done as part of the LLVMContext.
 //===----------------------------------------------------------------------===//
 
-#include "llvm/IR/DiagnosticInfo.h"
-#include "LLVMContextImpl.h"
+#include "llvm/ADT/iterator_range.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/Twine.h"
+#include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/Constants.h"
-#include "llvm/IR/DebugInfo.h"
+#include "llvm/IR/DebugInfoMetadata.h"
+#include "llvm/IR/DerivedTypes.h"
+#include "llvm/IR/DiagnosticInfo.h"
 #include "llvm/IR/DiagnosticPrinter.h"
 #include "llvm/IR/Function.h"
+#include "llvm/IR/GlobalValue.h"
 #include "llvm/IR/Instruction.h"
+#include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Metadata.h"
 #include "llvm/IR/Module.h"
+#include "llvm/IR/Type.h"
+#include "llvm/IR/Value.h"
+#include "llvm/Support/Casting.h"
 #include "llvm/Support/CommandLine.h"
+#include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/raw_ostream.h"
 #include "llvm/Support/Regex.h"
 #include <atomic>
+#include <cassert>
+#include <memory>
 #include <string>
 
 using namespace llvm;
@@ -52,6 +63,8 @@ struct PassRemarksOpt {
     }
   }
 };
+
+} // end anonymous namespace
 
 static PassRemarksOpt PassRemarksOptLoc;
 static PassRemarksOpt PassRemarksMissedOptLoc;
@@ -85,7 +98,6 @@ PassRemarksAnalysis(
         "the given regular expression"),
     cl::Hidden, cl::location(PassRemarksAnalysisOptLoc), cl::ValueRequired,
     cl::ZeroOrMore);
-}
 
 int llvm::getNextAvailablePluginDiagnosticKind() {
   static std::atomic<int> PluginKindID(DK_FirstPluginKind);
@@ -97,8 +109,7 @@ const char *OptimizationRemarkAnalysis::AlwaysPrint = "";
 DiagnosticInfoInlineAsm::DiagnosticInfoInlineAsm(const Instruction &I,
                                                  const Twine &MsgStr,
                                                  DiagnosticSeverity Severity)
-    : DiagnosticInfo(DK_InlineAsm, Severity), LocCookie(0), MsgStr(MsgStr),
-      Instr(&I) {
+    : DiagnosticInfo(DK_InlineAsm, Severity), MsgStr(MsgStr), Instr(&I) {
   if (const MDNode *SrcLoc = I.getMetadata("srcloc")) {
     if (SrcLoc->getNumOperands() != 0)
       if (const auto *CI =
@@ -193,7 +204,7 @@ DiagnosticInfoOptimizationBase::Argument::Argument(StringRef Key, const Value *V
   // Only include names that correspond to user variables.  FIXME: we should use
   // debug info if available to get the name of the user variable.
   if (isa<llvm::Argument>(V) || isa<GlobalValue>(V))
-    Val = GlobalValue::getRealLinkageName(V->getName());
+    Val = GlobalValue::dropLLVMManglingEscape(V->getName());
   else if (isa<Constant>(V)) {
     raw_string_ostream OS(Val);
     V->printAsOperand(OS, /*PrintType=*/false);
@@ -222,16 +233,31 @@ void DiagnosticInfoOptimizationBase::print(DiagnosticPrinter &DP) const {
 OptimizationRemark::OptimizationRemark(const char *PassName,
                                        StringRef RemarkName,
                                        const DiagnosticLocation &Loc,
-                                       Value *CodeRegion)
+                                       const Value *CodeRegion)
     : DiagnosticInfoIROptimization(
           DK_OptimizationRemark, DS_Remark, PassName, RemarkName,
           *cast<BasicBlock>(CodeRegion)->getParent(), Loc, CodeRegion) {}
 
 OptimizationRemark::OptimizationRemark(const char *PassName,
-                                       StringRef RemarkName, Instruction *Inst)
+                                       StringRef RemarkName,
+                                       const Instruction *Inst)
     : DiagnosticInfoIROptimization(DK_OptimizationRemark, DS_Remark, PassName,
                                    RemarkName, *Inst->getParent()->getParent(),
                                    Inst->getDebugLoc(), Inst->getParent()) {}
+
+// Helper to allow for an assert before attempting to return an invalid
+// reference.
+static const BasicBlock &getFirstFunctionBlock(const Function *Func) {
+  assert(!Func->empty() && "Function does not have a body");
+  return Func->front();
+}
+
+OptimizationRemark::OptimizationRemark(const char *PassName,
+                                       StringRef RemarkName,
+                                       const Function *Func)
+    : DiagnosticInfoIROptimization(DK_OptimizationRemark, DS_Remark, PassName,
+                                   RemarkName, *Func, Func->getSubprogram(),
+                                   &getFirstFunctionBlock(Func)) {}
 
 bool OptimizationRemark::isEnabled(StringRef PassName) {
   return PassRemarksOptLoc.Pattern &&
@@ -240,14 +266,14 @@ bool OptimizationRemark::isEnabled(StringRef PassName) {
 
 OptimizationRemarkMissed::OptimizationRemarkMissed(
     const char *PassName, StringRef RemarkName, const DiagnosticLocation &Loc,
-    Value *CodeRegion)
+    const Value *CodeRegion)
     : DiagnosticInfoIROptimization(
           DK_OptimizationRemarkMissed, DS_Remark, PassName, RemarkName,
           *cast<BasicBlock>(CodeRegion)->getParent(), Loc, CodeRegion) {}
 
 OptimizationRemarkMissed::OptimizationRemarkMissed(const char *PassName,
                                                    StringRef RemarkName,
-                                                   Instruction *Inst)
+                                                   const Instruction *Inst)
     : DiagnosticInfoIROptimization(DK_OptimizationRemarkMissed, DS_Remark,
                                    PassName, RemarkName,
                                    *Inst->getParent()->getParent(),
@@ -260,14 +286,14 @@ bool OptimizationRemarkMissed::isEnabled(StringRef PassName) {
 
 OptimizationRemarkAnalysis::OptimizationRemarkAnalysis(
     const char *PassName, StringRef RemarkName, const DiagnosticLocation &Loc,
-    Value *CodeRegion)
+    const Value *CodeRegion)
     : DiagnosticInfoIROptimization(
           DK_OptimizationRemarkAnalysis, DS_Remark, PassName, RemarkName,
           *cast<BasicBlock>(CodeRegion)->getParent(), Loc, CodeRegion) {}
 
 OptimizationRemarkAnalysis::OptimizationRemarkAnalysis(const char *PassName,
                                                        StringRef RemarkName,
-                                                       Instruction *Inst)
+                                                       const Instruction *Inst)
     : DiagnosticInfoIROptimization(DK_OptimizationRemarkAnalysis, DS_Remark,
                                    PassName, RemarkName,
                                    *Inst->getParent()->getParent(),
@@ -275,7 +301,7 @@ OptimizationRemarkAnalysis::OptimizationRemarkAnalysis(const char *PassName,
 
 OptimizationRemarkAnalysis::OptimizationRemarkAnalysis(
     enum DiagnosticKind Kind, const char *PassName, StringRef RemarkName,
-    const DiagnosticLocation &Loc, Value *CodeRegion)
+    const DiagnosticLocation &Loc, const Value *CodeRegion)
     : DiagnosticInfoIROptimization(Kind, DS_Remark, PassName, RemarkName,
                                    *cast<BasicBlock>(CodeRegion)->getParent(),
                                    Loc, CodeRegion) {}
@@ -327,7 +353,7 @@ void llvm::emitOptimizationRemarkAnalysisAliasing(LLVMContext &Ctx,
 
 DiagnosticInfoOptimizationFailure::DiagnosticInfoOptimizationFailure(
     const char *PassName, StringRef RemarkName, const DiagnosticLocation &Loc,
-    Value *CodeRegion)
+    const Value *CodeRegion)
     : DiagnosticInfoIROptimization(
           DK_OptimizationFailure, DS_Warning, PassName, RemarkName,
           *cast<BasicBlock>(CodeRegion)->getParent(), Loc, CodeRegion) {}

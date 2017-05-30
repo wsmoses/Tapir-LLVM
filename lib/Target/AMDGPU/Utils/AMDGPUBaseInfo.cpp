@@ -19,6 +19,7 @@
 #include "llvm/IR/GlobalValue.h"
 #include "llvm/IR/Instruction.h"
 #include "llvm/IR/LLVMContext.h"
+#include "llvm/IR/Module.h"
 #include "llvm/MC/MCContext.h"
 #include "llvm/MC/MCInstrDesc.h"
 #include "llvm/MC/MCRegisterInfo.h"
@@ -35,19 +36,12 @@
 #include <cstring>
 #include <utility>
 
-#define GET_SUBTARGETINFO_ENUM
-#include "AMDGPUGenSubtargetInfo.inc"
-#undef GET_SUBTARGETINFO_ENUM
+#include "MCTargetDesc/AMDGPUMCTargetDesc.h"
 
-#define GET_REGINFO_ENUM
-#include "AMDGPUGenRegisterInfo.inc"
-#undef GET_REGINFO_ENUM
 
 #define GET_INSTRINFO_NAMED_OPS
-#define GET_INSTRINFO_ENUM
 #include "AMDGPUGenInstrInfo.inc"
 #undef GET_INSTRINFO_NAMED_OPS
-#undef GET_INSTRINFO_ENUM
 
 namespace {
 
@@ -99,6 +93,12 @@ unsigned getVmcntBitWidthHi() { return 2; }
 } // end namespace anonymous
 
 namespace llvm {
+
+static cl::opt<bool> EnablePackedInlinableLiterals(
+    "enable-packed-inlinable-literals",
+    cl::desc("Enable packed inlinable literals (v2f16, v2i16)"),
+    cl::init(false));
+
 namespace AMDGPU {
 
 namespace IsaInfo {
@@ -307,7 +307,7 @@ void initDefaultAMDKernelCodeT(amd_kernel_code_t &Header,
   memset(&Header, 0, sizeof(Header));
 
   Header.amd_kernel_code_version_major = 1;
-  Header.amd_kernel_code_version_minor = 0;
+  Header.amd_kernel_code_version_minor = 1;
   Header.amd_machine_kind = 1; // AMD_MACHINE_KIND_AMDGPU
   Header.amd_machine_version_major = ISA.Major;
   Header.amd_machine_version_minor = ISA.Minor;
@@ -354,16 +354,16 @@ MCSection *getHSARodataReadonlyAgentSection(MCContext &Ctx) {
                            ELF::SHF_AMDGPU_HSA_AGENT);
 }
 
-bool isGroupSegment(const GlobalValue *GV) {
-  return GV->getType()->getAddressSpace() == AMDGPUAS::LOCAL_ADDRESS;
+bool isGroupSegment(const GlobalValue *GV, AMDGPUAS AS) {
+  return GV->getType()->getAddressSpace() == AS.LOCAL_ADDRESS;
 }
 
-bool isGlobalSegment(const GlobalValue *GV) {
-  return GV->getType()->getAddressSpace() == AMDGPUAS::GLOBAL_ADDRESS;
+bool isGlobalSegment(const GlobalValue *GV, AMDGPUAS AS) {
+  return GV->getType()->getAddressSpace() == AS.GLOBAL_ADDRESS;
 }
 
-bool isReadOnlySegment(const GlobalValue *GV) {
-  return GV->getType()->getAddressSpace() == AMDGPUAS::CONSTANT_ADDRESS;
+bool isReadOnlySegment(const GlobalValue *GV, AMDGPUAS AS) {
+  return GV->getType()->getAddressSpace() == AS.CONSTANT_ADDRESS;
 }
 
 bool shouldEmitConstantsToTextSection(const Triple &TT) {
@@ -503,6 +503,7 @@ unsigned getInitialPSInputAddr(const Function &F) {
 bool isShader(CallingConv::ID cc) {
   switch(cc) {
     case CallingConv::AMDGPU_VS:
+    case CallingConv::AMDGPU_HS:
     case CallingConv::AMDGPU_GS:
     case CallingConv::AMDGPU_PS:
     case CallingConv::AMDGPU_CS:
@@ -516,6 +517,21 @@ bool isCompute(CallingConv::ID cc) {
   return !isShader(cc) || cc == CallingConv::AMDGPU_CS;
 }
 
+bool isEntryFunctionCC(CallingConv::ID CC) {
+  switch (CC) {
+  case CallingConv::AMDGPU_KERNEL:
+  case CallingConv::SPIR_KERNEL:
+  case CallingConv::AMDGPU_VS:
+  case CallingConv::AMDGPU_GS:
+  case CallingConv::AMDGPU_PS:
+  case CallingConv::AMDGPU_CS:
+  case CallingConv::AMDGPU_HS:
+    return true;
+  default:
+    return false;
+  }
+}
+
 bool isSI(const MCSubtargetInfo &STI) {
   return STI.getFeatureBits()[AMDGPU::FeatureSouthernIslands];
 }
@@ -526,6 +542,17 @@ bool isCI(const MCSubtargetInfo &STI) {
 
 bool isVI(const MCSubtargetInfo &STI) {
   return STI.getFeatureBits()[AMDGPU::FeatureVolcanicIslands];
+}
+
+bool isGFX9(const MCSubtargetInfo &STI) {
+  return STI.getFeatureBits()[AMDGPU::FeatureGFX9];
+}
+
+bool isSGPR(unsigned Reg, const MCRegisterInfo* TRI) {
+  const MCRegisterClass SGPRClass = TRI->getRegClass(AMDGPU::SReg_32RegClassID);
+  const unsigned FirstSubReg = TRI->getSubReg(Reg, 1);
+  return SGPRClass.contains(FirstSubReg != 0 ? FirstSubReg : Reg) ||
+    Reg == AMDGPU::SCC;
 }
 
 unsigned getMCReg(unsigned Reg, const MCSubtargetInfo &STI) {
@@ -547,6 +574,25 @@ unsigned getMCReg(unsigned Reg, const MCSubtargetInfo &STI) {
   return Reg;
 }
 
+unsigned mc2PseudoReg(unsigned Reg) {
+  switch (Reg) {
+  case AMDGPU::FLAT_SCR_ci:
+  case AMDGPU::FLAT_SCR_vi:
+    return FLAT_SCR;
+
+  case AMDGPU::FLAT_SCR_LO_ci:
+  case AMDGPU::FLAT_SCR_LO_vi:
+    return AMDGPU::FLAT_SCR_LO;
+
+  case AMDGPU::FLAT_SCR_HI_ci:
+  case AMDGPU::FLAT_SCR_HI_vi:
+    return AMDGPU::FLAT_SCR_HI;
+
+  default:
+    return Reg;
+  }
+}
+
 bool isSISrcOperand(const MCInstrDesc &Desc, unsigned OpNo) {
   assert(OpNo < Desc.NumOperands);
   unsigned OpType = Desc.OpInfo[OpNo].OperandType;
@@ -564,6 +610,7 @@ bool isSISrcFPOperand(const MCInstrDesc &Desc, unsigned OpNo) {
   case AMDGPU::OPERAND_REG_INLINE_C_FP32:
   case AMDGPU::OPERAND_REG_INLINE_C_FP64:
   case AMDGPU::OPERAND_REG_INLINE_C_FP16:
+  case AMDGPU::OPERAND_REG_INLINE_C_V2FP16:
     return true;
   default:
     return false;
@@ -682,6 +729,17 @@ bool isInlinableLiteral16(int16_t Literal, bool HasInv2Pi) {
          Val == 0x3118;   // 1/2pi
 }
 
+bool isInlinableLiteralV216(int32_t Literal, bool HasInv2Pi) {
+  assert(HasInv2Pi);
+
+  if (!EnablePackedInlinableLiterals)
+    return false;
+
+  int16_t Lo16 = static_cast<int16_t>(Literal);
+  int16_t Hi16 = static_cast<int16_t>(Literal >> 16);
+  return Lo16 == Hi16 && isInlinableLiteral16(Lo16, HasInv2Pi);
+}
+
 bool isUniformMMO(const MachineMemOperand *MMO) {
   const Value *Ptr = MMO->getValue();
   // UndefValue means this is a load of a kernel input.  These are uniform.
@@ -708,6 +766,58 @@ bool isLegalSMRDImmOffset(const MCSubtargetInfo &ST, int64_t ByteOffset) {
   return isSI(ST) || isCI(ST) ? isUInt<8>(EncodedOffset) :
                                 isUInt<20>(EncodedOffset);
 }
-
 } // end namespace AMDGPU
+
 } // end namespace llvm
+
+const unsigned AMDGPUAS::MAX_COMMON_ADDRESS;
+const unsigned AMDGPUAS::GLOBAL_ADDRESS;
+const unsigned AMDGPUAS::LOCAL_ADDRESS;
+const unsigned AMDGPUAS::PARAM_D_ADDRESS;
+const unsigned AMDGPUAS::PARAM_I_ADDRESS;
+const unsigned AMDGPUAS::CONSTANT_BUFFER_0;
+const unsigned AMDGPUAS::CONSTANT_BUFFER_1;
+const unsigned AMDGPUAS::CONSTANT_BUFFER_2;
+const unsigned AMDGPUAS::CONSTANT_BUFFER_3;
+const unsigned AMDGPUAS::CONSTANT_BUFFER_4;
+const unsigned AMDGPUAS::CONSTANT_BUFFER_5;
+const unsigned AMDGPUAS::CONSTANT_BUFFER_6;
+const unsigned AMDGPUAS::CONSTANT_BUFFER_7;
+const unsigned AMDGPUAS::CONSTANT_BUFFER_8;
+const unsigned AMDGPUAS::CONSTANT_BUFFER_9;
+const unsigned AMDGPUAS::CONSTANT_BUFFER_10;
+const unsigned AMDGPUAS::CONSTANT_BUFFER_11;
+const unsigned AMDGPUAS::CONSTANT_BUFFER_12;
+const unsigned AMDGPUAS::CONSTANT_BUFFER_13;
+const unsigned AMDGPUAS::CONSTANT_BUFFER_14;
+const unsigned AMDGPUAS::CONSTANT_BUFFER_15;
+const unsigned AMDGPUAS::UNKNOWN_ADDRESS_SPACE;
+
+namespace llvm {
+namespace AMDGPU {
+
+AMDGPUAS getAMDGPUAS(Triple T) {
+  auto Env = T.getEnvironmentName();
+  AMDGPUAS AS;
+  if (Env == "amdgiz" || Env == "amdgizcl") {
+    AS.FLAT_ADDRESS     = 0;
+    AS.PRIVATE_ADDRESS  = 5;
+    AS.REGION_ADDRESS   = 4;
+  }
+  else {
+    AS.FLAT_ADDRESS     = 4;
+    AS.PRIVATE_ADDRESS  = 0;
+    AS.REGION_ADDRESS   = 5;
+   }
+  return AS;
+}
+
+AMDGPUAS getAMDGPUAS(const TargetMachine &M) {
+  return getAMDGPUAS(M.getTargetTriple());
+}
+
+AMDGPUAS getAMDGPUAS(const Module &M) {
+  return getAMDGPUAS(Triple(M.getTargetTriple()));
+}
+} // namespace AMDGPU
+} // namespace llvm

@@ -36,6 +36,7 @@ enum : uint64_t {
 
  // TODO: Should this be spilt into VOP3 a and b?
   VOP3 = 1 << 10,
+  VOP3P = 1 << 12,
 
   VINTRP = 1 << 13,
   SDWA = 1 << 14,
@@ -65,8 +66,8 @@ enum : uint64_t {
   SOPK_ZEXT = UINT64_C(1) << 38,
   SCALAR_STORE = UINT64_C(1) << 39,
   FIXED_SIZE = UINT64_C(1) << 40,
-  VOPAsmPrefer32Bit = UINT64_C(1) << 41
-
+  VOPAsmPrefer32Bit = UINT64_C(1) << 41,
+  HasFPClamp = UINT64_C(1) << 42
 };
 
 // v_cmp_class_* etc. use a 10-bit mask for what operation is checked.
@@ -102,18 +103,24 @@ namespace AMDGPU {
     OPERAND_REG_INLINE_C_FP16,
     OPERAND_REG_INLINE_C_FP32,
     OPERAND_REG_INLINE_C_FP64,
+    OPERAND_REG_INLINE_C_V2FP16,
+    OPERAND_REG_INLINE_C_V2INT16,
 
     OPERAND_REG_IMM_FIRST = OPERAND_REG_IMM_INT32,
     OPERAND_REG_IMM_LAST = OPERAND_REG_IMM_FP16,
 
     OPERAND_REG_INLINE_C_FIRST = OPERAND_REG_INLINE_C_INT16,
-    OPERAND_REG_INLINE_C_LAST = OPERAND_REG_INLINE_C_FP64,
+    OPERAND_REG_INLINE_C_LAST = OPERAND_REG_INLINE_C_V2INT16,
 
     OPERAND_SRC_FIRST = OPERAND_REG_IMM_INT32,
     OPERAND_SRC_LAST = OPERAND_REG_INLINE_C_LAST,
 
     // Operand for source modifiers for VOP instructions
     OPERAND_INPUT_MODS,
+
+    // Operand for GFX9 SDWA instructions
+    OPERAND_SDWA9_SRC,
+    OPERAND_SDWA9_VOPC_DST,
 
     /// Operand with 32-bit immediate that uses the constant bus.
     OPERAND_KIMM32,
@@ -125,9 +132,12 @@ namespace AMDGPU {
 // NEG and SEXT share same bit-mask because they can't be set simultaneously.
 namespace SISrcMods {
   enum {
-   NEG = 1 << 0,  // Floating-point negate modifier
-   ABS = 1 << 1,  // Floating-point absolute modifier
-   SEXT = 1 << 0  // Integer sign-extend modifier
+   NEG = 1 << 0,   // Floating-point negate modifier
+   ABS = 1 << 1,   // Floating-point absolute modifier
+   SEXT = 1 << 0,  // Integer sign-extend modifier
+   NEG_HI = ABS,   // Floating-point negate high packed component modifier.
+   OP_SEL_0 = 1 << 2,
+   OP_SEL_1 = 1 << 3
   };
 }
 
@@ -154,7 +164,8 @@ namespace AMDGPUAsmVariants {
     DEFAULT = 0,
     VOP3 = 1,
     SDWA = 2,
-    DPP = 3
+    SDWA9 = 3,
+    DPP = 4
   };
 }
 
@@ -242,6 +253,7 @@ enum Id { // HwRegCode, (6) [5:0]
   ID_LDS_ALLOC = 6,
   ID_IB_STS = 7,
   ID_SYMBOLIC_LAST_ = 8,
+  ID_MEM_BASES = 15,
   ID_SHIFT_ = 0,
   ID_WIDTH_ = 6,
   ID_MASK_ = (((1 << ID_WIDTH_) - 1) << ID_SHIFT_)
@@ -251,14 +263,20 @@ enum Offset { // Offset, (5) [10:6]
   OFFSET_DEFAULT_ = 0,
   OFFSET_SHIFT_ = 6,
   OFFSET_WIDTH_ = 5,
-  OFFSET_MASK_ = (((1 << OFFSET_WIDTH_) - 1) << OFFSET_SHIFT_)
+  OFFSET_MASK_ = (((1 << OFFSET_WIDTH_) - 1) << OFFSET_SHIFT_),
+
+  OFFSET_SRC_SHARED_BASE = 16,
+  OFFSET_SRC_PRIVATE_BASE = 0
 };
 
 enum WidthMinusOne { // WidthMinusOne, (5) [15:11]
   WIDTH_M1_DEFAULT_ = 31,
   WIDTH_M1_SHIFT_ = 11,
   WIDTH_M1_WIDTH_ = 5,
-  WIDTH_M1_MASK_ = (((1 << WIDTH_M1_WIDTH_) - 1) << WIDTH_M1_SHIFT_)
+  WIDTH_M1_MASK_ = (((1 << WIDTH_M1_WIDTH_) - 1) << WIDTH_M1_SHIFT_),
+
+  WIDTH_M1_SRC_SHARED_BASE = 15,
+  WIDTH_M1_SRC_PRIVATE_BASE = 15
 };
 
 } // namespace Hwreg
@@ -281,6 +299,11 @@ enum DstUnused {
   UNUSED_PRESERVE = 2,
 };
 
+#define SDWA9_SRC_SGPR_MASK 0x100
+#define SDWA9_SRC_REG_MASK 0xFF
+#define SDWA9_VOPC_DST_VCC_MASK 0x80
+#define SDWA9_VOPC_DST_REG_MASK 0x7F
+
 } // namespace SDWA
 } // namespace AMDGPU
 
@@ -289,6 +312,7 @@ enum DstUnused {
 #define   S_00B02C_EXTRA_LDS_SIZE(x)                                  (((x) & 0xFF) << 8)
 #define R_00B128_SPI_SHADER_PGM_RSRC1_VS                                0x00B128
 #define R_00B228_SPI_SHADER_PGM_RSRC1_GS                                0x00B228
+#define R_00B428_SPI_SHADER_PGM_RSRC1_HS                                0x00B428
 #define R_00B848_COMPUTE_PGM_RSRC1                                      0x00B848
 #define   S_00B028_VGPRS(x)                                           (((x) & 0x3F) << 0)
 #define   S_00B028_SGPRS(x)                                           (((x) & 0x0F) << 6)

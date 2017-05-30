@@ -141,6 +141,7 @@ void LTOCodeGenerator::initializeLTOPasses() {
   initializeMemCpyOptLegacyPassPass(R);
   initializeDCELegacyPassPass(R);
   initializeCFGSimplifyPassPass(R);
+  initializeLateCFGSimplifyPassPass(R);
 }
 
 void LTOCodeGenerator::setAsmUndefinedRefs(LTOModule *Mod) {
@@ -494,17 +495,14 @@ void LTOCodeGenerator::verifyMergedModuleOnce() {
     return;
   HasVerifiedInput = true;
 
-  if (LTOStripInvalidDebugInfo) {
-    bool BrokenDebugInfo = false;
-    if (verifyModule(*MergedModule, &dbgs(), &BrokenDebugInfo))
-      report_fatal_error("Broken module found, compilation aborted!");
-    if (BrokenDebugInfo) {
-      emitWarning("Invalid debug info found, debug info will be stripped");
-      StripDebugInfo(*MergedModule);
-    }
-  }
-  if (verifyModule(*MergedModule, &dbgs()))
+  bool BrokenDebugInfo = false;
+  if (verifyModule(*MergedModule, &dbgs(),
+                   LTOStripInvalidDebugInfo ? &BrokenDebugInfo : nullptr))
     report_fatal_error("Broken module found, compilation aborted!");
+  if (BrokenDebugInfo) {
+    emitWarning("Invalid debug info found, debug info will be stripped");
+    StripDebugInfo(*MergedModule);
+  }
 }
 
 void LTOCodeGenerator::finishOptimizationRemarks() {
@@ -554,6 +552,8 @@ bool LTOCodeGenerator::optimize(bool DisableVerify, bool DisableInline,
   if (!DisableInline)
     PMB.Inliner = createFunctionInliningPass();
   PMB.LibraryInfo = new TargetLibraryInfoImpl(TargetTriple);
+  if (Freestanding)
+    PMB.LibraryInfo->disableAllFunctions();
   PMB.OptLevel = OptLevel;
   PMB.VerifyInput = !DisableVerify;
   PMB.VerifyOutput = !DisableVerify;
@@ -597,6 +597,7 @@ bool LTOCodeGenerator::compileOptimized(ArrayRef<raw_pwrite_stream *> Out) {
   // If statistics were requested, print them out after codegen.
   if (llvm::AreStatisticsEnabled())
     llvm::PrintStatistics();
+  reportAndResetTimings();
 
   finishOptimizationRemarks();
 

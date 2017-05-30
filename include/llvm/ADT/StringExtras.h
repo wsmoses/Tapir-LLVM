@@ -1,4 +1,4 @@
-//===-- llvm/ADT/StringExtras.h - Useful string functions -------*- C++ -*-===//
+//===- llvm/ADT/StringExtras.h - Useful string functions --------*- C++ -*-===//
 //
 //                     The LLVM Compiler Infrastructure
 //
@@ -15,12 +15,18 @@
 #define LLVM_ADT_STRINGEXTRAS_H
 
 #include "llvm/ADT/StringRef.h"
-#include "llvm/Support/DataTypes.h"
 #include <iterator>
+#include <cassert>
+#include <cstddef>
+#include <cstdint>
+#include <cstring>
+#include <string>
+#include <utility>
 
 namespace llvm {
-class raw_ostream;
+
 template<typename T> class SmallVectorImpl;
+class raw_ostream;
 
 /// hexdigit - Return the hexadecimal character for the
 /// given number \p X (which should be less than 16).
@@ -76,6 +82,43 @@ static inline std::string toHex(StringRef Input) {
   return Output;
 }
 
+static inline uint8_t hexFromNibbles(char MSB, char LSB) {
+  unsigned U1 = hexDigitValue(MSB);
+  unsigned U2 = hexDigitValue(LSB);
+  assert(U1 != -1U && U2 != -1U);
+
+  return static_cast<uint8_t>((U1 << 4) | U2);
+}
+
+/// Convert hexadecimal string \p Input to its binary representation.
+/// The return string is half the size of \p Input.
+static inline std::string fromHex(StringRef Input) {
+  if (Input.empty())
+    return std::string();
+
+  std::string Output;
+  Output.reserve((Input.size() + 1) / 2);
+  if (Input.size() % 2 == 1) {
+    Output.push_back(hexFromNibbles('0', Input.front()));
+    Input = Input.drop_front();
+  }
+
+  assert(Input.size() % 2 == 0);
+  while (!Input.empty()) {
+    uint8_t Hex = hexFromNibbles(Input[0], Input[1]);
+    Output.push_back(Hex);
+    Input = Input.drop_front(2);
+  }
+  return Output;
+}
+
+/// \brief Convert the string \p S to an integer of the specified type using
+/// the radix \p Base.  If \p Base is 0, auto-detects the radix.
+/// Returns true if the number was successfully converted, false otherwise.
+template <typename N> bool to_integer(StringRef S, N &Num, unsigned Base = 0) {
+  return !S.getAsInteger(Base, Num);
+}
+
 static inline std::string utostr(uint64_t X, bool isNeg = false) {
   char Buffer[21];
   char *BufPtr = std::end(Buffer);
@@ -90,7 +133,6 @@ static inline std::string utostr(uint64_t X, bool isNeg = false) {
   if (isNeg) *--BufPtr = '-';   // Add negative sign...
   return std::string(BufPtr, std::end(Buffer));
 }
-
 
 static inline std::string itostr(int64_t X) {
   if (X < 0)
@@ -224,14 +266,22 @@ template <typename A1, typename... Args>
 inline size_t join_items_size(const A1 &A, Args &&... Items) {
   return join_one_item_size(A) + join_items_size(std::forward<Args>(Items)...);
 }
-}
+
+} // end namespace detail
 
 /// Joins the strings in the range [Begin, End), adding Separator between
 /// the elements.
 template <typename IteratorT>
 inline std::string join(IteratorT Begin, IteratorT End, StringRef Separator) {
-  typedef typename std::iterator_traits<IteratorT>::iterator_category tag;
+  using tag = typename std::iterator_traits<IteratorT>::iterator_category;
   return detail::join_impl(Begin, End, Separator, tag());
+}
+
+/// Joins the strings in the range [R.begin(), R.end()), adding Separator
+/// between the elements.
+template <typename Range>
+inline std::string join(Range &&R, StringRef Separator) {
+  return join(R.begin(), R.end(), Separator);
 }
 
 /// Joins the strings in the parameter pack \p Items, adding \p Separator
@@ -251,6 +301,6 @@ inline std::string join_items(Sep Separator, Args &&... Items) {
   return Result;
 }
 
-} // End llvm namespace
+} // end namespace llvm
 
-#endif
+#endif // LLVM_ADT_STRINGEXTRAS_H

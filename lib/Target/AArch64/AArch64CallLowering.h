@@ -34,8 +34,8 @@ public:
   bool lowerFormalArguments(MachineIRBuilder &MIRBuilder, const Function &F,
                             ArrayRef<unsigned> VRegs) const override;
 
-  bool lowerCall(MachineIRBuilder &MIRBuilder, const MachineOperand &Callee,
-                 const ArgInfo &OrigRet,
+  bool lowerCall(MachineIRBuilder &MIRBuilder, CallingConv::ID CallConv,
+                 const MachineOperand &Callee, const ArgInfo &OrigRet,
                  ArrayRef<ArgInfo> OrigArgs) const override;
 
 private:
@@ -46,8 +46,7 @@ private:
   typedef std::function<void(MachineIRBuilder &, int, CCValAssign &)>
       MemHandler;
 
-  typedef std::function<void(ArrayRef<unsigned>, ArrayRef<uint64_t>)>
-      SplitArgTy;
+  typedef std::function<void(unsigned, uint64_t)> SplitArgTy;
 
   void splitToValueTypes(const ArgInfo &OrigArgInfo,
                          SmallVectorImpl<ArgInfo> &SplitArgs,

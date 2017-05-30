@@ -65,15 +65,36 @@ static const SimpleTypeEntry SimpleTypeNames[] = {
     {"__bool64*", SimpleTypeKind::Boolean64},
 };
 
-/// Gets the type index for the next type record.
-TypeIndex TypeDatabase::getNextTypeIndex() const {
-  return TypeIndex(TypeIndex::FirstNonSimpleIndex + CVUDTNames.size());
+TypeDatabase::TypeDatabase(uint32_t Capacity) : TypeNameStorage(Allocator) {
+  CVUDTNames.resize(Capacity);
+  TypeRecords.resize(Capacity);
+  ValidRecords.resize(Capacity);
 }
 
-/// Records the name of a type, and reserves its type index.
-void TypeDatabase::recordType(StringRef Name, const CVType &Data) {
-  CVUDTNames.push_back(Name);
-  TypeRecords.push_back(Data);
+TypeIndex TypeDatabase::appendType(StringRef Name, const CVType &Data) {
+  LargestTypeIndex = getAppendIndex();
+  if (LargestTypeIndex.toArrayIndex() >= capacity())
+    grow();
+  recordType(Name, LargestTypeIndex, Data);
+  return LargestTypeIndex;
+}
+
+void TypeDatabase::recordType(StringRef Name, TypeIndex Index,
+                              const CVType &Data) {
+  LargestTypeIndex = empty() ? Index : std::max(Index, LargestTypeIndex);
+
+  if (LargestTypeIndex.toArrayIndex() >= capacity())
+    grow(Index);
+
+  uint32_t AI = Index.toArrayIndex();
+
+  assert(!contains(Index));
+  assert(AI < capacity());
+
+  CVUDTNames[AI] = Name;
+  TypeRecords[AI] = Data;
+  ValidRecords.set(AI);
+  ++Count;
 }
 
 /// Saves the name in a StringSet and creates a stable StringRef.
@@ -99,20 +120,94 @@ StringRef TypeDatabase::getTypeName(TypeIndex Index) const {
     return "<unknown simple type>";
   }
 
-  uint32_t I = Index.getIndex() - TypeIndex::FirstNonSimpleIndex;
-  if (I < CVUDTNames.size())
-    return CVUDTNames[I];
+  if (contains(Index))
+    return CVUDTNames[Index.toArrayIndex()];
 
   return "<unknown UDT>";
 }
 
 const CVType &TypeDatabase::getTypeRecord(TypeIndex Index) const {
-  return TypeRecords[Index.getIndex() - TypeIndex::FirstNonSimpleIndex];
+  assert(contains(Index));
+  return TypeRecords[Index.toArrayIndex()];
 }
 
-bool TypeDatabase::containsTypeIndex(TypeIndex Index) const {
-  uint32_t I = Index.getIndex() - TypeIndex::FirstNonSimpleIndex;
-  return I < CVUDTNames.size();
+CVType &TypeDatabase::getTypeRecord(TypeIndex Index) {
+  assert(contains(Index));
+  return TypeRecords[Index.toArrayIndex()];
 }
 
-uint32_t TypeDatabase::size() const { return CVUDTNames.size(); }
+bool TypeDatabase::contains(TypeIndex Index) const {
+  uint32_t AI = Index.toArrayIndex();
+  if (AI >= capacity())
+    return false;
+
+  return ValidRecords.test(AI);
+}
+
+uint32_t TypeDatabase::size() const { return Count; }
+
+uint32_t TypeDatabase::capacity() const { return TypeRecords.size(); }
+
+CVType TypeDatabase::getType(TypeIndex Index) { return getTypeRecord(Index); }
+
+StringRef TypeDatabase::getTypeName(TypeIndex Index) {
+  return static_cast<const TypeDatabase *>(this)->getTypeName(Index);
+}
+
+bool TypeDatabase::contains(TypeIndex Index) {
+  return static_cast<const TypeDatabase *>(this)->contains(Index);
+}
+
+uint32_t TypeDatabase::size() {
+  return static_cast<const TypeDatabase *>(this)->size();
+}
+
+uint32_t TypeDatabase::capacity() {
+  return static_cast<const TypeDatabase *>(this)->capacity();
+}
+
+void TypeDatabase::grow() { grow(LargestTypeIndex + 1); }
+
+void TypeDatabase::grow(TypeIndex NewIndex) {
+  uint32_t NewSize = NewIndex.toArrayIndex() + 1;
+
+  if (NewSize <= capacity())
+    return;
+
+  uint32_t NewCapacity = NewSize * 3 / 2;
+
+  TypeRecords.resize(NewCapacity);
+  CVUDTNames.resize(NewCapacity);
+  ValidRecords.resize(NewCapacity);
+}
+
+bool TypeDatabase::empty() const { return size() == 0; }
+
+Optional<TypeIndex> TypeDatabase::largestTypeIndexLessThan(TypeIndex TI) const {
+  uint32_t AI = TI.toArrayIndex();
+  int N = ValidRecords.find_prev(AI);
+  if (N == -1)
+    return None;
+  return TypeIndex::fromArrayIndex(N);
+}
+
+TypeIndex TypeDatabase::getAppendIndex() const {
+  if (empty())
+    return TypeIndex::fromArrayIndex(0);
+
+  return LargestTypeIndex + 1;
+}
+
+Optional<TypeIndex> TypeDatabase::getFirst() {
+  int N = ValidRecords.find_first();
+  if (N == -1)
+    return None;
+  return TypeIndex::fromArrayIndex(N);
+}
+
+Optional<TypeIndex> TypeDatabase::getNext(TypeIndex Prev) {
+  int N = ValidRecords.find_next(Prev.toArrayIndex());
+  if (N == -1)
+    return None;
+  return TypeIndex::fromArrayIndex(N);
+}

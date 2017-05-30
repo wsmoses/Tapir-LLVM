@@ -43,6 +43,9 @@ class AArch64TTIImpl : public BasicTTIImplBase<AArch64TTIImpl> {
     VECTOR_LDST_FOUR_ELEMENTS
   };
 
+  bool isWideningInstruction(Type *Ty, unsigned Opcode,
+                             ArrayRef<const Value *> Args);
+
 public:
   explicit AArch64TTIImpl(const AArch64TargetMachine *TM, const Function &F)
       : BaseT(TM, F.getParent()->getDataLayout()), ST(TM->getSubtargetImpl(F)),
@@ -84,9 +87,14 @@ public:
     return 64;
   }
 
+  unsigned getMinVectorRegisterBitWidth() {
+    return ST->getMinVectorRegisterBitWidth();
+  }
+
   unsigned getMaxInterleaveFactor(unsigned VF);
 
-  int getCastInstrCost(unsigned Opcode, Type *Dst, Type *Src);
+  int getCastInstrCost(unsigned Opcode, Type *Dst, Type *Src,
+                       const Instruction *I = nullptr);
 
   int getExtractWithExtendCost(unsigned Opcode, Type *Dst, VectorType *VecTy,
                                unsigned Index);
@@ -103,10 +111,11 @@ public:
 
   int getAddressComputationCost(Type *Ty, ScalarEvolution *SE, const SCEV *Ptr);
 
-  int getCmpSelInstrCost(unsigned Opcode, Type *ValTy, Type *CondTy);
+  int getCmpSelInstrCost(unsigned Opcode, Type *ValTy, Type *CondTy,
+                         const Instruction *I = nullptr);
 
   int getMemoryOpCost(unsigned Opcode, Type *Src, unsigned Alignment,
-                      unsigned AddressSpace);
+                      unsigned AddressSpace, const Instruction *I = nullptr);
 
   int getCostOfKeepingLiveOverCall(ArrayRef<Type *> Tys);
 
@@ -121,6 +130,10 @@ public:
                                  ArrayRef<unsigned> Indices, unsigned Alignment,
                                  unsigned AddressSpace);
 
+  bool
+  shouldConsiderAddressTypePromotion(const Instruction &I,
+                                     bool &AllowPromotionWithoutCommonHeader);
+
   unsigned getCacheLineSize();
 
   unsigned getPrefetchDistance();
@@ -128,6 +141,13 @@ public:
   unsigned getMinPrefetchStride();
 
   unsigned getMaxPrefetchIterationsAhead();
+
+  bool shouldExpandReduction(const IntrinsicInst *II) const {
+    return false;
+  }
+
+  bool useReductionIntrinsic(unsigned Opcode, Type *Ty,
+                             TTI::ReductionFlags Flags) const;
   /// @}
 };
 

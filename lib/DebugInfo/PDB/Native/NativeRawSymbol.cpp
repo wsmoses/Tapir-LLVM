@@ -11,15 +11,19 @@
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/DebugInfo/PDB/IPDBEnumChildren.h"
-#include "llvm/DebugInfo/PDB/PDBExtras.h"
 #include "llvm/DebugInfo/PDB/Native/NativeSession.h"
+#include "llvm/DebugInfo/PDB/PDBExtras.h"
+#include "llvm/DebugInfo/PDB/PDBSymbolTypeBuiltin.h"
+#include "llvm/DebugInfo/PDB/PDBSymbolTypeVTable.h"
+#include "llvm/DebugInfo/PDB/PDBSymbolTypeVTableShape.h"
 #include "llvm/Support/ConvertUTF.h"
 #include "llvm/Support/raw_ostream.h"
 
 using namespace llvm;
 using namespace llvm::pdb;
 
-NativeRawSymbol::NativeRawSymbol(const NativeSession &PDBSession) {}
+NativeRawSymbol::NativeRawSymbol(NativeSession &PDBSession)
+  : Session(PDBSession) {}
 
 void NativeRawSymbol::dump(raw_ostream &OS, int Indent) const {}
 
@@ -247,9 +251,7 @@ uint32_t NativeRawSymbol::getSubTypeId() const {
   return 0;
 }
 
-std::string NativeRawSymbol::getSymbolsFileName() const {
-  return 0;
-}
+std::string NativeRawSymbol::getSymbolsFileName() const { return ""; }
 
 uint32_t NativeRawSymbol::getSymIndexId() const {
   return 0;
@@ -319,6 +321,11 @@ uint32_t NativeRawSymbol::getVirtualTableShapeId() const {
   return 0;
 }
 
+std::unique_ptr<PDBSymbolTypeBuiltin>
+NativeRawSymbol::getVirtualBaseTableType() const {
+  return nullptr;
+}
+
 PDB_DataKind NativeRawSymbol::getDataKind() const {
   return PDB_DataKind::Unknown;
 }
@@ -328,7 +335,7 @@ PDB_SymType NativeRawSymbol::getSymTag() const {
 }
 
 PDB_UniqueId NativeRawSymbol::getGuid() const {
-  return {{0}};
+  return PDB_UniqueId{{0}};
 }
 
 int32_t NativeRawSymbol::getOffset() const {

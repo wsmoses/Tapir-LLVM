@@ -241,17 +241,20 @@ DIBasicType *DIBuilder::createBasicType(StringRef Name, uint64_t SizeInBits,
 
 DIDerivedType *DIBuilder::createQualifiedType(unsigned Tag, DIType *FromTy) {
   return DIDerivedType::get(VMContext, Tag, "", nullptr, 0, nullptr, FromTy, 0,
-                            0, 0, DINode::FlagZero);
+                            0, 0, None, DINode::FlagZero);
 }
 
-DIDerivedType *DIBuilder::createPointerType(DIType *PointeeTy,
-                                            uint64_t SizeInBits,
-                                            uint32_t AlignInBits,
-                                            StringRef Name) {
+DIDerivedType *DIBuilder::createPointerType(
+    DIType *PointeeTy,
+    uint64_t SizeInBits,
+    uint32_t AlignInBits,
+    Optional<unsigned> DWARFAddressSpace,
+    StringRef Name) {
   // FIXME: Why is there a name here?
   return DIDerivedType::get(VMContext, dwarf::DW_TAG_pointer_type, Name,
                             nullptr, 0, nullptr, PointeeTy, SizeInBits,
-                            AlignInBits, 0, DINode::FlagZero);
+                            AlignInBits, 0, DWARFAddressSpace,
+                            DINode::FlagZero);
 }
 
 DIDerivedType *DIBuilder::createMemberPointerType(DIType *PointeeTy,
@@ -261,15 +264,18 @@ DIDerivedType *DIBuilder::createMemberPointerType(DIType *PointeeTy,
                                                   DINode::DIFlags Flags) {
   return DIDerivedType::get(VMContext, dwarf::DW_TAG_ptr_to_member_type, "",
                             nullptr, 0, nullptr, PointeeTy, SizeInBits,
-                            AlignInBits, 0, Flags, Base);
+                            AlignInBits, 0, None, Flags, Base);
 }
 
-DIDerivedType *DIBuilder::createReferenceType(unsigned Tag, DIType *RTy,
-                                              uint64_t SizeInBits,
-                                              uint32_t AlignInBits) {
+DIDerivedType *DIBuilder::createReferenceType(
+    unsigned Tag, DIType *RTy,
+    uint64_t SizeInBits,
+    uint32_t AlignInBits,
+    Optional<unsigned> DWARFAddressSpace) {
   assert(RTy && "Unable to create reference type");
   return DIDerivedType::get(VMContext, Tag, "", nullptr, 0, nullptr, RTy,
-                            SizeInBits, AlignInBits, 0, DINode::FlagZero);
+                            SizeInBits, AlignInBits, 0, DWARFAddressSpace,
+                            DINode::FlagZero);
 }
 
 DIDerivedType *DIBuilder::createTypedef(DIType *Ty, StringRef Name,
@@ -277,14 +283,14 @@ DIDerivedType *DIBuilder::createTypedef(DIType *Ty, StringRef Name,
                                         DIScope *Context) {
   return DIDerivedType::get(VMContext, dwarf::DW_TAG_typedef, Name, File,
                             LineNo, getNonCompileUnitScope(Context), Ty, 0, 0,
-                            0, DINode::FlagZero);
+                            0, None, DINode::FlagZero);
 }
 
 DIDerivedType *DIBuilder::createFriend(DIType *Ty, DIType *FriendTy) {
   assert(Ty && "Invalid type!");
   assert(FriendTy && "Invalid friend type!");
   return DIDerivedType::get(VMContext, dwarf::DW_TAG_friend, "", nullptr, 0, Ty,
-                            FriendTy, 0, 0, 0, DINode::FlagZero);
+                            FriendTy, 0, 0, 0, None, DINode::FlagZero);
 }
 
 DIDerivedType *DIBuilder::createInheritance(DIType *Ty, DIType *BaseTy,
@@ -292,7 +298,7 @@ DIDerivedType *DIBuilder::createInheritance(DIType *Ty, DIType *BaseTy,
                                             DINode::DIFlags Flags) {
   assert(Ty && "Unable to create inheritance");
   return DIDerivedType::get(VMContext, dwarf::DW_TAG_inheritance, "", nullptr,
-                            0, Ty, BaseTy, 0, 0, BaseOffset, Flags);
+                            0, Ty, BaseTy, 0, 0, BaseOffset, None, Flags);
 }
 
 DIDerivedType *DIBuilder::createMemberType(DIScope *Scope, StringRef Name,
@@ -303,7 +309,7 @@ DIDerivedType *DIBuilder::createMemberType(DIScope *Scope, StringRef Name,
                                            DINode::DIFlags Flags, DIType *Ty) {
   return DIDerivedType::get(VMContext, dwarf::DW_TAG_member, Name, File,
                             LineNumber, getNonCompileUnitScope(Scope), Ty,
-                            SizeInBits, AlignInBits, OffsetInBits, Flags);
+                            SizeInBits, AlignInBits, OffsetInBits, None, Flags);
 }
 
 static ConstantAsMetadata *getConstantOrNull(Constant *C) {
@@ -320,7 +326,7 @@ DIDerivedType *DIBuilder::createBitFieldMemberType(
   return DIDerivedType::get(
       VMContext, dwarf::DW_TAG_member, Name, File, LineNumber,
       getNonCompileUnitScope(Scope), Ty, SizeInBits, /* AlignInBits */ 0,
-      OffsetInBits, Flags,
+      OffsetInBits, None, Flags,
       ConstantAsMetadata::get(ConstantInt::get(IntegerType::get(VMContext, 64),
                                                StorageOffsetInBits)));
 }
@@ -333,7 +339,8 @@ DIBuilder::createStaticMemberType(DIScope *Scope, StringRef Name, DIFile *File,
   Flags |= DINode::FlagStaticMember;
   return DIDerivedType::get(VMContext, dwarf::DW_TAG_member, Name, File,
                             LineNumber, getNonCompileUnitScope(Scope), Ty, 0,
-                            AlignInBits, 0, Flags, getConstantOrNull(Val));
+                            AlignInBits, 0, None, Flags,
+                            getConstantOrNull(Val));
 }
 
 DIDerivedType *
@@ -343,7 +350,7 @@ DIBuilder::createObjCIVar(StringRef Name, DIFile *File, unsigned LineNumber,
                           DIType *Ty, MDNode *PropertyNode) {
   return DIDerivedType::get(VMContext, dwarf::DW_TAG_member, Name, File,
                             LineNumber, getNonCompileUnitScope(File), Ty,
-                            SizeInBits, AlignInBits, OffsetInBits, Flags,
+                            SizeInBits, AlignInBits, OffsetInBits, None, Flags,
                             PropertyNode);
 }
 
@@ -440,14 +447,6 @@ DISubroutineType *DIBuilder::createSubroutineType(DITypeRefArray ParameterTypes,
                                                   DINode::DIFlags Flags,
                                                   unsigned CC) {
   return DISubroutineType::get(VMContext, Flags, CC, ParameterTypes);
-}
-
-DICompositeType *DIBuilder::createExternalTypeRef(unsigned Tag, DIFile *File,
-                                                  StringRef UniqueIdentifier) {
-  assert(!UniqueIdentifier.empty() && "external type ref without uid");
-  return DICompositeType::get(VMContext, Tag, "", nullptr, 0, nullptr, nullptr,
-                              0, 0, 0, DINode::FlagExternalTypeRef, nullptr, 0,
-                              nullptr, nullptr, UniqueIdentifier);
 }
 
 DICompositeType *DIBuilder::createEnumerationType(
@@ -677,13 +676,14 @@ DISubprogram *DIBuilder::createFunction(
     DIScope *Context, StringRef Name, StringRef LinkageName, DIFile *File,
     unsigned LineNo, DISubroutineType *Ty, bool isLocalToUnit,
     bool isDefinition, unsigned ScopeLine, DINode::DIFlags Flags,
-    bool isOptimized, DITemplateParameterArray TParams, DISubprogram *Decl) {
+    bool isOptimized, DITemplateParameterArray TParams, DISubprogram *Decl,
+    DITypeArray ThrownTypes) {
   auto *Node = getSubprogram(
       /* IsDistinct = */ isDefinition, VMContext,
       getNonCompileUnitScope(Context), Name, LinkageName, File, LineNo, Ty,
       isLocalToUnit, isDefinition, ScopeLine, nullptr, 0, 0, 0, Flags,
       isOptimized, isDefinition ? CUNode : nullptr, TParams, Decl,
-      MDTuple::getTemporary(VMContext, None).release());
+      MDTuple::getTemporary(VMContext, None).release(), ThrownTypes);
 
   if (isDefinition)
     AllSubprograms.push_back(Node);
@@ -695,23 +695,22 @@ DISubprogram *DIBuilder::createTempFunctionFwdDecl(
     DIScope *Context, StringRef Name, StringRef LinkageName, DIFile *File,
     unsigned LineNo, DISubroutineType *Ty, bool isLocalToUnit,
     bool isDefinition, unsigned ScopeLine, DINode::DIFlags Flags,
-    bool isOptimized, DITemplateParameterArray TParams, DISubprogram *Decl) {
+    bool isOptimized, DITemplateParameterArray TParams, DISubprogram *Decl,
+    DITypeArray ThrownTypes) {
   return DISubprogram::getTemporary(
              VMContext, getNonCompileUnitScope(Context), Name, LinkageName,
              File, LineNo, Ty, isLocalToUnit, isDefinition, ScopeLine, nullptr,
              0, 0, 0, Flags, isOptimized, isDefinition ? CUNode : nullptr,
-             TParams, Decl, nullptr)
+             TParams, Decl, nullptr, ThrownTypes)
       .release();
 }
 
-DISubprogram *DIBuilder::createMethod(DIScope *Context, StringRef Name,
-                                      StringRef LinkageName, DIFile *F,
-                                      unsigned LineNo, DISubroutineType *Ty,
-                                      bool isLocalToUnit, bool isDefinition,
-                                      unsigned VK, unsigned VIndex,
-                                      int ThisAdjustment, DIType *VTableHolder,
-                                      DINode::DIFlags Flags, bool isOptimized,
-                                      DITemplateParameterArray TParams) {
+DISubprogram *DIBuilder::createMethod(
+    DIScope *Context, StringRef Name, StringRef LinkageName, DIFile *F,
+    unsigned LineNo, DISubroutineType *Ty, bool isLocalToUnit,
+    bool isDefinition, unsigned VK, unsigned VIndex, int ThisAdjustment,
+    DIType *VTableHolder, DINode::DIFlags Flags, bool isOptimized,
+    DITemplateParameterArray TParams, DITypeArray ThrownTypes) {
   assert(getNonCompileUnitScope(Context) &&
          "Methods should have both a Context and a context that isn't "
          "the compile unit.");
@@ -720,7 +719,7 @@ DISubprogram *DIBuilder::createMethod(DIScope *Context, StringRef Name,
       /* IsDistinct = */ isDefinition, VMContext, cast<DIScope>(Context), Name,
       LinkageName, F, LineNo, Ty, isLocalToUnit, isDefinition, LineNo,
       VTableHolder, VK, VIndex, ThisAdjustment, Flags, isOptimized,
-      isDefinition ? CUNode : nullptr, TParams, nullptr, nullptr);
+      isDefinition ? CUNode : nullptr, TParams, nullptr, nullptr, ThrownTypes);
 
   if (isDefinition)
     AllSubprograms.push_back(SP);
@@ -729,10 +728,15 @@ DISubprogram *DIBuilder::createMethod(DIScope *Context, StringRef Name,
 }
 
 DINamespace *DIBuilder::createNameSpace(DIScope *Scope, StringRef Name,
-                                        DIFile *File, unsigned LineNo,
                                         bool ExportSymbols) {
-  return DINamespace::get(VMContext, getNonCompileUnitScope(Scope), File, Name,
-                          LineNo, ExportSymbols);
+
+  // It is okay to *not* make anonymous top-level namespaces distinct, because
+  // all nodes that have an anonymous namespace as their parent scope are
+  // guaranteed to be unique and/or are linked to their containing
+  // DICompileUnit. This decision is an explicit tradeoff of link time versus
+  // memory usage versus code simplicity and may get revisited in the future.
+  return DINamespace::get(VMContext, getNonCompileUnitScope(Scope), Name,
+                          ExportSymbols);
 }
 
 DIModule *DIBuilder::createModule(DIScope *Scope, StringRef Name,

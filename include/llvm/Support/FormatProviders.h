@@ -18,6 +18,7 @@
 #include "llvm/ADT/Optional.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/StringSwitch.h"
+#include "llvm/ADT/Twine.h"
 #include "llvm/Support/FormatVariadicDetails.h"
 #include "llvm/Support/NativeFormatting.h"
 
@@ -209,6 +210,17 @@ struct format_provider<
   }
 };
 
+/// Implementation of format_provider<T> for llvm::Twine.
+///
+/// This follows the same rules as the string formatter.
+
+template <> struct format_provider<Twine> {
+  static void format(const Twine &V, llvm::raw_ostream &Stream,
+                     StringRef Style) {
+    format_provider<std::string>::format(V.str(), Stream, Style);
+  }
+};
+
 /// Implementation of format_provider<T> for characters.
 ///
 /// The options string of a character type has the grammar:
@@ -358,8 +370,7 @@ template <typename IterT> class format_provider<llvm::iterator_range<IterT>> {
       return Default;
     }
 
-    std::vector<const char *> Delims = {"[]", "<>", "()"};
-    for (const char *D : Delims) {
+    for (const char *D : {"[]", "<>", "()"}) {
       if (Style.front() != D[0])
         continue;
       size_t End = Style.find_first_of(D[1]);

@@ -391,7 +391,8 @@ public:
                "Reattach predecessor found with no corresponding Detach predecessor.");
         // Available value from predecessor through a reattach is the
         // same as that for the corresponding detach.
-        Traits::AddPHIOperand(PHI, DetachPredInfo->AvailableVal, ReattachPredInfo->BB);
+        Traits::AddPHIOperand(PHI, DetachPredInfo->AvailableVal,
+                              ReattachPredInfo->BB);
         if (DetachPredInfo->AvailableVal != ReattachPredInfo->AvailableVal)
           DetachedValBlocks.push_back(Info);
       }
@@ -510,7 +511,6 @@ public:
       if (!AvailableVal)
         continue;
 
-      Traits::MarkDetachedDef(AvailableVal, Info->BB, Updater);
       if (ValIsDetached)
         (*ValIsDetached)[Info->BB] = true;
 

@@ -22,6 +22,7 @@
 #include "SIInstrInfo.h"
 #include "SIISelLowering.h"
 #include "SIFrameLowering.h"
+#include "SIMachineFunctionInfo.h"
 #include "Utils/AMDGPUBaseInfo.h"
 #include "llvm/ADT/Triple.h"
 #include "llvm/CodeGen/GlobalISel/GISelAccessor.h"
@@ -74,15 +75,19 @@ public:
     TrapHandlerAbiHsa = 1
   };
 
-  enum TrapCode {
-    TrapCodeBreakPoint = 0,
-    TrapCodeLLVMTrap = 1,
-    TrapCodeLLVMDebugTrap = 2,
-    TrapCodeHSADebugTrap = 3
+  enum TrapID {
+    TrapIDHardwareReserved = 0,
+    TrapIDHSADebugTrap = 1,
+    TrapIDLLVMTrap = 2,
+    TrapIDLLVMDebugTrap = 3,
+    TrapIDDebugBreakpoint = 7,
+    TrapIDDebugReserved8 = 8,
+    TrapIDDebugReservedFE = 0xfe,
+    TrapIDDebugReservedFF = 0xff
   };
 
   enum TrapRegValues {
-    TrapCodeLLVMTrapRegValue = 1
+    LLVMTrapHandlerRegValue = 1
   };
 
 protected:
@@ -103,6 +108,7 @@ protected:
   bool FP32Denormals;
   bool FP64FP16Denormals;
   bool FPExceptions;
+  bool DX10Clamp;
   bool FlatForGlobal;
   bool UnalignedScratchAccess;
   bool UnalignedBufferAccess;
@@ -131,6 +137,7 @@ protected:
   bool SGPRInitBug;
   bool HasSMemRealTime;
   bool Has16BitInsts;
+  bool HasVOP3PInsts;
   bool HasMovrel;
   bool HasVGPRIndexMode;
   bool HasScalarStores;
@@ -138,6 +145,9 @@ protected:
   bool HasSDWA;
   bool HasDPP;
   bool FlatAddressSpace;
+  bool FlatInstOffsets;
+  bool FlatGlobalInsts;
+  bool FlatScratchInsts;
   bool R600ALUInst;
   bool CaymanISA;
   bool CFALUBug;
@@ -150,6 +160,7 @@ protected:
 
   InstrItineraryData InstrItins;
   SelectionDAGTargetInfo TSInfo;
+  AMDGPUAS AS;
 
 public:
   AMDGPUSubtarget(const Triple &TT, StringRef GPU, StringRef FS,
@@ -207,8 +218,16 @@ public:
     return MaxPrivateElementSize;
   }
 
+  AMDGPUAS getAMDGPUAS() const {
+    return AS;
+  }
+
   bool has16BitInsts() const {
     return Has16BitInsts;
+  }
+
+  bool hasVOP3PInsts() const {
+    return HasVOP3PInsts;
   }
 
   bool hasHWFP64() const {
@@ -266,6 +285,14 @@ public:
     return (getGeneration() >= EVERGREEN);
   }
 
+  bool hasMed3_16() const {
+    return getGeneration() >= GFX9;
+  }
+
+  bool hasMin3Max3_16() const {
+    return getGeneration() >= GFX9;
+  }
+
   bool hasCARRY() const {
     return (getGeneration() >= EVERGREEN);
   }
@@ -294,10 +321,6 @@ public:
     return DumpCode;
   }
 
-  bool enableIEEEBit(const MachineFunction &MF) const {
-    return AMDGPU::isCompute(MF.getFunction()->getCallingConv());
-  }
-
   /// Return the amount of LDS that can be used that will not restrict the
   /// occupancy lower than WaveCount.
   unsigned getMaxLocalMemSizeWithWaveCount(unsigned WaveCount,
@@ -306,6 +329,11 @@ public:
   /// Inverse of getMaxLocalMemWithWaveCount. Return the maximum wavecount if
   /// the given LDS memory size is the only constraint.
   unsigned getOccupancyWithLocalMemSize(uint32_t Bytes, const Function &) const;
+
+  unsigned getOccupancyWithLocalMemSize(const MachineFunction &MF) const {
+    const auto *MFI = MF.getInfo<SIMachineFunctionInfo>();
+    return getOccupancyWithLocalMemSize(MFI->getLDSSize(), *MF.getFunction());
+  }
 
   bool hasFP16Denormals() const {
     return FP64FP16Denormals;
@@ -321,6 +349,14 @@ public:
 
   bool hasFPExceptions() const {
     return FPExceptions;
+  }
+
+  bool enableDX10Clamp() const {
+    return DX10Clamp;
+  }
+
+  bool enableIEEEBit(const MachineFunction &MF) const {
+    return AMDGPU::isCompute(MF.getFunction()->getCallingConv());
   }
 
   bool useFlatForGlobal() const {
@@ -351,6 +387,18 @@ public:
     return FlatAddressSpace;
   }
 
+  bool hasFlatInstOffsets() const {
+    return FlatInstOffsets;
+  }
+
+  bool hasFlatGlobalInsts() const {
+    return FlatGlobalInsts;
+  }
+
+  bool hasFlatScratchInsts() const {
+    return FlatScratchInsts;
+  }
+
   bool isMesaKernel(const MachineFunction &MF) const {
     return isMesa3DOS() && !AMDGPU::isShader(MF.getFunction()->getCallingConv());
   }
@@ -366,6 +414,10 @@ public:
 
   bool hasFminFmaxLegacy() const {
     return getGeneration() < AMDGPUSubtarget::VOLCANIC_ISLANDS;
+  }
+
+  bool hasSDWA() const {
+    return HasSDWA;
   }
 
   /// \brief Returns the offset in bytes from the start of the input buffer
@@ -386,9 +438,11 @@ public:
     return 0;
   }
 
+  // Scratch is allocated in 256 dword per wave blocks for the entire
+  // wavefront. When viewed from the perspecive of an arbitrary workitem, this
+  // is 4-byte aligned.
   unsigned getStackAlignment() const {
-    // Scratch is allocated in 256 dword per wave blocks.
-    return 4 * 256 / getWavefrontSize();
+    return 4;
   }
 
   bool enableMachineScheduler() const override {
@@ -483,6 +537,9 @@ public:
   /// compatible with minimum/maximum number of waves limited by flat work group
   /// size, register usage, and/or lds usage.
   std::pair<unsigned, unsigned> getWavesPerEU(const Function &F) const;
+
+  /// Creates value range metadata on an workitemid.* inrinsic call or load.
+  bool makeLIDRangeMetadata(Instruction *I) const;
 };
 
 class R600Subtarget final : public AMDGPUSubtarget {
@@ -601,6 +658,10 @@ public:
     return HasVGPRIndexMode;
   }
 
+  bool useVGPRIndexMode(bool UserEnable) const {
+    return !hasMovrel() || (UserEnable && hasVGPRIndexMode());
+  }
+
   bool hasScalarCompareEq64() const {
     return getGeneration() >= VOLCANIC_ISLANDS;
   }
@@ -611,10 +672,6 @@ public:
 
   bool hasInv2PiInlineImm() const {
     return HasInv2PiInlineImm;
-  }
-
-  bool hasSDWA() const {
-    return HasSDWA;
   }
 
   bool hasDPP() const {

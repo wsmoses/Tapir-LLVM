@@ -127,6 +127,9 @@ def FeatureERI      : SubtargetFeature<"avx512er", "HasERI", "true",
 def FeatureCDI      : SubtargetFeature<"avx512cd", "HasCDI", "true",
                       "Enable AVX-512 Conflict Detection Instructions",
                                       [FeatureAVX512]>;
+def FeatureVPOPCNTDQ : SubtargetFeature<"avx512vpopcntdq", "HasVPOPCNTDQ",
+                       "true", "Enable AVX-512 Population Count Instructions",
+                                      [FeatureAVX512]>;
 def FeaturePFI      : SubtargetFeature<"avx512pf", "HasPFI", "true",
                       "Enable AVX-512 PreFetch Instructions",
                                       [FeatureAVX512]>;
@@ -170,6 +173,8 @@ def FeatureAES     : SubtargetFeature<"aes", "HasAES", "true",
                                       [FeatureSSE2]>;
 def FeatureTBM     : SubtargetFeature<"tbm", "HasTBM", "true",
                                       "Enable TBM instructions">;
+def FeatureLWP     : SubtargetFeature<"lwp", "HasLWP", "true",
+                                      "Enable LWP instructions">;
 def FeatureMOVBE   : SubtargetFeature<"movbe", "HasMOVBE", "true",
                                       "Support MOVBE instruction">;
 def FeatureRDRAND  : SubtargetFeature<"rdrnd", "HasRDRAND", "true",
@@ -233,16 +238,19 @@ def FeatureLEAUsesAG : SubtargetFeature<"lea-uses-ag", "LEAUsesAG", "true",
                                    "LEA instruction needs inputs at AG stage">;
 def FeatureSlowLEA : SubtargetFeature<"slow-lea", "SlowLEA", "true",
                                    "LEA instruction with certain arguments is slow">;
+def FeatureSlow3OpsLEA : SubtargetFeature<"slow-3ops-lea", "Slow3OpsLEA", "true",
+                                   "LEA instruction with 3 ops or certain registers is slow">;
 def FeatureSlowIncDec : SubtargetFeature<"slow-incdec", "SlowIncDec", "true",
                                    "INC and DEC instructions are slower than ADD and SUB">;
 def FeatureSoftFloat
     : SubtargetFeature<"soft-float", "UseSoftFloat", "true",
                        "Use software floating point features.">;
-// On at least some AMD processors, there is no performance hazard to writing
-// only the lower parts of a YMM register without clearing the upper part.
-def FeatureFastPartialYMMWrite
-    : SubtargetFeature<"fast-partial-ymm-write", "HasFastPartialYMMWrite",
-                       "true", "Partial writes to YMM registers are fast">;
+// On some X86 processors, there is no performance hazard to writing only the
+// lower parts of a YMM or ZMM register without clearing the upper part.
+def FeatureFastPartialYMMorZMMWrite
+    : SubtargetFeature<"fast-partial-ymm-or-zmm-write",
+                       "HasFastPartialYMMorZMMWrite",
+                       "true", "Partial writes to YMM/ZMM registers are fast">;
 // FeatureFastScalarFSQRT should be enabled if scalar FSQRT has shorter latency
 // than the corresponding NR code. FeatureFastVectorFSQRT should be enabled if
 // vector FSQRT has higher throughput than the corresponding NR code.
@@ -271,6 +279,16 @@ def FeatureFastSHLDRotate
     : SubtargetFeature<
           "fast-shld-rotate", "HasFastSHLDRotate", "true",
           "SHLD can be used as a faster rotate">;
+
+// Ivy Bridge and newer processors have enhanced REP MOVSB and STOSB (aka
+// "string operations"). See "REP String Enhancement" in the Intel Software
+// Development Manual. This feature essentially means that REP MOVSB will copy
+// using the largest available size instead of copying bytes one by one, making
+// it at least as fast as REPMOVS{W,D,Q}.
+def FeatureERMSB
+    : SubtargetFeature<
+          "ermsb", "HasERMSB", "true",
+          "REP MOVS/STOS are fast">;
 
 //===----------------------------------------------------------------------===//
 // X86 processors supported.
@@ -467,6 +485,7 @@ def SNBFeatures : ProcessorFeatures<[], [
   FeatureXSAVE,
   FeatureXSAVEOPT,
   FeatureLAHFSAHF,
+  FeatureSlow3OpsLEA,
   FeatureFastScalarFSQRT,
   FeatureFastSHLDRotate
 ]>;
@@ -497,10 +516,10 @@ def HSWFeatures : ProcessorFeatures<IVBFeatures.Value, [
   FeatureAVX2,
   FeatureBMI,
   FeatureBMI2,
+  FeatureERMSB,
   FeatureFMA,
   FeatureLZCNT,
   FeatureMOVBE,
-  FeatureRTM,
   FeatureSlowIncDec
 ]>;
 
@@ -519,6 +538,7 @@ def : BroadwellProc<"broadwell">;
 
 def SKLFeatures : ProcessorFeatures<BDWFeatures.Value, [
   FeatureMPX,
+  FeatureRTM,
   FeatureXSAVEC,
   FeatureXSAVES,
   FeatureSGX,
@@ -545,7 +565,8 @@ class KnightsLandingProc<string Name> : ProcModel<Name, HaswellModel,
   FeatureLZCNT,
   FeatureBMI,
   FeatureBMI2,
-  FeatureFMA
+  FeatureFMA,
+  FeatureFastPartialYMMorZMMWrite
 ]>;
 def : KnightsLandingProc<"knl">;
 
@@ -659,7 +680,7 @@ def : ProcessorModel<"btver2", BtVer2Model, [
   FeatureXSAVEOPT,
   FeatureSlowSHLD,
   FeatureLAHFSAHF,
-  FeatureFastPartialYMMWrite
+  FeatureFastPartialYMMorZMMWrite
 ]>;
 
 // Bulldozer
@@ -678,6 +699,7 @@ def : Proc<"bdver1", [
   FeatureLZCNT,
   FeaturePOPCNT,
   FeatureXSAVE,
+  FeatureLWP,
   FeatureSlowSHLD,
   FeatureLAHFSAHF
 ]>;
@@ -700,6 +722,7 @@ def : Proc<"bdver2", [
   FeatureXSAVE,
   FeatureBMI,
   FeatureTBM,
+  FeatureLWP,
   FeatureFMA,
   FeatureSlowSHLD,
   FeatureLAHFSAHF
@@ -724,6 +747,7 @@ def : Proc<"bdver3", [
   FeatureXSAVE,
   FeatureBMI,
   FeatureTBM,
+  FeatureLWP,
   FeatureFMA,
   FeatureXSAVEOPT,
   FeatureSlowSHLD,
@@ -750,6 +774,7 @@ def : Proc<"bdver4", [
   FeatureBMI,
   FeatureBMI2,
   FeatureTBM,
+  FeatureLWP,
   FeatureFMA,
   FeatureXSAVEOPT,
   FeatureSlowSHLD,

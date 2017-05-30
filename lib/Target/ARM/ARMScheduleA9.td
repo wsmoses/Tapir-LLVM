@@ -1981,6 +1981,15 @@ def A9WriteV7 : SchedWriteRes<[A9UnitFP, A9UnitAGU]> { let Latency = 7; }
 def A9WriteV9 : SchedWriteRes<[A9UnitFP, A9UnitAGU]> { let Latency = 9; }
 def A9WriteV10 : SchedWriteRes<[A9UnitFP, A9UnitAGU]> { let Latency = 10; }
 
+def : WriteRes<WriteVLD1, []>;
+def : WriteRes<WriteVLD2, []>;
+def : WriteRes<WriteVLD3, []>;
+def : WriteRes<WriteVLD4, []>;
+def : WriteRes<WriteVST1, []>;
+def : WriteRes<WriteVST2, []>;
+def : WriteRes<WriteVST3, []>;
+def : WriteRes<WriteVST4, []>;
+
 // Reserve A9UnitFP for 2 consecutive cycles.
 def A9Write2V4 : SchedWriteRes<[A9UnitFP, A9UnitAGU]> {
   let Latency = 4;
@@ -2003,6 +2012,7 @@ def A9WriteAdr : SchedWriteRes<[A9UnitAGU]> { let NumMicroOps = 0; }
 
 // Load Integer.
 def A9WriteL : SchedWriteRes<[A9UnitLS]> { let Latency = 3; }
+def : SchedAlias<WriteLd, A9WriteL>;
 // Load the upper 32-bits using the same micro-op.
 def A9WriteLHi : SchedWriteRes<[]> { let Latency = 3;
                                      let NumMicroOps = 0; }
@@ -2482,6 +2492,7 @@ def : SchedAlias<WriteALUsr, A9WriteALUsr>;
 def : SchedAlias<WriteALUSsr, A9WriteALUsr>;
 def : SchedAlias<ReadALU, A9ReadALU>;
 def : SchedAlias<ReadALUsr, A9ReadALU>;
+def : SchedAlias<WriteST, A9WriteS>;
 
 // ===---------------------------------------------------------------------===//
 // Floating-point. Map target defined SchedReadWrite to processor specific ones

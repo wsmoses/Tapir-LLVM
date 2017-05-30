@@ -20,8 +20,8 @@
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/Twine.h"
-#include "llvm/CodeGen/MachineFunctionPass.h"
 #include "llvm/CodeGen/DwarfStringPoolEntry.h"
+#include "llvm/CodeGen/MachineFunctionPass.h"
 #include "llvm/IR/InlineAsm.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/Support/ErrorHandling.h"
@@ -34,6 +34,7 @@
 namespace llvm {
 
 class AsmPrinterHandler;
+class BasicBlock;
 class BlockAddress;
 class Constant;
 class ConstantArray;
@@ -43,6 +44,7 @@ class DIEAbbrev;
 class DwarfDebug;
 class GCMetadataPrinter;
 class GlobalIndirectSymbol;
+class GlobalObject;
 class GlobalValue;
 class GlobalVariable;
 class GCStrategy;
@@ -53,6 +55,7 @@ class MachineInstr;
 class MachineJumpTableInfo;
 class MachineLoopInfo;
 class MachineModuleInfo;
+class MachineOptimizationRemarkEmitter;
 class MCAsmInfo;
 class MCCFIInstruction;
 class MCContext;
@@ -64,6 +67,8 @@ class MCSubtargetInfo;
 class MCSymbol;
 class MCTargetOptions;
 class MDNode;
+class Module;
+class raw_ostream;
 class TargetLoweringObjectFile;
 class TargetMachine;
 
@@ -93,6 +98,9 @@ public:
   /// This is a pointer to the current MachineModuleInfo.
   MachineModuleInfo *MMI = nullptr;
 
+  /// Optimization remark emitter.
+  MachineOptimizationRemarkEmitter *ORE;
+
   /// The symbol for the current function. This is recalculated at the beginning
   /// of each call to runOnMachineFunction().
   ///
@@ -105,8 +113,11 @@ public:
 
   /// Map global GOT equivalent MCSymbols to GlobalVariables and keep track of
   /// its number of uses by other globals.
-  typedef std::pair<const GlobalVariable *, unsigned> GOTEquivUsePair;
+  using GOTEquivUsePair = std::pair<const GlobalVariable *, unsigned>;
   MapVector<const MCSymbol *, GOTEquivUsePair> GlobalGOTEquivs;
+
+  /// Enable print [latency:throughput] in output
+  bool EnablePrintSchedInfo = false;
 
 private:
   MCSymbol *CurrentFnBegin = nullptr;
@@ -218,6 +229,8 @@ public:
     FUNCTION_ENTER = 0,
     FUNCTION_EXIT = 1,
     TAIL_CALL = 2,
+    LOG_ARGS_ENTER = 3,
+    CUSTOM_EVENT = 4,
   };
 
   // The table will contain these structs that point to the sled, the function
@@ -234,7 +247,7 @@ public:
   };
 
   // All the sleds to be emitted.
-  std::vector<XRayFunctionEntry> Sleds;
+  SmallVector<XRayFunctionEntry, 4> Sleds;
 
   // Helper function to record a given XRay sled.
   void recordSled(MCSymbol *Sled, const MachineInstr &MI, SledKind Kind);

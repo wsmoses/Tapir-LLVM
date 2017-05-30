@@ -218,9 +218,7 @@ PPCTargetMachine::PPCTargetMachine(const Target &T, const Triple &TT,
                         computeFSAdditions(FS, OL, TT), Options,
                         getEffectiveRelocModel(TT, RM), CM, OL),
       TLOF(createTLOF(getTargetTriple())),
-      TargetABI(computeTargetABI(TT, Options)),
-      Subtarget(TargetTriple, CPU, computeFSAdditions(FS, OL, TT), *this) {
-
+      TargetABI(computeTargetABI(TT, Options)) {
   initAsmInfo();
 }
 
@@ -324,7 +322,7 @@ TargetPassConfig *PPCTargetMachine::createPassConfig(PassManagerBase &PM) {
 void PPCPassConfig::addIRPasses() {
   if (TM->getOptLevel() != CodeGenOpt::None)
     addPass(createPPCBoolRetToIntPass());
-  addPass(createAtomicExpandPass(&getPPCTargetMachine()));
+  addPass(createAtomicExpandPass());
 
   // For the BG/Q (or if explicitly requested), add explicit data prefetch
   // intrinsics.

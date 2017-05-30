@@ -102,6 +102,9 @@ TEST_F(ProfileSummaryInfoTest, TestNoProfile) {
   Function *F = M->getFunction("f");
 
   ProfileSummaryInfo PSI = buildPSI(M.get());
+  EXPECT_FALSE(PSI.hasProfileSummary());
+  EXPECT_FALSE(PSI.hasSampleProfile());
+  EXPECT_FALSE(PSI.hasInstrumentationProfile());
   // In the absence of profiles, is{Hot|Cold}X methods should always return
   // false.
   EXPECT_FALSE(PSI.isHotCount(1000));
@@ -130,6 +133,7 @@ TEST_F(ProfileSummaryInfoTest, TestCommon) {
   Function *H = M->getFunction("h");
 
   ProfileSummaryInfo PSI = buildPSI(M.get());
+  EXPECT_TRUE(PSI.hasProfileSummary());
   EXPECT_TRUE(PSI.isHotCount(400));
   EXPECT_TRUE(PSI.isColdCount(2));
   EXPECT_FALSE(PSI.isColdCount(100));
@@ -144,6 +148,8 @@ TEST_F(ProfileSummaryInfoTest, InstrProf) {
   auto M = makeLLVMModule("InstrProf");
   Function *F = M->getFunction("f");
   ProfileSummaryInfo PSI = buildPSI(M.get());
+  EXPECT_TRUE(PSI.hasProfileSummary());
+  EXPECT_TRUE(PSI.hasInstrumentationProfile());
 
   BasicBlock &BB0 = F->getEntryBlock();
   BasicBlock *BB1 = BB0.getTerminator()->getSuccessor(0);
@@ -164,7 +170,7 @@ TEST_F(ProfileSummaryInfoTest, InstrProf) {
   EXPECT_FALSE(PSI.isHotCallSite(CS2, &BFI));
 
   // Test that adding an MD_prof metadata with a hot count on CS2 does not
-  // change itas hotness as it has no effect in instrumented profiling.
+  // change its hotness as it has no effect in instrumented profiling.
   MDBuilder MDB(M->getContext());
   CI2->setMetadata(llvm::LLVMContext::MD_prof, MDB.createBranchWeights({400}));
   EXPECT_FALSE(PSI.isHotCallSite(CS2, &BFI));
@@ -174,6 +180,8 @@ TEST_F(ProfileSummaryInfoTest, SampleProf) {
   auto M = makeLLVMModule("SampleProfile");
   Function *F = M->getFunction("f");
   ProfileSummaryInfo PSI = buildPSI(M.get());
+  EXPECT_TRUE(PSI.hasProfileSummary());
+  EXPECT_TRUE(PSI.hasSampleProfile());
 
   BasicBlock &BB0 = F->getEntryBlock();
   BasicBlock *BB1 = BB0.getTerminator()->getSuccessor(0);

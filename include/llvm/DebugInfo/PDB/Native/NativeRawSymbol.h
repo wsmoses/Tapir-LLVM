@@ -19,7 +19,7 @@ class NativeSession;
 
 class NativeRawSymbol : public IPDBRawSymbol {
 public:
-  explicit NativeRawSymbol(const NativeSession &PDBSession);
+  explicit NativeRawSymbol(NativeSession &PDBSession);
 
   void dump(raw_ostream &OS, int Indent) const override;
 
@@ -101,6 +101,8 @@ public:
   uint32_t getVirtualBaseDispIndex() const override;
   uint32_t getVirtualBaseOffset() const override;
   uint32_t getVirtualTableShapeId() const override;
+  std::unique_ptr<PDBSymbolTypeBuiltin>
+  getVirtualBaseTableType() const override;
   PDB_DataKind getDataKind() const override;
   PDB_SymType getSymTag() const override;
   PDB_UniqueId getGuid() const override;
@@ -196,6 +198,9 @@ public:
   bool isVolatileType() const override;
   bool wasInlined() const override;
   std::string getUnused() const override;
+
+protected:
+  NativeSession &Session;
 };
 
 }

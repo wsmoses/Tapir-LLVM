@@ -715,13 +715,13 @@ char MachinePipeliner::ID = 0;
 int MachinePipeliner::NumTries = 0;
 #endif
 char &llvm::MachinePipelinerID = MachinePipeliner::ID;
-INITIALIZE_PASS_BEGIN(MachinePipeliner, "pipeliner",
+INITIALIZE_PASS_BEGIN(MachinePipeliner, DEBUG_TYPE,
                       "Modulo Software Pipelining", false, false)
 INITIALIZE_PASS_DEPENDENCY(AAResultsWrapperPass)
 INITIALIZE_PASS_DEPENDENCY(MachineLoopInfo)
 INITIALIZE_PASS_DEPENDENCY(MachineDominatorTree)
 INITIALIZE_PASS_DEPENDENCY(LiveIntervals)
-INITIALIZE_PASS_END(MachinePipeliner, "pipeliner",
+INITIALIZE_PASS_END(MachinePipeliner, DEBUG_TYPE,
                     "Modulo Software Pipelining", false, false)
 
 /// The "main" function for implementing Swing Modulo Scheduling.
@@ -733,7 +733,7 @@ bool MachinePipeliner::runOnMachineFunction(MachineFunction &mf) {
     return false;
 
   if (mf.getFunction()->getAttributes().hasAttribute(
-          AttributeSet::FunctionIndex, Attribute::OptimizeForSize) &&
+          AttributeList::FunctionIndex, Attribute::OptimizeForSize) &&
       !EnableSWPOptSize.getPosition())
     return false;
 
@@ -955,7 +955,7 @@ static void getPhiRegs(MachineInstr &Phi, MachineBasicBlock *Loop,
   for (unsigned i = 1, e = Phi.getNumOperands(); i != e; i += 2)
     if (Phi.getOperand(i + 1).getMBB() != Loop)
       InitVal = Phi.getOperand(i).getReg();
-    else if (Phi.getOperand(i + 1).getMBB() == Loop)
+    else
       LoopVal = Phi.getOperand(i).getReg();
 
   assert(InitVal != 0 && LoopVal != 0 && "Unexpected Phi structure.");
@@ -2509,7 +2509,7 @@ void SwingSchedulerDAG::generateExistingPhis(
     MachineBasicBlock *KernelBB, SMSchedule &Schedule, ValueMapTy *VRMap,
     InstrMapTy &InstrMap, unsigned LastStageNum, unsigned CurStageNum,
     bool IsLast) {
-  // Compute the stage number for the inital value of the Phi, which
+  // Compute the stage number for the initial value of the Phi, which
   // comes from the prolog. The prolog to use depends on to which kernel/
   // epilog that we're adding the Phi.
   unsigned PrologStage = 0;
@@ -3475,7 +3475,7 @@ bool SwingSchedulerDAG::isLoopCarriedOrder(SUnit *Source, const SDep &Dep,
   // increment value to determine if the accesses may be loop carried.
   if (OffsetS >= OffsetD)
     return OffsetS + AccessSizeS > DeltaS;
-  else if (OffsetS < OffsetD)
+  else
     return OffsetD + AccessSizeD > DeltaD;
 
   return true;

@@ -2139,6 +2139,16 @@ LLVMValueRef LLVMMDNodeInContext(LLVMContextRef C, LLVMValueRef *Vals,
 LLVMValueRef LLVMMDNode(LLVMValueRef *Vals, unsigned Count);
 
 /**
+ * Obtain a Metadata as a Value.
+ */
+LLVMValueRef LLVMMetadataAsValue(LLVMContextRef C, LLVMMetadataRef MD);
+
+/**
+ * Obtain a Value as a Metadata.
+ */
+LLVMMetadataRef LLVMValueAsMetadata(LLVMValueRef Val);
+
+/**
  * Obtain the underlying string from a MDString value.
  *
  * @param V Instance to obtain string from.

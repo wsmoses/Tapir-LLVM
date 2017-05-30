@@ -43,7 +43,7 @@
 
 using namespace llvm;
 
-#define DEBUG_TYPE "live-debug-values"
+#define DEBUG_TYPE "livedebugvalues"
 
 STATISTIC(NumInserted, "Number of DBG_VALUE instructions inserted");
 
@@ -283,7 +283,7 @@ public:
 
 char LiveDebugValues::ID = 0;
 char &llvm::LiveDebugValuesID = LiveDebugValues::ID;
-INITIALIZE_PASS(LiveDebugValues, "livedebugvalues", "Live DEBUG_VALUE analysis",
+INITIALIZE_PASS(LiveDebugValues, DEBUG_TYPE, "Live DEBUG_VALUE analysis",
                 false, false)
 
 /// Default construct and initialize the pass.
@@ -373,8 +373,12 @@ void LiveDebugValues::transferRegisterDef(MachineInstr &MI,
   unsigned SP = TLI->getStackPointerRegisterToSaveRestore();
   SparseBitVector<> KillSet;
   for (const MachineOperand &MO : MI.operands()) {
+    // Determine whether the operand is a register def.  Assume that call
+    // instructions never clobber SP, because some backends (e.g., AArch64)
+    // never list SP in the regmask.
     if (MO.isReg() && MO.isDef() && MO.getReg() &&
-        TRI->isPhysicalRegister(MO.getReg())) {
+        TRI->isPhysicalRegister(MO.getReg()) &&
+        !(MI.isCall() && MO.getReg() == SP)) {
       // Remove ranges of all aliased registers.
       for (MCRegAliasIterator RAI(MO.getReg(), TRI, true); RAI.isValid(); ++RAI)
         for (unsigned ID : OpenRanges.getVarLocs())

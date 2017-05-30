@@ -135,15 +135,15 @@ ModRefInfo AAResults::getModRefInfo(Instruction *I, ImmutableCallSite Call) {
     return MRI_ModRef;
   } else if (auto D = dyn_cast<DetachInst>(I)) {
     ModRefInfo Result = MRI_NoModRef;
-    SmallPtrSet<const BasicBlock *, 32> Visited;
-    SmallVector<const BasicBlock *, 32> WorkList;
+    SmallPtrSet<BasicBlock *, 32> Visited;
+    SmallVector<BasicBlock *, 32> WorkList;
     WorkList.push_back(D->getSuccessor(0));
     while (!WorkList.empty()) {
-      const BasicBlock *BB = WorkList.pop_back_val();
+      BasicBlock *BB = WorkList.pop_back_val();
       if (!Visited.insert(BB).second)
         continue;
 
-      for (BasicBlock::const_iterator I = BB->begin(), E = BB->end(); I != E; ++I) {
+      for (BasicBlock::iterator I = BB->begin(), E = BB->end(); I != E; ++I) {
         // Fail fast if we encounter an invalid CFG.
         assert(!(D == &*I) &&
 	       "Invalid CFG found: Detached CFG reaches its own Detach instruction.");
@@ -371,8 +371,8 @@ FunctionModRefBehavior AAResults::getModRefBehavior(const Function *F) {
 
 ModRefInfo AAResults::getModRefInfo(const LoadInst *L,
                                     const MemoryLocation &Loc) {
-  // Be conservative in the face of volatile/atomic.
-  if (!L->isUnordered())
+  // Be conservative in the face of atomic.
+  if (isStrongerThan(L->getOrdering(), AtomicOrdering::Unordered))
     return MRI_ModRef;
 
   // If the load address doesn't alias the given address, it doesn't read
@@ -386,8 +386,8 @@ ModRefInfo AAResults::getModRefInfo(const LoadInst *L,
 
 ModRefInfo AAResults::getModRefInfo(const StoreInst *S,
                                     const MemoryLocation &Loc) {
-  // Be conservative in the face of volatile/atomic.
-  if (!S->isUnordered())
+  // Be conservative in the face of atomic.
+  if (isStrongerThan(S->getOrdering(), AtomicOrdering::Unordered))
     return MRI_ModRef;
 
   if (Loc.Ptr) {
@@ -816,7 +816,7 @@ AAResults llvm::createLegacyPMAAResults(Pass &P, Function &F,
 
 bool llvm::isNoAliasCall(const Value *V) {
   if (auto CS = ImmutableCallSite(V))
-    return CS.paramHasAttr(0, Attribute::NoAlias);
+    return CS.hasRetAttr(Attribute::NoAlias);
   return false;
 }
 

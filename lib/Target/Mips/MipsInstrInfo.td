@@ -21,7 +21,7 @@ def SDT_MipsCMov         : SDTypeProfile<1, 4, [SDTCisSameAs<0, 1>,
                                                 SDTCisSameAs<1, 2>,
                                                 SDTCisSameAs<3, 4>,
                                                 SDTCisInt<4>]>;
-def SDT_MipsCallSeqStart : SDCallSeqStart<[SDTCisVT<0, i32>]>;
+def SDT_MipsCallSeqStart : SDCallSeqStart<[SDTCisVT<0, i32>, SDTCisVT<1, i32>]>;
 def SDT_MipsCallSeqEnd   : SDCallSeqEnd<[SDTCisVT<0, i32>, SDTCisVT<1, i32>]>;
 def SDT_MFLOHI : SDTypeProfile<1, 1, [SDTCisInt<0>, SDTCisVT<1, untyped>]>;
 def SDT_MTLOHI : SDTypeProfile<1, 2, [SDTCisVT<0, untyped>,
@@ -138,6 +138,7 @@ def MipsSync : SDNode<"MipsISD::Sync", SDT_Sync, [SDNPHasChain,SDNPSideEffect]>;
 
 def MipsExt :  SDNode<"MipsISD::Ext", SDT_Ext>;
 def MipsIns :  SDNode<"MipsISD::Ins", SDT_Ins>;
+def MipsCIns : SDNode<"MipsISD::CIns", SDT_Ext>;
 
 def MipsLWL : SDNode<"MipsISD::LWL", SDTMipsLoadLR,
                      [SDNPHasChain, SDNPMayLoad, SDNPMemOperand]>;
@@ -541,7 +542,7 @@ def UImm32CoercedAsmOperandClass : UImmAnyAsmOperandClass<33, []> {
 def SImm32RelaxedAsmOperandClass
     : SImmAsmOperandClass<32, [UImm32CoercedAsmOperandClass]> {
   let Name = "SImm32_Relaxed";
-  let PredicateMethod = "isAnyImm<32>";
+  let PredicateMethod = "isAnyImm<33>";
   let DiagnosticType = "SImm32_Relaxed";
 }
 def SImm32AsmOperandClass
@@ -1172,6 +1173,10 @@ def immZExt5Plus33 : PatLeaf<(imm), [{
   return isUInt<5>(N->getZExtValue() - 33);
 }]>;
 
+def immZExt5To31 : SDNodeXForm<imm, [{
+  return getImm(N, 31 - N->getZExtValue());
+}]>;
+
 // True if (N + 1) fits in 16-bit field.
 def immSExt16Plus1 : PatLeaf<(imm), [{
   return isInt<17>(N->getSExtValue()) && isInt<16>(N->getSExtValue() + 1);
@@ -1714,8 +1719,8 @@ let isReturn=1, isTerminator=1, isBarrier=1, hasCtrlDep=1, isCTI=1 in {
 }
 
 let Defs = [SP], Uses = [SP], hasSideEffects = 1 in {
-def ADJCALLSTACKDOWN : MipsPseudo<(outs), (ins i32imm:$amt),
-                                  [(callseq_start timm:$amt)]>;
+def ADJCALLSTACKDOWN : MipsPseudo<(outs), (ins i32imm:$amt1, i32imm:$amt2),
+                                  [(callseq_start timm:$amt1, timm:$amt2)]>;
 def ADJCALLSTACKUP   : MipsPseudo<(outs), (ins i32imm:$amt1, i32imm:$amt2),
                                   [(callseq_end timm:$amt1, timm:$amt2)]>;
 }
@@ -2320,6 +2325,21 @@ def MULOUMacro : MipsAsmPseudoInst<(outs), (ins GPR32Opnd:$rd, GPR32Opnd:$rs,
 //===----------------------------------------------------------------------===//
 // Instruction aliases
 //===----------------------------------------------------------------------===//
+
+multiclass OneOrTwoOperandMacroImmediateAlias<string Memnomic,
+                                              Instruction Opcode,
+                                              RegisterOperand RO = GPR32Opnd,
+                                              Operand Imm = simm32_relaxed> {
+  def : MipsInstAlias<!strconcat(Memnomic, " $rs, $rt, $imm"),
+                                (Opcode RO:$rs,
+                                        RO:$rt,
+                                        Imm:$imm), 0>;
+  def : MipsInstAlias<!strconcat(Memnomic, " $rs, $imm"),
+                                (Opcode RO:$rs,
+                                        RO:$rs,
+                                        Imm:$imm), 0>;
+}
+
 def : MipsInstAlias<"move $dst, $src",
                     (OR GPR32Opnd:$dst, GPR32Opnd:$src, ZERO), 1>,
       GPR_32 {
@@ -2332,26 +2352,7 @@ def : MipsInstAlias<"move $dst, $src",
 }
 def : MipsInstAlias<"bal $offset", (BGEZAL ZERO, brtarget:$offset), 0>,
       ISA_MIPS1_NOT_32R6_64R6;
-def : MipsInstAlias<
-          "addu $rs, $rt, $imm",
-          (ADDiu GPR32Opnd:$rs, GPR32Opnd:$rt, simm32_relaxed:$imm), 0>;
-def : MipsInstAlias<
-          "addu $rs, $imm",
-          (ADDiu GPR32Opnd:$rs, GPR32Opnd:$rs, simm32_relaxed:$imm), 0>;
-def : MipsInstAlias<
-          "add $rs, $rt, $imm",
-          (ADDi GPR32Opnd:$rs, GPR32Opnd:$rt, simm32_relaxed:$imm), 0>,
-          ISA_MIPS1_NOT_32R6_64R6;
-def : MipsInstAlias<
-          "add $rs, $imm",
-          (ADDi GPR32Opnd:$rs, GPR32Opnd:$rs, simm32_relaxed:$imm), 0>,
-          ISA_MIPS1_NOT_32R6_64R6;
-def : MipsInstAlias<
-          "and $rs, $rt, $imm",
-          (ANDi GPR32Opnd:$rs, GPR32Opnd:$rt, simm32_relaxed:$imm), 0>;
-def : MipsInstAlias<
-          "and $rs, $imm",
-          (ANDi GPR32Opnd:$rs, GPR32Opnd:$rs, simm32_relaxed:$imm), 0>;
+
 def : MipsInstAlias<"j $rs", (JR GPR32Opnd:$rs), 0>;
 let Predicates = [NotInMicroMips] in {
 def : MipsInstAlias<"jalr $rs", (JALR RA, GPR32Opnd:$rs), 0>;
@@ -2379,36 +2380,26 @@ let AdditionalPredicates = [NotInMicroMips] in {
           "sgtu $$rs, $rt",
           (SLTu GPR32Opnd:$rs, GPR32Opnd:$rt, GPR32Opnd:$rs), 0>;
   def : MipsInstAlias<
-          "slt $rs, $rt, $imm",
-          (SLTi GPR32Opnd:$rs, GPR32Opnd:$rt, simm32_relaxed:$imm), 0>;
-  def : MipsInstAlias<
-          "sltu $rt, $rs, $imm",
-          (SLTiu GPR32Opnd:$rt, GPR32Opnd:$rs, simm32_relaxed:$imm), 0>;
-  def : MipsInstAlias<
-          "and $rs, $rt, $imm",
-          (ANDi GPR32Opnd:$rs, GPR32Opnd:$rt, simm32_relaxed:$imm), 0>;
-  def : MipsInstAlias<
-          "and $rs, $imm",
-          (ANDi GPR32Opnd:$rs, GPR32Opnd:$rs, simm32_relaxed:$imm), 0>;
-  def : MipsInstAlias<
-          "xor $rs, $rt, $imm",
-          (XORi GPR32Opnd:$rs, GPR32Opnd:$rt, simm32_relaxed:$imm), 0>;
-  def : MipsInstAlias<
-          "xor $rs, $imm",
-          (XORi GPR32Opnd:$rs, GPR32Opnd:$rs, simm32_relaxed:$imm), 0>;
-  def : MipsInstAlias<
-          "or $rs, $rt, $imm",
-          (ORi GPR32Opnd:$rs, GPR32Opnd:$rt, simm32_relaxed:$imm), 0>;
-  def : MipsInstAlias<
-          "or $rs, $imm",
-          (ORi GPR32Opnd:$rs, GPR32Opnd:$rs, simm32_relaxed:$imm), 0>;
-  def : MipsInstAlias<
           "not $rt, $rs",
           (NOR GPR32Opnd:$rt, GPR32Opnd:$rs, ZERO), 0>;
   def : MipsInstAlias<
           "not $rt",
           (NOR GPR32Opnd:$rt, GPR32Opnd:$rt, ZERO), 0>;
   def : MipsInstAlias<"nop", (SLL ZERO, ZERO, 0), 1>;
+
+  defm : OneOrTwoOperandMacroImmediateAlias<"add", ADDi>, ISA_MIPS1_NOT_32R6_64R6;
+
+  defm : OneOrTwoOperandMacroImmediateAlias<"addu", ADDiu>;
+
+  defm : OneOrTwoOperandMacroImmediateAlias<"and", ANDi>, GPR_32;
+
+  defm : OneOrTwoOperandMacroImmediateAlias<"or", ORi>, GPR_32;
+
+  defm : OneOrTwoOperandMacroImmediateAlias<"xor", XORi>, GPR_32;
+
+  defm : OneOrTwoOperandMacroImmediateAlias<"slt", SLTi>, GPR_32;
+
+  defm : OneOrTwoOperandMacroImmediateAlias<"sltu", SLTiu>, GPR_32;
 }
 def : MipsInstAlias<"mfc0 $rt, $rd", (MFC0 GPR32Opnd:$rt, COP0Opnd:$rd, 0), 0>;
 def : MipsInstAlias<"mtc0 $rt, $rd", (MTC0 COP0Opnd:$rd, GPR32Opnd:$rt, 0), 0>;
@@ -2516,9 +2507,12 @@ def JalTwoReg : MipsAsmPseudoInst<(outs GPR32Opnd:$rd), (ins GPR32Opnd:$rs),
 def JalOneReg : MipsAsmPseudoInst<(outs), (ins GPR32Opnd:$rs),
                       "jal\t$rs"> ;
 
-def NORImm : MipsAsmPseudoInst<
-                 (outs), (ins GPR32Opnd:$rs, GPR32Opnd:$rt, simm32:$imm),
-                 "nor\t$rs, $rt, $imm"> ;
+class NORIMM_DESC_BASE<RegisterOperand RO, DAGOperand Imm> :
+   MipsAsmPseudoInst<(outs RO:$rs), (ins RO:$rt, Imm:$imm),
+                      "nor\t$rs, $rt, $imm">;
+def NORImm : NORIMM_DESC_BASE<GPR32Opnd, simm32_relaxed>, GPR_32;
+def : MipsInstAlias<"nor\t$rs, $imm", (NORImm GPR32Opnd:$rs, GPR32Opnd:$rs,
+                                              simm32_relaxed:$imm)>, GPR_32;
 
 let hasDelaySlot = 1, isCTI = 1 in {
 def BneImm : MipsAsmPseudoInst<(outs GPR32Opnd:$rt),

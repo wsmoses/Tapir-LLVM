@@ -30,6 +30,7 @@
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Value.h"
 #include "llvm/Support/Casting.h"
+#include "llvm/Support/CBindingWrapping.h"
 #include "llvm/Support/ErrorHandling.h"
 #include <cassert>
 #include <cstddef>
@@ -78,7 +79,7 @@ public:
 protected:
   Metadata(unsigned ID, StorageType Storage)
       : SubclassID(ID), Storage(Storage), SubclassData16(0), SubclassData32(0) {
-    static_assert(sizeof(*this) == 8, "Metdata fields poorly packed");
+    static_assert(sizeof(*this) == 8, "Metadata fields poorly packed");
   }
 
   ~Metadata() = default;
@@ -133,6 +134,14 @@ public:
   /// @}
 };
 
+// Create wrappers for C Binding types (see CBindingWrapping.h).
+DEFINE_ISA_CONVERSION_FUNCTIONS(Metadata, LLVMMetadataRef)
+
+// Specialized opaque metadata conversions.
+inline Metadata **unwrap(LLVMMetadataRef *MDs) {
+  return reinterpret_cast<Metadata**>(MDs);
+}
+
 #define HANDLE_METADATA(CLASS) class CLASS;
 #include "llvm/IR/Metadata.def"
 
@@ -165,12 +174,13 @@ class MetadataAsValue : public Value {
   Metadata *MD;
 
   MetadataAsValue(Type *Ty, Metadata *MD);
-  ~MetadataAsValue() override;
 
   /// \brief Drop use of metadata (during teardown).
   void dropUse() { MD = nullptr; }
 
 public:
+  ~MetadataAsValue();
+
   static MetadataAsValue *get(LLVMContext &Context, Metadata *MD);
   static MetadataAsValue *getIfExists(LLVMContext &Context, Metadata *MD);
   Metadata *getMetadata() const { return MD; }

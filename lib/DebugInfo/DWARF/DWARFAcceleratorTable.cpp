@@ -1,4 +1,4 @@
-//===--- DWARFAcceleratorTable.cpp ----------------------------------------===//
+//===- DWARFAcceleratorTable.cpp ------------------------------------------===//
 //
 //                     The LLVM Compiler Infrastructure
 //
@@ -7,12 +7,20 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/DebugInfo/DWARF/DWARFAcceleratorTable.h"
+#include "llvm/DebugInfo/DWARF/DWARFContext.h"
+#include "llvm/DebugInfo/DWARF/DWARFFormValue.h"
+#include "llvm/DebugInfo/DWARF/DWARFRelocMap.h"
 #include "llvm/Support/Dwarf.h"
+#include "llvm/Support/Compiler.h"
 #include "llvm/Support/Format.h"
 #include "llvm/Support/raw_ostream.h"
+#include <cstddef>
+#include <cstdint>
+#include <utility>
 
-namespace llvm {
+using namespace llvm;
 
 bool DWARFAcceleratorTable::extract() {
   uint32_t Offset = 0;
@@ -105,10 +113,8 @@ LLVM_DUMP_METHOD void DWARFAcceleratorTable::dump(raw_ostream &OS) const {
         continue;
       }
       while (AccelSection.isValidOffsetForDataOfSize(DataOffset, 4)) {
-        unsigned StringOffset = AccelSection.getU32(&DataOffset);
-        RelocAddrMap::const_iterator Reloc = Relocs.find(DataOffset-4);
-        if (Reloc != Relocs.end())
-          StringOffset += Reloc->second.second;
+        unsigned StringOffset =
+            getRelocatedValue(AccelSection, 4, &DataOffset, &Relocs);
         if (!StringOffset)
           break;
         OS << format("    Name: %08x \"%s\"\n", StringOffset,
@@ -130,5 +136,4 @@ LLVM_DUMP_METHOD void DWARFAcceleratorTable::dump(raw_ostream &OS) const {
       }
     }
   }
-}
 }

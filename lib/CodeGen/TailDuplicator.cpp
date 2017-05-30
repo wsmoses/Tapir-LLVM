@@ -725,6 +725,7 @@ bool TailDuplicator::duplicateSimpleBB(
     if (PredTBB == NextBB && PredFBB == nullptr)
       PredTBB = nullptr;
 
+    auto DL = PredBB->findBranchDebugLoc();
     TII->removeBranch(*PredBB);
 
     if (!PredBB->isSuccessor(NewTarget))
@@ -735,7 +736,7 @@ bool TailDuplicator::duplicateSimpleBB(
     }
 
     if (PredTBB)
-      TII->insertBranch(*PredBB, PredTBB, PredFBB, PredCond, DebugLoc());
+      TII->insertBranch(*PredBB, PredTBB, PredFBB, PredCond, DL);
 
     TDBBs.push_back(PredBB);
   }
@@ -748,7 +749,7 @@ bool TailDuplicator::canTailDuplicate(MachineBasicBlock *TailBB,
   if (PredBB->succ_size() > 1)
     return false;
 
-  MachineBasicBlock *PredTBB, *PredFBB;
+  MachineBasicBlock *PredTBB = nullptr, *PredFBB = nullptr;
   SmallVector<MachineOperand, 4> PredCond;
   if (TII->analyzeBranch(*PredBB, PredTBB, PredFBB, PredCond))
     return false;
@@ -831,7 +832,7 @@ bool TailDuplicator::tailDuplicate(bool IsSimple, MachineBasicBlock *TailBB,
     appendCopies(PredBB, CopyInfos, Copies);
 
     // Simplify
-    MachineBasicBlock *PredTBB, *PredFBB;
+    MachineBasicBlock *PredTBB = nullptr, *PredFBB = nullptr;
     SmallVector<MachineOperand, 4> PredCond;
     TII->analyzeBranch(*PredBB, PredTBB, PredFBB, PredCond);
 

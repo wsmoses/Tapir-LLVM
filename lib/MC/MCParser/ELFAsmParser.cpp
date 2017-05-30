@@ -157,7 +157,7 @@ private:
   bool maybeParseSectionType(StringRef &TypeName);
   bool parseMergeSize(int64_t &Size);
   bool parseGroup(StringRef &GroupName);
-  bool parseMetadataSym(MCSectionELF *&Associated);
+  bool parseMetadataSym(MCSymbolELF *&Associated);
   bool maybeParseUniqueID(int64_t &UniqueID);
 };
 
@@ -298,7 +298,7 @@ static unsigned parseSectionFlags(StringRef flagsStr, bool *UseLastGroup) {
     case 'w':
       flags |= ELF::SHF_WRITE;
       break;
-    case 'm':
+    case 'o':
       flags |= ELF::SHF_LINK_ORDER;
       break;
     case 'M':
@@ -391,11 +391,18 @@ bool ELFAsmParser::maybeParseSectionType(StringRef &TypeName) {
     return false;
   Lex();
   if (L.isNot(AsmToken::At) && L.isNot(AsmToken::Percent) &&
-      L.isNot(AsmToken::String))
-    return TokError("expected '@<type>', '%<type>' or \"<type>\"");
+      L.isNot(AsmToken::String)) {
+    if (L.getAllowAtInIdentifier())
+      return TokError("expected '@<type>', '%<type>' or \"<type>\"");
+    else
+      return TokError("expected '%<type>' or \"<type>\"");
+  }
   if (!L.is(AsmToken::String))
     Lex();
-  if (getParser().parseIdentifier(TypeName))
+  if (L.is(AsmToken::Integer)) {
+    TypeName = getTok().getString();
+    Lex();
+  } else if (getParser().parseIdentifier(TypeName))
     return TokError("expected identifier in directive");
   return false;
 }
@@ -429,7 +436,7 @@ bool ELFAsmParser::parseGroup(StringRef &GroupName) {
   return false;
 }
 
-bool ELFAsmParser::parseMetadataSym(MCSectionELF *&Associated) {
+bool ELFAsmParser::parseMetadataSym(MCSymbolELF *&Associated) {
   MCAsmLexer &L = getLexer();
   if (L.isNot(AsmToken::Comma))
     return TokError("expected metadata symbol");
@@ -437,10 +444,9 @@ bool ELFAsmParser::parseMetadataSym(MCSectionELF *&Associated) {
   StringRef Name;
   if (getParser().parseIdentifier(Name))
     return true;
-  MCSymbol *Sym = getContext().lookupSymbol(Name);
-  if (!Sym || !Sym->isInSection())
+  Associated = dyn_cast_or_null<MCSymbolELF>(getContext().lookupSymbol(Name));
+  if (!Associated || !Associated->isInSection())
     return TokError("symbol is not in a section: " + Name);
-  Associated = cast<MCSectionELF>(&Sym->getSection());
   return false;
 }
 
@@ -466,6 +472,10 @@ bool ELFAsmParser::maybeParseUniqueID(int64_t &UniqueID) {
   return false;
 }
 
+static bool hasPrefix(StringRef SectionName, StringRef Prefix) {
+  return SectionName.startswith(Prefix) || SectionName == Prefix.drop_back();
+}
+
 bool ELFAsmParser::ParseSectionArguments(bool IsPush, SMLoc loc) {
   StringRef SectionName;
 
@@ -479,15 +489,24 @@ bool ELFAsmParser::ParseSectionArguments(bool IsPush, SMLoc loc) {
   const MCExpr *Subsection = nullptr;
   bool UseLastGroup = false;
   StringRef UniqueStr;
-  MCSectionELF *Associated = nullptr;
+  MCSymbolELF *Associated = nullptr;
   int64_t UniqueID = ~0;
 
   // Set the defaults first.
-  if (SectionName == ".fini" || SectionName == ".init" ||
-      SectionName == ".rodata")
+  if (hasPrefix(SectionName, ".rodata.") || SectionName == ".rodata1")
     Flags |= ELF::SHF_ALLOC;
-  if (SectionName == ".fini" || SectionName == ".init")
-    Flags |= ELF::SHF_EXECINSTR;
+  if (SectionName == ".fini" || SectionName == ".init" ||
+      hasPrefix(SectionName, ".text."))
+    Flags |= ELF::SHF_ALLOC | ELF::SHF_EXECINSTR;
+  if (hasPrefix(SectionName, ".data.") || SectionName == ".data1" ||
+      hasPrefix(SectionName, ".bss.") ||
+      hasPrefix(SectionName, ".init_array.") ||
+      hasPrefix(SectionName, ".fini_array.") ||
+      hasPrefix(SectionName, ".preinit_array."))
+    Flags |= ELF::SHF_ALLOC | ELF::SHF_WRITE;
+  if (hasPrefix(SectionName, ".tdata.") ||
+      hasPrefix(SectionName, ".tbss."))
+    Flags |= ELF::SHF_ALLOC | ELF::SHF_WRITE | ELF::SHF_TLS;
 
   if (getLexer().is(AsmToken::Comma)) {
     Lex();
@@ -559,11 +578,15 @@ EndStmt:
   if (TypeName.empty()) {
     if (SectionName.startswith(".note"))
       Type = ELF::SHT_NOTE;
-    else if (SectionName == ".init_array")
+    else if (hasPrefix(SectionName, ".init_array."))
       Type = ELF::SHT_INIT_ARRAY;
-    else if (SectionName == ".fini_array")
+    else if (hasPrefix(SectionName, ".bss."))
+      Type = ELF::SHT_NOBITS;
+    else if (hasPrefix(SectionName, ".tbss."))
+      Type = ELF::SHT_NOBITS;
+    else if (hasPrefix(SectionName, ".fini_array."))
       Type = ELF::SHT_FINI_ARRAY;
-    else if (SectionName == ".preinit_array")
+    else if (hasPrefix(SectionName, ".preinit_array."))
       Type = ELF::SHT_PREINIT_ARRAY;
   } else {
     if (TypeName == "init_array")
@@ -580,7 +603,7 @@ EndStmt:
       Type = ELF::SHT_NOTE;
     else if (TypeName == "unwind")
       Type = ELF::SHT_X86_64_UNWIND;
-    else
+    else if (TypeName.getAsInteger(0, Type))
       return TokError("unknown section type");
   }
 
@@ -594,8 +617,9 @@ EndStmt:
       }
   }
 
-  MCSection *ELFSection = getContext().getELFSection(
-      SectionName, Type, Flags, Size, GroupName, UniqueID, Associated);
+  MCSection *ELFSection =
+      getContext().getELFSection(SectionName, Type, Flags, Size, GroupName,
+                                 UniqueID, Associated);
   getStreamer().SwitchSection(ELFSection, Subsection);
 
   if (getContext().getGenDwarfForAssembly()) {
@@ -743,6 +767,7 @@ bool ELFAsmParser::ParseDirectiveSymver(StringRef, SMLoc) {
   const MCExpr *Value = MCSymbolRefExpr::create(Sym, getContext());
 
   getStreamer().EmitAssignment(Alias, Value);
+  getStreamer().emitELFSymverDirective(Alias, Sym);
   return false;
 }
 

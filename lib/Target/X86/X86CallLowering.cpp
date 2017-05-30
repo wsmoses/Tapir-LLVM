@@ -14,14 +14,14 @@
 //===----------------------------------------------------------------------===//
 
 #include "X86CallLowering.h"
+#include "X86CallingConv.h"
 #include "X86ISelLowering.h"
 #include "X86InstrInfo.h"
 #include "X86TargetMachine.h"
-#include "X86CallingConv.h"
 
 #include "llvm/CodeGen/GlobalISel/MachineIRBuilder.h"
-#include "llvm/CodeGen/MachineValueType.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
+#include "llvm/CodeGen/MachineValueType.h"
 #include "llvm/Target/TargetSubtargetInfo.h"
 
 using namespace llvm;
@@ -47,25 +47,26 @@ void X86CallLowering::splitToValueTypes(const ArgInfo &OrigArg,
   unsigned NumParts = TLI.getNumRegisters(Context, VT);
 
   if (NumParts == 1) {
-    SplitArgs.push_back(OrigArg);
+    // replace the original type ( pointer -> GPR ).
+    SplitArgs.emplace_back(OrigArg.Reg, VT.getTypeForEVT(Context),
+                           OrigArg.Flags, OrigArg.IsFixed);
     return;
   }
 
-  SmallVector<uint64_t, 4> BitOffsets;
   SmallVector<unsigned, 8> SplitRegs;
 
   EVT PartVT = TLI.getRegisterType(Context, VT);
   Type *PartTy = PartVT.getTypeForEVT(Context);
 
   for (unsigned i = 0; i < NumParts; ++i) {
-    ArgInfo Info = ArgInfo{MRI.createGenericVirtualRegister(LLT{*PartTy, DL}),
-                           PartTy, OrigArg.Flags};
+    ArgInfo Info =
+        ArgInfo{MRI.createGenericVirtualRegister(getLLTForType(*PartTy, DL)),
+                PartTy, OrigArg.Flags};
     SplitArgs.push_back(Info);
-    BitOffsets.push_back(PartVT.getSizeInBits() * i);
     SplitRegs.push_back(Info.Reg);
   }
 
-  PerformArgSplit(SplitRegs, BitOffsets);
+  PerformArgSplit(SplitRegs);
 }
 
 namespace {
@@ -109,16 +110,15 @@ bool X86CallLowering::lowerReturn(MachineIRBuilder &MIRBuilder,
     const Function &F = *MF.getFunction();
 
     ArgInfo OrigArg{VReg, Val->getType()};
-    setArgFlags(OrigArg, AttributeSet::ReturnIndex, DL, F);
+    setArgFlags(OrigArg, AttributeList::ReturnIndex, DL, F);
 
     SmallVector<ArgInfo, 8> SplitArgs;
-    splitToValueTypes(OrigArg, SplitArgs, DL, MRI,
-                      [&](ArrayRef<unsigned> Regs, ArrayRef<uint64_t> Offsets) {
-                        MIRBuilder.buildExtract(Regs, Offsets, VReg);
-                      });
+    splitToValueTypes(
+        OrigArg, SplitArgs, DL, MRI,
+        [&](ArrayRef<unsigned> Regs) { MIRBuilder.buildUnmerge(Regs, VReg); });
 
     FuncReturnHandler Handler(MIRBuilder, MRI, MIB, RetCC_X86);
-    if(!handleAssignments(MIRBuilder, SplitArgs, Handler))
+    if (!handleAssignments(MIRBuilder, SplitArgs, Handler))
       return false;
   }
 
@@ -139,9 +139,8 @@ struct FormalArgHandler : public CallLowering::ValueHandler {
     int FI = MFI.CreateFixedObject(Size, Offset, true);
     MPO = MachinePointerInfo::getFixedStack(MIRBuilder.getMF(), FI);
 
-    unsigned AddrReg =
-        MRI.createGenericVirtualRegister(LLT::pointer(0,
-                                         DL.getPointerSizeInBits(0)));
+    unsigned AddrReg = MRI.createGenericVirtualRegister(
+        LLT::pointer(0, DL.getPointerSizeInBits(0)));
     MIRBuilder.buildFrameIndex(AddrReg, FI);
     return AddrReg;
   }
@@ -163,7 +162,7 @@ struct FormalArgHandler : public CallLowering::ValueHandler {
 
   const DataLayout &DL;
 };
-}
+} // namespace
 
 bool X86CallLowering::lowerFormalArguments(MachineIRBuilder &MIRBuilder,
                                            const Function &F,
@@ -171,7 +170,7 @@ bool X86CallLowering::lowerFormalArguments(MachineIRBuilder &MIRBuilder,
   if (F.arg_empty())
     return true;
 
-  //TODO: handle variadic function
+  // TODO: handle variadic function
   if (F.isVarArg())
     return false;
 
@@ -181,19 +180,19 @@ bool X86CallLowering::lowerFormalArguments(MachineIRBuilder &MIRBuilder,
 
   SmallVector<ArgInfo, 8> SplitArgs;
   unsigned Idx = 0;
-  for (auto &Arg : F.getArgumentList()) {
+  for (auto &Arg : F.args()) {
     ArgInfo OrigArg(VRegs[Idx], Arg.getType());
     setArgFlags(OrigArg, Idx + 1, DL, F);
     splitToValueTypes(OrigArg, SplitArgs, DL, MRI,
-                      [&](ArrayRef<unsigned> Regs, ArrayRef<uint64_t> Offsets) {
-                            MIRBuilder.buildSequence(VRegs[Idx], Regs, Offsets);
+                      [&](ArrayRef<unsigned> Regs) {
+                        MIRBuilder.buildMerge(VRegs[Idx], Regs);
                       });
     Idx++;
   }
 
   MachineBasicBlock &MBB = MIRBuilder.getMBB();
   if (!MBB.empty())
-     MIRBuilder.setInstr(*MBB.begin());
+    MIRBuilder.setInstr(*MBB.begin());
 
   FormalArgHandler Handler(MIRBuilder, MRI, CC_X86, DL);
   if (!handleAssignments(MIRBuilder, SplitArgs, Handler))

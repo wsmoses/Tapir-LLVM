@@ -8,6 +8,8 @@
 //===----------------------------------------------------------------------===//
 
 #include "AMDGPU.h"
+#include "AMDGPUSubtarget.h"
+#include "llvm/CodeGen/TargetPassConfig.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/IntrinsicInst.h"
@@ -23,10 +25,14 @@ namespace {
 const unsigned MaxStaticSize = 1024;
 
 class AMDGPULowerIntrinsics : public ModulePass {
+private:
+  bool makeLIDRangeMetadata(Function &F) const;
+
 public:
   static char ID;
 
-  AMDGPULowerIntrinsics() : ModulePass(ID) { }
+  AMDGPULowerIntrinsics() : ModulePass(ID) {}
+
   bool runOnModule(Module &M) override;
   StringRef getPassName() const override {
     return "AMDGPU Lower Intrinsics";
@@ -39,8 +45,8 @@ char AMDGPULowerIntrinsics::ID = 0;
 
 char &llvm::AMDGPULowerIntrinsicsID = AMDGPULowerIntrinsics::ID;
 
-INITIALIZE_PASS(AMDGPULowerIntrinsics, DEBUG_TYPE,
-                "Lower intrinsics", false, false)
+INITIALIZE_PASS(AMDGPULowerIntrinsics, DEBUG_TYPE, "Lower intrinsics", false,
+                false)
 
 // TODO: Should refine based on estimated number of accesses (e.g. does it
 // require splitting based on alignment)
@@ -96,6 +102,25 @@ static bool expandMemIntrinsicUses(Function &F) {
   return Changed;
 }
 
+bool AMDGPULowerIntrinsics::makeLIDRangeMetadata(Function &F) const {
+  auto *TPC = getAnalysisIfAvailable<TargetPassConfig>();
+  if (!TPC)
+    return false;
+
+  const TargetMachine &TM = TPC->getTM<TargetMachine>();
+  const AMDGPUSubtarget &ST = TM.getSubtarget<AMDGPUSubtarget>(F);
+  bool Changed = false;
+
+  for (auto *U : F.users()) {
+    auto *CI = dyn_cast<CallInst>(U);
+    if (!CI)
+      continue;
+
+    Changed |= ST.makeLIDRangeMetadata(CI);
+  }
+  return Changed;
+}
+
 bool AMDGPULowerIntrinsics::runOnModule(Module &M) {
   bool Changed = false;
 
@@ -110,6 +135,19 @@ bool AMDGPULowerIntrinsics::runOnModule(Module &M) {
       if (expandMemIntrinsicUses(F))
         Changed = true;
       break;
+
+    case Intrinsic::amdgcn_workitem_id_x:
+    case Intrinsic::r600_read_tidig_x:
+    case Intrinsic::amdgcn_workitem_id_y:
+    case Intrinsic::r600_read_tidig_y:
+    case Intrinsic::amdgcn_workitem_id_z:
+    case Intrinsic::r600_read_tidig_z:
+    case Intrinsic::r600_read_local_size_x:
+    case Intrinsic::r600_read_local_size_y:
+    case Intrinsic::r600_read_local_size_z:
+      Changed |= makeLIDRangeMetadata(F);
+      break;
+
     default:
       break;
     }

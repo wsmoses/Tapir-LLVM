@@ -27,21 +27,19 @@ def MMX_X86movw2d : SDNode<"X86ISD::MMX_MOVW2D", SDTypeProfile<1, 1,
 //===----------------------------------------------------------------------===//
 
 def load_mmx : PatFrag<(ops node:$ptr), (x86mmx (load node:$ptr))>;
-def load_mvmmx : PatFrag<(ops node:$ptr),
-                         (x86mmx (MMX_X86movw2d (load node:$ptr)))>;
 
 //===----------------------------------------------------------------------===//
 // SSE specific DAG Nodes.
 //===----------------------------------------------------------------------===//
 
-def SDTX86VFCMP : SDTypeProfile<1, 3, [SDTCisFP<0>, SDTCisSameAs<1, 2>,
-                                       SDTCisFP<1>, SDTCisVT<3, i8>,
-                                       SDTCisVec<1>]>;
-def SDTX86CmpTestSae : SDTypeProfile<1, 3, [SDTCisVT<0, i32>, 
-                                     SDTCisSameAs<1, 2>, SDTCisInt<3>]>;
+def SDTX86VFCMP : SDTypeProfile<1, 3, [SDTCisFP<0>, SDTCisVec<0>,
+                                       SDTCisSameAs<0, 1>, SDTCisSameAs<1, 2>,
+                                       SDTCisVT<3, i8>]>;
 
 def X86fmin    : SDNode<"X86ISD::FMIN",      SDTFPBinOp>;
 def X86fmax    : SDNode<"X86ISD::FMAX",      SDTFPBinOp>;
+def X86fmins   : SDNode<"X86ISD::FMINS",     SDTFPBinOp>;
+def X86fmaxs   : SDNode<"X86ISD::FMAXS",     SDTFPBinOp>;
 
 // Commutative and Associative FMIN and FMAX.
 def X86fminc    : SDNode<"X86ISD::FMINC", SDTFPBinOp,
@@ -276,7 +274,7 @@ def X86select  : SDNode<"X86ISD::SELECT",
                                              SDTCisSameNumEltsAs<0, 1>]>>;
 
 def X86selects : SDNode<"X86ISD::SELECTS",
-                        SDTypeProfile<1, 3, [SDTCisVT<1, i1>,
+                        SDTypeProfile<1, 3, [SDTCisVT<1, v1i1>,
                                              SDTCisSameAs<0, 2>,
                                              SDTCisSameAs<2, 3>]>>;
 
@@ -357,7 +355,6 @@ def SDTFmaRound : SDTypeProfile<1, 4, [SDTCisSameAs<0,1>,
 def X86PAlignr : SDNode<"X86ISD::PALIGNR", SDTShuff3OpI>;
 def X86VAlign  : SDNode<"X86ISD::VALIGN", SDTShuff3OpI>;
 
-def X86Abs      : SDNode<"X86ISD::ABS", SDTIntUnaryOp>;
 def X86Conflict : SDNode<"X86ISD::CONFLICT", SDTIntUnaryOp>;
 
 def X86PShufd  : SDNode<"X86ISD::PSHUFD", SDTShuff2OpI>;
@@ -444,7 +441,7 @@ def X86Vfpclass    : SDNode<"X86ISD::VFPCLASS",
                                             SDTCisSameNumEltsAs<0,1>,
                                             SDTCisVT<2, i32>]>, []>;
 def X86Vfpclasss   : SDNode<"X86ISD::VFPCLASSS",
-                       SDTypeProfile<1, 2, [SDTCisVT<0, i1>,
+                       SDTypeProfile<1, 2, [SDTCisVT<0, v1i1>,
                                             SDTCisFP<1>, SDTCisVT<2, i32>]>,[]>;
 
 def X86SubVBroadcast : SDNode<"X86ISD::SUBV_BROADCAST",
@@ -454,7 +451,7 @@ def X86SubVBroadcast : SDNode<"X86ISD::SUBV_BROADCAST",
 def X86VBroadcast : SDNode<"X86ISD::VBROADCAST", SDTVBroadcast>;
 def X86VBroadcastm : SDNode<"X86ISD::VBROADCASTM", SDTVBroadcastm>;
 def X86Vextract   : SDNode<"X86ISD::VEXTRACT",  SDTypeProfile<1, 2,
-                              [SDTCisEltOfVec<0, 1>, SDTCisVec<1>,
+                              [SDTCisVec<1>,
                                SDTCisPtrTy<2>]>, []>;
 
 def X86Blendi    : SDNode<"X86ISD::BLENDI",   SDTBlend>;
@@ -462,13 +459,19 @@ def X86Blendi    : SDNode<"X86ISD::BLENDI",   SDTBlend>;
 def X86Addsub    : SDNode<"X86ISD::ADDSUB", SDTFPBinOp>;
 
 def X86faddRnd   : SDNode<"X86ISD::FADD_RND",  SDTFPBinOpRound>;
+def X86faddRnds  : SDNode<"X86ISD::FADDS_RND", SDTFPBinOpRound>;
 def X86fsubRnd   : SDNode<"X86ISD::FSUB_RND",  SDTFPBinOpRound>;
+def X86fsubRnds  : SDNode<"X86ISD::FSUBS_RND", SDTFPBinOpRound>;
 def X86fmulRnd   : SDNode<"X86ISD::FMUL_RND",  SDTFPBinOpRound>;
+def X86fmulRnds  : SDNode<"X86ISD::FMULS_RND", SDTFPBinOpRound>;
 def X86fdivRnd   : SDNode<"X86ISD::FDIV_RND",  SDTFPBinOpRound>;
-def X86fmaxRnd   : SDNode<"X86ISD::FMAX_RND",       SDTFPBinOpRound>;
+def X86fdivRnds  : SDNode<"X86ISD::FDIVS_RND", SDTFPBinOpRound>;
+def X86fmaxRnd   : SDNode<"X86ISD::FMAX_RND",  SDTFPBinOpRound>;
+def X86fmaxRnds  : SDNode<"X86ISD::FMAXS_RND", SDTFPBinOpRound>;
+def X86fminRnd   : SDNode<"X86ISD::FMIN_RND",  SDTFPBinOpRound>;
+def X86fminRnds  : SDNode<"X86ISD::FMINS_RND", SDTFPBinOpRound>;
 def X86scalef    : SDNode<"X86ISD::SCALEF",         SDTFPBinOpRound>;
 def X86scalefs   : SDNode<"X86ISD::SCALEFS",        SDTFPBinOpRound>;
-def X86fminRnd   : SDNode<"X86ISD::FMIN_RND",       SDTFPBinOpRound>;
 def X86fsqrtRnd     : SDNode<"X86ISD::FSQRT_RND",   SDTFPUnaryOpRound>;
 def X86fsqrtRnds    : SDNode<"X86ISD::FSQRTS_RND", SDTFPBinOpRound>;
 def X86fgetexpRnd   : SDNode<"X86ISD::FGETEXP_RND", SDTFPUnaryOpRound>;

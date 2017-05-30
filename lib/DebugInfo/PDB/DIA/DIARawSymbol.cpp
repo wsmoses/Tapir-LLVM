@@ -14,6 +14,10 @@
 #include "llvm/DebugInfo/PDB/DIA/DIAEnumSymbols.h"
 #include "llvm/DebugInfo/PDB/DIA/DIASession.h"
 #include "llvm/DebugInfo/PDB/PDBExtras.h"
+#include "llvm/DebugInfo/PDB/PDBSymbolTypeBuiltin.h"
+#include "llvm/DebugInfo/PDB/PDBSymbolTypePointer.h"
+#include "llvm/DebugInfo/PDB/PDBSymbolTypeVTable.h"
+#include "llvm/DebugInfo/PDB/PDBSymbolTypeVTableShape.h"
 #include "llvm/Support/ConvertUTF.h"
 #include "llvm/Support/raw_ostream.h"
 
@@ -715,6 +719,18 @@ uint32_t DIARawSymbol::getVirtualBaseOffset() const {
 
 uint32_t DIARawSymbol::getVirtualTableShapeId() const {
   return PrivateGetDIAValue(Symbol, &IDiaSymbol::get_virtualTableShapeId);
+}
+
+std::unique_ptr<PDBSymbolTypeBuiltin>
+DIARawSymbol::getVirtualBaseTableType() const {
+  CComPtr<IDiaSymbol> TableType;
+  if (FAILED(Symbol->get_virtualBaseTableType(&TableType)) || !TableType)
+    return nullptr;
+
+  auto RawVT = llvm::make_unique<DIARawSymbol>(Session, TableType);
+  auto Pointer =
+      llvm::make_unique<PDBSymbolTypePointer>(Session, std::move(RawVT));
+  return unique_dyn_cast<PDBSymbolTypeBuiltin>(Pointer->getPointeeType());
 }
 
 PDB_DataKind DIARawSymbol::getDataKind() const {

@@ -309,7 +309,7 @@ void PointerReplacer::replace(Instruction *I) {
     auto *NewI = new BitCastInst(V, NewT);
     IC.InsertNewInstWith(NewI, *BC);
     NewI->takeName(BC);
-    WorkMap[GEP] = NewI;
+    WorkMap[BC] = NewI;
   } else {
     llvm_unreachable("should never reach here");
   }
@@ -885,10 +885,8 @@ static bool canReplaceGEPIdxWithZero(InstCombiner &IC, GetElementPtrInst *GEPI,
   // first non-zero index.
   auto IsAllNonNegative = [&]() {
     for (unsigned i = Idx+1, e = GEPI->getNumOperands(); i != e; ++i) {
-      bool KnownNonNegative, KnownNegative;
-      IC.ComputeSignBit(GEPI->getOperand(i), KnownNonNegative,
-                        KnownNegative, 0, MemI);
-      if (KnownNonNegative)
+      KnownBits Known = IC.computeKnownBits(GEPI->getOperand(i), 0, MemI);
+      if (Known.isNonNegative())
         continue;
       return false;
     }
@@ -929,6 +927,18 @@ static Instruction *replaceGEPIdxWithZero(InstCombiner &IC, Value *Ptr,
   }
 
   return nullptr;
+}
+
+static bool canSimplifyNullLoadOrGEP(LoadInst &LI, Value *Op) {
+  if (GetElementPtrInst *GEPI = dyn_cast<GetElementPtrInst>(Op)) {
+    const Value *GEPI0 = GEPI->getOperand(0);
+    if (isa<ConstantPointerNull>(GEPI0) && GEPI->getPointerAddressSpace() == 0)
+      return true;
+  }
+  if (isa<UndefValue>(Op) ||
+      (isa<ConstantPointerNull>(Op) && LI.getPointerAddressSpace() == 0))
+    return true;
+  return false;
 }
 
 Instruction *InstCombiner::visitLoadInst(LoadInst &LI) {
@@ -979,27 +989,13 @@ Instruction *InstCombiner::visitLoadInst(LoadInst &LI) {
   if (!LI.isUnordered()) return nullptr;
 
   // load(gep null, ...) -> unreachable
-  if (GetElementPtrInst *GEPI = dyn_cast<GetElementPtrInst>(Op)) {
-    const Value *GEPI0 = GEPI->getOperand(0);
-    // TODO: Consider a target hook for valid address spaces for this xform.
-    if (isa<ConstantPointerNull>(GEPI0) && GEPI->getPointerAddressSpace() == 0){
-      // Insert a new store to null instruction before the load to indicate
-      // that this code is not reachable.  We do this instead of inserting
-      // an unreachable instruction directly because we cannot modify the
-      // CFG.
-      new StoreInst(UndefValue::get(LI.getType()),
-                    Constant::getNullValue(Op->getType()), &LI);
-      return replaceInstUsesWith(LI, UndefValue::get(LI.getType()));
-    }
-  }
-
   // load null/undef -> unreachable
-  // TODO: Consider a target hook for valid address spaces for this xform.
-  if (isa<UndefValue>(Op) ||
-      (isa<ConstantPointerNull>(Op) && LI.getPointerAddressSpace() == 0)) {
-    // Insert a new store to null instruction before the load to indicate that
-    // this code is not reachable.  We do this instead of inserting an
-    // unreachable instruction directly because we cannot modify the CFG.
+  // TODO: Consider a target hook for valid address spaces for this xforms.
+  if (canSimplifyNullLoadOrGEP(LI, Op)) {
+    // Insert a new store to null instruction before the load to indicate
+    // that this code is not reachable.  We do this instead of inserting
+    // an unreachable instruction directly because we cannot modify the
+    // CFG.
     new StoreInst(UndefValue::get(LI.getType()),
                   Constant::getNullValue(Op->getType()), &LI);
     return replaceInstUsesWith(LI, UndefValue::get(LI.getType()));

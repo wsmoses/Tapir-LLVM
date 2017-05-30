@@ -28,7 +28,7 @@ declare void @llvm.debugtrap() #0
 ; GCN-LABEL: {{^}}hsa_trap:
 ; HSA-TRAP: enable_trap_handler = 1
 ; HSA-TRAP: s_mov_b64 s[0:1], s[4:5]
-; HSA-TRAP: s_trap 1
+; HSA-TRAP: s_trap 2
 
 ; for llvm.trap in hsa path without ABI, direct generate s_endpgm instruction without any warning information
 ; NO-HSA-TRAP: enable_trap_handler = 0
@@ -38,7 +38,7 @@ declare void @llvm.debugtrap() #0
 ; TRAP-BIT: enable_trap_handler = 1
 ; NO-TRAP-BIT: enable_trap_handler = 0
 ; NO-MESA-TRAP: s_endpgm
-define void @hsa_trap() {
+define amdgpu_kernel void @hsa_trap() {
   call void @llvm.trap()
   ret void
 }
@@ -55,7 +55,7 @@ define void @hsa_trap() {
 ; GCN-LABEL: {{^}}hsa_debugtrap:
 ; HSA-TRAP: enable_trap_handler = 1
 ; HSA-TRAP: s_mov_b64 s[0:1], s[4:5]
-; HSA-TRAP: s_trap 2
+; HSA-TRAP: s_trap 3
 
 ; for llvm.debugtrap in non-hsa path without ABI, generate a warning and a s_endpgm instruction
 ; NO-HSA-TRAP: enable_trap_handler = 0
@@ -64,7 +64,7 @@ define void @hsa_trap() {
 ; TRAP-BIT: enable_trap_handler = 1
 ; NO-TRAP-BIT: enable_trap_handler = 0
 ; NO-MESA-TRAP: s_endpgm
-define void @hsa_debugtrap() {
+define amdgpu_kernel void @hsa_debugtrap() {
   call void @llvm.debugtrap()
   ret void
 }
@@ -75,8 +75,29 @@ define void @hsa_debugtrap() {
 ; NO-TRAP-BIT: enable_trap_handler = 0
 ; NO-HSA-TRAP: s_endpgm
 ; NO-MESA-TRAP: s_endpgm
-define void @trap() {
+define amdgpu_kernel void @trap() {
   call void @llvm.trap()
+  ret void
+}
+
+; GCN-LABEL: {{^}}non_entry_trap:
+; TRAP-BIT: enable_trap_handler = 1
+; NO-TRAP-BIT: enable_trap_handler = 0
+
+; HSA: BB{{[0-9]_[0-9]+]]: ; %trap
+; HSA-TRAP: s_mov_b64 s[0:1], s[4:5]
+; HSA-TRAP-NEXT: s_trap 2
+define amdgpu_kernel void @non_entry_trap(i32 addrspace(1)* nocapture readonly %arg0) local_unnamed_addr #1 {
+entry:
+  %tmp29 = load volatile i32, i32 addrspace(1)* %arg0
+  %cmp = icmp eq i32 %tmp29, -1
+  br i1 %cmp, label %ret, label %trap
+
+trap:
+  call void @llvm.trap()
+  unreachable
+
+ret:
   ret void
 }
 

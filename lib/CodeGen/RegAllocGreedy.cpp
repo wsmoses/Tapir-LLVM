@@ -285,8 +285,7 @@ class RAGreedy : public MachineFunctionPass,
     // Set B[i] = C for every live bundle where B[i] was NoCand.
     unsigned getBundles(SmallVectorImpl<unsigned> &B, unsigned C) {
       unsigned Count = 0;
-      for (int i = LiveBundles.find_first(); i >= 0;
-           i = LiveBundles.find_next(i))
+      for (unsigned i : LiveBundles.set_bits())
         if (B[i] == NoCand) {
           B[i] = C;
           Count++;
@@ -698,7 +697,7 @@ unsigned RAGreedy::canReassign(LiveInterval &VirtReg, unsigned PrevReg) {
     MCRegUnitIterator Units(PhysReg, TRI);
     for (; Units.isValid(); ++Units) {
       // Instantiate a "subquery", not to be confused with the Queries array.
-      LiveIntervalUnion::Query subQ(&VirtReg, &Matrix->getLiveUnions()[*Units]);
+      LiveIntervalUnion::Query subQ(VirtReg, Matrix->getLiveUnions()[*Units]);
       if (subQ.checkInterference())
         break;
     }
@@ -849,7 +848,11 @@ void RAGreedy::evictInterference(LiveInterval &VirtReg, unsigned PhysReg,
   SmallVector<LiveInterval*, 8> Intfs;
   for (MCRegUnitIterator Units(PhysReg, TRI); Units.isValid(); ++Units) {
     LiveIntervalUnion::Query &Q = Matrix->query(VirtReg, *Units);
-    assert(Q.seenAllInterferences() && "Didn't check all interfererences.");
+    // We usually have the interfering VRegs cached so collectInterferingVRegs()
+    // should be fast, we may need to recalculate if when different physregs
+    // overlap the same register unit so we had different SubRanges queried
+    // against it.
+    Q.collectInterferingVRegs();
     ArrayRef<LiveInterval*> IVR = Q.interferingVRegs();
     Intfs.append(IVR.begin(), IVR.end());
   }
@@ -1158,9 +1161,8 @@ bool RAGreedy::calcCompactRegion(GlobalSplitCandidate &Cand) {
   }
 
   DEBUG({
-    for (int i = Cand.LiveBundles.find_first(); i>=0;
-         i = Cand.LiveBundles.find_next(i))
-    dbgs() << " EB#" << i;
+    for (int i : Cand.LiveBundles.set_bits())
+      dbgs() << " EB#" << i;
     dbgs() << ".\n";
   });
   return true;
@@ -1478,8 +1480,7 @@ unsigned RAGreedy::calculateRegionSplitCost(LiveInterval &VirtReg,
     DEBUG({
       dbgs() << ", total = "; MBFI->printBlockFreq(dbgs(), Cost)
                                 << " with bundles";
-      for (int i = Cand.LiveBundles.find_first(); i>=0;
-           i = Cand.LiveBundles.find_next(i))
+      for (int i : Cand.LiveBundles.set_bits())
         dbgs() << " EB#" << i;
       dbgs() << ".\n";
     });

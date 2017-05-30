@@ -400,8 +400,7 @@ template <typename CFLAA> class CFLGraphBuilder {
       // TODO: address other common library functions such as realloc(),
       // strdup(),
       // etc.
-      if (isMallocLikeFn(Inst, &TLI) || isCallocLikeFn(Inst, &TLI) ||
-          isFreeCall(Inst, &TLI))
+      if (isMallocOrCallocLikeFn(Inst, &TLI) || isFreeCall(Inst, &TLI))
         return;
 
       // TODO: Add support for noalias args/all the other fun function
@@ -430,7 +429,7 @@ template <typename CFLAA> class CFLGraphBuilder {
 
       if (Inst->getType()->isPointerTy()) {
         auto *Fn = CS.getCalledFunction();
-        if (Fn == nullptr || !Fn->doesNotAlias(0))
+        if (Fn == nullptr || !Fn->returnDoesNotAlias())
           // No need to call addNode() since we've added Inst at the
           // beginning of this function and we know it is not a global.
           Graph.addAttr(InstantiatedValue{Inst, 0}, getAttrUnknown());

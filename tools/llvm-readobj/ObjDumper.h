@@ -59,7 +59,7 @@ public:
   virtual void printMipsOptions() { }
 
   // Only implemented for AMDGPU ELF at this time.
-  virtual void printAMDGPURuntimeMD() {}
+  virtual void printAMDGPUCodeObjectMetadata() {}
 
   // Only implemented for PE/COFF.
   virtual void printCOFFImports() { }
@@ -67,8 +67,10 @@ public:
   virtual void printCOFFDirectives() { }
   virtual void printCOFFBaseReloc() { }
   virtual void printCOFFDebugDirectory() { }
+  virtual void printCOFFResources() {}
   virtual void printCodeViewDebugInfo() { }
-  virtual void mergeCodeViewTypes(llvm::codeview::TypeTableBuilder &CVTypes) {}
+  virtual void mergeCodeViewTypes(llvm::codeview::TypeTableBuilder &CVIDs,
+                                  llvm::codeview::TypeTableBuilder &CVTypes) {}
 
   // Only implemented for MachO.
   virtual void printMachODataInCode() { }
@@ -103,7 +105,8 @@ std::error_code createWasmDumper(const object::ObjectFile *Obj,
 void dumpCOFFImportFile(const object::COFFImportFile *File);
 
 void dumpCodeViewMergedTypes(ScopedPrinter &Writer,
-                             llvm::codeview::TypeTableBuilder &CVTypes);
+                             llvm::codeview::TypeTableBuilder &IDTable,
+                             llvm::codeview::TypeTableBuilder &TypeTable);
 
 } // namespace llvm
 

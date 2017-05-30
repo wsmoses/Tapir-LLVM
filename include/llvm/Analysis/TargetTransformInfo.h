@@ -44,23 +44,26 @@ class Value;
 
 /// \brief Information about a load/store intrinsic defined by the target.
 struct MemIntrinsicInfo {
-  MemIntrinsicInfo()
-      : ReadMem(false), WriteMem(false), IsSimple(false), MatchingId(0),
-        NumMemRefs(0), PtrVal(nullptr) {}
-  bool ReadMem;
-  bool WriteMem;
-  /// True only if this memory operation is non-volatile, non-atomic, and
-  /// unordered.  (See LoadInst/StoreInst for details on each)
-  bool IsSimple;
-  // Same Id is set by the target for corresponding load/store intrinsics.
-  unsigned short MatchingId;
-  int NumMemRefs;
-
   /// This is the pointer that the intrinsic is loading from or storing to.
   /// If this is non-null, then analysis/optimization passes can assume that
   /// this intrinsic is functionally equivalent to a load/store from this
   /// pointer.
-  Value *PtrVal;
+  Value *PtrVal = nullptr;
+
+  // Ordering for atomic operations.
+  AtomicOrdering Ordering = AtomicOrdering::NotAtomic;
+
+  // Same Id is set by the target for corresponding load/store intrinsics.
+  unsigned short MatchingId = 0;
+
+  bool ReadMem = false;
+  bool WriteMem = false;
+  bool IsVolatile = false;
+
+  bool isUnordered() const {
+    return (Ordering == AtomicOrdering::NotAtomic ||
+            Ordering == AtomicOrdering::Unordered) && !IsVolatile;
+  }
 };
 
 /// \brief This pass provides access to the codegen interfaces that are needed
@@ -193,6 +196,12 @@ public:
   /// Mirrors the \c getCallCost method but uses an intrinsic identifier.
   int getIntrinsicCost(Intrinsic::ID IID, Type *RetTy,
                        ArrayRef<const Value *> Arguments) const;
+
+  /// \return The estimated number of case clusters when lowering \p 'SI'.
+  /// \p JTSize Set a jump table size only when \p SI is suitable for a jump
+  /// table.
+  unsigned getEstimatedNumberOfCaseClusters(const SwitchInst &SI,
+                                            unsigned &JTSize) const;
 
   /// \brief Estimate the cost of a given IR user when lowered.
   ///
@@ -387,6 +396,9 @@ public:
   bool isLegalMaskedScatter(Type *DataType) const;
   bool isLegalMaskedGather(Type *DataType) const;
 
+  /// Return true if target doesn't mind addresses in vectors.
+  bool prefersVectorizedAddressing() const;
+
   /// \brief Return the cost of the scaling factor used in the addressing
   /// mode represented by AM for this target, for a load/store
   /// of the specified type.
@@ -433,6 +445,11 @@ public:
 
   unsigned getOperandsScalarizationOverhead(ArrayRef<const Value *> Args,
                                             unsigned VF) const;
+
+  /// If target has efficient vector element load/store instructions, it can
+  /// return true here so that insertion/extraction costs are not added to
+  /// the scalarization cost of a load/store.
+  bool supportsEfficientVectorElementLoadStore() const;
 
   /// \brief Don't restrict interleaved unrolling to small loops.
   bool enableAggressiveInterleaving(bool LoopHasReductions) const;
@@ -523,6 +540,15 @@ public:
   /// \return The width of the largest scalar or vector register type.
   unsigned getRegisterBitWidth(bool Vector) const;
 
+  /// \return The width of the smallest vector register type.
+  unsigned getMinVectorRegisterBitWidth() const;
+
+  /// \return True if it should be considered for address type promotion.
+  /// \p AllowPromotionWithoutCommonHeader Set true if promoting \p I is
+  /// profitable without finding other extensions fed by the same input.
+  bool shouldConsiderAddressTypePromotion(
+      const Instruction &I, bool &AllowPromotionWithoutCommonHeader) const;
+
   /// \return The size of a cache line in bytes.
   unsigned getCacheLineSize() const;
 
@@ -563,8 +589,10 @@ public:
                      Type *SubTp = nullptr) const;
 
   /// \return The expected cost of cast instructions, such as bitcast, trunc,
-  /// zext, etc.
-  int getCastInstrCost(unsigned Opcode, Type *Dst, Type *Src) const;
+  /// zext, etc. If there is an existing instruction that holds Opcode, it
+  /// may be passed in the 'I' parameter.
+  int getCastInstrCost(unsigned Opcode, Type *Dst, Type *Src,
+                       const Instruction *I = nullptr) const;
 
   /// \return The expected cost of a sign- or zero-extended vector extract. Use
   /// -1 to indicate that there is no information about the index value.
@@ -575,9 +603,11 @@ public:
   /// Phi, Ret, Br.
   int getCFInstrCost(unsigned Opcode) const;
 
-  /// \returns The expected cost of compare and select instructions.
+  /// \returns The expected cost of compare and select instructions. If there
+  /// is an existing instruction that holds Opcode, it may be passed in the
+  /// 'I' parameter.
   int getCmpSelInstrCost(unsigned Opcode, Type *ValTy,
-                         Type *CondTy = nullptr) const;
+                 Type *CondTy = nullptr, const Instruction *I = nullptr) const;
 
   /// \return The expected cost of vector Insert and Extract.
   /// Use -1 to indicate that there is no information on the index value.
@@ -585,7 +615,7 @@ public:
 
   /// \return The cost of Load and Store instructions.
   int getMemoryOpCost(unsigned Opcode, Type *Src, unsigned Alignment,
-                      unsigned AddressSpace) const;
+                      unsigned AddressSpace, const Instruction *I = nullptr) const;
 
   /// \return The cost of masked Load and Store instructions.
   int getMaskedMemoryOpCost(unsigned Opcode, Type *Src, unsigned Alignment,
@@ -628,13 +658,19 @@ public:
   ///  ((v0+v2), (v1+v3), undef, undef)
   int getReductionCost(unsigned Opcode, Type *Ty, bool IsPairwiseForm) const;
 
-  /// \returns The cost of Intrinsic instructions. Types analysis only.
-  int getIntrinsicInstrCost(Intrinsic::ID ID, Type *RetTy,
-                            ArrayRef<Type *> Tys, FastMathFlags FMF) const;
-
   /// \returns The cost of Intrinsic instructions. Analyses the real arguments.
+  /// Three cases are handled: 1. scalar instruction 2. vector instruction
+  /// 3. scalar instruction which is to be vectorized with VF.
   int getIntrinsicInstrCost(Intrinsic::ID ID, Type *RetTy,
-                            ArrayRef<Value *> Args, FastMathFlags FMF) const;
+                            ArrayRef<Value *> Args, FastMathFlags FMF,
+                            unsigned VF = 1) const;
+
+  /// \returns The cost of Intrinsic instructions. Types analysis only.
+  /// If ScalarizationCostPassed is UINT_MAX, the cost of scalarizing the
+  /// arguments and the return value will be computed based on types.
+  int getIntrinsicInstrCost(Intrinsic::ID ID, Type *RetTy,
+                            ArrayRef<Type *> Tys, FastMathFlags FMF,
+                            unsigned ScalarizationCostPassed = UINT_MAX) const;
 
   /// \returns The cost of Call instructions.
   int getCallInstrCost(Function *F, Type *RetTy, ArrayRef<Type *> Tys) const;
@@ -710,6 +746,22 @@ public:
                                 unsigned ChainSizeInBytes,
                                 VectorType *VecTy) const;
 
+  /// Flags describing the kind of vector reduction.
+  struct ReductionFlags {
+    ReductionFlags() : IsMaxOp(false), IsSigned(false), NoNaN(false) {}
+    bool IsMaxOp;  ///< If the op a min/max kind, true if it's a max operation.
+    bool IsSigned; ///< Whether the operation is a signed int reduction.
+    bool NoNaN;    ///< If op is an fp min/max, whether NaNs may be present.
+  };
+
+  /// \returns True if the target wants to handle the given reduction idiom in
+  /// the intrinsics form instead of the shuffle form.
+  bool useReductionIntrinsic(unsigned Opcode, Type *Ty,
+                             ReductionFlags Flags) const;
+
+  /// \returns True if the target wants to expand the given reduction intrinsic
+  /// into a shuffle sequence.
+  bool shouldExpandReduction(const IntrinsicInst *II) const;
   /// @}
 
 private:
@@ -740,6 +792,8 @@ public:
                                ArrayRef<Type *> ParamTys) = 0;
   virtual int getIntrinsicCost(Intrinsic::ID IID, Type *RetTy,
                                ArrayRef<const Value *> Arguments) = 0;
+  virtual unsigned getEstimatedNumberOfCaseClusters(const SwitchInst &SI,
+                                                    unsigned &JTSize) = 0;
   virtual int getUserCost(const User *U) = 0;
   virtual bool hasBranchDivergence() = 0;
   virtual bool isSourceOfDivergence(const Value *V) = 0;
@@ -756,6 +810,7 @@ public:
   virtual bool isLegalMaskedLoad(Type *DataType) = 0;
   virtual bool isLegalMaskedScatter(Type *DataType) = 0;
   virtual bool isLegalMaskedGather(Type *DataType) = 0;
+  virtual bool prefersVectorizedAddressing() = 0;
   virtual int getScalingFactorCost(Type *Ty, GlobalValue *BaseGV,
                                    int64_t BaseOffset, bool HasBaseReg,
                                    int64_t Scale, unsigned AddrSpace) = 0;
@@ -771,6 +826,7 @@ public:
   getScalarizationOverhead(Type *Ty, bool Insert, bool Extract) = 0;
   virtual unsigned getOperandsScalarizationOverhead(ArrayRef<const Value *> Args,
                                                     unsigned VF) = 0;
+  virtual bool supportsEfficientVectorElementLoadStore() = 0;
   virtual bool enableAggressiveInterleaving(bool LoopHasReductions) = 0;
   virtual bool enableInterleavedAccessVectorization() = 0;
   virtual bool isFPVectorizationPotentiallyUnsafe() = 0;
@@ -791,6 +847,9 @@ public:
                             Type *Ty) = 0;
   virtual unsigned getNumberOfRegisters(bool Vector) = 0;
   virtual unsigned getRegisterBitWidth(bool Vector) = 0;
+  virtual unsigned getMinVectorRegisterBitWidth() = 0;
+  virtual bool shouldConsiderAddressTypePromotion(
+      const Instruction &I, bool &AllowPromotionWithoutCommonHeader) = 0;
   virtual unsigned getCacheLineSize() = 0;
   virtual unsigned getPrefetchDistance() = 0;
   virtual unsigned getMinPrefetchStride() = 0;
@@ -804,16 +863,17 @@ public:
                          ArrayRef<const Value *> Args) = 0;
   virtual int getShuffleCost(ShuffleKind Kind, Type *Tp, int Index,
                              Type *SubTp) = 0;
-  virtual int getCastInstrCost(unsigned Opcode, Type *Dst, Type *Src) = 0;
+  virtual int getCastInstrCost(unsigned Opcode, Type *Dst, Type *Src,
+                               const Instruction *I) = 0;
   virtual int getExtractWithExtendCost(unsigned Opcode, Type *Dst,
                                        VectorType *VecTy, unsigned Index) = 0;
   virtual int getCFInstrCost(unsigned Opcode) = 0;
   virtual int getCmpSelInstrCost(unsigned Opcode, Type *ValTy,
-                                 Type *CondTy) = 0;
+                                Type *CondTy, const Instruction *I) = 0;
   virtual int getVectorInstrCost(unsigned Opcode, Type *Val,
                                  unsigned Index) = 0;
   virtual int getMemoryOpCost(unsigned Opcode, Type *Src, unsigned Alignment,
-                              unsigned AddressSpace) = 0;
+                              unsigned AddressSpace, const Instruction *I) = 0;
   virtual int getMaskedMemoryOpCost(unsigned Opcode, Type *Src,
                                     unsigned Alignment,
                                     unsigned AddressSpace) = 0;
@@ -828,11 +888,10 @@ public:
   virtual int getReductionCost(unsigned Opcode, Type *Ty,
                                bool IsPairwiseForm) = 0;
   virtual int getIntrinsicInstrCost(Intrinsic::ID ID, Type *RetTy,
-                                    ArrayRef<Type *> Tys,
-                                    FastMathFlags FMF) = 0;
+                      ArrayRef<Type *> Tys, FastMathFlags FMF,
+                      unsigned ScalarizationCostPassed) = 0;
   virtual int getIntrinsicInstrCost(Intrinsic::ID ID, Type *RetTy,
-                                    ArrayRef<Value *> Args,
-                                    FastMathFlags FMF) = 0;
+         ArrayRef<Value *> Args, FastMathFlags FMF, unsigned VF) = 0;
   virtual int getCallInstrCost(Function *F, Type *RetTy,
                                ArrayRef<Type *> Tys) = 0;
   virtual unsigned getNumberOfParts(Type *Tp) = 0;
@@ -860,6 +919,9 @@ public:
   virtual unsigned getStoreVectorFactor(unsigned VF, unsigned StoreSize,
                                         unsigned ChainSizeInBytes,
                                         VectorType *VecTy) const = 0;
+  virtual bool useReductionIntrinsic(unsigned Opcode, Type *Ty,
+                                     ReductionFlags) const = 0;
+  virtual bool shouldExpandReduction(const IntrinsicInst *II) const = 0;
 };
 
 template <typename T>
@@ -942,6 +1004,9 @@ public:
   bool isLegalMaskedGather(Type *DataType) override {
     return Impl.isLegalMaskedGather(DataType);
   }
+  bool prefersVectorizedAddressing() override {
+    return Impl.prefersVectorizedAddressing();
+  }
   int getScalingFactorCost(Type *Ty, GlobalValue *BaseGV, int64_t BaseOffset,
                            bool HasBaseReg, int64_t Scale,
                            unsigned AddrSpace) override {
@@ -973,6 +1038,10 @@ public:
   unsigned getOperandsScalarizationOverhead(ArrayRef<const Value *> Args,
                                             unsigned VF) override {
     return Impl.getOperandsScalarizationOverhead(Args, VF);
+  }
+
+  bool supportsEfficientVectorElementLoadStore() override {
+    return Impl.supportsEfficientVectorElementLoadStore();
   }
 
   bool enableAggressiveInterleaving(bool LoopHasReductions) override {
@@ -1018,7 +1087,14 @@ public:
   unsigned getRegisterBitWidth(bool Vector) override {
     return Impl.getRegisterBitWidth(Vector);
   }
-
+  unsigned getMinVectorRegisterBitWidth() override {
+    return Impl.getMinVectorRegisterBitWidth();
+  }
+  bool shouldConsiderAddressTypePromotion(
+      const Instruction &I, bool &AllowPromotionWithoutCommonHeader) override {
+    return Impl.shouldConsiderAddressTypePromotion(
+        I, AllowPromotionWithoutCommonHeader);
+  }
   unsigned getCacheLineSize() override {
     return Impl.getCacheLineSize();
   }
@@ -1031,6 +1107,10 @@ public:
   }
   unsigned getMaxInterleaveFactor(unsigned VF) override {
     return Impl.getMaxInterleaveFactor(VF);
+  }
+  unsigned getEstimatedNumberOfCaseClusters(const SwitchInst &SI,
+                                            unsigned &JTSize) override {
+    return Impl.getEstimatedNumberOfCaseClusters(SI, JTSize);
   }
   unsigned
   getArithmeticInstrCost(unsigned Opcode, Type *Ty, OperandValueKind Opd1Info,
@@ -1045,8 +1125,9 @@ public:
                      Type *SubTp) override {
     return Impl.getShuffleCost(Kind, Tp, Index, SubTp);
   }
-  int getCastInstrCost(unsigned Opcode, Type *Dst, Type *Src) override {
-    return Impl.getCastInstrCost(Opcode, Dst, Src);
+  int getCastInstrCost(unsigned Opcode, Type *Dst, Type *Src,
+                       const Instruction *I) override {
+    return Impl.getCastInstrCost(Opcode, Dst, Src, I);
   }
   int getExtractWithExtendCost(unsigned Opcode, Type *Dst, VectorType *VecTy,
                                unsigned Index) override {
@@ -1055,15 +1136,16 @@ public:
   int getCFInstrCost(unsigned Opcode) override {
     return Impl.getCFInstrCost(Opcode);
   }
-  int getCmpSelInstrCost(unsigned Opcode, Type *ValTy, Type *CondTy) override {
-    return Impl.getCmpSelInstrCost(Opcode, ValTy, CondTy);
+  int getCmpSelInstrCost(unsigned Opcode, Type *ValTy, Type *CondTy,
+                         const Instruction *I) override {
+    return Impl.getCmpSelInstrCost(Opcode, ValTy, CondTy, I);
   }
   int getVectorInstrCost(unsigned Opcode, Type *Val, unsigned Index) override {
     return Impl.getVectorInstrCost(Opcode, Val, Index);
   }
   int getMemoryOpCost(unsigned Opcode, Type *Src, unsigned Alignment,
-                      unsigned AddressSpace) override {
-    return Impl.getMemoryOpCost(Opcode, Src, Alignment, AddressSpace);
+                      unsigned AddressSpace, const Instruction *I) override {
+    return Impl.getMemoryOpCost(Opcode, Src, Alignment, AddressSpace, I);
   }
   int getMaskedMemoryOpCost(unsigned Opcode, Type *Src, unsigned Alignment,
                             unsigned AddressSpace) override {
@@ -1086,13 +1168,13 @@ public:
     return Impl.getReductionCost(Opcode, Ty, IsPairwiseForm);
   }
   int getIntrinsicInstrCost(Intrinsic::ID ID, Type *RetTy, ArrayRef<Type *> Tys,
-                            FastMathFlags FMF) override {
-    return Impl.getIntrinsicInstrCost(ID, RetTy, Tys, FMF);
+               FastMathFlags FMF, unsigned ScalarizationCostPassed) override {
+    return Impl.getIntrinsicInstrCost(ID, RetTy, Tys, FMF,
+                                      ScalarizationCostPassed);
   }
   int getIntrinsicInstrCost(Intrinsic::ID ID, Type *RetTy,
-                            ArrayRef<Value *> Args,
-                            FastMathFlags FMF) override {
-    return Impl.getIntrinsicInstrCost(ID, RetTy, Args, FMF);
+       ArrayRef<Value *> Args, FastMathFlags FMF, unsigned VF) override {
+    return Impl.getIntrinsicInstrCost(ID, RetTy, Args, FMF, VF);
   }
   int getCallInstrCost(Function *F, Type *RetTy,
                        ArrayRef<Type *> Tys) override {
@@ -1150,6 +1232,13 @@ public:
                                 unsigned ChainSizeInBytes,
                                 VectorType *VecTy) const override {
     return Impl.getStoreVectorFactor(VF, StoreSize, ChainSizeInBytes, VecTy);
+  }
+  bool useReductionIntrinsic(unsigned Opcode, Type *Ty,
+                             ReductionFlags Flags) const override {
+    return Impl.useReductionIntrinsic(Opcode, Ty, Flags);
+  }
+  bool shouldExpandReduction(const IntrinsicInst *II) const override {
+    return Impl.shouldExpandReduction(II);
   }
 };
 

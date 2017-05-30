@@ -180,7 +180,9 @@ const RegisterBank &ARMRegisterBankInfo::getRegBankFromRegClass(
   switch (RC.getID()) {
   case GPRRegClassID:
   case GPRnopcRegClassID:
+  case GPRspRegClassID:
   case tGPR_and_tcGPRRegClassID:
+  case tGPRRegClassID:
     return getRegBank(ARM::GPRRegBankID);
   case SPR_8RegClassID:
   case SPRRegClassID:
@@ -194,14 +196,14 @@ const RegisterBank &ARMRegisterBankInfo::getRegBankFromRegClass(
   llvm_unreachable("Switch should handle all register classes");
 }
 
-RegisterBankInfo::InstructionMapping
+const RegisterBankInfo::InstructionMapping &
 ARMRegisterBankInfo::getInstrMapping(const MachineInstr &MI) const {
   auto Opc = MI.getOpcode();
 
   // Try the default logic for non-generic instructions that are either copies
   // or already have some operands assigned to banks.
   if (!isPreISelGenericOpcode(Opc)) {
-    InstructionMapping Mapping = getInstrMappingImpl(MI);
+    const InstructionMapping &Mapping = getInstrMappingImpl(MI);
     if (Mapping.isValid())
       return Mapping;
   }
@@ -217,13 +219,21 @@ ARMRegisterBankInfo::getInstrMapping(const MachineInstr &MI) const {
 
   switch (Opc) {
   case G_ADD:
+  case G_SUB:
+  case G_MUL:
+  case G_SDIV:
+  case G_UDIV:
   case G_SEXT:
   case G_ZEXT:
+  case G_ANYEXT:
+  case G_TRUNC:
+  case G_GEP:
     // FIXME: We're abusing the fact that everything lives in a GPR for now; in
     // the real world we would use different mappings.
     OperandsMapping = &ARM::ValueMappings[ARM::GPR3OpsIdx];
     break;
   case G_LOAD:
+  case G_STORE:
     OperandsMapping =
         Ty.getSizeInBits() == 64
             ? getOperandsMapping({&ARM::ValueMappings[ARM::DPR3OpsIdx],
@@ -237,6 +247,7 @@ ARMRegisterBankInfo::getInstrMapping(const MachineInstr &MI) const {
                           ? &ARM::ValueMappings[ARM::DPR3OpsIdx]
                           : &ARM::ValueMappings[ARM::SPR3OpsIdx];
     break;
+  case G_CONSTANT:
   case G_FRAME_INDEX:
     OperandsMapping =
         getOperandsMapping({&ARM::ValueMappings[ARM::GPR3OpsIdx], nullptr});
@@ -248,7 +259,7 @@ ARMRegisterBankInfo::getInstrMapping(const MachineInstr &MI) const {
     LLT Ty2 = MRI.getType(MI.getOperand(3).getReg());
     if (Ty.getSizeInBits() != 64 || Ty1.getSizeInBits() != 32 ||
         Ty2.getSizeInBits() != 32)
-      return InstructionMapping{};
+      return getInvalidInstructionMapping();
     OperandsMapping =
         getOperandsMapping({&ARM::ValueMappings[ARM::DPR3OpsIdx],
                             &ARM::ValueMappings[ARM::GPR3OpsIdx], nullptr,
@@ -259,18 +270,16 @@ ARMRegisterBankInfo::getInstrMapping(const MachineInstr &MI) const {
     // We only support G_EXTRACT for splitting a double precision floating point
     // value into two GPRs.
     LLT Ty1 = MRI.getType(MI.getOperand(1).getReg());
-    LLT Ty2 = MRI.getType(MI.getOperand(2).getReg());
-    if (Ty.getSizeInBits() != 32 || Ty1.getSizeInBits() != 32 ||
-        Ty2.getSizeInBits() != 64)
-      return InstructionMapping{};
+    if (Ty.getSizeInBits() != 32 || Ty1.getSizeInBits() != 64 ||
+        MI.getOperand(2).getImm() % 32 != 0)
+      return getInvalidInstructionMapping();
     OperandsMapping = getOperandsMapping({&ARM::ValueMappings[ARM::GPR3OpsIdx],
-                                          &ARM::ValueMappings[ARM::GPR3OpsIdx],
                                           &ARM::ValueMappings[ARM::DPR3OpsIdx],
                                           nullptr, nullptr});
     break;
   }
   default:
-    return InstructionMapping{};
+    return getInvalidInstructionMapping();
   }
 
 #ifndef NDEBUG
@@ -284,6 +293,6 @@ ARMRegisterBankInfo::getInstrMapping(const MachineInstr &MI) const {
   }
 #endif
 
-  return InstructionMapping{DefaultMappingID, /*Cost=*/1, OperandsMapping,
-                            NumOperands};
+  return getInstructionMapping(DefaultMappingID, /*Cost=*/1, OperandsMapping,
+                               NumOperands);
 }

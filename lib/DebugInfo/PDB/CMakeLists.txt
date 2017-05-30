@@ -28,6 +28,9 @@ if(LLVM_ENABLE_DIA_SDK)
 endif()
 
 add_pdb_impl_folder(Native
+  Native/DbiModuleDescriptor.cpp
+  Native/DbiModuleDescriptorBuilder.cpp
+  Native/DbiModuleList.cpp
   Native/DbiStream.cpp
   Native/DbiStreamBuilder.cpp
   Native/EnumTables.cpp
@@ -37,18 +40,20 @@ add_pdb_impl_folder(Native
   Native/HashTable.cpp
   Native/InfoStream.cpp
   Native/InfoStreamBuilder.cpp
-  Native/ModInfo.cpp
-  Native/ModStream.cpp
+  Native/ModuleDebugStream.cpp
+  Native/NativeCompilandSymbol.cpp
+  Native/NativeEnumModules.cpp
+  Native/NativeExeSymbol.cpp
   Native/NativeRawSymbol.cpp
   Native/NamedStreamMap.cpp
   Native/NativeSession.cpp
   Native/PDBFile.cpp
   Native/PDBFileBuilder.cpp
+  Native/PDBStringTable.cpp
+  Native/PDBStringTableBuilder.cpp
   Native/PDBTypeServerHandler.cpp
   Native/PublicsStream.cpp
   Native/RawError.cpp
-  Native/StringTable.cpp
-  Native/StringTableBuilder.cpp
   Native/SymbolStream.cpp
   Native/TpiHashing.cpp
   Native/TpiStream.cpp
@@ -97,6 +102,7 @@ add_llvm_library(LLVMDebugInfoPDB
   PDBSymbolUnknown.cpp
   PDBSymbolUsingNamespace.cpp
   PDBSymDumper.cpp
+  UDTLayout.cpp
   ${PDB_IMPL_SOURCES}
 
   ADDITIONAL_HEADER_DIRS

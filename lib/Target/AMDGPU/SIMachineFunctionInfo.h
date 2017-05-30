@@ -16,6 +16,7 @@
 
 #include "AMDGPUMachineFunction.h"
 #include "SIRegisterInfo.h"
+#include "MCTargetDesc/AMDGPUMCTargetDesc.h"
 #include "llvm/CodeGen/PseudoSourceValue.h"
 #include "llvm/MC/MCRegisterInfo.h"
 #include "llvm/Support/ErrorHandling.h"
@@ -87,6 +88,14 @@ class SIMachineFunctionInfo final : public AMDGPUMachineFunction {
   unsigned ScratchRSrcReg;
   unsigned ScratchWaveOffsetReg;
 
+  // This is the current function's incremented size from the kernel's scratch
+  // wave offset register. For an entry function, this is exactly the same as
+  // the ScratchWaveOffsetReg.
+  unsigned FrameOffsetReg;
+
+  // Top of the stack SGPR offset derived from the ScratchWaveOffsetReg.
+  unsigned StackPtrOffsetReg;
+
   // Input registers for non-HSA ABI
   unsigned PrivateMemoryPtrUserSGPR;
 
@@ -112,6 +121,8 @@ class SIMachineFunctionInfo final : public AMDGPUMachineFunction {
 
   // Graphics info.
   unsigned PSInputAddr;
+  unsigned PSInputEnable;
+
   bool ReturnsVoid;
 
   // A pair of default/requested minimum/maximum flat work group sizes.
@@ -130,17 +141,12 @@ class SIMachineFunctionInfo final : public AMDGPUMachineFunction {
   AMDGPUBufferPseudoSourceValue BufferPSV;
   AMDGPUImagePseudoSourceValue ImagePSV;
 
-public:
-  // FIXME: Make private
+private:
   unsigned LDSWaveSpillSize;
-  unsigned PSInputEna;
-
-
   unsigned ScratchOffsetReg;
   unsigned NumUserSGPRs;
   unsigned NumSystemSGPRs;
 
-private:
   bool HasSpilledSGPRs;
   bool HasSpilledVGPRs;
   bool HasNonSpillStackObjects;
@@ -366,9 +372,24 @@ public:
     return ScratchWaveOffsetReg;
   }
 
+  unsigned getFrameOffsetReg() const {
+    return FrameOffsetReg;
+  }
+
+  void setStackPtrOffsetReg(unsigned Reg) {
+    assert(Reg != AMDGPU::NoRegister && "Should never be unset");
+    StackPtrOffsetReg = Reg;
+  }
+
+  unsigned getStackPtrOffsetReg() const {
+    return StackPtrOffsetReg;
+  }
+
   void setScratchWaveOffsetReg(unsigned Reg) {
     assert(Reg != AMDGPU::NoRegister && "Should never be unset");
     ScratchWaveOffsetReg = Reg;
+    if (isEntryFunction())
+      FrameOffsetReg = ScratchWaveOffsetReg;
   }
 
   unsigned getQueuePtrUserSGPR() const {
@@ -423,12 +444,20 @@ public:
     return PSInputAddr;
   }
 
+  unsigned getPSInputEnable() const {
+    return PSInputEnable;
+  }
+
   bool isPSInputAllocated(unsigned Index) const {
     return PSInputAddr & (1 << Index);
   }
 
   void markPSInputAllocated(unsigned Index) {
     PSInputAddr |= 1 << Index;
+  }
+
+  void markPSInputEnabled(unsigned Index) {
+    PSInputEnable |= 1 << Index;
   }
 
   bool returnsVoid() const {
@@ -525,6 +554,10 @@ public:
       return AMDGPU::VGPR2;
     }
     llvm_unreachable("unexpected dimension");
+  }
+
+  unsigned getLDSWaveSpillSize() const {
+    return LDSWaveSpillSize;
   }
 
   const AMDGPUBufferPseudoSourceValue *getBufferPSV() const {

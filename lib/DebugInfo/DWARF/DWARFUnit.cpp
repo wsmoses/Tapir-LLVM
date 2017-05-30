@@ -13,6 +13,8 @@
 #include "llvm/DebugInfo/DWARF/DWARFAbbreviationDeclaration.h"
 #include "llvm/DebugInfo/DWARF/DWARFContext.h"
 #include "llvm/DebugInfo/DWARF/DWARFDebugAbbrev.h"
+#include "llvm/DebugInfo/DWARF/DWARFDebugInfoEntry.h"
+#include "llvm/DebugInfo/DWARF/DWARFDie.h"
 #include "llvm/DebugInfo/DWARF/DWARFFormValue.h"
 #include "llvm/DebugInfo/DWARF/DWARFUnit.h"
 #include "llvm/Object/ObjectFile.h"
@@ -21,33 +23,34 @@
 #include "llvm/Support/Path.h"
 #include <algorithm>
 #include <cassert>
+#include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <vector>
 
-namespace llvm {
-
+using namespace llvm;
 using namespace dwarf;
 
 void DWARFUnitSectionBase::parse(DWARFContext &C, const DWARFSection &Section) {
-  parseImpl(C, Section, C.getDebugAbbrev(), C.getRangeSection(),
-            C.getStringSection(), StringRef(), C.getAddrSection(),
+  parseImpl(C, Section, C.getDebugAbbrev(), &C.getRangeSection(),
+            C.getStringSection(), StringRef(), &C.getAddrSection(),
             C.getLineSection().Data, C.isLittleEndian(), false);
 }
 
 void DWARFUnitSectionBase::parseDWO(DWARFContext &C,
                                     const DWARFSection &DWOSection,
                                     DWARFUnitIndex *Index) {
-  parseImpl(C, DWOSection, C.getDebugAbbrevDWO(), C.getRangeDWOSection(),
+  parseImpl(C, DWOSection, C.getDebugAbbrevDWO(), &C.getRangeDWOSection(),
             C.getStringDWOSection(), C.getStringOffsetDWOSection(),
-            C.getAddrSection(), C.getLineDWOSection().Data, C.isLittleEndian(),
+            &C.getAddrSection(), C.getLineDWOSection().Data, C.isLittleEndian(),
             true);
 }
 
 DWARFUnit::DWARFUnit(DWARFContext &DC, const DWARFSection &Section,
-                     const DWARFDebugAbbrev *DA, StringRef RS, StringRef SS,
-                     StringRef SOS, StringRef AOS, StringRef LS, bool LE,
-                     bool IsDWO, const DWARFUnitSectionBase &UnitSection,
+                     const DWARFDebugAbbrev *DA, const DWARFSection *RS,
+                     StringRef SS, StringRef SOS, const DWARFSection *AOS,
+                     StringRef LS, bool LE, bool IsDWO,
+                     const DWARFUnitSectionBase &UnitSection,
                      const DWARFUnitIndex::Entry *IndexEntry)
     : Context(DC), InfoSection(Section), Abbrev(DA), RangeSection(RS),
       LineSection(LS), StringSection(SS), StringOffsetSection([&]() {
@@ -66,10 +69,10 @@ DWARFUnit::~DWARFUnit() = default;
 bool DWARFUnit::getAddrOffsetSectionItem(uint32_t Index,
                                                 uint64_t &Result) const {
   uint32_t Offset = AddrOffsetSectionBase + Index * AddrSize;
-  if (AddrOffsetSection.size() < Offset + AddrSize)
+  if (AddrOffsetSection->Data.size() < Offset + AddrSize)
     return false;
-  DataExtractor DA(AddrOffsetSection, isLittleEndian, AddrSize);
-  Result = DA.getAddress(&Offset);
+  DataExtractor DA(AddrOffsetSection->Data, isLittleEndian, AddrSize);
+  Result = getRelocatedValue(DA, AddrSize, &Offset, &AddrOffsetSection->Relocs);
   return true;
 }
 
@@ -88,7 +91,15 @@ bool DWARFUnit::getStringOffsetSectionItem(uint32_t Index,
 bool DWARFUnit::extractImpl(DataExtractor debug_info, uint32_t *offset_ptr) {
   Length = debug_info.getU32(offset_ptr);
   Version = debug_info.getU16(offset_ptr);
-  uint64_t AbbrOffset = debug_info.getU32(offset_ptr);
+  uint64_t AbbrOffset;
+  if (Version >= 5) {
+    UnitType = debug_info.getU8(offset_ptr);
+    AddrSize = debug_info.getU8(offset_ptr);
+    AbbrOffset = debug_info.getU32(offset_ptr);
+  } else {
+    AbbrOffset = debug_info.getU32(offset_ptr);
+    AddrSize = debug_info.getU8(offset_ptr);
+  }
   if (IndexEntry) {
     if (AbbrOffset)
       return false;
@@ -100,7 +111,6 @@ bool DWARFUnit::extractImpl(DataExtractor debug_info, uint32_t *offset_ptr) {
       return false;
     AbbrOffset = AbbrEntry->Offset;
   }
-  AddrSize = debug_info.getU8(offset_ptr);
 
   bool LengthOK = debug_info.isValidOffset(getNextUnitOffset() - 1);
   bool VersionOK = DWARFContext::isSupportedVersion(Version);
@@ -133,9 +143,10 @@ bool DWARFUnit::extractRangeList(uint32_t RangeListOffset,
                                         DWARFDebugRangeList &RangeList) const {
   // Require that compile unit is extracted.
   assert(!DieArray.empty());
-  DataExtractor RangesData(RangeSection, isLittleEndian, AddrSize);
+  DataExtractor RangesData(RangeSection->Data, isLittleEndian, AddrSize);
   uint32_t ActualRangeListOffset = RangeSectionBase + RangeListOffset;
-  return RangeList.extract(RangesData, &ActualRangeListOffset);
+  return RangeList.extract(RangesData, &ActualRangeListOffset,
+                           RangeSection->Relocs);
 }
 
 void DWARFUnit::clear() {
@@ -152,7 +163,7 @@ void DWARFUnit::clear() {
 }
 
 const char *DWARFUnit::getCompilationDir() {
-  return toString(getUnitDIE().find(DW_AT_comp_dir), nullptr);
+  return dwarf::toString(getUnitDIE().find(DW_AT_comp_dir), nullptr);
 }
 
 Optional<uint64_t> DWARFUnit::getDWOId() {
@@ -238,21 +249,6 @@ size_t DWARFUnit::extractDIEsIfNeeded(bool CUDieOnly) {
   return DieArray.size();
 }
 
-DWARFUnit::DWOHolder::DWOHolder(StringRef DWOPath)
-    : DWOU(nullptr) {
-  auto Obj = object::ObjectFile::createObjectFile(DWOPath);
-  if (!Obj) {
-    // TODO: Actually report errors helpfully.
-    consumeError(Obj.takeError());
-    return;
-  }
-  DWOFile = std::move(Obj.get());
-  DWOContext.reset(
-      cast<DWARFContext>(new DWARFContextInMemory(*DWOFile.getBinary())));
-  if (DWOContext->getNumDWOCompileUnits() > 0)
-    DWOU = DWOContext->getDWOCompileUnitAtIndex(0);
-}
-
 bool DWARFUnit::parseDWO() {
   if (isDWO)
     return false;
@@ -261,27 +257,31 @@ bool DWARFUnit::parseDWO() {
   DWARFDie UnitDie = getUnitDIE();
   if (!UnitDie)
     return false;
-  auto DWOFileName = toString(UnitDie.find(DW_AT_GNU_dwo_name));
+  auto DWOFileName = dwarf::toString(UnitDie.find(DW_AT_GNU_dwo_name));
   if (!DWOFileName)
     return false;
-  auto CompilationDir = toString(UnitDie.find(DW_AT_comp_dir));
+  auto CompilationDir = dwarf::toString(UnitDie.find(DW_AT_comp_dir));
   SmallString<16> AbsolutePath;
   if (sys::path::is_relative(*DWOFileName) && CompilationDir &&
       *CompilationDir) {
     sys::path::append(AbsolutePath, *CompilationDir);
   }
   sys::path::append(AbsolutePath, *DWOFileName);
-  DWO = llvm::make_unique<DWOHolder>(AbsolutePath);
-  DWARFUnit *DWOCU = DWO->getUnit();
-  // Verify that compile unit in .dwo file is valid.
-  if (!DWOCU || DWOCU->getDWOId() != getDWOId()) {
-    DWO.reset();
+  auto DWOId = getDWOId();
+  if (!DWOId)
     return false;
-  }
+  auto DWOContext = Context.getDWOContext(AbsolutePath);
+  if (!DWOContext)
+    return false;
+
+  DWARFCompileUnit *DWOCU = DWOContext->getDWOCompileUnitForHash(*DWOId);
+  if (!DWOCU)
+    return false;
+  DWO = std::shared_ptr<DWARFCompileUnit>(std::move(DWOContext), DWOCU);
   // Share .debug_addr and .debug_ranges section with compile unit in .dwo
-  DWOCU->setAddrOffsetSection(AddrOffsetSection, AddrOffsetSectionBase);
+  DWO->setAddrOffsetSection(AddrOffsetSection, AddrOffsetSectionBase);
   auto DWORangesBase = UnitDie.getRangesBaseAttribute();
-  DWOCU->setRangesSection(RangeSection, DWORangesBase ? *DWORangesBase : 0);
+  DWO->setRangesSection(RangeSection, DWORangesBase ? *DWORangesBase : 0);
   return true;
 }
 
@@ -324,8 +324,8 @@ void DWARFUnit::collectAddressRanges(DWARFAddressRangesVector &CURanges) {
 
   // Collect address ranges from DIEs in .dwo if necessary.
   bool DWOCreated = parseDWO();
-  if (DWO.get())
-    DWO->getUnit()->collectAddressRanges(CURanges);
+  if (DWO)
+    DWO->collectAddressRanges(CURanges);
   if (DWOCreated)
     DWO.reset();
 
@@ -335,41 +335,67 @@ void DWARFUnit::collectAddressRanges(DWARFAddressRangesVector &CURanges) {
     clearDIEs(true);
 }
 
-DWARFDie
-DWARFUnit::getSubprogramForAddress(uint64_t Address) {
-  extractDIEsIfNeeded(false);
-  for (const DWARFDebugInfoEntry &D : DieArray) {
-    DWARFDie DIE(this, &D);
-    if (DIE.isSubprogramDIE() &&
-        DIE.addressRangeContainsAddress(Address)) {
-      return DIE;
+void DWARFUnit::updateAddressDieMap(DWARFDie Die) {
+  if (Die.isSubroutineDIE()) {
+    for (const auto &R : Die.getAddressRanges()) {
+      // Ignore 0-sized ranges.
+      if (R.LowPC == R.HighPC)
+        continue;
+      auto B = AddrDieMap.upper_bound(R.LowPC);
+      if (B != AddrDieMap.begin() && R.LowPC < (--B)->second.first) {
+        // The range is a sub-range of existing ranges, we need to split the
+        // existing range.
+        if (R.HighPC < B->second.first)
+          AddrDieMap[R.HighPC] = B->second;
+        if (R.LowPC > B->first)
+          AddrDieMap[B->first].first = R.LowPC;
+      }
+      AddrDieMap[R.LowPC] = std::make_pair(R.HighPC, Die);
     }
   }
-  return DWARFDie();
+  // Parent DIEs are added to the AddrDieMap prior to the Children DIEs to
+  // simplify the logic to update AddrDieMap. The child's range will always
+  // be equal or smaller than the parent's range. With this assumption, when
+  // adding one range into the map, it will at most split a range into 3
+  // sub-ranges.
+  for (DWARFDie Child = Die.getFirstChild(); Child; Child = Child.getSibling())
+    updateAddressDieMap(Child);
+}
+
+DWARFDie DWARFUnit::getSubroutineForAddress(uint64_t Address) {
+  extractDIEsIfNeeded(false);
+  if (AddrDieMap.empty())
+    updateAddressDieMap(getUnitDIE());
+  auto R = AddrDieMap.upper_bound(Address);
+  if (R == AddrDieMap.begin())
+    return DWARFDie();
+  // upper_bound's previous item contains Address.
+  --R;
+  if (Address >= R->second.first)
+    return DWARFDie();
+  return R->second.second;
 }
 
 void
 DWARFUnit::getInlinedChainForAddress(uint64_t Address,
                                      SmallVectorImpl<DWARFDie> &InlinedChain) {
-  // First, find a subprogram that contains the given address (the root
-  // of inlined chain).
-  DWARFDie SubprogramDIE;
+  assert(InlinedChain.empty());
   // Try to look for subprogram DIEs in the DWO file.
   parseDWO();
-  if (DWO)
-    SubprogramDIE = DWO->getUnit()->getSubprogramForAddress(Address);
-  else
-    SubprogramDIE = getSubprogramForAddress(Address);
+  // First, find the subroutine that contains the given address (the leaf
+  // of inlined chain).
+  DWARFDie SubroutineDIE =
+      (DWO ? DWO.get() : this)->getSubroutineForAddress(Address);
 
-  // Get inlined chain rooted at this subprogram DIE.
-  if (SubprogramDIE)
-    SubprogramDIE.getInlinedChainForAddress(Address, InlinedChain);
-  else
-    InlinedChain.clear();
+  while (SubroutineDIE) {
+    if (SubroutineDIE.isSubroutineDIE())
+      InlinedChain.push_back(SubroutineDIE);
+    SubroutineDIE  = SubroutineDIE.getParent();
+  }
 }
 
-const DWARFUnitIndex &getDWARFUnitIndex(DWARFContext &Context,
-                                        DWARFSectionKind Kind) {
+const DWARFUnitIndex &llvm::getDWARFUnitIndex(DWARFContext &Context,
+                                              DWARFSectionKind Kind) {
   if (Kind == DW_SECT_INFO)
     return Context.getCUIndex();
   assert(Kind == DW_SECT_TYPES);
@@ -407,11 +433,10 @@ DWARFDie DWARFUnit::getSibling(const DWARFDebugInfoEntry *Die) {
     return DWARFDie();
   
   // Find the next DIE whose depth is the same as the Die's depth.
-  for (size_t I=getDIEIndex(Die)+1, EndIdx = DieArray.size(); I<EndIdx; ++I) {
+  for (size_t I = getDIEIndex(Die) + 1, EndIdx = DieArray.size(); I < EndIdx;
+       ++I) {
     if (DieArray[I].getDepth() == Depth)
       return DWARFDie(this, &DieArray[I]);
   }
   return DWARFDie();
 }
-
-} // end namespace llvm

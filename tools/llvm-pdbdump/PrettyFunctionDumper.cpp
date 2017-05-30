@@ -26,6 +26,7 @@
 #include "llvm/DebugInfo/PDB/PDBSymbolTypeTypedef.h"
 #include "llvm/DebugInfo/PDB/PDBSymbolTypeUDT.h"
 #include "llvm/Support/Format.h"
+#include "llvm/Support/FormatVariadic.h"
 
 using namespace llvm;
 using namespace llvm::codeview;
@@ -119,14 +120,19 @@ void FunctionDumper::start(const PDBSymbolFunc &Symbol, PointerType Pointer) {
   WithColor(Printer, PDB_ColorItem::Address).get() << format_hex(FuncStart, 10);
   if (auto DebugStart = Symbol.findOneChild<PDBSymbolFuncDebugStart>()) {
     uint64_t Prologue = DebugStart->getVirtualAddress() - FuncStart;
-    WithColor(Printer, PDB_ColorItem::Offset).get() << "+" << Prologue;
+    WithColor(Printer, PDB_ColorItem::Offset).get()
+        << formatv("+{0,2}", Prologue);
   }
   Printer << " - ";
   WithColor(Printer, PDB_ColorItem::Address).get() << format_hex(FuncEnd, 10);
   if (auto DebugEnd = Symbol.findOneChild<PDBSymbolFuncDebugEnd>()) {
     uint64_t Epilogue = FuncEnd - DebugEnd->getVirtualAddress();
-    WithColor(Printer, PDB_ColorItem::Offset).get() << "-" << Epilogue;
+    WithColor(Printer, PDB_ColorItem::Offset).get()
+        << formatv("-{0,2}", Epilogue);
   }
+
+  WithColor(Printer, PDB_ColorItem::Comment).get()
+      << formatv(" | sizeof={0,3}", Symbol.getLength());
   Printer << "] (";
 
   if (Symbol.hasFramePointer()) {
@@ -195,10 +201,7 @@ void FunctionDumper::start(const PDBSymbolFunc &Symbol, PointerType Pointer) {
 }
 
 void FunctionDumper::dump(const PDBSymbolTypeArray &Symbol) {
-  uint32_t ElementTypeId = Symbol.getTypeId();
-  auto ElementType = Symbol.getSession().getSymbolById(ElementTypeId);
-  if (!ElementType)
-    return;
+  auto ElementType = Symbol.getElementType();
 
   ElementType->dump(*this);
   Printer << "[";
@@ -232,12 +235,11 @@ void FunctionDumper::dump(const PDBSymbolTypeTypedef &Symbol) {
 }
 
 void FunctionDumper::dump(const PDBSymbolTypePointer &Symbol) {
-  uint32_t PointeeId = Symbol.getTypeId();
-  auto PointeeType = Symbol.getSession().getSymbolById(PointeeId);
+  auto PointeeType = Symbol.getPointeeType();
   if (!PointeeType)
     return;
 
-  if (auto FuncSig = dyn_cast<PDBSymbolTypeFunctionSig>(PointeeType.get())) {
+  if (auto FuncSig = unique_dyn_cast<PDBSymbolTypeFunctionSig>(PointeeType)) {
     FunctionDumper NestedDumper(Printer);
     PointerType Pointer =
         Symbol.isReference() ? PointerType::Reference : PointerType::Pointer;

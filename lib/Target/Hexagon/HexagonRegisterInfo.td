@@ -122,12 +122,6 @@ let Namespace = "Hexagon" in {
   def P2 : Rp<2, "p2">, DwarfRegNum<[65]>;
   def P3 : Rp<3, "p3">, DwarfRegNum<[66]>;
 
-  // Modifier registers.
-  // C6 and C7 can also be M0 and M1, but register names must be unique, even
-  // if belonging to different register classes.
-  def M0 : Mx<0, "m0">, DwarfRegNum<[72]>;
-  def M1 : Mx<1, "m1">, DwarfRegNum<[73]>;
-
   // Fake register to represent USR.OVF bit. Artihmetic/saturating instruc-
   // tions modify this bit, and multiple such instructions are allowed in the
   // same packet. We need to ignore output dependencies on this bit, but not
@@ -149,21 +143,21 @@ let Namespace = "Hexagon" in {
   // When defining more Cn registers, make sure to explicitly mark them
   // as reserved in HexagonRegisterInfo.cpp.
   def C5:         Rc<5,  "c5",         ["c5"]>,    DwarfRegNum<[72]>;
-  def C6:         Rc<6,  "c6",         [], [M0]>,  DwarfRegNum<[73]>;
-  def C7:         Rc<7,  "c7",         [], [M1]>,  DwarfRegNum<[74]>;
+  def M0:         Rc<6,  "m0",         ["c6"]>,    DwarfRegNum<[73]>;
+  def M1:         Rc<7,  "m1",         ["c7"]>,    DwarfRegNum<[74]>;
   // Define C8 separately and make it aliased with USR.
   // The problem is that USR has subregisters (e.g. overflow). If USR was
   // specified as a subregister of C9_8, it would imply that subreg_overflow
   // and isub_lo can be composed, which leads to all kinds of issues
   // with lane masks.
   def C8:         Rc<8,  "c8",         [], [USR]>, DwarfRegNum<[75]>;
-  def PC:         Rc<9,  "pc">,                    DwarfRegNum<[76]>;
+  def PC:         Rc<9,  "pc",         ["c9"]>,    DwarfRegNum<[76]>;
   def UGP:        Rc<10, "ugp",        ["c10"]>,   DwarfRegNum<[77]>;
   def GP:         Rc<11, "gp",         ["c11"]>,   DwarfRegNum<[78]>;
   def CS0:        Rc<12, "cs0",        ["c12"]>,   DwarfRegNum<[79]>;
   def CS1:        Rc<13, "cs1",        ["c13"]>,   DwarfRegNum<[80]>;
-  def UPCL:       Rc<14, "upcyclelo",  ["c14"]>,   DwarfRegNum<[81]>;
-  def UPCH:       Rc<15, "upcyclehi",  ["c15"]>,   DwarfRegNum<[82]>;
+  def UPCYCLELO:  Rc<14, "upcyclelo",  ["c14"]>,   DwarfRegNum<[81]>;
+  def UPCYCLEHI:  Rc<15, "upcyclehi",  ["c15"]>,   DwarfRegNum<[82]>;
   def FRAMELIMIT: Rc<16, "framelimit", ["c16"]>,   DwarfRegNum<[83]>;
   def FRAMEKEY:   Rc<17, "framekey",   ["c17"]>,   DwarfRegNum<[84]>;
   def PKTCOUNTLO: Rc<18, "pktcountlo", ["c18"]>,   DwarfRegNum<[85]>;
@@ -177,12 +171,12 @@ let Namespace = "Hexagon" in {
     def C1_0:     Rcc<0,  "c1:0",   [SA0, LC0], ["lc0:sa0"]>, DwarfRegNum<[67]>;
     def C3_2:     Rcc<2,  "c3:2",   [SA1, LC1], ["lc1:sa1"]>, DwarfRegNum<[69]>;
     def C5_4:     Rcc<4,  "c5:4",   [P3_0, C5]>,              DwarfRegNum<[71]>;
-    def C7_6:     Rcc<6,  "c7:6",   [C6, C7],   ["m1:0"]>,    DwarfRegNum<[72]>;
+    def C7_6:     Rcc<6,  "c7:6",   [M0, M1],   ["m1:0"]>,    DwarfRegNum<[72]>;
     // Use C8 instead of USR as a subregister of C9_8.
     def C9_8:     Rcc<8,  "c9:8",   [C8, PC]>,                DwarfRegNum<[74]>;
     def C11_10:   Rcc<10, "c11:10", [UGP, GP]>,               DwarfRegNum<[76]>;
     def CS:       Rcc<12, "c13:12", [CS0, CS1], ["cs1:0"]>,   DwarfRegNum<[78]>;
-    def UPC:      Rcc<14, "c15:14", [UPCL, UPCH]>,            DwarfRegNum<[80]>;
+    def UPCYCLE:  Rcc<14, "c15:14", [UPCYCLELO, UPCYCLEHI]>,  DwarfRegNum<[80]>;
     def C17_16:   Rcc<16, "c17:16", [FRAMELIMIT, FRAMEKEY]>,  DwarfRegNum<[83]>;
     def PKTCOUNT: Rcc<18, "c19:18", [PKTCOUNTLO, PKTCOUNTHI], ["pktcount"]>,
                                                               DwarfRegNum<[85]>;
@@ -280,8 +274,8 @@ def ModRegs : RegisterClass<"Hexagon", [i32], 32, (add M0, M1)>;
 
 let Size = 32, isAllocatable = 0 in
 def CtrRegs : RegisterClass<"Hexagon", [i32], 32,
-  (add LC0, SA0, LC1, SA1, P3_0, C5, C6, C7,
-       C8, PC, UGP, GP, CS0, CS1, UPCL, UPCH,
+  (add LC0, SA0, LC1, SA1, P3_0, C5, C8, PC, UGP, GP, CS0, CS1,
+       UPCYCLELO, UPCYCLEHI,
        FRAMELIMIT, FRAMEKEY, PKTCOUNTLO, PKTCOUNTHI, UTIMERLO, UTIMERHI,
        M0, M1, USR)>;
 
@@ -290,7 +284,7 @@ def UsrBits : RegisterClass<"Hexagon", [i1], 0, (add USR_OVF)>;
 
 let Size = 64, isAllocatable = 0 in
 def CtrRegs64 : RegisterClass<"Hexagon", [i64], 64,
-  (add C1_0, C3_2, C5_4, C7_6, C9_8, C11_10, CS, UPC, C17_16,
+  (add C1_0, C3_2, C5_4, C7_6, C9_8, C11_10, CS, UPCYCLE, C17_16,
        PKTCOUNT, UTIMER)>;
 
 // These registers are new for v62 and onward.

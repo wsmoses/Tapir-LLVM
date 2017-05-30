@@ -1,4 +1,4 @@
-//===-- DWARFContext.h ------------------------------------------*- C++ -*-===//
+//===- DWARFContext.h -------------------------------------------*- C++ -*-===//
 //
 //                     The LLVM Compiler Infrastructure
 //
@@ -7,8 +7,8 @@
 //
 //===----------------------------------------------------------------------===/
 
-#ifndef LLVM_LIB_DEBUGINFO_DWARFCONTEXT_H
-#define LLVM_LIB_DEBUGINFO_DWARFCONTEXT_H
+#ifndef LLVM_DEBUGINFO_DWARF_DWARFCONTEXT_H
+#define LLVM_DEBUGINFO_DWARF_DWARFCONTEXT_H
 
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/iterator_range.h"
@@ -31,6 +31,7 @@
 #include "llvm/DebugInfo/DWARF/DWARFUnit.h"
 #include "llvm/DebugInfo/DWARF/DWARFUnitIndex.h"
 #include "llvm/Object/ObjectFile.h"
+#include "llvm/Support/Host.h"
 #include <cstdint>
 #include <deque>
 #include <map>
@@ -39,12 +40,13 @@
 
 namespace llvm {
 
-// In place of applying the relocations to the data we've read from disk we use
-// a separate mapping table to the side and checking that at locations in the
-// dwarf where we expect relocated values. This adds a bit of complexity to the
-// dwarf parsing/extraction at the benefit of not allocating memory for the
-// entire size of the debug info sections.
-typedef DenseMap<uint64_t, std::pair<uint8_t, int64_t>> RelocAddrMap;
+class MemoryBuffer;
+class raw_ostream;
+
+/// Reads a value from data extractor and applies a relocation to the result if
+/// one exists for the given offset.
+uint64_t getRelocatedValue(const DataExtractor &Data, uint32_t Size,
+                           uint32_t *Off, const RelocAddrMap *Relocs);
 
 /// DWARFContext
 /// This data structure is the top level entity that deals with dwarf debug
@@ -68,6 +70,14 @@ class DWARFContext : public DIContext {
   std::deque<DWARFUnitSection<DWARFTypeUnit>> DWOTUs;
   std::unique_ptr<DWARFDebugAbbrev> AbbrevDWO;
   std::unique_ptr<DWARFDebugLocDWO> LocDWO;
+
+  struct DWOFile {
+    object::OwningBinary<object::ObjectFile> File;
+    std::unique_ptr<DWARFContext> Context;
+  };
+  StringMap<std::weak_ptr<DWOFile>> DWOFiles;
+  std::weak_ptr<DWOFile> DWP;
+  bool CheckedForDWP = false;
 
   /// Read compile units from the debug_info section (if necessary)
   /// and store them in CUs.
@@ -96,6 +106,8 @@ public:
 
   void dump(raw_ostream &OS, DIDumpType DumpType = DIDT_All,
             bool DumpEH = false, bool SummarizeTypes = false) override;
+
+  bool verify(raw_ostream &OS, DIDumpType DumpType = DIDT_All) override;
 
   typedef DWARFUnitSection<DWARFCompileUnit>::iterator_range cu_iterator_range;
   typedef DWARFUnitSection<DWARFTypeUnit>::iterator_range tu_iterator_range;
@@ -161,6 +173,11 @@ public:
     return DWOCUs[index].get();
   }
 
+  DWARFCompileUnit *getDWOCompileUnitForHash(uint64_t Hash);
+
+  /// Get a DIE given an exact offset.
+  DWARFDie getDIEForOffset(uint32_t Offset);
+
   const DWARFUnitIndex &getCUIndex();
   DWARFGdbIndex &getGdbIndex();
   const DWARFUnitIndex &getTUIndex();
@@ -199,6 +216,7 @@ public:
   DIInliningInfo getInliningInfoForAddress(uint64_t Address,
       DILineInfoSpecifier Specifier = DILineInfoSpecifier()) override;
 
+  virtual StringRef getFileName() const = 0;
   virtual bool isLittleEndian() const = 0;
   virtual uint8_t getAddressSize() const = 0;
   virtual const DWARFSection &getInfoSection() = 0;
@@ -212,7 +230,7 @@ public:
   virtual StringRef getEHFrameSection() = 0;
   virtual const DWARFSection &getLineSection() = 0;
   virtual StringRef getStringSection() = 0;
-  virtual StringRef getRangeSection() = 0;
+  virtual const DWARFSection& getRangeSection() = 0;
   virtual StringRef getMacinfoSection() = 0;
   virtual StringRef getPubNamesSection() = 0;
   virtual StringRef getPubTypesSection() = 0;
@@ -227,8 +245,8 @@ public:
   virtual const DWARFSection &getLocDWOSection() = 0;
   virtual StringRef getStringDWOSection() = 0;
   virtual StringRef getStringOffsetDWOSection() = 0;
-  virtual StringRef getRangeDWOSection() = 0;
-  virtual StringRef getAddrSection() = 0;
+  virtual const DWARFSection &getRangeDWOSection() = 0;
+  virtual const DWARFSection &getAddrSection() = 0;
   virtual const DWARFSection& getAppleNamesSection() = 0;
   virtual const DWARFSection& getAppleTypesSection() = 0;
   virtual const DWARFSection& getAppleNamespacesSection() = 0;
@@ -240,6 +258,8 @@ public:
   static bool isSupportedVersion(unsigned version) {
     return version == 2 || version == 3 || version == 4 || version == 5;
   }
+
+  std::shared_ptr<DWARFContext> getDWOContext(StringRef AbsolutePath);
 
 private:
   /// Return the compile unit that includes an offset (relative to .debug_info).
@@ -256,6 +276,7 @@ private:
 class DWARFContextInMemory : public DWARFContext {
   virtual void anchor();
 
+  StringRef FileName;
   bool IsLittleEndian;
   uint8_t AddressSize;
   DWARFSection InfoSection;
@@ -267,7 +288,7 @@ class DWARFContextInMemory : public DWARFContext {
   StringRef EHFrameSection;
   DWARFSection LineSection;
   StringRef StringSection;
-  StringRef RangeSection;
+  DWARFSection RangeSection;
   StringRef MacinfoSection;
   StringRef PubNamesSection;
   StringRef PubTypesSection;
@@ -282,8 +303,8 @@ class DWARFContextInMemory : public DWARFContext {
   DWARFSection LocDWOSection;
   StringRef StringDWOSection;
   StringRef StringOffsetDWOSection;
-  StringRef RangeDWOSection;
-  StringRef AddrSection;
+  DWARFSection RangeDWOSection;
+  DWARFSection AddrSection;
   DWARFSection AppleNamesSection;
   DWARFSection AppleTypesSection;
   DWARFSection AppleNamespacesSection;
@@ -296,6 +317,11 @@ class DWARFContextInMemory : public DWARFContext {
 
   StringRef *MapSectionToMember(StringRef Name);
 
+  /// If Sec is compressed section, decompresses and updates its contents
+  /// provided by Data. Otherwise leaves it unchanged.
+  Error maybeDecompress(const object::SectionRef &Sec, StringRef Name,
+                        StringRef &Data);
+
 public:
   DWARFContextInMemory(const object::ObjectFile &Obj,
     const LoadedObjectInfo *L = nullptr);
@@ -304,6 +330,7 @@ public:
                        uint8_t AddrSize,
                        bool isLittleEndian = sys::IsLittleEndianHost);
 
+  StringRef getFileName() const override { return FileName; }
   bool isLittleEndian() const override { return IsLittleEndian; }
   uint8_t getAddressSize() const override { return AddressSize; }
   const DWARFSection &getInfoSection() override { return InfoSection; }
@@ -315,7 +342,7 @@ public:
   StringRef getEHFrameSection() override { return EHFrameSection; }
   const DWARFSection &getLineSection() override { return LineSection; }
   StringRef getStringSection() override { return StringSection; }
-  StringRef getRangeSection() override { return RangeSection; }
+  const DWARFSection &getRangeSection() override { return RangeSection; }
   StringRef getMacinfoSection() override { return MacinfoSection; }
   StringRef getPubNamesSection() override { return PubNamesSection; }
   StringRef getPubTypesSection() override { return PubTypesSection; }
@@ -328,20 +355,24 @@ public:
 
   // Sections for DWARF5 split dwarf proposal.
   const DWARFSection &getInfoDWOSection() override { return InfoDWOSection; }
+
   const TypeSectionMap &getTypesDWOSections() override {
     return TypesDWOSections;
   }
+
   StringRef getAbbrevDWOSection() override { return AbbrevDWOSection; }
   const DWARFSection &getLineDWOSection() override { return LineDWOSection; }
   const DWARFSection &getLocDWOSection() override { return LocDWOSection; }
   StringRef getStringDWOSection() override { return StringDWOSection; }
+
   StringRef getStringOffsetDWOSection() override {
     return StringOffsetDWOSection;
   }
-  StringRef getRangeDWOSection() override { return RangeDWOSection; }
-  StringRef getAddrSection() override {
-    return AddrSection;
-  }
+
+  const DWARFSection &getRangeDWOSection() override { return RangeDWOSection; }
+
+  const DWARFSection &getAddrSection() override { return AddrSection; }
+
   StringRef getCUIndexSection() override { return CUIndexSection; }
   StringRef getGdbIndexSection() override { return GdbIndexSection; }
   StringRef getTUIndexSection() override { return TUIndexSection; }
@@ -349,4 +380,4 @@ public:
 
 } // end namespace llvm
 
-#endif // LLVM_LIB_DEBUGINFO_DWARFCONTEXT_H
+#endif // LLVM_DEBUGINFO_DWARF_DWARFCONTEXT_H

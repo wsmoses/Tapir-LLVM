@@ -57,7 +57,7 @@ static  bool needsFPFromSig(Function &F) {
     ;
   }
   if (F.arg_size() >=1) {
-    Argument &Arg = F.getArgumentList().front();
+    Argument &Arg = *F.arg_begin();
     switch (Arg.getType()->getTypeID()) {
     case Type::FloatTyID:
     case Type::DoubleTyID:
@@ -155,6 +155,4 @@ bool MipsOs16::runOnModule(Module &M) {
   return modified;
 }
 
-ModulePass *llvm::createMipsOs16Pass(MipsTargetMachine &TM) {
-  return new MipsOs16;
-}
+ModulePass *llvm::createMipsOs16Pass() { return new MipsOs16(); }

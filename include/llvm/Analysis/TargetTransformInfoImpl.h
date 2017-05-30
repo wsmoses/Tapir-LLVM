@@ -114,6 +114,12 @@ public:
     return TTI::TCC_Free;
   }
 
+  unsigned getEstimatedNumberOfCaseClusters(const SwitchInst &SI,
+                                            unsigned &JTSize) {
+    JTSize = 0;
+    return SI.getNumCases();
+  }
+
   unsigned getCallCost(FunctionType *FTy, int NumArgs) {
     assert(FTy && "FunctionType must be provided to this routine.");
 
@@ -231,6 +237,8 @@ public:
 
   bool isLegalMaskedGather(Type *DataType) { return false; }
 
+  bool prefersVectorizedAddressing() { return true; }
+
   int getScalingFactorCost(Type *Ty, GlobalValue *BaseGV, int64_t BaseOffset,
                            bool HasBaseReg, int64_t Scale, unsigned AddrSpace) {
     // Guess that all legal addressing mode are free.
@@ -261,6 +269,8 @@ public:
 
   unsigned getOperandsScalarizationOverhead(ArrayRef<const Value *> Args,
                                             unsigned VF) { return 0; }
+
+  bool supportsEfficientVectorElementLoadStore() { return false; }
 
   bool enableAggressiveInterleaving(bool LoopHasReductions) { return false; }
 
@@ -303,6 +313,15 @@ public:
 
   unsigned getRegisterBitWidth(bool Vector) { return 32; }
 
+  unsigned getMinVectorRegisterBitWidth() { return 128; }
+
+  bool
+  shouldConsiderAddressTypePromotion(const Instruction &I,
+                                     bool &AllowPromotionWithoutCommonHeader) {
+    AllowPromotionWithoutCommonHeader = false;
+    return false;
+  }
+
   unsigned getCacheLineSize() { return 0; }
 
   unsigned getPrefetchDistance() { return 0; }
@@ -327,7 +346,8 @@ public:
     return 1;
   }
 
-  unsigned getCastInstrCost(unsigned Opcode, Type *Dst, Type *Src) { return 1; }
+  unsigned getCastInstrCost(unsigned Opcode, Type *Dst, Type *Src,
+                            const Instruction *I) { return 1; }
 
   unsigned getExtractWithExtendCost(unsigned Opcode, Type *Dst,
                                     VectorType *VecTy, unsigned Index) {
@@ -336,7 +356,8 @@ public:
 
   unsigned getCFInstrCost(unsigned Opcode) { return 1; }
 
-  unsigned getCmpSelInstrCost(unsigned Opcode, Type *ValTy, Type *CondTy) {
+  unsigned getCmpSelInstrCost(unsigned Opcode, Type *ValTy, Type *CondTy,
+                              const Instruction *I) {
     return 1;
   }
 
@@ -345,7 +366,7 @@ public:
   }
 
   unsigned getMemoryOpCost(unsigned Opcode, Type *Src, unsigned Alignment,
-                           unsigned AddressSpace) {
+                           unsigned AddressSpace, const Instruction *I) {
     return 1;
   }
 
@@ -369,11 +390,12 @@ public:
   }
 
   unsigned getIntrinsicInstrCost(Intrinsic::ID ID, Type *RetTy,
-                                 ArrayRef<Type *> Tys, FastMathFlags FMF) {
+                                 ArrayRef<Type *> Tys, FastMathFlags FMF,
+                                 unsigned ScalarizationCostPassed) {
     return 1;
   }
   unsigned getIntrinsicInstrCost(Intrinsic::ID ID, Type *RetTy,
-                                 ArrayRef<Value *> Args, FastMathFlags FMF) {
+            ArrayRef<Value *> Args, FastMathFlags FMF, unsigned VF) {
     return 1;
   }
 
@@ -438,6 +460,16 @@ public:
                                 VectorType *VecTy) const {
     return VF;
   }
+
+  bool useReductionIntrinsic(unsigned Opcode, Type *Ty,
+                             TTI::ReductionFlags Flags) const {
+    return false;
+  }
+
+  bool shouldExpandReduction(const IntrinsicInst *II) const {
+    return true;
+  }
+
 protected:
   // Obtain the minimum required size to hold the value (without the sign)
   // In case of a vector it returns the min required size for one element.

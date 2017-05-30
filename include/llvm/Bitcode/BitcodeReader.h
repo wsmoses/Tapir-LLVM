@@ -46,6 +46,9 @@ namespace llvm {
     ArrayRef<uint8_t> Buffer;
     StringRef ModuleIdentifier;
 
+    // The string table used to interpret this module.
+    StringRef Strtab;
+
     // The bitstream location of the IDENTIFICATION_BLOCK.
     uint64_t IdentificationBit;
 
@@ -70,6 +73,7 @@ namespace llvm {
     StringRef getBuffer() const {
       return StringRef((const char *)Buffer.begin(), Buffer.size());
     }
+    StringRef getStrtab() const { return Strtab; }
 
     StringRef getModuleIdentifier() const { return ModuleIdentifier; }
 
@@ -89,6 +93,10 @@ namespace llvm {
 
     /// Parse the specified bitcode buffer, returning the module summary index.
     Expected<std::unique_ptr<ModuleSummaryIndex>> getSummary();
+
+    /// Parse the specified bitcode buffer and merge its module summary index
+    /// into CombinedIndex.
+    Error readSummary(ModuleSummaryIndex &CombinedIndex, unsigned ModuleId);
   };
 
   /// Returns a list of modules in the specified bitcode buffer.
@@ -136,6 +144,19 @@ namespace llvm {
   /// Parse the specified bitcode buffer, returning the module summary index.
   Expected<std::unique_ptr<ModuleSummaryIndex>>
   getModuleSummaryIndex(MemoryBufferRef Buffer);
+
+  /// Parse the specified bitcode buffer and merge the index into CombinedIndex.
+  Error readModuleSummaryIndex(MemoryBufferRef Buffer,
+                               ModuleSummaryIndex &CombinedIndex,
+                               unsigned ModuleId);
+
+  /// Parse the module summary index out of an IR file and return the module
+  /// summary index object if found, or an empty summary if not. If Path refers
+  /// to an empty file and IgnoreEmptyThinLTOIndexFile is true, then
+  /// this function will return nullptr.
+  Expected<std::unique_ptr<ModuleSummaryIndex>>
+  getModuleSummaryIndexForFile(StringRef Path,
+                               bool IgnoreEmptyThinLTOIndexFile = false);
 
   /// isBitcodeWrapper - Return true if the given bytes are the magic bytes
   /// for an LLVM IR bitcode wrapper.

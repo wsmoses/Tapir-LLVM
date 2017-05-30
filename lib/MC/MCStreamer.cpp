@@ -777,8 +777,8 @@ void MCStreamer::visitUsedExpr(const MCExpr &Expr) {
   }
 }
 
-void MCStreamer::EmitInstruction(const MCInst &Inst,
-                                 const MCSubtargetInfo &STI) {
+void MCStreamer::EmitInstruction(const MCInst &Inst, const MCSubtargetInfo &STI,
+                                 bool) {
   // Scan for values.
   for (unsigned i = Inst.getNumOperands(); i--;)
     if (Inst.getOperand(i).isExpr())
@@ -807,12 +807,22 @@ void MCStreamer::emitAbsoluteSymbolDiff(const MCSymbol *Hi, const MCSymbol *Lo,
 void MCStreamer::EmitAssemblerFlag(MCAssemblerFlag Flag) {}
 void MCStreamer::EmitThumbFunc(MCSymbol *Func) {}
 void MCStreamer::EmitSymbolDesc(MCSymbol *Symbol, unsigned DescValue) {}
-void MCStreamer::BeginCOFFSymbolDef(const MCSymbol *Symbol) {}
-void MCStreamer::EndCOFFSymbolDef() {}
+void MCStreamer::BeginCOFFSymbolDef(const MCSymbol *Symbol) {
+  llvm_unreachable("this directive only supported on COFF targets");
+}
+void MCStreamer::EndCOFFSymbolDef() {
+  llvm_unreachable("this directive only supported on COFF targets");
+}
 void MCStreamer::EmitFileDirective(StringRef Filename) {}
-void MCStreamer::EmitCOFFSymbolStorageClass(int StorageClass) {}
-void MCStreamer::EmitCOFFSymbolType(int Type) {}
+void MCStreamer::EmitCOFFSymbolStorageClass(int StorageClass) {
+  llvm_unreachable("this directive only supported on COFF targets");
+}
+void MCStreamer::EmitCOFFSymbolType(int Type) {
+  llvm_unreachable("this directive only supported on COFF targets");
+}
 void MCStreamer::emitELFSize(MCSymbol *Symbol, const MCExpr *Value) {}
+void MCStreamer::emitELFSymverDirective(MCSymbol *Alias,
+                                        const MCSymbol *Aliasee) {}
 void MCStreamer::EmitLocalCommonSymbol(MCSymbol *Symbol, uint64_t Size,
                                        unsigned ByteAlignment) {}
 void MCStreamer::EmitTBSSSymbol(MCSection *Section, MCSymbol *Symbol,

@@ -232,14 +232,16 @@ HexagonBlockRanges::RegisterSet HexagonBlockRanges::getLiveIns(
       const TargetRegisterInfo &TRI) {
   RegisterSet LiveIns;
   RegisterSet Tmp;
+
   for (auto I : B.liveins()) {
-    if (I.LaneMask.all()) {
-      Tmp.insert({I.PhysReg,0});
+    MCSubRegIndexIterator S(I.PhysReg, &TRI);
+    if (I.LaneMask.all() || (I.LaneMask.any() && !S.isValid())) {
+      Tmp.insert({I.PhysReg, 0});
       continue;
     }
-    for (MCSubRegIndexIterator S(I.PhysReg, &TRI); S.isValid(); ++S) {
-      LaneBitmask M = TRI.getSubRegIndexLaneMask(S.getSubRegIndex());
-      if ((M & I.LaneMask).any())
+    for (; S.isValid(); ++S) {
+      unsigned SI = S.getSubRegIndex();
+      if ((I.LaneMask & TRI.getSubRegIndexLaneMask(SI)).any())
         Tmp.insert({S.getSubReg(), 0});
     }
   }
@@ -362,12 +364,11 @@ void HexagonBlockRanges::computeInitialLiveRanges(InstrIndexMap &IndexMap,
           Clobbers.insert(R);
       }
     }
-#ifndef NDEBUG
+    // Defs and clobbers can overlap, e.g.
+    // %D0<def,dead> = COPY %vreg5, %R0<imp-def>, %R1<imp-def>
     for (RegisterRef R : Defs)
-      assert(!Clobbers.count(R));
-    for (RegisterRef R : Clobbers)
-      assert(!Defs.count(R));
-#endif
+      Clobbers.erase(R);
+
     // Update maps for defs.
     for (RegisterRef S : Defs) {
       // Defs should already be expanded into subregs.

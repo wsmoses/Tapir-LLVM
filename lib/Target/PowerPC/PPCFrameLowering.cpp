@@ -1459,8 +1459,7 @@ void PPCFrameLowering::emitEpilogue(MachineFunction &MF,
   }
 
   if (FI->usesPICBase())
-    BuildMI(MBB, MBBI, dl, LoadInst)
-      .addReg(PPC::R30)
+    BuildMI(MBB, MBBI, dl, LoadInst, PPC::R30)
       .addImm(PBPOffset)
       .addReg(RBReg);
 
@@ -1766,31 +1765,36 @@ void PPCFrameLowering::processFunctionBeforeFrameFinalized(MachineFunction &MF,
   // Check whether the frame pointer register is allocated. If so, make sure it
   // is spilled to the correct offset.
   if (needsFP(MF)) {
-    HasGPSaveArea = true;
-
     int FI = PFI->getFramePointerSaveIndex();
     assert(FI && "No Frame Pointer Save Slot!");
-
     MFI.setObjectOffset(FI, LowerBound + MFI.getObjectOffset(FI));
+    // FP is R31/X31, so no need to update MinGPR/MinG8R.
+    HasGPSaveArea = true;
   }
 
   if (PFI->usesPICBase()) {
-    HasGPSaveArea = true;
-
     int FI = PFI->getPICBasePointerSaveIndex();
     assert(FI && "No PIC Base Pointer Save Slot!");
-
     MFI.setObjectOffset(FI, LowerBound + MFI.getObjectOffset(FI));
+
+    MinGPR = std::min<unsigned>(MinGPR, PPC::R30);
+    HasGPSaveArea = true;
   }
 
   const PPCRegisterInfo *RegInfo = Subtarget.getRegisterInfo();
   if (RegInfo->hasBasePointer(MF)) {
-    HasGPSaveArea = true;
-
     int FI = PFI->getBasePointerSaveIndex();
     assert(FI && "No Base Pointer Save Slot!");
-
     MFI.setObjectOffset(FI, LowerBound + MFI.getObjectOffset(FI));
+
+    unsigned BP = RegInfo->getBaseRegister(MF);
+    if (PPC::G8RCRegClass.contains(BP)) {
+      MinG8R = std::min<unsigned>(MinG8R, BP);
+      HasG8SaveArea = true;
+    } else if (PPC::GPRCRegClass.contains(BP)) {
+      MinGPR = std::min<unsigned>(MinGPR, BP);
+      HasGPSaveArea = true;
+    }
   }
 
   // General register save area starts right below the Floating-point
@@ -1898,12 +1902,13 @@ PPCFrameLowering::addScavengingSpillSlot(MachineFunction &MF,
   MachineFrameInfo &MFI = MF.getFrameInfo();
   if (MFI.hasVarSizedObjects() || spillsCR(MF) || spillsVRSAVE(MF) ||
       hasNonRISpills(MF) || (hasSpills(MF) && !isInt<16>(StackSize))) {
-    const TargetRegisterClass *GPRC = &PPC::GPRCRegClass;
-    const TargetRegisterClass *G8RC = &PPC::G8RCRegClass;
-    const TargetRegisterClass *RC = Subtarget.isPPC64() ? G8RC : GPRC;
-    RS->addScavengingFrameIndex(MFI.CreateStackObject(RC->getSize(),
-                                                      RC->getAlignment(),
-                                                      false));
+    const TargetRegisterClass &GPRC = PPC::GPRCRegClass;
+    const TargetRegisterClass &G8RC = PPC::G8RCRegClass;
+    const TargetRegisterClass &RC = Subtarget.isPPC64() ? G8RC : GPRC;
+    const TargetRegisterInfo &TRI = *Subtarget.getRegisterInfo();
+    unsigned Size = TRI.getSpillSize(RC);
+    unsigned Align = TRI.getSpillAlignment(RC);
+    RS->addScavengingFrameIndex(MFI.CreateStackObject(Size, Align, false));
 
     // Might we have over-aligned allocas?
     bool HasAlVars = MFI.hasVarSizedObjects() &&
@@ -1911,9 +1916,7 @@ PPCFrameLowering::addScavengingSpillSlot(MachineFunction &MF,
 
     // These kinds of spills might need two registers.
     if (spillsCR(MF) || spillsVRSAVE(MF) || HasAlVars)
-      RS->addScavengingFrameIndex(MFI.CreateStackObject(RC->getSize(),
-                                                        RC->getAlignment(),
-                                                        false));
+      RS->addScavengingFrameIndex(MFI.CreateStackObject(Size, Align, false));
 
   }
 }

@@ -36,12 +36,15 @@ static bool promoteMemoryToRegister(Function &F, DominatorTree &DT,
   // CFG's.  We can perform this scan for entry blocks once for the function,
   // because this pass preserves the CFG.
   SmallVector<BasicBlock *, 4> EntryBlocks;
+  bool FunctionContainsDetach = false;
   EntryBlocks.push_back(&F.getEntryBlock());
   for (BasicBlock &BB : F)
     if (BasicBlock *Pred = BB.getUniquePredecessor())
-      if (DetachInst *DI = dyn_cast<DetachInst>(Pred->getTerminator()))
+      if (DetachInst *DI = dyn_cast<DetachInst>(Pred->getTerminator())) {
+        FunctionContainsDetach = true;
         if (DI->getDetached() == &BB)
           EntryBlocks.push_back(&BB);
+      }
 
   while (1) {
     Allocas.clear();
@@ -51,13 +54,14 @@ static bool promoteMemoryToRegister(Function &F, DominatorTree &DT,
     for (BasicBlock *BB : EntryBlocks)
       for (BasicBlock::iterator I = BB->begin(), E = --BB->end(); I != E; ++I)
         if (AllocaInst *AI = dyn_cast<AllocaInst>(I))       // Is it an alloca?
-          if (isAllocaPromotable(AI, DT))
+          if (isAllocaPromotable(AI) &&
+              (!FunctionContainsDetach || isAllocaParallelPromotable(AI, DT)))
             Allocas.push_back(AI);
 
     if (Allocas.empty())
       break;
 
-    PromoteMemToReg(Allocas, DT, nullptr, &AC);
+    PromoteMemToReg(Allocas, DT, &AC);
     NumPromoted += Allocas.size();
     Changed = true;
   }

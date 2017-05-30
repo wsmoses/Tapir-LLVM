@@ -1268,8 +1268,7 @@ Value *SCEVExpander::expandAddRecExprLiterally(const SCEVAddRecExpr *S) {
   if (PostIncLoops.count(L)) {
     PostIncLoopSet Loops;
     Loops.insert(L);
-    Normalized = cast<SCEVAddRecExpr>(TransformForPostIncUse(
-        Normalize, S, nullptr, nullptr, Loops, SE, SE.DT));
+    Normalized = cast<SCEVAddRecExpr>(normalizeForPostIncUse(S, Loops, SE));
   }
 
   // Strip off any non-loop-dominating component from the addrec start.
@@ -1773,9 +1772,10 @@ SCEVExpander::getOrInsertCanonicalInductionVariable(const Loop *L,
 ///
 /// This does not depend on any SCEVExpander state but should be used in
 /// the same context that SCEVExpander is used.
-unsigned SCEVExpander::replaceCongruentIVs(Loop *L, const DominatorTree *DT,
-                                           SmallVectorImpl<WeakVH> &DeadInsts,
-                                           const TargetTransformInfo *TTI) {
+unsigned
+SCEVExpander::replaceCongruentIVs(Loop *L, const DominatorTree *DT,
+                                  SmallVectorImpl<WeakTrackingVH> &DeadInsts,
+                                  const TargetTransformInfo *TTI) {
   // Find integer phis in order of increasing width.
   SmallVector<PHINode*, 8> Phis;
   for (auto &I : *L->getHeader()) {
@@ -1800,7 +1800,7 @@ unsigned SCEVExpander::replaceCongruentIVs(Loop *L, const DominatorTree *DT,
   // so narrow phis can reuse them.
   for (PHINode *Phi : Phis) {
     auto SimplifyPHINode = [&](PHINode *PN) -> Value * {
-      if (Value *V = SimplifyInstruction(PN, DL, &SE.TLI, &SE.DT, &SE.AC))
+      if (Value *V = SimplifyInstruction(PN, {DL, &SE.TLI, &SE.DT, &SE.AC}))
         return V;
       if (!SE.isSCEVable(PN->getType()))
         return nullptr;

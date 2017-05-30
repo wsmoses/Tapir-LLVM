@@ -169,7 +169,8 @@ Pass *createLoopStrengthReducePass();
 //
 // LoopUnswitch - This pass is a simple loop unswitching pass.
 //
-Pass *createLoopUnswitchPass(bool OptimizeForSize = false);
+Pass *createLoopUnswitchPass(bool OptimizeForSize = false,
+                             bool hasBranchDivergence = false);
 
 //===----------------------------------------------------------------------===//
 //
@@ -261,6 +262,14 @@ FunctionPass *createCFGSimplificationPass(
 
 //===----------------------------------------------------------------------===//
 //
+// LateCFGSimplification - Like CFGSimplification, but may also
+// convert switches to lookup tables.
+//
+FunctionPass *createLateCFGSimplificationPass(
+    int Threshold = -1, std::function<bool(const Function &)> Ftor = nullptr);
+
+//===----------------------------------------------------------------------===//
+//
 // FlattenCFG - flatten CFG, reduce number of conditional branches by using
 // parallel-and and parallel-or mode, etc...
 //
@@ -344,6 +353,13 @@ FunctionPass *createEarlyCSEPass(bool UseMemorySSA = false);
 // tree to hoist common expressions from sibling branches.
 //
 FunctionPass *createGVNHoistPass();
+
+//===----------------------------------------------------------------------===//
+//
+// GVNSink - This pass uses an "inverted" value numbering to decide the
+// similarity of expressions and sinks similar expressions into successors.
+//
+FunctionPass *createGVNSinkPass();
 
 //===----------------------------------------------------------------------===//
 //

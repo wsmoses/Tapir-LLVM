@@ -114,9 +114,10 @@ LLVMContextImpl::~LLVMContextImpl() {
   }
 
   // Destroy attribute lists.
-  for (FoldingSetIterator<AttributeSetImpl> I = AttrsLists.begin(),
-         E = AttrsLists.end(); I != E; ) {
-    FoldingSetIterator<AttributeSetImpl> Elem = I++;
+  for (FoldingSetIterator<AttributeListImpl> I = AttrsLists.begin(),
+                                             E = AttrsLists.end();
+       I != E;) {
+    FoldingSetIterator<AttributeListImpl> Elem = I++;
     delete &*Elem;
   }
 
@@ -213,27 +214,6 @@ uint32_t LLVMContextImpl::getOperandBundleTagID(StringRef Tag) const {
   assert(I != BundleTagCache.end() && "Unknown tag!");
   return I->second;
 }
-
-// ConstantsContext anchors
-void UnaryConstantExpr::anchor() { }
-
-void BinaryConstantExpr::anchor() { }
-
-void SelectConstantExpr::anchor() { }
-
-void ExtractElementConstantExpr::anchor() { }
-
-void InsertElementConstantExpr::anchor() { }
-
-void ShuffleVectorConstantExpr::anchor() { }
-
-void ExtractValueConstantExpr::anchor() { }
-
-void InsertValueConstantExpr::anchor() { }
-
-void GetElementPtrConstantExpr::anchor() { }
-
-void CompareConstantExpr::anchor() { }
 
 /// Singleton instance of the OptBisect class.
 ///

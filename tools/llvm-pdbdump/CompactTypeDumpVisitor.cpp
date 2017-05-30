@@ -29,29 +29,31 @@ static StringRef getLeafName(TypeLeafKind K) {
   return StringRef();
 }
 
-CompactTypeDumpVisitor::CompactTypeDumpVisitor(TypeDatabase &TypeDB,
+CompactTypeDumpVisitor::CompactTypeDumpVisitor(TypeCollection &Types,
                                                ScopedPrinter *W)
-    : W(W), TI(TypeIndex::None()), Offset(0), TypeDB(TypeDB) {}
+    : CompactTypeDumpVisitor(Types, TypeIndex(TypeIndex::FirstNonSimpleIndex),
+                             W) {}
+
+CompactTypeDumpVisitor::CompactTypeDumpVisitor(TypeCollection &Types,
+                                               TypeIndex FirstTI,
+                                               ScopedPrinter *W)
+    : W(W), TI(FirstTI), Offset(0), Types(Types) {}
 
 Error CompactTypeDumpVisitor::visitTypeBegin(CVType &Record) {
-  if (TI == TypeIndex::None())
-    TI.setIndex(TypeIndex::FirstNonSimpleIndex);
-  else
-    TI.setIndex(TI.getIndex() + 1);
-
   return Error::success();
 }
 
 Error CompactTypeDumpVisitor::visitTypeEnd(CVType &Record) {
   uint32_t I = TI.getIndex();
   StringRef Leaf = getLeafName(Record.Type);
-  StringRef Name = TypeDB.getTypeName(TI);
+  StringRef Name = Types.getTypeName(TI);
   W->printString(
       llvm::formatv("Index: {0:x} ({1:N} bytes, offset {2:N}) {3} \"{4}\"", I,
                     Record.length(), Offset, Leaf, Name)
           .str());
 
   Offset += Record.length();
+  TI.setIndex(TI.getIndex() + 1);
 
   return Error::success();
 }

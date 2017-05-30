@@ -160,7 +160,9 @@ void LivePhysRegs::addBlockLiveIns(const MachineBasicBlock &MBB) {
 static void addPristines(LivePhysRegs &LiveRegs, const MachineFunction &MF,
                          const MachineFrameInfo &MFI,
                          const TargetRegisterInfo &TRI) {
-  for (const MCPhysReg *CSR = TRI.getCalleeSavedRegs(&MF); CSR && *CSR; ++CSR)
+  const MachineRegisterInfo &MRI = MF.getRegInfo();
+  for (const MCPhysReg *CSR = MRI.getCalleeSavedRegs(); CSR && *CSR;
+       ++CSR)
     LiveRegs.addReg(*CSR);
   for (const CalleeSavedInfo &Info : MFI.getCalleeSavedInfo())
     LiveRegs.removeReg(Info.getReg());
@@ -179,7 +181,8 @@ void LivePhysRegs::addLiveOuts(const MachineBasicBlock &MBB) {
     if (MBB.isReturnBlock()) {
       // The return block has no successors whose live-ins we could merge
       // below. So instead we add the callee saved registers manually.
-      for (const MCPhysReg *I = TRI->getCalleeSavedRegs(&MF); *I; ++I)
+      const MachineRegisterInfo &MRI = MF.getRegInfo();
+      for (const MCPhysReg *I = MRI.getCalleeSavedRegs(); *I; ++I)
         addReg(*I);
     } else {
       addPristines(*this, MF, MFI, *TRI);
@@ -197,8 +200,10 @@ void LivePhysRegs::addLiveIns(const MachineBasicBlock &MBB) {
   addBlockLiveIns(MBB);
 }
 
-void llvm::computeLiveIns(LivePhysRegs &LiveRegs, const TargetRegisterInfo &TRI,
+void llvm::computeLiveIns(LivePhysRegs &LiveRegs,
+                          const MachineRegisterInfo &MRI,
                           MachineBasicBlock &MBB) {
+  const TargetRegisterInfo &TRI = *MRI.getTargetRegisterInfo();
   assert(MBB.livein_empty());
   LiveRegs.init(TRI);
   LiveRegs.addLiveOutsNoPristines(MBB);
@@ -206,10 +211,12 @@ void llvm::computeLiveIns(LivePhysRegs &LiveRegs, const TargetRegisterInfo &TRI,
     LiveRegs.stepBackward(MI);
 
   for (unsigned Reg : LiveRegs) {
+    if (MRI.isReserved(Reg))
+      continue;
     // Skip the register if we are about to add one of its super registers.
     bool ContainsSuperReg = false;
     for (MCSuperRegIterator SReg(Reg, &TRI); SReg.isValid(); ++SReg) {
-      if (LiveRegs.contains(*SReg)) {
+      if (LiveRegs.contains(*SReg) && !MRI.isReserved(*SReg)) {
         ContainsSuperReg = true;
         break;
       }

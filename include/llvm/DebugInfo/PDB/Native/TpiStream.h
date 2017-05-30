@@ -11,16 +11,19 @@
 #define LLVM_DEBUGINFO_PDB_RAW_PDBTPISTREAM_H
 
 #include "llvm/DebugInfo/CodeView/TypeRecord.h"
-#include "llvm/DebugInfo/MSF/StreamArray.h"
 #include "llvm/DebugInfo/PDB/Native/HashTable.h"
 #include "llvm/DebugInfo/PDB/Native/RawConstants.h"
 #include "llvm/DebugInfo/PDB/Native/RawTypes.h"
 #include "llvm/DebugInfo/PDB/PDBTypes.h"
+#include "llvm/Support/BinaryStreamArray.h"
 #include "llvm/Support/raw_ostream.h"
 
 #include "llvm/Support/Error.h"
 
 namespace llvm {
+namespace codeview {
+class LazyRandomTypeCollection;
+}
 namespace msf {
 class MappedBlockStream;
 }
@@ -40,31 +43,34 @@ public:
 
   uint32_t TypeIndexBegin() const;
   uint32_t TypeIndexEnd() const;
-  uint32_t NumTypeRecords() const;
+  uint32_t getNumTypeRecords() const;
   uint16_t getTypeHashStreamIndex() const;
   uint16_t getTypeHashStreamAuxIndex() const;
 
   uint32_t getHashKeySize() const;
-  uint32_t NumHashBuckets() const;
-  msf::FixedStreamArray<support::ulittle32_t> getHashValues() const;
-  msf::FixedStreamArray<TypeIndexOffset> getTypeIndexOffsets() const;
+  uint32_t getNumHashBuckets() const;
+  FixedStreamArray<support::ulittle32_t> getHashValues() const;
+  FixedStreamArray<codeview::TypeIndexOffset> getTypeIndexOffsets() const;
   HashTable &getHashAdjusters();
 
   codeview::CVTypeRange types(bool *HadError) const;
+  const codeview::CVTypeArray &typeArray() const { return TypeRecords; }
+
+  codeview::LazyRandomTypeCollection &typeCollection() { return *Types; }
 
   Error commit();
 
 private:
-  Error verifyHashValues();
-
   const PDBFile &Pdb;
   std::unique_ptr<msf::MappedBlockStream> Stream;
 
+  std::unique_ptr<codeview::LazyRandomTypeCollection> Types;
+
   codeview::CVTypeArray TypeRecords;
 
-  std::unique_ptr<msf::ReadableStream> HashStream;
-  msf::FixedStreamArray<support::ulittle32_t> HashValues;
-  msf::FixedStreamArray<TypeIndexOffset> TypeIndexOffsets;
+  std::unique_ptr<BinaryStream> HashStream;
+  FixedStreamArray<support::ulittle32_t> HashValues;
+  FixedStreamArray<codeview::TypeIndexOffset> TypeIndexOffsets;
   HashTable HashAdjusters;
 
   const TpiStreamHeader *Header;

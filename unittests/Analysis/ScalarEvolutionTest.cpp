@@ -51,13 +51,13 @@ protected:
     return ScalarEvolution(F, TLI, *AC, *DT, *LI);
   }
 
-  void runWithFunctionAndSE(
+  void runWithSE(
       Module &M, StringRef FuncName,
-      function_ref<void(Function &F, ScalarEvolution &SE)> Test) {
+      function_ref<void(Function &F, LoopInfo &LI, ScalarEvolution &SE)> Test) {
     auto *F = M.getFunction(FuncName);
     ASSERT_NE(F, nullptr) << "Could not find " << FuncName;
     ScalarEvolution SE = buildSE(*F);
-    Test(*F, SE);
+    Test(*F, *LI, SE);
   }
 };
 
@@ -306,9 +306,11 @@ TEST_F(ScalarEvolutionsTest, ExpandPtrTypeSCEV) {
   //   %bitcast2 = bitcast i8* %select to i32*
   //   br i1 undef, label %loop, label %exit
 
+  const DataLayout &DL = F->getParent()->getDataLayout();
   BranchInst *Br = BranchInst::Create(
       LoopBB, ExitBB, UndefValue::get(Type::getInt1Ty(Context)), LoopBB);
-  AllocaInst *Alloca = new AllocaInst(I32Ty, "alloca", Br);
+  AllocaInst *Alloca = new AllocaInst(I32Ty, DL.getAllocaAddrSpace(),
+                                      "alloca", Br);
   ConstantInt *Ci32 = ConstantInt::get(Context, APInt(32, 1));
   GetElementPtrInst *Gep0 =
       GetElementPtrInst::Create(I32Ty, Alloca, Ci32, "gep0", Br);
@@ -417,7 +419,7 @@ TEST_F(ScalarEvolutionsTest, CommutativeExprOperandOrder) {
   assert(M && "Could not parse module?");
   assert(!verifyModule(*M) && "Must have been well formed!");
 
-  runWithFunctionAndSE(*M, "f_1", [&](Function &F, ScalarEvolution &SE) {
+  runWithSE(*M, "f_1", [&](Function &F, LoopInfo &LI, ScalarEvolution &SE) {
     auto *IV0 = getInstructionByName(F, "iv0");
     auto *IV0Inc = getInstructionByName(F, "iv0.inc");
 
@@ -458,14 +460,15 @@ TEST_F(ScalarEvolutionsTest, CommutativeExprOperandOrder) {
   };
 
   for (StringRef FuncName : {"f_2", "f_3", "f_4"})
-    runWithFunctionAndSE(*M, FuncName, [&](Function &F, ScalarEvolution &SE) {
-      CheckCommutativeMulExprs(SE, SE.getSCEV(getInstructionByName(F, "x")),
-                               SE.getSCEV(getInstructionByName(F, "y")),
-                               SE.getSCEV(getInstructionByName(F, "z")));
-    });
+    runWithSE(
+        *M, FuncName, [&](Function &F, LoopInfo &LI, ScalarEvolution &SE) {
+          CheckCommutativeMulExprs(SE, SE.getSCEV(getInstructionByName(F, "x")),
+                                   SE.getSCEV(getInstructionByName(F, "y")),
+                                   SE.getSCEV(getInstructionByName(F, "z")));
+        });
 }
 
-TEST_F(ScalarEvolutionsTest, SCEVCompareComplexity) {
+TEST_F(ScalarEvolutionsTest, CompareSCEVComplexity) {
   FunctionType *FTy =
       FunctionType::get(Type::getVoidTy(Context), std::vector<Type *>(), false);
   Function *F = cast<Function>(M.getOrInsertFunction("f", FTy));
@@ -532,6 +535,42 @@ TEST_F(ScalarEvolutionsTest, SCEVCompareComplexity) {
   EXPECT_NE(nullptr, SE.getSCEV(Acc[0]));
 }
 
+TEST_F(ScalarEvolutionsTest, CompareValueComplexity) {
+  IntegerType *IntPtrTy = M.getDataLayout().getIntPtrType(Context);
+  PointerType *IntPtrPtrTy = IntPtrTy->getPointerTo();
+
+  FunctionType *FTy =
+      FunctionType::get(Type::getVoidTy(Context), {IntPtrTy, IntPtrTy}, false);
+  Function *F = cast<Function>(M.getOrInsertFunction("f", FTy));
+  BasicBlock *EntryBB = BasicBlock::Create(Context, "entry", F);
+
+  Value *X = &*F->arg_begin();
+  Value *Y = &*std::next(F->arg_begin());
+
+  const int ValueDepth = 10;
+  for (int i = 0; i < ValueDepth; i++) {
+    X = new LoadInst(new IntToPtrInst(X, IntPtrPtrTy, "", EntryBB), "",
+                     /*isVolatile*/ false, EntryBB);
+    Y = new LoadInst(new IntToPtrInst(Y, IntPtrPtrTy, "", EntryBB), "",
+                     /*isVolatile*/ false, EntryBB);
+  }
+
+  auto *MulA = BinaryOperator::CreateMul(X, Y, "", EntryBB);
+  auto *MulB = BinaryOperator::CreateMul(Y, X, "", EntryBB);
+  ReturnInst::Create(Context, nullptr, EntryBB);
+
+  // This test isn't checking for correctness.  Today making A and B resolve to
+  // the same SCEV would require deeper searching in CompareValueComplexity,
+  // which will slow down compilation.  However, this test can fail (with LLVM's
+  // behavior still being correct) if we ever have a smarter
+  // CompareValueComplexity that is both fast and more accurate.
+
+  ScalarEvolution SE = buildSE(*F);
+  auto *A = SE.getSCEV(MulA);
+  auto *B = SE.getSCEV(MulB);
+  EXPECT_NE(A, B);
+}
+
 TEST_F(ScalarEvolutionsTest, SCEVAddExpr) {
   Type *Ty32 = Type::getInt32Ty(Context);
   Type *ArgTys[] = {Type::getInt64Ty(Context), Ty32};
@@ -564,5 +603,255 @@ TEST_F(ScalarEvolutionsTest, SCEVAddExpr) {
   EXPECT_NE(nullptr, SE.getSCEV(Mul1));
 }
 
+static Instruction &GetInstByName(Function &F, StringRef Name) {
+  for (auto &I : instructions(F))
+    if (I.getName() == Name)
+      return I;
+  llvm_unreachable("Could not find instructions!");
+}
+
+TEST_F(ScalarEvolutionsTest, SCEVNormalization) {
+  LLVMContext C;
+  SMDiagnostic Err;
+  std::unique_ptr<Module> M = parseAssemblyString(
+      "target datalayout = \"e-m:e-p:32:32-f64:32:64-f80:32-n8:16:32-S128\" "
+      " "
+      "@var_0 = external global i32, align 4"
+      "@var_1 = external global i32, align 4"
+      "@var_2 = external global i32, align 4"
+      " "
+      "declare i32 @unknown(i32, i32, i32)"
+      " "
+      "define void @f_1(i8* nocapture %arr, i32 %n, i32* %A, i32* %B) "
+      "    local_unnamed_addr { "
+      "entry: "
+      "  br label %loop.ph "
+      " "
+      "loop.ph: "
+      "  br label %loop "
+      " "
+      "loop: "
+      "  %iv0 = phi i32 [ %iv0.inc, %loop ], [ 0, %loop.ph ] "
+      "  %iv1 = phi i32 [ %iv1.inc, %loop ], [ -2147483648, %loop.ph ] "
+      "  %iv0.inc = add i32 %iv0, 1 "
+      "  %iv1.inc = add i32 %iv1, 3 "
+      "  br i1 undef, label %for.end.loopexit, label %loop "
+      " "
+      "for.end.loopexit: "
+      "  ret void "
+      "} "
+      " "
+      "define void @f_2(i32 %a, i32 %b, i32 %c, i32 %d) "
+      "    local_unnamed_addr { "
+      "entry: "
+      "  br label %loop_0 "
+      " "
+      "loop_0: "
+      "  br i1 undef, label %loop_0, label %loop_1 "
+      " "
+      "loop_1: "
+      "  br i1 undef, label %loop_2, label %loop_1 "
+      " "
+      " "
+      "loop_2: "
+      "  br i1 undef, label %end, label %loop_2 "
+      " "
+      "end: "
+      "  ret void "
+      "} "
+      ,
+      Err, C);
+
+  assert(M && "Could not parse module?");
+  assert(!verifyModule(*M) && "Must have been well formed!");
+
+  runWithSE(*M, "f_1", [&](Function &F, LoopInfo &LI, ScalarEvolution &SE) {
+    auto &I0 = GetInstByName(F, "iv0");
+    auto &I1 = *I0.getNextNode();
+
+    auto *S0 = cast<SCEVAddRecExpr>(SE.getSCEV(&I0));
+    PostIncLoopSet Loops;
+    Loops.insert(S0->getLoop());
+    auto *N0 = normalizeForPostIncUse(S0, Loops, SE);
+    auto *D0 = denormalizeForPostIncUse(N0, Loops, SE);
+    EXPECT_EQ(S0, D0) << *S0 << " " << *D0;
+
+    auto *S1 = cast<SCEVAddRecExpr>(SE.getSCEV(&I1));
+    Loops.clear();
+    Loops.insert(S1->getLoop());
+    auto *N1 = normalizeForPostIncUse(S1, Loops, SE);
+    auto *D1 = denormalizeForPostIncUse(N1, Loops, SE);
+    EXPECT_EQ(S1, D1) << *S1 << " " << *D1;
+  });
+
+  runWithSE(*M, "f_2", [&](Function &F, LoopInfo &LI, ScalarEvolution &SE) {
+    auto *L2 = *LI.begin();
+    auto *L1 = *std::next(LI.begin());
+    auto *L0 = *std::next(LI.begin(), 2);
+
+    auto GetAddRec = [&SE](const Loop *L, std::initializer_list<const SCEV *> Ops) {
+      SmallVector<const SCEV *, 4> OpsCopy(Ops);
+      return SE.getAddRecExpr(OpsCopy, L, SCEV::FlagAnyWrap);
+    };
+
+    auto GetAdd = [&SE](std::initializer_list<const SCEV *> Ops) {
+      SmallVector<const SCEV *, 4> OpsCopy(Ops);
+      return SE.getAddExpr(OpsCopy, SCEV::FlagAnyWrap);
+    };
+
+    // We first populate the AddRecs vector with a few "interesting" SCEV
+    // expressions, and then we go through the list and assert that each
+    // expression in it has an invertible normalization.
+
+    std::vector<const SCEV *> Exprs;
+    {
+      const SCEV *V0 = SE.getSCEV(&*F.arg_begin());
+      const SCEV *V1 = SE.getSCEV(&*std::next(F.arg_begin(), 1));
+      const SCEV *V2 = SE.getSCEV(&*std::next(F.arg_begin(), 2));
+      const SCEV *V3 = SE.getSCEV(&*std::next(F.arg_begin(), 3));
+
+      Exprs.push_back(GetAddRec(L0, {V0}));             // 0
+      Exprs.push_back(GetAddRec(L0, {V0, V1}));         // 1
+      Exprs.push_back(GetAddRec(L0, {V0, V1, V2}));     // 2
+      Exprs.push_back(GetAddRec(L0, {V0, V1, V2, V3})); // 3
+
+      Exprs.push_back(
+          GetAddRec(L1, {Exprs[1], Exprs[2], Exprs[3], Exprs[0]})); // 4
+      Exprs.push_back(
+          GetAddRec(L1, {Exprs[1], Exprs[2], Exprs[0], Exprs[3]})); // 5
+      Exprs.push_back(
+          GetAddRec(L1, {Exprs[1], Exprs[3], Exprs[3], Exprs[1]})); // 6
+
+      Exprs.push_back(GetAdd({Exprs[6], Exprs[3], V2})); // 7
+
+      Exprs.push_back(
+          GetAddRec(L2, {Exprs[4], Exprs[3], Exprs[3], Exprs[5]})); // 8
+
+      Exprs.push_back(
+          GetAddRec(L2, {Exprs[4], Exprs[6], Exprs[7], Exprs[3], V0})); // 9
+    }
+
+    std::vector<PostIncLoopSet> LoopSets;
+    for (int i = 0; i < 8; i++) {
+      LoopSets.emplace_back();
+      if (i & 1)
+        LoopSets.back().insert(L0);
+      if (i & 2)
+        LoopSets.back().insert(L1);
+      if (i & 4)
+        LoopSets.back().insert(L2);
+    }
+
+    for (const auto &LoopSet : LoopSets)
+      for (auto *S : Exprs) {
+        {
+          auto *N = llvm::normalizeForPostIncUse(S, LoopSet, SE);
+          auto *D = llvm::denormalizeForPostIncUse(N, LoopSet, SE);
+
+          // Normalization and then denormalizing better give us back the same
+          // value.
+          EXPECT_EQ(S, D) << "S = " << *S << "  D = " << *D << " N = " << *N;
+        }
+        {
+          auto *D = llvm::denormalizeForPostIncUse(S, LoopSet, SE);
+          auto *N = llvm::normalizeForPostIncUse(D, LoopSet, SE);
+
+          // Denormalization and then normalizing better give us back the same
+          // value.
+          EXPECT_EQ(S, N) << "S = " << *S << "  N = " << *N;
+        }
+      }
+  });
+}
+
+// Expect the call of getZeroExtendExpr will not cost exponential time.
+TEST_F(ScalarEvolutionsTest, SCEVZeroExtendExpr) {
+  LLVMContext C;
+  SMDiagnostic Err;
+
+  // Generate a function like below:
+  // define void @foo() {
+  // entry:
+  //   br label %for.cond
+  //
+  // for.cond:
+  //   %0 = phi i64 [ 100, %entry ], [ %dec, %for.inc ]
+  //   %cmp = icmp sgt i64 %0, 90
+  //   br i1 %cmp, label %for.inc, label %for.cond1
+  //
+  // for.inc:
+  //   %dec = add nsw i64 %0, -1
+  //   br label %for.cond
+  //
+  // for.cond1:
+  //   %1 = phi i64 [ 100, %for.cond ], [ %dec5, %for.inc2 ]
+  //   %cmp3 = icmp sgt i64 %1, 90
+  //   br i1 %cmp3, label %for.inc2, label %for.cond4
+  //
+  // for.inc2:
+  //   %dec5 = add nsw i64 %1, -1
+  //   br label %for.cond1
+  //
+  // ......
+  //
+  // for.cond89:
+  //   %19 = phi i64 [ 100, %for.cond84 ], [ %dec94, %for.inc92 ]
+  //   %cmp93 = icmp sgt i64 %19, 90
+  //   br i1 %cmp93, label %for.inc92, label %for.end
+  //
+  // for.inc92:
+  //   %dec94 = add nsw i64 %19, -1
+  //   br label %for.cond89
+  //
+  // for.end:
+  //   %gep = getelementptr i8, i8* null, i64 %dec
+  //   %gep6 = getelementptr i8, i8* %gep, i64 %dec5
+  //   ......
+  //   %gep95 = getelementptr i8, i8* %gep91, i64 %dec94
+  //   ret void
+  // }
+  FunctionType *FTy = FunctionType::get(Type::getVoidTy(Context), {}, false);
+  Function *F = cast<Function>(M.getOrInsertFunction("foo", FTy));
+
+  BasicBlock *EntryBB = BasicBlock::Create(Context, "entry", F);
+  BasicBlock *CondBB = BasicBlock::Create(Context, "for.cond", F);
+  BasicBlock *EndBB = BasicBlock::Create(Context, "for.end", F);
+  BranchInst::Create(CondBB, EntryBB);
+  BasicBlock *PrevBB = EntryBB;
+
+  Type *I64Ty = Type::getInt64Ty(Context);
+  Type *I8Ty = Type::getInt8Ty(Context);
+  Type *I8PtrTy = Type::getInt8PtrTy(Context);
+  Value *Accum = Constant::getNullValue(I8PtrTy);
+  int Iters = 20;
+  for (int i = 0; i < Iters; i++) {
+    BasicBlock *IncBB = BasicBlock::Create(Context, "for.inc", F, EndBB);
+    auto *PN = PHINode::Create(I64Ty, 2, "", CondBB);
+    PN->addIncoming(ConstantInt::get(Context, APInt(64, 100)), PrevBB);
+    auto *Cmp = CmpInst::Create(Instruction::ICmp, CmpInst::ICMP_SGT, PN,
+                                ConstantInt::get(Context, APInt(64, 90)), "cmp",
+                                CondBB);
+    BasicBlock *NextBB;
+    if (i != Iters - 1)
+      NextBB = BasicBlock::Create(Context, "for.cond", F, EndBB);
+    else
+      NextBB = EndBB;
+    BranchInst::Create(IncBB, NextBB, Cmp, CondBB);
+    auto *Dec = BinaryOperator::CreateNSWAdd(
+        PN, ConstantInt::get(Context, APInt(64, -1)), "dec", IncBB);
+    PN->addIncoming(Dec, IncBB);
+    BranchInst::Create(CondBB, IncBB);
+
+    Accum = GetElementPtrInst::Create(I8Ty, Accum, Dec, "gep", EndBB);
+
+    PrevBB = CondBB;
+    CondBB = NextBB;
+  }
+  ReturnInst::Create(Context, nullptr, EndBB);
+  ScalarEvolution SE = buildSE(*F);
+  const SCEV *S = SE.getSCEV(Accum);
+  Type *I128Ty = Type::getInt128Ty(Context);
+  SE.getZeroExtendExpr(S, I128Ty);
+}
 }  // end anonymous namespace
 }  // end namespace llvm

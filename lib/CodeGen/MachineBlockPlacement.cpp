@@ -36,7 +36,6 @@
 #include "llvm/CodeGen/MachineBasicBlock.h"
 #include "llvm/CodeGen/MachineBlockFrequencyInfo.h"
 #include "llvm/CodeGen/MachineBranchProbabilityInfo.h"
-#include "llvm/CodeGen/MachineDominators.h"
 #include "llvm/CodeGen/MachineFunction.h"
 #include "llvm/CodeGen/MachineFunctionPass.h"
 #include "llvm/CodeGen/MachineLoopInfo.h"
@@ -86,19 +85,6 @@ static cl::opt<unsigned> ExitBlockBias(
 // Definition:
 // - Outlining: placement of a basic block outside the chain or hot path.
 
-static cl::opt<bool> OutlineOptionalBranches(
-    "outline-optional-branches",
-    cl::desc("Outlining optional branches will place blocks that are optional "
-              "branches, i.e. branches with a common post dominator, outside "
-              "the hot path or chain"),
-    cl::init(false), cl::Hidden);
-
-static cl::opt<unsigned> OutlineOptionalThreshold(
-    "outline-optional-threshold",
-    cl::desc("Don't outline optional branches that are a single block with an "
-             "instruction count below this threshold"),
-    cl::init(4), cl::Hidden);
-
 static cl::opt<unsigned> LoopToColdBlockRatio(
     "loop-to-cold-block-ratio",
     cl::desc("Outline loop blocks from loop chain if (frequency of loop) / "
@@ -147,6 +133,14 @@ static cl::opt<unsigned> TailDupPlacementThreshold(
              "that won't conflict."), cl::init(2),
     cl::Hidden);
 
+// Heuristic for aggressive tail duplication.
+static cl::opt<unsigned> TailDupPlacementAggressiveThreshold(
+    "tail-dup-placement-aggressive-threshold",
+    cl::desc("Instruction cutoff for aggressive tail duplication during "
+             "layout. Used at -O3. Tail merging during layout is forced to "
+             "have a threshold that won't conflict."), cl::init(3),
+    cl::Hidden);
+
 // Heuristic for tail duplication.
 static cl::opt<unsigned> TailDupPlacementPenalty(
     "tail-dup-placement-penalty",
@@ -154,6 +148,14 @@ static cl::opt<unsigned> TailDupPlacementPenalty(
              "Copying can increase fallthrough, but it also increases icache "
              "pressure. This parameter controls the penalty to account for that. "
              "Percent as integer."),
+    cl::init(2),
+    cl::Hidden);
+
+// Heuristic for triangle chains.
+static cl::opt<unsigned> TriangleChainCount(
+    "triangle-chain-count",
+    cl::desc("Number of triangle-shaped-CFG's that need to be in a row for the "
+             "triangle tail duplication heuristic to kick in. 0 to disable."),
     cl::init(2),
     cl::Hidden);
 
@@ -243,25 +245,26 @@ public:
   /// updating the block -> chain mapping. It does not free or tear down the
   /// old chain, but the old chain's block list is no longer valid.
   void merge(MachineBasicBlock *BB, BlockChain *Chain) {
-    assert(BB);
-    assert(!Blocks.empty());
+    assert(BB && "Can't merge a null block.");
+    assert(!Blocks.empty() && "Can't merge into an empty chain.");
 
     // Fast path in case we don't have a chain already.
     if (!Chain) {
-      assert(!BlockToChain[BB]);
+      assert(!BlockToChain[BB] &&
+             "Passed chain is null, but BB has entry in BlockToChain.");
       Blocks.push_back(BB);
       BlockToChain[BB] = this;
       return;
     }
 
-    assert(BB == *Chain->begin());
+    assert(BB == *Chain->begin() && "Passed BB is not head of Chain.");
     assert(Chain->begin() != Chain->end());
 
     // Update the incoming blocks to point to this chain, and add them to the
     // chain structure.
     for (MachineBasicBlock *ChainBB : *Chain) {
       Blocks.push_back(ChainBB);
-      assert(BlockToChain[ChainBB] == Chain && "Incoming blocks not in chain");
+      assert(BlockToChain[ChainBB] == Chain && "Incoming blocks not in chain.");
       BlockToChain[ChainBB] = this;
     }
   }
@@ -309,8 +312,8 @@ class MachineBlockPlacement : public MachineFunctionPass {
   SmallVector<MachineBasicBlock *, 16> BlockWorkList;
   SmallVector<MachineBasicBlock *, 16> EHPadWorkList;
 
-  /// Edges that have already been computed as optimal by the trellis code.
-  DenseMap<const MachineBasicBlock *, MachineBasicBlock *> ComputedTrellisEdges;
+  /// Edges that have already been computed as optimal.
+  DenseMap<const MachineBasicBlock *, BlockAndTailDupResult> ComputedEdges;
 
   /// \brief Machine Function
   MachineFunction *F;
@@ -335,9 +338,6 @@ class MachineBlockPlacement : public MachineFunctionPass {
   /// \brief A handle to the target's lowering info.
   const TargetLoweringBase *TLI;
 
-  /// \brief A handle to the dominator tree.
-  MachineDominatorTree *MDT;
-
   /// \brief A handle to the post dominator tree.
   MachinePostDominatorTree *MPDT;
 
@@ -347,10 +347,6 @@ class MachineBlockPlacement : public MachineFunctionPass {
   /// since tail duplication affects placement decisions of later blocks, it
   /// must be done inline.
   TailDuplicator TailDup;
-
-  /// \brief A set of blocks that are unavoidably execute, i.e. they dominate
-  /// all terminators of the MachineFunction.
-  SmallPtrSet<const MachineBasicBlock *, 4> UnavoidableBlocks;
 
   /// \brief Allocator and owner of BlockChain structures.
   ///
@@ -446,7 +442,6 @@ class MachineBlockPlacement : public MachineFunctionPass {
   void rotateLoopWithProfile(
       BlockChain &LoopChain, const MachineLoop &L,
       const BlockFilterSet &LoopBlockSet);
-  void collectMustExecuteBBs();
   void buildCFGChains();
   void optimizeBranches();
   void alignBlocks();
@@ -472,12 +467,15 @@ class MachineBlockPlacement : public MachineFunctionPass {
   /// Get the best pair of non-conflicting edges.
   static std::pair<WeightedEdge, WeightedEdge> getBestNonConflictingEdges(
       const MachineBasicBlock *BB,
-      SmallVector<SmallVector<WeightedEdge, 8>, 2> &Edges);
+      MutableArrayRef<SmallVector<WeightedEdge, 8>> Edges);
   /// Returns true if a block can tail duplicate into all unplaced
   /// predecessors. Filters based on loop.
   bool canTailDuplicateUnplacedPreds(
       const MachineBasicBlock *BB, MachineBasicBlock *Succ,
       const BlockChain &Chain, const BlockFilterSet *BlockFilter);
+  /// Find chains of triangles to tail-duplicate where a global analysis works,
+  /// but a local analysis would not find them.
+  void precomputeTriangleChains();
 
 public:
   static char ID; // Pass identification, replacement for typeid
@@ -490,7 +488,6 @@ public:
   void getAnalysisUsage(AnalysisUsage &AU) const override {
     AU.addRequired<MachineBranchProbabilityInfo>();
     AU.addRequired<MachineBlockFrequencyInfo>();
-    AU.addRequired<MachineDominatorTree>();
     if (TailDupPlacement)
       AU.addRequired<MachinePostDominatorTree>();
     AU.addRequired<MachineLoopInfo>();
@@ -502,14 +499,13 @@ public:
 
 char MachineBlockPlacement::ID = 0;
 char &llvm::MachineBlockPlacementID = MachineBlockPlacement::ID;
-INITIALIZE_PASS_BEGIN(MachineBlockPlacement, "block-placement",
+INITIALIZE_PASS_BEGIN(MachineBlockPlacement, DEBUG_TYPE,
                       "Branch Probability Basic Block Placement", false, false)
 INITIALIZE_PASS_DEPENDENCY(MachineBranchProbabilityInfo)
 INITIALIZE_PASS_DEPENDENCY(MachineBlockFrequencyInfo)
-INITIALIZE_PASS_DEPENDENCY(MachineDominatorTree)
 INITIALIZE_PASS_DEPENDENCY(MachinePostDominatorTree)
 INITIALIZE_PASS_DEPENDENCY(MachineLoopInfo)
-INITIALIZE_PASS_END(MachineBlockPlacement, "block-placement",
+INITIALIZE_PASS_END(MachineBlockPlacement, DEBUG_TYPE,
                     "Branch Probability Basic Block Placement", false, false)
 
 #ifndef NDEBUG
@@ -773,57 +769,65 @@ bool MachineBlockPlacement::isProfitableToTailDup(
   //  Cost in the first case is: P + V
   //  For this calculation, we always assume P > Qout. If Qout > P
   //  The result of this function will be ignored at the caller.
-  //  Cost in the second case is: Qout + Qin * U + P * V
+  //  Let F = SuccFreq - Qin
+  //  Cost in the second case is: Qout + min(Qin, F) * U + max(Qin, F) * V
 
   if (PDom == nullptr || !Succ->isSuccessor(PDom)) {
     BranchProbability UProb = BestSuccSucc;
     BranchProbability VProb = AdjustedSuccSumProb - UProb;
+    BlockFrequency F = SuccFreq - Qin;
     BlockFrequency V = SuccFreq * VProb;
-    BlockFrequency QinU = Qin * UProb;
+    BlockFrequency QinU = std::min(Qin, F) * UProb;
     BlockFrequency BaseCost = P + V;
-    BlockFrequency DupCost = Qout + QinU + P * VProb;
+    BlockFrequency DupCost = Qout + QinU + std::max(Qin, F) * VProb;
     return greaterWithBias(BaseCost, DupCost, EntryFreq);
   }
   BranchProbability UProb = MBPI->getEdgeProbability(Succ, PDom);
   BranchProbability VProb = AdjustedSuccSumProb - UProb;
   BlockFrequency U = SuccFreq * UProb;
   BlockFrequency V = SuccFreq * VProb;
+  BlockFrequency F = SuccFreq - Qin;
   // If there is a post-dominating successor, here is the calculation:
   // BB         BB                 BB          BB
-  // | \Qout    |  \               | \Qout     |  \
-  // |P C       |   =              |P C        |   =
-  // =   C'     |P   C             =   C'      |P   C
-  // |  /Qin    |     |            |  /Qin     |     |
-  // | /        |     C' (+Succ)   | /         |     C' (+Succ)
-  // Succ       Succ /|            Succ        Succ /|
-  // | \  V     |  \/ |            | \  V      |  \/ |
-  // |U \       |U /\ |            |U =        |U /\ |
-  // =   D      = =  \=            |   D       | =  =|
-  // |  /       |/    D            |  /        |/    D
-  // | /        |    /             | =         |    /
-  // |/         |   /              |/          |   =
-  // Dom        Dom                Dom         Dom
+  // | \Qout    |   \               | \Qout     |  \
+  // |P C       |    =              |P C        |   =
+  // =   C'     |P    C             =   C'      |P   C
+  // |  /Qin    |      |            |  /Qin     |     |
+  // | /        |      C' (+Succ)   | /         |     C' (+Succ)
+  // Succ       Succ  /|            Succ        Succ /|
+  // | \  V     |   \/ |            | \  V      |  \/ |
+  // |U \       |U  /\ =?           |U =        |U /\ |
+  // =   D      = =  =?|            |   D       | =  =|
+  // |  /       |/     D            |  /        |/    D
+  // | /        |     /             | =         |    /
+  // |/         |    /              |/          |   =
+  // Dom         Dom                Dom         Dom
   //  '=' : Branch taken for that CFG edge
   // The cost for taken branches in the first case is P + U
+  // Let F = SuccFreq - Qin
   // The cost in the second case (assuming independence), given the layout:
-  // BB, Succ, (C+Succ), D, Dom
-  // is Qout + P * V + Qin * U
+  // BB, Succ, (C+Succ), D, Dom or the layout:
+  // BB, Succ, D, Dom, (C+Succ)
+  // is Qout + max(F, Qin) * U + min(F, Qin)
   // compare P + U vs Qout + P * U + Qin.
   //
   // The 3rd and 4th cases cover when Dom would be chosen to follow Succ.
   //
   // For the 3rd case, the cost is P + 2 * V
-  // For the 4th case, the cost is Qout + Qin * U + P * V + V
-  // We choose 4 over 3 when (P + V) > Qout + Qin * U + P * V
+  // For the 4th case, the cost is Qout + min(Qin, F) * U + max(Qin, F) * V + V
+  // We choose 4 over 3 when (P + V) > Qout + min(Qin, F) * U + max(Qin, F) * V
   if (UProb > AdjustedSuccSumProb / 2 &&
       !hasBetterLayoutPredecessor(Succ, PDom, *BlockToChain[PDom], UProb, UProb,
                                   Chain, BlockFilter))
     // Cases 3 & 4
-    return greaterWithBias((P + V), (Qout + Qin * UProb + P * VProb),
-                           EntryFreq);
+    return greaterWithBias(
+        (P + V), (Qout + std::max(Qin, F) * VProb + std::min(Qin, F) * UProb),
+        EntryFreq);
   // Cases 1 & 2
-  return greaterWithBias(
-      (P + U), (Qout + Qin * AdjustedSuccSumProb + P * UProb), EntryFreq);
+  return greaterWithBias((P + U),
+                         (Qout + std::min(Qin, F) * AdjustedSuccSumProb +
+                          std::max(Qin, F) * UProb),
+                         EntryFreq);
 }
 
 /// Check for a trellis layout. \p BB is the upper part of a trellis if its
@@ -851,8 +855,13 @@ bool MachineBlockPlacement::isTrellis(
     int PredCount = 0;
     for (auto SuccPred : Succ->predecessors()) {
       // Allow triangle successors, but don't count them.
-      if (Successors.count(SuccPred))
+      if (Successors.count(SuccPred)) {
+        // Make sure that it is actually a triangle.
+        for (MachineBasicBlock *CheckSucc : SuccPred->successors())
+          if (!Successors.count(CheckSucc))
+            return false;
         continue;
+      }
       const BlockChain *PredChain = BlockToChain[SuccPred];
       if (SuccPred == BB || (BlockFilter && !BlockFilter->count(SuccPred)) ||
           PredChain == &Chain || PredChain == BlockToChain[Succ])
@@ -881,8 +890,8 @@ std::pair<MachineBlockPlacement::WeightedEdge,
           MachineBlockPlacement::WeightedEdge>
 MachineBlockPlacement::getBestNonConflictingEdges(
     const MachineBasicBlock *BB,
-    SmallVector<SmallVector<MachineBlockPlacement::WeightedEdge, 8>, 2>
-        &Edges) {
+    MutableArrayRef<SmallVector<MachineBlockPlacement::WeightedEdge, 8>>
+        Edges) {
   // Sort the edges, and then for each successor, find the best incoming
   // predecessor. If the best incoming predecessors aren't the same,
   // then that is clearly the best layout. If there is a conflict, one of the
@@ -940,7 +949,7 @@ MachineBlockPlacement::getBestTrellisSuccessor(
     return Result;
 
   // Collect the edge frequencies of all edges that form the trellis.
-  SmallVector<SmallVector<WeightedEdge, 8>, 2> Edges(2);
+  SmallVector<WeightedEdge, 8> Edges[2];
   int SuccIndex = 0;
   for (auto Succ : ViableSuccs) {
     for (MachineBasicBlock *SuccPred : Succ->predecessors()) {
@@ -993,7 +1002,7 @@ MachineBlockPlacement::getBestTrellisSuccessor(
   }
   // We have already computed the optimal edge for the other side of the
   // trellis.
-  ComputedTrellisEdges[BestB.Src] = BestB.Dest;
+  ComputedEdges[BestB.Src] = { BestB.Dest, false };
 
   auto TrellisSucc = BestA.Dest;
   DEBUG(BranchProbability SuccProb = getAdjustedProbability(
@@ -1065,40 +1074,129 @@ bool MachineBlockPlacement::canTailDuplicateUnplacedPreds(
   return true;
 }
 
-/// When the option OutlineOptionalBranches is on, this method
-/// checks if the fallthrough candidate block \p Succ (of block
-/// \p BB) also has other unscheduled predecessor blocks which
-/// are also successors of \p BB (forming triangular shape CFG).
-/// If none of such predecessors are small, it returns true.
-/// The caller can choose to select \p Succ as the layout successors
-/// so that \p Succ's predecessors (optional branches) can be
-/// outlined.
-/// FIXME: fold this with more general layout cost analysis.
-bool MachineBlockPlacement::shouldPredBlockBeOutlined(
-    const MachineBasicBlock *BB, const MachineBasicBlock *Succ,
-    const BlockChain &Chain, const BlockFilterSet *BlockFilter,
-    BranchProbability SuccProb, BranchProbability HotProb) {
-  if (!OutlineOptionalBranches)
-    return false;
-  // If we outline optional branches, look whether Succ is unavoidable, i.e.
-  // dominates all terminators of the MachineFunction. If it does, other
-  // successors must be optional. Don't do this for cold branches.
-  if (SuccProb > HotProb.getCompl() && UnavoidableBlocks.count(Succ) > 0) {
-    for (MachineBasicBlock *Pred : Succ->predecessors()) {
-      // Check whether there is an unplaced optional branch.
-      if (Pred == Succ || (BlockFilter && !BlockFilter->count(Pred)) ||
-          BlockToChain[Pred] == &Chain)
-        continue;
-      // Check whether the optional branch has exactly one BB.
-      if (Pred->pred_size() > 1 || *Pred->pred_begin() != BB)
-        continue;
-      // Check whether the optional branch is small.
-      if (Pred->size() < OutlineOptionalThreshold)
-        return false;
+/// Find chains of triangles where we believe it would be profitable to
+/// tail-duplicate them all, but a local analysis would not find them.
+/// There are 3 ways this can be profitable:
+/// 1) The post-dominators marked 50% are actually taken 55% (This shrinks with
+///    longer chains)
+/// 2) The chains are statically correlated. Branch probabilities have a very
+///    U-shaped distribution.
+///    [http://nrs.harvard.edu/urn-3:HUL.InstRepos:24015805]
+///    If the branches in a chain are likely to be from the same side of the
+///    distribution as their predecessor, but are independent at runtime, this
+///    transformation is profitable. (Because the cost of being wrong is a small
+///    fixed cost, unlike the standard triangle layout where the cost of being
+///    wrong scales with the # of triangles.)
+/// 3) The chains are dynamically correlated. If the probability that a previous
+///    branch was taken positively influences whether the next branch will be
+///    taken
+/// We believe that 2 and 3 are common enough to justify the small margin in 1.
+void MachineBlockPlacement::precomputeTriangleChains() {
+  struct TriangleChain {
+    std::vector<MachineBasicBlock *> Edges;
+    TriangleChain(MachineBasicBlock *src, MachineBasicBlock *dst)
+        : Edges({src, dst}) {}
+
+    void append(MachineBasicBlock *dst) {
+      assert(getKey()->isSuccessor(dst) &&
+             "Attempting to append a block that is not a successor.");
+      Edges.push_back(dst);
     }
-    return true;
-  } else
-    return false;
+
+    unsigned count() const { return Edges.size() - 1; }
+
+    MachineBasicBlock *getKey() const {
+      return Edges.back();
+    }
+  };
+
+  if (TriangleChainCount == 0)
+    return;
+
+  DEBUG(dbgs() << "Pre-computing triangle chains.\n");
+  // Map from last block to the chain that contains it. This allows us to extend
+  // chains as we find new triangles.
+  DenseMap<const MachineBasicBlock *, TriangleChain> TriangleChainMap;
+  for (MachineBasicBlock &BB : *F) {
+    // If BB doesn't have 2 successors, it doesn't start a triangle.
+    if (BB.succ_size() != 2)
+      continue;
+    MachineBasicBlock *PDom = nullptr;
+    for (MachineBasicBlock *Succ : BB.successors()) {
+      if (!MPDT->dominates(Succ, &BB))
+        continue;
+      PDom = Succ;
+      break;
+    }
+    // If BB doesn't have a post-dominating successor, it doesn't form a
+    // triangle.
+    if (PDom == nullptr)
+      continue;
+    // If PDom has a hint that it is low probability, skip this triangle.
+    if (MBPI->getEdgeProbability(&BB, PDom) < BranchProbability(50, 100))
+      continue;
+    // If PDom isn't eligible for duplication, this isn't the kind of triangle
+    // we're looking for.
+    if (!shouldTailDuplicate(PDom))
+      continue;
+    bool CanTailDuplicate = true;
+    // If PDom can't tail-duplicate into it's non-BB predecessors, then this
+    // isn't the kind of triangle we're looking for.
+    for (MachineBasicBlock* Pred : PDom->predecessors()) {
+      if (Pred == &BB)
+        continue;
+      if (!TailDup.canTailDuplicate(PDom, Pred)) {
+        CanTailDuplicate = false;
+        break;
+      }
+    }
+    // If we can't tail-duplicate PDom to its predecessors, then skip this
+    // triangle.
+    if (!CanTailDuplicate)
+      continue;
+
+    // Now we have an interesting triangle. Insert it if it's not part of an
+    // existing chain
+    // Note: This cannot be replaced with a call insert() or emplace() because
+    // the find key is BB, but the insert/emplace key is PDom.
+    auto Found = TriangleChainMap.find(&BB);
+    // If it is, remove the chain from the map, grow it, and put it back in the
+    // map with the end as the new key.
+    if (Found != TriangleChainMap.end()) {
+      TriangleChain Chain = std::move(Found->second);
+      TriangleChainMap.erase(Found);
+      Chain.append(PDom);
+      TriangleChainMap.insert(std::make_pair(Chain.getKey(), std::move(Chain)));
+    } else {
+      auto InsertResult = TriangleChainMap.try_emplace(PDom, &BB, PDom);
+      assert(InsertResult.second && "Block seen twice.");
+      (void)InsertResult;
+    }
+  }
+
+  // Iterating over a DenseMap is safe here, because the only thing in the body
+  // of the loop is inserting into another DenseMap (ComputedEdges).
+  // ComputedEdges is never iterated, so this doesn't lead to non-determinism.
+  for (auto &ChainPair : TriangleChainMap) {
+    TriangleChain &Chain = ChainPair.second;
+    // Benchmarking has shown that due to branch correlation duplicating 2 or
+    // more triangles is profitable, despite the calculations assuming
+    // independence.
+    if (Chain.count() < TriangleChainCount)
+      continue;
+    MachineBasicBlock *dst = Chain.Edges.back();
+    Chain.Edges.pop_back();
+    for (MachineBasicBlock *src : reverse(Chain.Edges)) {
+      DEBUG(dbgs() << "Marking edge: " << getBlockName(src) << "->" <<
+            getBlockName(dst) << " as pre-computed based on triangles.\n");
+
+      auto InsertResult = ComputedEdges.insert({src, {dst, true}});
+      assert(InsertResult.second && "Block seen twice.");
+      (void)InsertResult;
+
+      dst = src;
+    }
+  }
 }
 
 // When profile is not present, return the StaticLikelyProb.
@@ -1329,18 +1427,16 @@ MachineBlockPlacement::selectBestSuccessor(
 
   DEBUG(dbgs() << "Selecting best successor for: " << getBlockName(BB) << "\n");
 
-  // if we already precomputed the best successor for BB as part of a trellis we
-  // saw earlier, return that if still applicable.
-  auto FoundEdge = ComputedTrellisEdges.find(BB);
-  if (FoundEdge != ComputedTrellisEdges.end()) {
-    MachineBasicBlock *Succ = FoundEdge->second;
-    ComputedTrellisEdges.erase(FoundEdge);
+  // if we already precomputed the best successor for BB, return that if still
+  // applicable.
+  auto FoundEdge = ComputedEdges.find(BB);
+  if (FoundEdge != ComputedEdges.end()) {
+    MachineBasicBlock *Succ = FoundEdge->second.BB;
+    ComputedEdges.erase(FoundEdge);
     BlockChain *SuccChain = BlockToChain[Succ];
     if (BB->isSuccessor(Succ) && (!BlockFilter || BlockFilter->count(Succ)) &&
-        SuccChain != &Chain && Succ == *SuccChain->begin()) {
-      BestSucc.BB = Succ;
-      return BestSucc;
-    }
+        SuccChain != &Chain && Succ == *SuccChain->begin())
+      return FoundEdge->second;
   }
 
   // if BB is part of a trellis, Use the trellis to determine the optimal
@@ -1358,13 +1454,6 @@ MachineBlockPlacement::selectBestSuccessor(
     auto RealSuccProb = MBPI->getEdgeProbability(BB, Succ);
     BranchProbability SuccProb =
         getAdjustedProbability(RealSuccProb, AdjustedSumProb);
-
-    // This heuristic is off by default.
-    if (shouldPredBlockBeOutlined(BB, Succ, Chain, BlockFilter, SuccProb,
-                                  HotProb)) {
-      BestSucc.BB = Succ;
-      return BestSucc;
-    }
 
     BlockChain &SuccChain = *BlockToChain[Succ];
     // Skip the edge \c BB->Succ if block \c Succ has a better layout
@@ -1412,11 +1501,7 @@ MachineBlockPlacement::selectBestSuccessor(
     if (DupProb < BestProb)
       break;
     if (canTailDuplicateUnplacedPreds(BB, Succ, Chain, BlockFilter)
-        // If tail duplication gives us fallthrough when we otherwise wouldn't
-        // have it, that is a strict gain.
-        && (BestSucc.BB == nullptr
-            || isProfitableToTailDup(BB, Succ, BestProb, Chain,
-                                     BlockFilter))) {
+        && (isProfitableToTailDup(BB, Succ, BestProb, Chain, BlockFilter))) {
       DEBUG(
           dbgs() << "    Candidate: " << getBlockName(Succ) << ", probability: "
                  << DupProb
@@ -1463,13 +1548,15 @@ MachineBasicBlock *MachineBlockPlacement::selectBestCandidateBlock(
   MachineBasicBlock *BestBlock = nullptr;
   BlockFrequency BestFreq;
   for (MachineBasicBlock *MBB : WorkList) {
-    assert(MBB->isEHPad() == IsEHPad);
+    assert(MBB->isEHPad() == IsEHPad &&
+           "EHPad mismatch between block and work list.");
 
     BlockChain &SuccChain = *BlockToChain[MBB];
     if (&SuccChain == &Chain)
       continue;
 
-    assert(SuccChain.UnscheduledPredecessors == 0 && "Found CFG-violating block");
+    assert(SuccChain.UnscheduledPredecessors == 0 &&
+           "Found CFG-violating block");
 
     BlockFrequency CandidateFreq = MBFI->getBlockFreq(MBB);
     DEBUG(dbgs() << "    " << getBlockName(MBB) << " -> ";
@@ -1537,9 +1624,12 @@ void MachineBlockPlacement::fillWorkLists(
   if (!UpdatedPreds.insert(&Chain).second)
     return;
 
-  assert(Chain.UnscheduledPredecessors == 0);
+  assert(
+      Chain.UnscheduledPredecessors == 0 &&
+      "Attempting to place block with unscheduled predecessors in worklist.");
   for (MachineBasicBlock *ChainBB : Chain) {
-    assert(BlockToChain[ChainBB] == &Chain);
+    assert(BlockToChain[ChainBB] == &Chain &&
+           "Block in chain doesn't match BlockToChain map.");
     for (MachineBasicBlock *Pred : ChainBB->predecessors()) {
       if (BlockFilter && !BlockFilter->count(Pred))
         continue;
@@ -2052,8 +2142,10 @@ void MachineBlockPlacement::buildLoopChains(const MachineLoop &L) {
   for (const MachineLoop *InnerLoop : L)
     buildLoopChains(*InnerLoop);
 
-  assert(BlockWorkList.empty());
-  assert(EHPadWorkList.empty());
+  assert(BlockWorkList.empty() &&
+         "BlockWorkList not empty when starting to build loop chains.");
+  assert(EHPadWorkList.empty() &&
+         "EHPadWorkList not empty when starting to build loop chains.");
   BlockFilterSet LoopBlockSet = collectLoopBlockSet(L);
 
   // Check if we have profile data for this function. If yes, we will rotate
@@ -2083,7 +2175,8 @@ void MachineBlockPlacement::buildLoopChains(const MachineLoop &L) {
   // walk the blocks, and use a set to prevent visiting a particular chain
   // twice.
   SmallPtrSet<BlockChain *, 4> UpdatedPreds;
-  assert(LoopChain.UnscheduledPredecessors == 0);
+  assert(LoopChain.UnscheduledPredecessors == 0 &&
+         "LoopChain should not have unscheduled predecessors.");
   UpdatedPreds.insert(&LoopChain);
 
   for (const MachineBasicBlock *LoopBB : LoopBlockSet)
@@ -2133,31 +2226,6 @@ void MachineBlockPlacement::buildLoopChains(const MachineLoop &L) {
   EHPadWorkList.clear();
 }
 
-/// When OutlineOpitonalBranches is on, this method collects BBs that
-/// dominates all terminator blocks of the function \p F.
-void MachineBlockPlacement::collectMustExecuteBBs() {
-  if (OutlineOptionalBranches) {
-    // Find the nearest common dominator of all of F's terminators.
-    MachineBasicBlock *Terminator = nullptr;
-    for (MachineBasicBlock &MBB : *F) {
-      if (MBB.succ_size() == 0) {
-        if (Terminator == nullptr)
-          Terminator = &MBB;
-        else
-          Terminator = MDT->findNearestCommonDominator(Terminator, &MBB);
-      }
-    }
-
-    // MBBs dominating this common dominator are unavoidable.
-    UnavoidableBlocks.clear();
-    for (MachineBasicBlock &MBB : *F) {
-      if (MDT->dominates(&MBB, Terminator)) {
-        UnavoidableBlocks.insert(&MBB);
-      }
-    }
-  }
-}
-
 void MachineBlockPlacement::buildCFGChains() {
   // Ensure that every BB in the function has an associated chain to simplify
   // the assumptions of the remaining algorithm.
@@ -2192,16 +2260,15 @@ void MachineBlockPlacement::buildCFGChains() {
     }
   }
 
-  // Turned on with OutlineOptionalBranches option
-  collectMustExecuteBBs();
-
   // Build any loop-based chains.
   PreferredLoopExit = nullptr;
   for (MachineLoop *L : *MLI)
     buildLoopChains(*L);
 
-  assert(BlockWorkList.empty());
-  assert(EHPadWorkList.empty());
+  assert(BlockWorkList.empty() &&
+         "BlockWorkList should be empty before building final chain.");
+  assert(EHPadWorkList.empty() &&
+         "EHPadWorkList should be empty before building final chain.");
 
   SmallPtrSet<BlockChain *, 4> UpdatedPreds;
   for (MachineBasicBlock &MBB : *F)
@@ -2589,27 +2656,46 @@ bool MachineBlockPlacement::runOnMachineFunction(MachineFunction &MF) {
   MLI = &getAnalysis<MachineLoopInfo>();
   TII = MF.getSubtarget().getInstrInfo();
   TLI = MF.getSubtarget().getTargetLowering();
-  MDT = &getAnalysis<MachineDominatorTree>();
   MPDT = nullptr;
 
   // Initialize PreferredLoopExit to nullptr here since it may never be set if
   // there are no MachineLoops.
   PreferredLoopExit = nullptr;
 
+  assert(BlockToChain.empty() &&
+         "BlockToChain map should be empty before starting placement.");
+  assert(ComputedEdges.empty() &&
+         "Computed Edge map should be empty before starting placement.");
+
+  unsigned TailDupSize = TailDupPlacementThreshold;
+  // If only the aggressive threshold is explicitly set, use it.
+  if (TailDupPlacementAggressiveThreshold.getNumOccurrences() != 0 &&
+      TailDupPlacementThreshold.getNumOccurrences() == 0)
+    TailDupSize = TailDupPlacementAggressiveThreshold;
+
+  TargetPassConfig *PassConfig = &getAnalysis<TargetPassConfig>();
+  // For agressive optimization, we can adjust some thresholds to be less
+  // conservative.
+  if (PassConfig->getOptLevel() >= CodeGenOpt::Aggressive) {
+    // At O3 we should be more willing to copy blocks for tail duplication. This
+    // increases size pressure, so we only do it at O3
+    // Do this unless only the regular threshold is explicitly set.
+    if (TailDupPlacementThreshold.getNumOccurrences() == 0 ||
+        TailDupPlacementAggressiveThreshold.getNumOccurrences() != 0)
+      TailDupSize = TailDupPlacementAggressiveThreshold;
+  }
+
   if (TailDupPlacement) {
     MPDT = &getAnalysis<MachinePostDominatorTree>();
-    unsigned TailDupSize = TailDupPlacementThreshold;
     if (MF.getFunction()->optForSize())
       TailDupSize = 1;
     TailDup.initMF(MF, MBPI, /* LayoutMode */ true, TailDupSize);
+    precomputeTriangleChains();
   }
-
-  assert(BlockToChain.empty());
 
   buildCFGChains();
 
   // Changing the layout can create new tail merging opportunities.
-  TargetPassConfig *PassConfig = &getAnalysis<TargetPassConfig>();
   // TailMerge can create jump into if branches that make CFG irreducible for
   // HW that requires structured CFG.
   bool EnableTailMerge = !MF.getTarget().requiresStructuredCFG() &&
@@ -2617,7 +2703,7 @@ bool MachineBlockPlacement::runOnMachineFunction(MachineFunction &MF) {
                          BranchFoldPlacement;
   // No tail merging opportunities if the block number is less than four.
   if (MF.size() > 3 && EnableTailMerge) {
-    unsigned TailMergeSize = TailDupPlacementThreshold + 1;
+    unsigned TailMergeSize = TailDupSize + 1;
     BranchFolder BF(/*EnableTailMerge=*/true, /*CommonHoist=*/false, *MBFI,
                     *MBPI, TailMergeSize);
 
@@ -2626,8 +2712,8 @@ bool MachineBlockPlacement::runOnMachineFunction(MachineFunction &MF) {
                             /*AfterBlockPlacement=*/true)) {
       // Redo the layout if tail merging creates/removes/moves blocks.
       BlockToChain.clear();
-      // Must redo the dominator tree if blocks were changed.
-      MDT->runOnMachineFunction(MF);
+      ComputedEdges.clear();
+      // Must redo the post-dominator tree if blocks were changed.
       if (MPDT)
         MPDT->runOnMachineFunction(MF);
       ChainAllocator.DestroyAll();
@@ -2639,6 +2725,7 @@ bool MachineBlockPlacement::runOnMachineFunction(MachineFunction &MF) {
   alignBlocks();
 
   BlockToChain.clear();
+  ComputedEdges.clear();
   ChainAllocator.DestroyAll();
 
   if (AlignAllBlock)

@@ -655,11 +655,13 @@ static AllocaInst *CreateStackFrame(Function &F) {
   // assert(!LookupStackFrame(F) && "already created the stack frame");
 
   LLVMContext &Ctx = F.getContext();
+  const DataLayout &DL = F.getParent()->getDataLayout();
   Type *SFTy = StackFrameBuilder::get(Ctx);
 
-  Instruction* I = F.getEntryBlock().getFirstNonPHIOrDbgOrLifetime();
+  Instruction *I = F.getEntryBlock().getFirstNonPHIOrDbgOrLifetime();
 
-  AllocaInst* SF = new AllocaInst(SFTy, /*size*/nullptr, 8,
+  AllocaInst *SF = new AllocaInst(SFTy, DL.getAllocaAddrSpace(),
+                                  /*size*/nullptr, 8,
                                   /*name*/stack_frame_name, /*insert before*/I);
   if (!I)
     F.getEntryBlock().getInstList().push_back(SF);
@@ -1151,22 +1153,12 @@ Function *llvm::cilk::extractDetachBodyToFunction(DetachInst &detach,
   Function *extracted;
   {
     SmallVector<ReturnInst *, 4> Returns;  // Ignore returns cloned.
-
-    if (DISubprogram *SP = F.getSubprogram()) {
-      // If we have debug info, add mapping for the metadata nodes that should not
-      // be cloned by CloneFunctionInto.
-      auto &MD = VMap.MD();
-      MD[SP->getUnit()].reset(SP->getUnit());
-      MD[SP->getType()].reset(SP->getType());
-      MD[SP->getFile()].reset(SP->getFile());
-    }
-
     std::vector<BasicBlock *> blocks(functionPieces.begin(), functionPieces.end());
 
     extracted = CreateHelper(Inputs, Outputs, blocks,
                              Spawned, Detacher, Continue,
                              VMap, F.getParent(),
-                             /*ModuleLevelChanges=*/false, Returns, ".d2c",
+                             /*ModuleLevelChanges=*/false, Returns, ".cilk",
                              &ExitBlocks, nullptr, nullptr, nullptr);
 
     assert(Returns.empty() && "Returns cloned when cloning detached CFG.");

@@ -38,7 +38,7 @@ template <> struct ilist_alloc_traits<MCFragment> {
 /// current translation unit.  The MCContext class uniques and creates these.
 class MCSection {
 public:
-  enum SectionVariant { SV_COFF = 0, SV_ELF, SV_MachO };
+  enum SectionVariant { SV_COFF = 0, SV_ELF, SV_MachO, SV_Wasm };
 
   /// \brief Express the state of bundle locked groups while emitting code.
   enum BundleLockStateType {
@@ -47,13 +47,13 @@ public:
     BundleLockedAlignToEnd
   };
 
-  typedef iplist<MCFragment> FragmentListType;
+  using FragmentListType = iplist<MCFragment>;
 
-  typedef FragmentListType::const_iterator const_iterator;
-  typedef FragmentListType::iterator iterator;
+  using const_iterator = FragmentListType::const_iterator;
+  using iterator = FragmentListType::iterator;
 
-  typedef FragmentListType::const_reverse_iterator const_reverse_iterator;
-  typedef FragmentListType::reverse_iterator reverse_iterator;
+  using const_reverse_iterator = FragmentListType::const_reverse_iterator;
+  using reverse_iterator = FragmentListType::reverse_iterator;
 
 private:
   MCSymbol *Begin;

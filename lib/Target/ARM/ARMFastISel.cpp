@@ -1350,8 +1350,10 @@ bool ARMFastISel::ARMEmitCmp(const Value *Src1Value, const Value *Src2Value,
   if (!SrcEVT.isSimple()) return false;
   MVT SrcVT = SrcEVT.getSimpleVT();
 
-  bool isFloat = (Ty->isFloatTy() || Ty->isDoubleTy());
-  if (isFloat && !Subtarget->hasVFP2())
+  if (Ty->isFloatTy() && !Subtarget->hasVFP2())
+    return false;
+
+  if (Ty->isDoubleTy() && (!Subtarget->hasVFP2() || Subtarget->isFPOnlySP()))
     return false;
 
   // Check to see if the 2nd operand is a constant that we can encode directly
@@ -1501,7 +1503,7 @@ bool ARMFastISel::SelectCmp(const Instruction *I) {
 
 bool ARMFastISel::SelectFPExt(const Instruction *I) {
   // Make sure we have VFP and that we're extending float to double.
-  if (!Subtarget->hasVFP2()) return false;
+  if (!Subtarget->hasVFP2() || Subtarget->isFPOnlySP()) return false;
 
   Value *V = I->getOperand(0);
   if (!I->getType()->isDoubleTy() ||
@@ -1520,7 +1522,7 @@ bool ARMFastISel::SelectFPExt(const Instruction *I) {
 
 bool ARMFastISel::SelectFPTrunc(const Instruction *I) {
   // Make sure we have VFP and that we're truncating double to float.
-  if (!Subtarget->hasVFP2()) return false;
+  if (!Subtarget->hasVFP2() || Subtarget->isFPOnlySP()) return false;
 
   Value *V = I->getOperand(0);
   if (!(I->getType()->isFloatTy() &&
@@ -1571,7 +1573,8 @@ bool ARMFastISel::SelectIToFP(const Instruction *I, bool isSigned) {
 
   unsigned Opc;
   if (Ty->isFloatTy()) Opc = isSigned ? ARM::VSITOS : ARM::VUITOS;
-  else if (Ty->isDoubleTy()) Opc = isSigned ? ARM::VSITOD : ARM::VUITOD;
+  else if (Ty->isDoubleTy() && !Subtarget->isFPOnlySP())
+    Opc = isSigned ? ARM::VSITOD : ARM::VUITOD;
   else return false;
 
   unsigned ResultReg = createResultReg(TLI.getRegClassFor(DstVT));
@@ -1596,7 +1599,8 @@ bool ARMFastISel::SelectFPToI(const Instruction *I, bool isSigned) {
   unsigned Opc;
   Type *OpTy = I->getOperand(0)->getType();
   if (OpTy->isFloatTy()) Opc = isSigned ? ARM::VTOSIZS : ARM::VTOUIZS;
-  else if (OpTy->isDoubleTy()) Opc = isSigned ? ARM::VTOSIZD : ARM::VTOUIZD;
+  else if (OpTy->isDoubleTy() && !Subtarget->isFPOnlySP())
+    Opc = isSigned ? ARM::VTOSIZD : ARM::VTOUIZD;
   else return false;
 
   // f64->s32/u32 or f32->s32/u32 both need an intermediate f32 reg.
@@ -1698,7 +1702,8 @@ bool ARMFastISel::SelectDiv(const Instruction *I, bool isSigned) {
   // If we have integer div support we should have selected this automagically.
   // In case we have a real miss go ahead and return false and we'll pick
   // it up later.
-  if (Subtarget->hasDivide()) return false;
+  if (Subtarget->hasDivideInThumbMode())
+    return false;
 
   // Otherwise emit a libcall.
   RTLIB::Libcall LC = RTLIB::UNKNOWN_LIBCALL;
@@ -1800,8 +1805,9 @@ bool ARMFastISel::SelectBinaryFPOp(const Instruction *I, unsigned ISDOpcode) {
   // if we have them.
   // FIXME: It'd be nice to use NEON instructions.
   Type *Ty = I->getType();
-  bool isFloat = (Ty->isDoubleTy() || Ty->isFloatTy());
-  if (isFloat && !Subtarget->hasVFP2())
+  if (Ty->isFloatTy() && !Subtarget->hasVFP2())
+    return false;
+  if (Ty->isDoubleTy() && (!Subtarget->hasVFP2() || Subtarget->isFPOnlySP()))
     return false;
 
   unsigned Opc;
@@ -1943,7 +1949,7 @@ bool ARMFastISel::ProcessCallArgs(SmallVectorImpl<Value*> &Args,
   unsigned AdjStackDown = TII.getCallFrameSetupOpcode();
   AddOptionalDefs(BuildMI(*FuncInfo.MBB, FuncInfo.InsertPt, DbgLoc,
                           TII.get(AdjStackDown))
-                  .addImm(NumBytes));
+                  .addImm(NumBytes).addImm(0));
 
   // Process the args.
   for (unsigned i = 0, e = ArgLocs.size(); i != e; ++i) {
@@ -2346,19 +2352,19 @@ bool ARMFastISel::SelectCall(const Instruction *I,
       break;
 
     ISD::ArgFlagsTy Flags;
-    unsigned AttrInd = i - CS.arg_begin() + 1;
-    if (CS.paramHasAttr(AttrInd, Attribute::SExt))
+    unsigned ArgIdx = i - CS.arg_begin();
+    if (CS.paramHasAttr(ArgIdx, Attribute::SExt))
       Flags.setSExt();
-    if (CS.paramHasAttr(AttrInd, Attribute::ZExt))
+    if (CS.paramHasAttr(ArgIdx, Attribute::ZExt))
       Flags.setZExt();
 
     // FIXME: Only handle *easy* calls for now.
-    if (CS.paramHasAttr(AttrInd, Attribute::InReg) ||
-        CS.paramHasAttr(AttrInd, Attribute::StructRet) ||
-        CS.paramHasAttr(AttrInd, Attribute::SwiftSelf) ||
-        CS.paramHasAttr(AttrInd, Attribute::SwiftError) ||
-        CS.paramHasAttr(AttrInd, Attribute::Nest) ||
-        CS.paramHasAttr(AttrInd, Attribute::ByVal))
+    if (CS.paramHasAttr(ArgIdx, Attribute::InReg) ||
+        CS.paramHasAttr(ArgIdx, Attribute::StructRet) ||
+        CS.paramHasAttr(ArgIdx, Attribute::SwiftSelf) ||
+        CS.paramHasAttr(ArgIdx, Attribute::SwiftError) ||
+        CS.paramHasAttr(ArgIdx, Attribute::Nest) ||
+        CS.paramHasAttr(ArgIdx, Attribute::ByVal))
       return false;
 
     Type *ArgTy = (*i)->getType();
@@ -3019,20 +3025,18 @@ bool ARMFastISel::fastLowerArguments() {
 
   // Only handle simple cases. i.e. Up to 4 i8/i16/i32 scalar arguments
   // which are passed in r0 - r3.
-  unsigned Idx = 1;
-  for (Function::const_arg_iterator I = F->arg_begin(), E = F->arg_end();
-       I != E; ++I, ++Idx) {
-    if (Idx > 4)
+  for (const Argument &Arg : F->args()) {
+    if (Arg.getArgNo() >= 4)
       return false;
 
-    if (F->getAttributes().hasAttribute(Idx, Attribute::InReg) ||
-        F->getAttributes().hasAttribute(Idx, Attribute::StructRet) ||
-        F->getAttributes().hasAttribute(Idx, Attribute::SwiftSelf) ||
-        F->getAttributes().hasAttribute(Idx, Attribute::SwiftError) ||
-        F->getAttributes().hasAttribute(Idx, Attribute::ByVal))
+    if (Arg.hasAttribute(Attribute::InReg) ||
+        Arg.hasAttribute(Attribute::StructRet) ||
+        Arg.hasAttribute(Attribute::SwiftSelf) ||
+        Arg.hasAttribute(Attribute::SwiftError) ||
+        Arg.hasAttribute(Attribute::ByVal))
       return false;
 
-    Type *ArgTy = I->getType();
+    Type *ArgTy = Arg.getType();
     if (ArgTy->isStructTy() || ArgTy->isArrayTy() || ArgTy->isVectorTy())
       return false;
 
@@ -3053,10 +3057,10 @@ bool ARMFastISel::fastLowerArguments() {
   };
 
   const TargetRegisterClass *RC = &ARM::rGPRRegClass;
-  Idx = 0;
   for (Function::const_arg_iterator I = F->arg_begin(), E = F->arg_end();
-       I != E; ++I, ++Idx) {
-    unsigned SrcReg = GPRArgRegs[Idx];
+       I != E; ++I) {
+    unsigned ArgNo = I->getArgNo();
+    unsigned SrcReg = GPRArgRegs[ArgNo];
     unsigned DstReg = FuncInfo.MF->addLiveIn(SrcReg, RC);
     // FIXME: Unfortunately it's necessary to emit a copy from the livein copy.
     // Without this, EmitLiveInCopies may eliminate the livein if its only

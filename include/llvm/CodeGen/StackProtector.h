@@ -1,4 +1,4 @@
-//===-- StackProtector.h - Stack Protector Insertion ----------------------===//
+//===- StackProtector.h - Stack Protector Insertion -------------*- C++ -*-===//
 //
 //                     The LLVM Compiler Infrastructure
 //
@@ -19,12 +19,15 @@
 
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/Triple.h"
+#include "llvm/CodeGen/TargetPassConfig.h"
 #include "llvm/IR/Dominators.h"
 #include "llvm/IR/ValueMap.h"
 #include "llvm/Pass.h"
 #include "llvm/Target/TargetLowering.h"
+#include "llvm/Target/TargetMachine.h"
 
 namespace llvm {
+
 class Function;
 class Module;
 class PHINode;
@@ -48,12 +51,12 @@ public:
   typedef ValueMap<const AllocaInst *, SSPLayoutKind> SSPLayoutMap;
 
 private:
-  const TargetMachine *TM;
+  const TargetMachine *TM = nullptr;
 
   /// TLI - Keep a pointer of a TargetLowering to consult for determining
   /// target type sizes.
-  const TargetLoweringBase *TLI;
-  const Triple Trip;
+  const TargetLoweringBase *TLI = nullptr;
+  Triple Trip;
 
   Function *F;
   Module *M;
@@ -67,7 +70,7 @@ private:
 
   /// \brief The minimum size of buffers that will receive stack smashing
   /// protection when -fstack-protection is used.
-  unsigned SSPBufferSize;
+  unsigned SSPBufferSize = 0;
 
   /// VisitedPHIs - The set of PHI nodes visited when determining
   /// if a variable's reference has been taken.  This set
@@ -111,17 +114,13 @@ private:
 
 public:
   static char ID; // Pass identification, replacement for typeid.
-  StackProtector()
-      : FunctionPass(ID), TM(nullptr), TLI(nullptr), SSPBufferSize(0) {
-    initializeStackProtectorPass(*PassRegistry::getPassRegistry());
-  }
-  StackProtector(const TargetMachine *TM)
-      : FunctionPass(ID), TM(TM), TLI(nullptr), Trip(TM->getTargetTriple()),
-        SSPBufferSize(8) {
+
+  StackProtector() : FunctionPass(ID), SSPBufferSize(8) {
     initializeStackProtectorPass(*PassRegistry::getPassRegistry());
   }
 
   void getAnalysisUsage(AnalysisUsage &AU) const override {
+    AU.addRequired<TargetPassConfig>();
     AU.addPreserved<DominatorTreeWrapperPass>();
   }
 
@@ -134,6 +133,7 @@ public:
 
   bool runOnFunction(Function &Fn) override;
 };
+
 } // end namespace llvm
 
 #endif // LLVM_CODEGEN_STACKPROTECTOR_H

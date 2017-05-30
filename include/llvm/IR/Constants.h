@@ -26,6 +26,7 @@
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/None.h"
 #include "llvm/ADT/Optional.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/IR/Constant.h"
 #include "llvm/IR/DerivedTypes.h"
@@ -56,8 +57,6 @@ template <class ConstantClass> struct ConstantAggrKeyType;
 /// GlobalValues), it never makes sense to RAUW them.
 class ConstantData : public Constant {
   friend class Constant;
-
-  void anchor() override;
 
   Value *handleOperandChangeImpl(Value *From, Value *To) {
     llvm_unreachable("Constant data does not have operands!");
@@ -92,7 +91,6 @@ class ConstantInt final : public ConstantData {
 
   ConstantInt(IntegerType *Ty, const APInt& V);
 
-  void anchor() override;
   void destroyConstantImpl();
 
 public:
@@ -273,7 +271,6 @@ class ConstantFP final : public ConstantData {
 
   ConstantFP(Type *Ty, const APFloat& V);
 
-  void anchor() override;
   void destroyConstantImpl();
 
 public:
@@ -452,7 +449,14 @@ class ConstantStruct final : public ConstantAggregate {
 public:
   // ConstantStruct accessors
   static Constant *get(StructType *T, ArrayRef<Constant*> V);
-  static Constant *get(StructType *T, ...) LLVM_END_WITH_NULL;
+
+  template <typename... Csts>
+  static typename std::enable_if<are_base_of<Constant, Csts...>::value,
+                                 Constant *>::type
+  get(StructType *T, Csts *... Vs) {
+    SmallVector<Constant *, 8> Values({Vs...});
+    return get(T, Values);
+  }
 
   /// Return an anonymous struct that has the specified elements.
   /// If the struct is possibly empty, then you must specify a context.
@@ -580,7 +584,7 @@ class ConstantDataSequential : public ConstantData {
 protected:
   explicit ConstantDataSequential(Type *ty, ValueTy VT, const char *Data)
       : ConstantData(ty, VT), DataElements(Data), Next(nullptr) {}
-  ~ConstantDataSequential() override { delete Next; }
+  ~ConstantDataSequential() { delete Next; }
 
   static Constant *getImpl(StringRef Bytes, Type *Ty);
 
@@ -630,8 +634,8 @@ public:
   /// The size of the elements is known to be a multiple of one byte.
   uint64_t getElementByteSize() const;
 
-  /// This method returns true if this is an array of i8.
-  bool isString() const;
+  /// This method returns true if this is an array of \p CharSize integers.
+  bool isString(unsigned CharSize = 8) const;
 
   /// This method returns true if the array "isString", ends with a null byte,
   /// and does not contains any other null bytes.
@@ -683,8 +687,6 @@ class ConstantDataArray final : public ConstantDataSequential {
   void *operator new(size_t s) {
     return User::operator new(s, 0);
   }
-
-  void anchor() override;
 
 public:
   ConstantDataArray(const ConstantDataArray &) = delete;
@@ -746,8 +748,6 @@ class ConstantDataVector final : public ConstantDataSequential {
   void *operator new(size_t s) {
     return User::operator new(s, 0);
   }
-
-  void anchor() override;
 
 public:
   ConstantDataVector(const ConstantDataVector &) = delete;

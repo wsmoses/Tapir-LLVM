@@ -130,11 +130,19 @@ typedef void (__cilkrts_cilk_for_64)(__cilk_abi_f64_t body, void *data,
 //DEFAULT_GET_CILKRTS_FUNC(get_nworkers)
 #pragma GCC diagnostic ignored "-Wunused-function"
 static llvm::Function *Get__cilkrts_get_nworkers(llvm::Module& M) {
-  llvm::AttributeSet constset;
-  constset = constset.addAttribute(M.getContext(), llvm::AttributeSet::FunctionIndex, llvm::Attribute::AttrKind::ReadNone);
-  //constset = constset.addAttribute(M.getContext(), llvm::AttributeSet::FunctionIndex, llvm::Attribute::AttrKind::InaccessibleMemOnly);
-  constset = constset.addAttribute(M.getContext(), llvm::AttributeSet::FunctionIndex, llvm::Attribute::AttrKind::NoUnwind);
-  auto F = llvm::cast<llvm::Function>(M.getOrInsertFunction("__cilkrts_get_nworkers", llvm::TypeBuilder<__cilkrts_get_nworkers, false>::get(M.getContext()), constset) );
+  llvm::LLVMContext &C = M.getContext();
+  llvm::AttributeList AL;
+  AL = AL.addAttribute(C, llvm::AttributeList::FunctionIndex,
+                       llvm::Attribute::ReadNone);
+  // AL = AL.addAttribute(C, llvm::AttributeSet::FunctionIndex,
+  //                      llvm::Attribute::InaccessibleMemOnly);
+  AL = AL.addAttribute(C, llvm::AttributeList::FunctionIndex,
+                       llvm::Attribute::NoUnwind);
+  llvm::Function *F = llvm::cast<llvm::Function>(
+      M.getOrInsertFunction(
+          "__cilkrts_get_nworkers",
+          llvm::TypeBuilder<__cilkrts_get_nworkers, false>::get(C),
+          AL));
   return F;
 }
 
@@ -222,9 +230,9 @@ public:
     StructType *Ty = StructType::create(C, "__cilkrts_pedigree");
     cache[&C] = Ty;
     Ty->setBody(
-                TypeBuilder<uint64_t,            X>::get(C), // rank
-                TypeBuilder<__cilkrts_pedigree*, X>::get(C), // next
-                NULL);
+        TypeBuilder<uint64_t,            X>::get(C), // rank
+        TypeBuilder<__cilkrts_pedigree*, X>::get(C)  // next
+                );
     return Ty;
   }
   enum {
@@ -244,20 +252,20 @@ public:
     StructType *Ty = StructType::create(C, "__cilkrts_worker");
     cache[&C] = Ty;
     Ty->setBody(
-                TypeBuilder<__cilkrts_stack_frame**, X>::get(C), // tail
-                TypeBuilder<__cilkrts_stack_frame**, X>::get(C), // head
-                TypeBuilder<__cilkrts_stack_frame**, X>::get(C), // exc
-                TypeBuilder<__cilkrts_stack_frame**, X>::get(C), // protected_tail
-                TypeBuilder<__cilkrts_stack_frame**, X>::get(C), // ltq_limit
-                TypeBuilder<int32_t,                 X>::get(C), // self
-                TypeBuilder<void*,                   X>::get(C), // g
-                TypeBuilder<void*,                   X>::get(C), // l
-                TypeBuilder<void*,                   X>::get(C), // reducer_map
-                TypeBuilder<__cilkrts_stack_frame*,  X>::get(C), // current_stack_frame
-                TypeBuilder<__cilkrts_stack_frame**, X>::get(C), // saved_protected_tail
-                TypeBuilder<void*,                   X>::get(C), // sysdep
-                TypeBuilder<__cilkrts_pedigree,      X>::get(C), // pedigree
-                NULL);
+        TypeBuilder<__cilkrts_stack_frame**, X>::get(C), // tail
+        TypeBuilder<__cilkrts_stack_frame**, X>::get(C), // head
+        TypeBuilder<__cilkrts_stack_frame**, X>::get(C), // exc
+        TypeBuilder<__cilkrts_stack_frame**, X>::get(C), // protected_tail
+        TypeBuilder<__cilkrts_stack_frame**, X>::get(C), // ltq_limit
+        TypeBuilder<int32_t,                 X>::get(C), // self
+        TypeBuilder<void*,                   X>::get(C), // g
+        TypeBuilder<void*,                   X>::get(C), // l
+        TypeBuilder<void*,                   X>::get(C), // reducer_map
+        TypeBuilder<__cilkrts_stack_frame*,  X>::get(C), // current_stack_frame
+        TypeBuilder<__cilkrts_stack_frame**, X>::get(C), // saved_protected_tail
+        TypeBuilder<void*,                   X>::get(C), // sysdep
+        TypeBuilder<__cilkrts_pedigree,      X>::get(C)  // pedigree
+                );
     return Ty;
   }
   enum {
@@ -288,17 +296,17 @@ public:
     StructType *Ty = StructType::create(C, "__cilkrts_stack_frame");
     cache[&C] = Ty;
     Ty->setBody(
-                TypeBuilder<uint32_t,               X>::get(C), // flags
-                TypeBuilder<int32_t,                X>::get(C), // size
-                TypeBuilder<__cilkrts_stack_frame*, X>::get(C), // call_parent
-                TypeBuilder<__cilkrts_worker*,      X>::get(C), // worker
-                TypeBuilder<void*,                  X>::get(C), // except_data
-                TypeBuilder<__CILK_JUMP_BUFFER,     X>::get(C), // ctx
-                TypeBuilder<uint32_t,               X>::get(C), // mxcsr
-                TypeBuilder<uint16_t,               X>::get(C), // fpcsr
-                TypeBuilder<uint16_t,               X>::get(C), // reserved
-                TypeBuilder<__cilkrts_pedigree,     X>::get(C), // parent_pedigree
-                NULL);
+        TypeBuilder<uint32_t,               X>::get(C), // flags
+        TypeBuilder<int32_t,                X>::get(C), // size
+        TypeBuilder<__cilkrts_stack_frame*, X>::get(C), // call_parent
+        TypeBuilder<__cilkrts_worker*,      X>::get(C), // worker
+        TypeBuilder<void*,                  X>::get(C), // except_data
+        TypeBuilder<__CILK_JUMP_BUFFER,     X>::get(C), // ctx
+        TypeBuilder<uint32_t,               X>::get(C), // mxcsr
+        TypeBuilder<uint16_t,               X>::get(C), // fpcsr
+        TypeBuilder<uint16_t,               X>::get(C), // reserved
+        TypeBuilder<__cilkrts_pedigree,     X>::get(C)  // parent_pedigree
+                );
     return Ty;
   }
   enum {

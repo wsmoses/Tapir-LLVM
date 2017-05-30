@@ -110,7 +110,7 @@ static cl::opt<unsigned> FlatLoopTripCountThreshold(
              "aggressively unrolled."));
 
 static cl::opt<bool>
-    UnrollAllowPeeling("unroll-allow-peeling", cl::Hidden,
+    UnrollAllowPeeling("unroll-allow-peeling", cl::init(true), cl::Hidden,
                        cl::desc("Allows loops to be peeled when the dynamic "
                                 "trip count is known to be low."));
 
@@ -155,7 +155,7 @@ static TargetTransformInfo::UnrollingPreferences gatherUnrollingPreferences(
   UP.AllowExpensiveTripCount = false;
   UP.Force = false;
   UP.UpperBound = false;
-  UP.AllowPeeling = false;
+  UP.AllowPeeling = true;
 
   // Override with any target specific settings
   TTI.getUnrollingPreferences(L, UP);
@@ -509,7 +509,7 @@ analyzeLoopUnrollCost(const Loop *L, unsigned TripCount, DominatorTree &DT,
             KnownSucc = SI->getSuccessor(0);
           else if (ConstantInt *SimpleCondVal =
                        dyn_cast<ConstantInt>(SimpleCond))
-            KnownSucc = SI->findCaseValue(SimpleCondVal).getCaseSuccessor();
+            KnownSucc = SI->findCaseValue(SimpleCondVal)->getCaseSuccessor();
         }
       }
       if (KnownSucc) {
@@ -784,7 +784,15 @@ static bool computeUnrollCount(
     }
   }
 
-  // 4rd priority is partial unrolling.
+  // 4th priority is loop peeling
+  computePeelCount(L, LoopSize, UP, TripCount);
+  if (UP.PeelCount) {
+    UP.Runtime = false;
+    UP.Count = 1;
+    return ExplicitUnroll;
+  }
+
+  // 5th priority is partial unrolling.
   // Try partial unroll only when TripCount could be staticaly calculated.
   if (TripCount) {
     UP.Partial |= ExplicitUnroll;
@@ -846,14 +854,6 @@ static bool computeUnrollCount(
                                  L->getStartLoc(), L->getHeader())
         << "Unable to fully unroll loop as directed by unroll(full) pragma "
            "because loop has a runtime trip count.");
-
-  // 5th priority is loop peeling
-  computePeelCount(L, LoopSize, UP);
-  if (UP.PeelCount) {
-    UP.Runtime = false;
-    UP.Count = 1;
-    return ExplicitUnroll;
-  }
 
   // 6th priority is runtime unrolling.
   // Don't unroll a runtime trip count loop when it is disabled.

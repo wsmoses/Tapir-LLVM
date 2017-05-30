@@ -188,8 +188,9 @@ namespace {
       return Reg < regsReserved.size() && regsReserved.test(Reg);
     }
 
-    bool isAllocatable(unsigned Reg) {
-      return Reg < TRI->getNumRegs() && MRI->isAllocatable(Reg);
+    bool isAllocatable(unsigned Reg) const {
+      return Reg < TRI->getNumRegs() && TRI->isInAllocatableClass(Reg) &&
+        !regsReserved.test(Reg);
     }
 
     // Analysis information if available
@@ -260,8 +261,8 @@ namespace {
     static char ID; // Pass ID, replacement for typeid
     const std::string Banner;
 
-    MachineVerifierPass(const std::string &banner = nullptr)
-      : MachineFunctionPass(ID), Banner(banner) {
+    MachineVerifierPass(std::string banner = std::string())
+      : MachineFunctionPass(ID), Banner(std::move(banner)) {
         initializeMachineVerifierPassPass(*PassRegistry::getPassRegistry());
       }
 
@@ -526,9 +527,11 @@ void MachineVerifier::markReachable(const MachineBasicBlock *MBB) {
 
 void MachineVerifier::visitMachineFunctionBefore() {
   lastIndex = SlotIndex();
-  regsReserved = MRI->getReservedRegs();
+  regsReserved = MRI->reservedRegsFrozen() ? MRI->getReservedRegs()
+                                           : TRI->getReservedRegs(*MF);
 
-  markReachable(&MF->front());
+  if (!MF->empty())
+    markReachable(&MF->front());
 
   // Build a set of the basic blocks in the function.
   FunctionBlocks.clear();
@@ -548,7 +551,8 @@ void MachineVerifier::visitMachineFunctionBefore() {
   // Check that the register use lists are sane.
   MRI->verifyUseLists();
 
-  verifyStackFrame();
+  if (!MF->empty())
+    verifyStackFrame();
 }
 
 // Does iterator point to a and b as the first two elements?
@@ -756,7 +760,7 @@ MachineVerifier::visitMachineBasicBlockBefore(const MachineBasicBlock *MBB) {
 
   const MachineFrameInfo &MFI = MF->getFrameInfo();
   BitVector PR = MFI.getPristineRegs(*MF);
-  for (int I = PR.find_first(); I>0; I = PR.find_next(I)) {
+  for (unsigned I : PR.set_bits()) {
     for (MCSubRegIterator SubRegs(I, TRI, /*IncludeSelf=*/true);
          SubRegs.isValid(); ++SubRegs)
       regsLive.insert(*SubRegs);
@@ -2028,6 +2032,8 @@ namespace {
 void MachineVerifier::verifyStackFrame() {
   unsigned FrameSetupOpcode   = TII->getCallFrameSetupOpcode();
   unsigned FrameDestroyOpcode = TII->getCallFrameDestroyOpcode();
+  if (FrameSetupOpcode == ~0u && FrameDestroyOpcode == ~0u)
+    return;
 
   SmallVector<StackStateOfBB, 8> SPState;
   SPState.resize(MF->getNumBlockIDs());
@@ -2055,23 +2061,14 @@ void MachineVerifier::verifyStackFrame() {
     // Update stack state by checking contents of MBB.
     for (const auto &I : *MBB) {
       if (I.getOpcode() == FrameSetupOpcode) {
-        // The first operand of a FrameOpcode should be i32.
-        int Size = I.getOperand(0).getImm();
-        assert(Size >= 0 &&
-          "Value should be non-negative in FrameSetup and FrameDestroy.\n");
-
         if (BBState.ExitIsSetup)
           report("FrameSetup is after another FrameSetup", &I);
-        BBState.ExitValue -= Size;
+        BBState.ExitValue -= TII->getFrameTotalSize(I);
         BBState.ExitIsSetup = true;
       }
 
       if (I.getOpcode() == FrameDestroyOpcode) {
-        // The first operand of a FrameOpcode should be i32.
-        int Size = I.getOperand(0).getImm();
-        assert(Size >= 0 &&
-          "Value should be non-negative in FrameSetup and FrameDestroy.\n");
-
+        int Size = TII->getFrameTotalSize(I);
         if (!BBState.ExitIsSetup)
           report("FrameDestroy is not after a FrameSetup", &I);
         int AbsSPAdj = BBState.ExitValue < 0 ? -BBState.ExitValue :

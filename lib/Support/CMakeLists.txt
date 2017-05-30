@@ -9,6 +9,9 @@ elseif( CMAKE_HOST_UNIX )
   if( HAVE_LIBDL )
     set(system_libs ${system_libs} ${CMAKE_DL_LIBS})
   endif()
+  if( HAVE_BACKTRACE )
+    set(system_libs ${system_libs} ${Backtrace_LIBRARIES})
+  endif()
   if(LLVM_ENABLE_TERMINFO)
     if(HAVE_TERMINFO)
       set(system_libs ${system_libs} ${TERMINFO_LIBS})
@@ -34,6 +37,10 @@ add_llvm_library(LLVMSupport
   ARMAttributeParser.cpp
   ARMWinEH.cpp
   Allocator.cpp
+  BinaryStreamError.cpp
+  BinaryStreamReader.cpp
+  BinaryStreamRef.cpp
+  BinaryStreamWriter.cpp
   BlockFrequency.cpp
   BranchProbability.cpp
   CachePruning.cpp
@@ -68,12 +75,14 @@ add_llvm_library(LLVMSupport
   LineIterator.cpp
   Locale.cpp
   LockFileManager.cpp
+  LowLevelType.cpp
   ManagedStatic.cpp
   MathExtras.cpp
   MemoryBuffer.cpp
   MD5.cpp
   NativeFormatting.cpp
   Options.cpp
+  Parallel.cpp
   PluginLoader.cpp
   PrettyStackTrace.cpp
   RandomNumberGenerator.cpp
@@ -123,7 +132,6 @@ add_llvm_library(LLVMSupport
   Process.cpp
   Program.cpp
   RWMutex.cpp
-  SearchForAddressOfSpecialSymbol.cpp
   Signals.cpp
   TargetRegistry.cpp
   ThreadLocal.cpp
@@ -136,7 +144,7 @@ add_llvm_library(LLVMSupport
   Windows
   ${LLVM_MAIN_INCLUDE_DIR}/llvm/ADT
   ${LLVM_MAIN_INCLUDE_DIR}/llvm/Support
-
+  ${Backtrace_INCLUDE_DIRS}
   LINK_LIBS ${system_libs}
   )
 

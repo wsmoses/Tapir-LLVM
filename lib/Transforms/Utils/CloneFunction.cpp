@@ -40,7 +40,16 @@ using namespace llvm;
 BasicBlock *llvm::CloneBasicBlock(const BasicBlock *BB,
                                   ValueToValueMapTy &VMap,
                                   const Twine &NameSuffix, Function *F,
-                                  ClonedCodeInfo *CodeInfo) {
+                                  ClonedCodeInfo *CodeInfo,
+                                  DenseMap<const MDNode *, MDNode *>
+                                  *DbgCache) {
+  // Set up cache for reparenting debug info.
+  DenseMap<const MDNode *, MDNode *> *Cache;
+  if (DbgCache)
+    Cache = DbgCache;
+  else
+    Cache = new DenseMap<const MDNode *, MDNode *>;
+
   BasicBlock *NewBB = BasicBlock::Create(BB->getContext(), "", F);
   if (BB->hasName()) NewBB->setName(BB->getName()+NameSuffix);
 
@@ -50,6 +59,9 @@ BasicBlock *llvm::CloneBasicBlock(const BasicBlock *BB,
   for (BasicBlock::const_iterator II = BB->begin(), IE = BB->end();
        II != IE; ++II) {
     Instruction *NewInst = II->clone();
+    if (F && F->getSubprogram())
+      DebugLoc::reparentDebugInfo(*NewInst, BB->getParent()->getSubprogram(),
+                                  F->getSubprogram(), *Cache);
     if (II->hasName())
       NewInst->setName(II->getName()+NameSuffix);
     NewBB->getInstList().push_back(NewInst);
@@ -70,6 +82,10 @@ BasicBlock *llvm::CloneBasicBlock(const BasicBlock *BB,
     CodeInfo->ContainsDynamicAllocas |= hasStaticAllocas && 
                                         BB != &BB->getParent()->getEntryBlock();
   }
+
+  if (!DbgCache)
+    delete Cache;
+
   return NewBB;
 }
 
@@ -90,9 +106,9 @@ void llvm::CloneFunctionInto(Function *NewFunc, const Function *OldFunc,
     assert(VMap.count(&I) && "No mapping from source argument specified!");
 #endif
 
-  // Copy all attributes other than those stored in the AttributeSet.  We need
-  // to remap the parameter indices of the AttributeSet.
-  AttributeSet NewAttrs = NewFunc->getAttributes();
+  // Copy all attributes other than those stored in the AttributeList.  We need
+  // to remap the parameter indices of the AttributeList.
+  AttributeList NewAttrs = NewFunc->getAttributes();
   NewFunc->copyAttributesFrom(OldFunc);
   NewFunc->setAttributes(NewAttrs);
 
@@ -103,31 +119,45 @@ void llvm::CloneFunctionInto(Function *NewFunc, const Function *OldFunc,
                  ModuleLevelChanges ? RF_None : RF_NoModuleLevelChanges,
                  TypeMapper, Materializer));
 
-  AttributeSet OldAttrs = OldFunc->getAttributes();
+  SmallVector<AttributeSet, 4> NewArgAttrs(NewFunc->arg_size());
+  AttributeList OldAttrs = OldFunc->getAttributes();
+
   // Clone any argument attributes that are present in the VMap.
-  for (const Argument &OldArg : OldFunc->args())
+  for (const Argument &OldArg : OldFunc->args()) {
     if (Argument *NewArg = dyn_cast<Argument>(VMap[&OldArg])) {
-      AttributeSet attrs =
-          OldAttrs.getParamAttributes(OldArg.getArgNo() + 1);
-      if (attrs.getNumSlots() > 0)
-        NewArg->addAttr(attrs);
+      NewArgAttrs[NewArg->getArgNo()] =
+          OldAttrs.getParamAttributes(OldArg.getArgNo());
     }
+  }
 
   NewFunc->setAttributes(
-      NewFunc->getAttributes()
-          .addAttributes(NewFunc->getContext(), AttributeSet::ReturnIndex,
-                         OldAttrs.getRetAttributes())
-          .addAttributes(NewFunc->getContext(), AttributeSet::FunctionIndex,
-                         OldAttrs.getFnAttributes()));
+      AttributeList::get(NewFunc->getContext(), OldAttrs.getFnAttributes(),
+                         OldAttrs.getRetAttributes(), NewArgAttrs));
 
   SmallVector<std::pair<unsigned, MDNode *>, 1> MDs;
   OldFunc->getAllMetadata(MDs);
-  for (auto MD : MDs)
-    NewFunc->addMetadata(
-        MD.first,
-        *MapMetadata(MD.second, VMap,
-                     ModuleLevelChanges ? RF_None : RF_NoModuleLevelChanges,
-                     TypeMapper, Materializer));
+  for (auto MD : MDs) {
+    MDNode *NewMD;
+    bool MustCloneSP =
+        (MD.first == LLVMContext::MD_dbg && OldFunc->getParent() &&
+         OldFunc->getParent() == NewFunc->getParent());
+    if (MustCloneSP) {
+      auto *SP = cast<DISubprogram>(MD.second);
+      NewMD = DISubprogram::getDistinct(
+          NewFunc->getContext(), SP->getScope(), SP->getName(),
+          NewFunc->getName(), SP->getFile(), SP->getLine(), SP->getType(),
+          SP->isLocalToUnit(), SP->isDefinition(), SP->getScopeLine(),
+          SP->getContainingType(), SP->getVirtuality(), SP->getVirtualIndex(),
+          SP->getThisAdjustment(), SP->getFlags(), SP->isOptimized(),
+          SP->getUnit(), SP->getTemplateParams(), SP->getDeclaration(),
+          SP->getVariables(), SP->getThrownTypes());
+    } else
+      NewMD =
+          MapMetadata(MD.second, VMap,
+                      ModuleLevelChanges ? RF_None : RF_NoModuleLevelChanges,
+                      TypeMapper, Materializer);
+    NewFunc->addMetadata(MD.first, *NewMD);
+  }
 
   // Loop over all of the basic blocks in the function, cloning them as
   // appropriate.  Note that we save BE this way in order to handle cloning of
@@ -247,7 +277,7 @@ namespace {
 void PruningFunctionCloner::CloneBlock(const BasicBlock *BB,
                                        BasicBlock::const_iterator StartingInst,
                                        std::vector<const BasicBlock*> &ToClone){
-  WeakVH &BBEntry = VMap[BB];
+  WeakTrackingVH &BBEntry = VMap[BB];
 
   // Have we already cloned this block?
   if (BBEntry) return;
@@ -299,7 +329,7 @@ void PruningFunctionCloner::CloneBlock(const BasicBlock *BB,
 
         if (!NewInst->mayHaveSideEffects()) {
           VMap[&*II] = V;
-          delete NewInst;
+          NewInst->deleteValue();
           continue;
         }
       }
@@ -353,7 +383,7 @@ void PruningFunctionCloner::CloneBlock(const BasicBlock *BB,
       Cond = dyn_cast_or_null<ConstantInt>(V);
     }
     if (Cond) {     // Constant fold to uncond branch!
-      SwitchInst::ConstCaseIt Case = SI->findCaseValue(Cond);
+      SwitchInst::ConstCaseHandle Case = *SI->findCaseValue(Cond);
       BasicBlock *Dest = const_cast<BasicBlock*>(Case.getCaseSuccessor());
       VMap[OldTI] = BranchInst::Create(Dest, NewBB);
       ToClone.push_back(Dest);
@@ -549,7 +579,7 @@ void llvm::CloneAndPruneIntoFromInst(Function *NewFunc, const Function *OldFunc,
   // Make a second pass over the PHINodes now that all of them have been
   // remapped into the new function, simplifying the PHINode and performing any
   // recursive simplifications exposed. This will transparently update the
-  // WeakVH in the VMap. Notably, we rely on that so that if we coalesce
+  // WeakTrackingVH in the VMap. Notably, we rely on that so that if we coalesce
   // two PHINodes, the iteration over the old PHIs remains valid, and the
   // mapping will just map us to the new node (which may not even be a PHI
   // node).

@@ -81,7 +81,7 @@ bool MipsAsmPrinter::runOnMachineFunction(MachineFunction &MF) {
 
   AsmPrinter::runOnMachineFunction(MF);
 
-  EmitXRayTable();
+  emitXRayTable();
 
   return true;
 }
@@ -273,9 +273,9 @@ void MipsAsmPrinter::printSavedRegsBitmask() {
   const TargetRegisterInfo *TRI = MF->getSubtarget().getRegisterInfo();
   const std::vector<CalleeSavedInfo> &CSI = MFI.getCalleeSavedInfo();
   // size of stack area to which FP callee-saved regs are saved.
-  unsigned CPURegSize = Mips::GPR32RegClass.getSize();
-  unsigned FGR32RegSize = Mips::FGR32RegClass.getSize();
-  unsigned AFGR64RegSize = Mips::AFGR64RegClass.getSize();
+  unsigned CPURegSize = TRI->getRegSizeInBits(Mips::GPR32RegClass) / 8;
+  unsigned FGR32RegSize = TRI->getRegSizeInBits(Mips::FGR32RegClass) / 8;
+  unsigned AFGR64RegSize = TRI->getRegSizeInBits(Mips::AFGR64RegClass) / 8;
   bool HasAFGR64Reg = false;
   unsigned CSFPRegsSize = 0;
 
@@ -1146,39 +1146,6 @@ void MipsAsmPrinter::EmitSled(const MachineInstr &MI, SledKind Kind) {
   }
 
   recordSled(CurSled, MI, Kind);
-}
-
-void MipsAsmPrinter::EmitXRayTable() {
-  if (Sleds.empty())
-    return;
-  if (Subtarget->isTargetELF()) {
-    auto PrevSection = OutStreamer->getCurrentSectionOnly();
-    auto Fn = MF->getFunction();
-    MCSection *Section;
-
-    if (Fn->hasComdat())
-      Section = OutContext.getELFSection("xray_instr_map", ELF::SHT_PROGBITS,
-                                         ELF::SHF_ALLOC | ELF::SHF_GROUP, 0,
-                                         Fn->getComdat()->getName());
-    else
-      Section =
-          OutContext.getELFSection("xray_instr_map", ELF::SHT_PROGBITS,
-                                   ELF::SHF_ALLOC, 0, CurrentFnSym->getName());
-
-    OutStreamer->SwitchSection(Section);
-    for (const auto &Sled : Sleds) {
-      OutStreamer->EmitSymbolValue(Sled.Sled, Subtarget->isGP64bit() ? 8 : 4);
-      OutStreamer->EmitSymbolValue(CurrentFnSym, Subtarget->isGP64bit() ? 8 : 4);
-      auto Kind = static_cast<uint8_t>(Sled.Kind);
-      OutStreamer->EmitBytes(
-          StringRef(reinterpret_cast<const char *>(&Kind), 1));
-      OutStreamer->EmitBytes(
-          StringRef(reinterpret_cast<const char *>(&Sled.AlwaysInstrument), 1));
-      OutStreamer->EmitZeros(Subtarget->isGP64bit() ? 14 : 6);
-    }
-    OutStreamer->SwitchSection(PrevSection);
-  }
-  Sleds.clear();
 }
 
 void MipsAsmPrinter::LowerPATCHABLE_FUNCTION_ENTER(const MachineInstr &MI) {

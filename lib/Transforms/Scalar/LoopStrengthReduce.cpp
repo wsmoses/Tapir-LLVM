@@ -136,7 +136,7 @@ static cl::opt<bool> InsnsCost(
 
 // Flag to choose how to narrow complex lsr solution
 static cl::opt<bool> LSRExpNarrow(
-  "lsr-exp-narrow", cl::Hidden, cl::init(true),
+  "lsr-exp-narrow", cl::Hidden, cl::init(false),
   cl::desc("Narrow LSR complex solution using"
            " expectation of registers number"));
 
@@ -307,9 +307,13 @@ struct Formula {
   /// canonical representation of a formula is
   /// 1. BaseRegs.size > 1 implies ScaledReg != NULL and
   /// 2. ScaledReg != NULL implies Scale != 1 || !BaseRegs.empty().
+  /// 3. The reg containing recurrent expr related with currect loop in the
+  /// formula should be put in the ScaledReg.
   /// #1 enforces that the scaled register is always used when at least two
   /// registers are needed by the formula: e.g., reg1 + reg2 is reg1 + 1 * reg2.
   /// #2 enforces that 1 * reg is reg.
+  /// #3 ensures invariant regs with respect to current loop can be combined
+  /// together in LSR codegen.
   /// This invariant can be temporarly broken while building a formula.
   /// However, every formula inserted into the LSRInstance must be in canonical
   /// form.
@@ -330,9 +334,9 @@ struct Formula {
 
   void initialMatch(const SCEV *S, Loop *L, ScalarEvolution &SE);
 
-  bool isCanonical() const;
+  bool isCanonical(const Loop &L) const;
 
-  void canonicalize();
+  void canonicalize(const Loop &L);
 
   bool unscale();
 
@@ -424,16 +428,35 @@ void Formula::initialMatch(const SCEV *S, Loop *L, ScalarEvolution &SE) {
       BaseRegs.push_back(Sum);
     HasBaseReg = true;
   }
-  canonicalize();
+  canonicalize(*L);
 }
 
 /// \brief Check whether or not this formula statisfies the canonical
 /// representation.
 /// \see Formula::BaseRegs.
-bool Formula::isCanonical() const {
-  if (ScaledReg)
-    return Scale != 1 || !BaseRegs.empty();
-  return BaseRegs.size() <= 1;
+bool Formula::isCanonical(const Loop &L) const {
+  if (!ScaledReg)
+    return BaseRegs.size() <= 1;
+
+  if (Scale != 1)
+    return true;
+
+  if (Scale == 1 && BaseRegs.empty())
+    return false;
+
+  const SCEVAddRecExpr *SAR = dyn_cast<const SCEVAddRecExpr>(ScaledReg);
+  if (SAR && SAR->getLoop() == &L)
+    return true;
+
+  // If ScaledReg is not a recurrent expr, or it is but its loop is not current
+  // loop, meanwhile BaseRegs contains a recurrent expr reg related with current
+  // loop, we want to swap the reg in BaseRegs with ScaledReg.
+  auto I =
+      find_if(make_range(BaseRegs.begin(), BaseRegs.end()), [&](const SCEV *S) {
+        return isa<const SCEVAddRecExpr>(S) &&
+               (cast<SCEVAddRecExpr>(S)->getLoop() == &L);
+      });
+  return I == BaseRegs.end();
 }
 
 /// \brief Helper method to morph a formula into its canonical representation.
@@ -442,21 +465,33 @@ bool Formula::isCanonical() const {
 /// field. Otherwise, we would have to do special cases everywhere in LSR
 /// to treat reg1 + reg2 + ... the same way as reg1 + 1*reg2 + ...
 /// On the other hand, 1*reg should be canonicalized into reg.
-void Formula::canonicalize() {
-  if (isCanonical())
+void Formula::canonicalize(const Loop &L) {
+  if (isCanonical(L))
     return;
   // So far we did not need this case. This is easy to implement but it is
   // useless to maintain dead code. Beside it could hurt compile time.
   assert(!BaseRegs.empty() && "1*reg => reg, should not be needed.");
+
   // Keep the invariant sum in BaseRegs and one of the variant sum in ScaledReg.
-  ScaledReg = BaseRegs.back();
-  BaseRegs.pop_back();
-  Scale = 1;
-  size_t BaseRegsSize = BaseRegs.size();
-  size_t Try = 0;
-  // If ScaledReg is an invariant, try to find a variant expression.
-  while (Try < BaseRegsSize && !isa<SCEVAddRecExpr>(ScaledReg))
-    std::swap(ScaledReg, BaseRegs[Try++]);
+  if (!ScaledReg) {
+    ScaledReg = BaseRegs.back();
+    BaseRegs.pop_back();
+    Scale = 1;
+  }
+
+  // If ScaledReg is an invariant with respect to L, find the reg from
+  // BaseRegs containing the recurrent expr related with Loop L. Swap the
+  // reg with ScaledReg.
+  const SCEVAddRecExpr *SAR = dyn_cast<const SCEVAddRecExpr>(ScaledReg);
+  if (!SAR || SAR->getLoop() != &L) {
+    auto I = find_if(make_range(BaseRegs.begin(), BaseRegs.end()),
+                     [&](const SCEV *S) {
+                       return isa<const SCEVAddRecExpr>(S) &&
+                              (cast<SCEVAddRecExpr>(S)->getLoop() == &L);
+                     });
+    if (I != BaseRegs.end())
+      std::swap(ScaledReg, *I);
+  }
 }
 
 /// \brief Get rid of the scale in the formula.
@@ -865,7 +900,7 @@ static bool isHighCostExpansion(const SCEV *S,
 /// If any of the instructions is the specified set are trivially dead, delete
 /// them and see if this makes any of their operands subsequently dead.
 static bool
-DeleteTriviallyDeadInstructions(SmallVectorImpl<WeakVH> &DeadInsts) {
+DeleteTriviallyDeadInstructions(SmallVectorImpl<WeakTrackingVH> &DeadInsts) {
   bool Changed = false;
 
   while (!DeadInsts.empty()) {
@@ -908,7 +943,8 @@ static bool isAMCompletelyFolded(const TargetTransformInfo &TTI,
                                  const LSRUse &LU, const Formula &F);
 // Get the cost of the scaling factor used in F for LU.
 static unsigned getScalingFactorCost(const TargetTransformInfo &TTI,
-                                     const LSRUse &LU, const Formula &F);
+                                     const LSRUse &LU, const Formula &F,
+                                     const Loop &L);
 
 namespace {
 
@@ -1102,7 +1138,7 @@ public:
   
   bool HasFormulaWithSameRegs(const Formula &F) const;
   float getNotSelectedProbability(const SCEV *Reg) const;
-  bool InsertFormula(const Formula &F);
+  bool InsertFormula(const Formula &F, const Loop &L);
   void DeleteFormula(Formula &F);
   void RecomputeRegs(size_t LUIdx, RegUseTracker &Reguses);
 
@@ -1191,7 +1227,7 @@ void Cost::RateFormula(const TargetTransformInfo &TTI,
                        ScalarEvolution &SE, DominatorTree &DT,
                        const LSRUse &LU,
                        SmallPtrSetImpl<const SCEV *> *LoserRegs) {
-  assert(F.isCanonical() && "Cost is accurate only for canonical formula");
+  assert(F.isCanonical(*L) && "Cost is accurate only for canonical formula");
   // Tally up the registers.
   unsigned PrevAddRecCost = AddRecCost;
   unsigned PrevNumRegs = NumRegs;
@@ -1237,7 +1273,7 @@ void Cost::RateFormula(const TargetTransformInfo &TTI,
   NumBaseAdds += (F.UnfoldedOffset != 0);
 
   // Accumulate non-free scaling amounts.
-  ScaleCost += getScalingFactorCost(TTI, LU, F);
+  ScaleCost += getScalingFactorCost(TTI, LU, F, *L);
 
   // Tally up the non-zero immediates.
   for (const LSRFixup &Fixup : LU.Fixups) {
@@ -1391,8 +1427,8 @@ float LSRUse::getNotSelectedProbability(const SCEV *Reg) const {
 
 /// If the given formula has not yet been inserted, add it to the list, and
 /// return true. Return false otherwise.  The formula must be in canonical form.
-bool LSRUse::InsertFormula(const Formula &F) {
-  assert(F.isCanonical() && "Invalid canonical representation");
+bool LSRUse::InsertFormula(const Formula &F, const Loop &L) {
+  assert(F.isCanonical(L) && "Invalid canonical representation");
 
   if (!Formulae.empty() && RigidFormula)
     return false;
@@ -1562,7 +1598,7 @@ static bool isAMCompletelyFolded(const TargetTransformInfo &TTI,
 static bool isAMCompletelyFolded(const TargetTransformInfo &TTI,
                                  int64_t MinOffset, int64_t MaxOffset,
                                  LSRUse::KindType Kind, MemAccessTy AccessTy,
-                                 const Formula &F) {
+                                 const Formula &F, const Loop &L) {
   // For the purpose of isAMCompletelyFolded either having a canonical formula
   // or a scale not equal to zero is correct.
   // Problems may arise from non canonical formulae having a scale == 0.
@@ -1570,7 +1606,7 @@ static bool isAMCompletelyFolded(const TargetTransformInfo &TTI,
   // However, when we generate the scaled formulae, we first check that the
   // scaling factor is profitable before computing the actual ScaledReg for
   // compile time sake.
-  assert((F.isCanonical() || F.Scale != 0));
+  assert((F.isCanonical(L) || F.Scale != 0));
   return isAMCompletelyFolded(TTI, MinOffset, MaxOffset, Kind, AccessTy,
                               F.BaseGV, F.BaseOffset, F.HasBaseReg, F.Scale);
 }
@@ -1605,14 +1641,15 @@ static bool isAMCompletelyFolded(const TargetTransformInfo &TTI,
 }
 
 static unsigned getScalingFactorCost(const TargetTransformInfo &TTI,
-                                     const LSRUse &LU, const Formula &F) {
+                                     const LSRUse &LU, const Formula &F,
+                                     const Loop &L) {
   if (!F.Scale)
     return 0;
 
   // If the use is not completely folded in that instruction, we will have to
   // pay an extra cost only for scale != 1.
   if (!isAMCompletelyFolded(TTI, LU.MinOffset, LU.MaxOffset, LU.Kind,
-                            LU.AccessTy, F))
+                            LU.AccessTy, F, L))
     return F.Scale != 1;
 
   switch (LU.Kind) {
@@ -1808,7 +1845,7 @@ class LSRInstance {
   void FinalizeChain(IVChain &Chain);
   void CollectChains();
   void GenerateIVChain(const IVChain &Chain, SCEVExpander &Rewriter,
-                       SmallVectorImpl<WeakVH> &DeadInsts);
+                       SmallVectorImpl<WeakTrackingVH> &DeadInsts);
 
   void CollectInterestingTypesAndFactors();
   void CollectFixupsAndInitialFormulae();
@@ -1883,19 +1920,15 @@ class LSRInstance {
                                   const LSRUse &LU,
                                   SCEVExpander &Rewriter) const;
 
-  Value *Expand(const LSRUse &LU, const LSRFixup &LF,
-                const Formula &F,
-                BasicBlock::iterator IP,
-                SCEVExpander &Rewriter,
-                SmallVectorImpl<WeakVH> &DeadInsts) const;
+  Value *Expand(const LSRUse &LU, const LSRFixup &LF, const Formula &F,
+                BasicBlock::iterator IP, SCEVExpander &Rewriter,
+                SmallVectorImpl<WeakTrackingVH> &DeadInsts) const;
   void RewriteForPHI(PHINode *PN, const LSRUse &LU, const LSRFixup &LF,
-                     const Formula &F,
-                     SCEVExpander &Rewriter,
-                     SmallVectorImpl<WeakVH> &DeadInsts) const;
-  void Rewrite(const LSRUse &LU, const LSRFixup &LF,
-               const Formula &F,
+                     const Formula &F, SCEVExpander &Rewriter,
+                     SmallVectorImpl<WeakTrackingVH> &DeadInsts) const;
+  void Rewrite(const LSRUse &LU, const LSRFixup &LF, const Formula &F,
                SCEVExpander &Rewriter,
-               SmallVectorImpl<WeakVH> &DeadInsts) const;
+               SmallVectorImpl<WeakTrackingVH> &DeadInsts) const;
   void ImplementSolution(const SmallVectorImpl<const Formula *> &Solution);
 
 public:
@@ -2977,7 +3010,7 @@ static bool canFoldIVIncExpr(const SCEV *IncExpr, Instruction *UserInst,
 /// Generate an add or subtract for each IVInc in a chain to materialize the IV
 /// user's operand from the previous IV user's operand.
 void LSRInstance::GenerateIVChain(const IVChain &Chain, SCEVExpander &Rewriter,
-                                  SmallVectorImpl<WeakVH> &DeadInsts) {
+                                  SmallVectorImpl<WeakTrackingVH> &DeadInsts) {
   // Find the new IVOperand for the head of the chain. It may have been replaced
   // by LSR.
   const IVInc &Head = Chain.Incs[0];
@@ -3123,8 +3156,7 @@ void LSRInstance::CollectFixupsAndInitialFormulae() {
         if (SE.isLoopInvariant(N, L) && isSafeToExpand(N, SE)) {
           // S is normalized, so normalize N before folding it into S
           // to keep the result normalized.
-          N = TransformForPostIncUse(Normalize, N, CI, nullptr,
-                                     TmpPostIncLoops, SE, DT);
+          N = normalizeForPostIncUse(N, TmpPostIncLoops, SE);
           Kind = LSRUse::ICmpZero;
           S = SE.getMinusSCEV(N, S);
         }
@@ -3206,7 +3238,8 @@ bool LSRInstance::InsertFormula(LSRUse &LU, unsigned LUIdx, const Formula &F) {
   // Do not insert formula that we will not be able to expand.
   assert(isLegalUse(TTI, LU.MinOffset, LU.MaxOffset, LU.Kind, LU.AccessTy, F) &&
          "Formula is illegal");
-  if (!LU.InsertFormula(F))
+
+  if (!LU.InsertFormula(F, *L))
     return false;
 
   CountRegisters(F, LUIdx);
@@ -3445,7 +3478,7 @@ void LSRInstance::GenerateReassociationsImpl(LSRUse &LU, unsigned LUIdx,
       F.BaseRegs.push_back(*J);
     // We may have changed the number of register in base regs, adjust the
     // formula accordingly.
-    F.canonicalize();
+    F.canonicalize(*L);
 
     if (InsertFormula(LU, LUIdx, F))
       // If that formula hadn't been seen before, recurse to find more like
@@ -3457,7 +3490,7 @@ void LSRInstance::GenerateReassociationsImpl(LSRUse &LU, unsigned LUIdx,
 /// Split out subexpressions from adds and the bases of addrecs.
 void LSRInstance::GenerateReassociations(LSRUse &LU, unsigned LUIdx,
                                          Formula Base, unsigned Depth) {
-  assert(Base.isCanonical() && "Input must be in the canonical form");
+  assert(Base.isCanonical(*L) && "Input must be in the canonical form");
   // Arbitrarily cap recursion to protect compile time.
   if (Depth >= 3)
     return;
@@ -3498,7 +3531,7 @@ void LSRInstance::GenerateCombinations(LSRUse &LU, unsigned LUIdx,
     // rather than proceed with zero in a register.
     if (!Sum->isZero()) {
       F.BaseRegs.push_back(Sum);
-      F.canonicalize();
+      F.canonicalize(*L);
       (void)InsertFormula(LU, LUIdx, F);
     }
   }
@@ -3555,7 +3588,7 @@ void LSRInstance::GenerateConstantOffsetsImpl(
           F.ScaledReg = nullptr;
         } else
           F.deleteBaseReg(F.BaseRegs[Idx]);
-        F.canonicalize();
+        F.canonicalize(*L);
       } else if (IsScaledReg)
         F.ScaledReg = NewG;
       else
@@ -3718,10 +3751,10 @@ void LSRInstance::GenerateScales(LSRUse &LU, unsigned LUIdx, Formula Base) {
     if (LU.Kind == LSRUse::ICmpZero &&
         !Base.HasBaseReg && Base.BaseOffset == 0 && !Base.BaseGV)
       continue;
-    // For each addrec base reg, apply the scale, if possible.
-    for (size_t i = 0, e = Base.BaseRegs.size(); i != e; ++i)
-      if (const SCEVAddRecExpr *AR =
-            dyn_cast<SCEVAddRecExpr>(Base.BaseRegs[i])) {
+    // For each addrec base reg, if its loop is current loop, apply the scale.
+    for (size_t i = 0, e = Base.BaseRegs.size(); i != e; ++i) {
+      const SCEVAddRecExpr *AR = dyn_cast<SCEVAddRecExpr>(Base.BaseRegs[i]);
+      if (AR && (AR->getLoop() == L || LU.AllFixupsOutsideLoop)) {
         const SCEV *FactorS = SE.getConstant(IntTy, Factor);
         if (FactorS->isZero())
           continue;
@@ -3735,11 +3768,17 @@ void LSRInstance::GenerateScales(LSRUse &LU, unsigned LUIdx, Formula Base) {
           // The canonical representation of 1*reg is reg, which is already in
           // Base. In that case, do not try to insert the formula, it will be
           // rejected anyway.
-          if (F.Scale == 1 && F.BaseRegs.empty())
+          if (F.Scale == 1 && (F.BaseRegs.empty() ||
+                               (AR->getLoop() != L && LU.AllFixupsOutsideLoop)))
             continue;
+          // If AllFixupsOutsideLoop is true and F.Scale is 1, we may generate
+          // non canonical Formula with ScaledReg's loop not being L.
+          if (F.Scale == 1 && LU.AllFixupsOutsideLoop)
+            F.canonicalize(*L);
           (void)InsertFormula(LU, LUIdx, F);
         }
       }
+    }
   }
 }
 
@@ -3766,6 +3805,7 @@ void LSRInstance::GenerateTruncates(LSRUse &LU, unsigned LUIdx, Formula Base) {
       if (!F.hasRegsUsedByUsesOtherThan(LUIdx, RegUses))
         continue;
 
+      F.canonicalize(*L);
       (void)InsertFormula(LU, LUIdx, F);
     }
   }
@@ -3863,8 +3903,7 @@ void LSRInstance::GenerateCrossUseConstantOffsets() {
 
         // Compute the difference between the two.
         int64_t Imm = (uint64_t)JImm - M->first;
-        for (int LUIdx = UsedByIndices.find_first(); LUIdx != -1;
-             LUIdx = UsedByIndices.find_next(LUIdx))
+        for (unsigned LUIdx : UsedByIndices.set_bits())
           // Make a memo of this use, offset, and register tuple.
           if (UniqueItems.insert(std::make_pair(LUIdx, Imm)).second)
             WorkItems.push_back(WorkItem(LUIdx, Imm, OrigReg));
@@ -3920,7 +3959,7 @@ void LSRInstance::GenerateCrossUseConstantOffsets() {
             continue;
 
         // OK, looks good.
-        NewF.canonicalize();
+        NewF.canonicalize(*this->L);
         (void)InsertFormula(LU, LUIdx, NewF);
       } else {
         // Use the immediate in a base register.
@@ -3952,7 +3991,7 @@ void LSRInstance::GenerateCrossUseConstantOffsets() {
                 goto skip_formula;
 
           // Ok, looks good.
-          NewF.canonicalize();
+          NewF.canonicalize(*this->L);
           (void)InsertFormula(LU, LUIdx, NewF);
           break;
         skip_formula:;
@@ -4716,12 +4755,10 @@ LSRInstance::AdjustInsertPositionForExpand(BasicBlock::iterator LowestIP,
 
 /// Emit instructions for the leading candidate expression for this LSRUse (this
 /// is called "expanding").
-Value *LSRInstance::Expand(const LSRUse &LU,
-                           const LSRFixup &LF,
-                           const Formula &F,
-                           BasicBlock::iterator IP,
+Value *LSRInstance::Expand(const LSRUse &LU, const LSRFixup &LF,
+                           const Formula &F, BasicBlock::iterator IP,
                            SCEVExpander &Rewriter,
-                           SmallVectorImpl<WeakVH> &DeadInsts) const {
+                           SmallVectorImpl<WeakTrackingVH> &DeadInsts) const {
   if (LU.RigidFormula)
     return LF.OperandValToReplace;
 
@@ -4755,11 +4792,7 @@ Value *LSRInstance::Expand(const LSRUse &LU,
     assert(!Reg->isZero() && "Zero allocated in a base register!");
 
     // If we're expanding for a post-inc user, make the post-inc adjustment.
-    PostIncLoopSet &Loops = const_cast<PostIncLoopSet &>(LF.PostIncLoops);
-    Reg = TransformForPostIncUse(Denormalize, Reg,
-                                 LF.UserInst, LF.OperandValToReplace,
-                                 Loops, SE, DT);
-
+    Reg = denormalizeForPostIncUse(Reg, LF.PostIncLoops, SE);
     Ops.push_back(SE.getUnknown(Rewriter.expandCodeFor(Reg, nullptr)));
   }
 
@@ -4770,9 +4803,7 @@ Value *LSRInstance::Expand(const LSRUse &LU,
 
     // If we're expanding for a post-inc user, make the post-inc adjustment.
     PostIncLoopSet &Loops = const_cast<PostIncLoopSet &>(LF.PostIncLoops);
-    ScaledS = TransformForPostIncUse(Denormalize, ScaledS,
-                                     LF.UserInst, LF.OperandValToReplace,
-                                     Loops, SE, DT);
+    ScaledS = denormalizeForPostIncUse(ScaledS, Loops, SE);
 
     if (LU.Kind == LSRUse::ICmpZero) {
       // Expand ScaleReg as if it was part of the base regs.
@@ -4902,12 +4933,9 @@ Value *LSRInstance::Expand(const LSRUse &LU,
 /// Helper for Rewrite. PHI nodes are special because the use of their operands
 /// effectively happens in their predecessor blocks, so the expression may need
 /// to be expanded in multiple places.
-void LSRInstance::RewriteForPHI(PHINode *PN,
-                                const LSRUse &LU,
-                                const LSRFixup &LF,
-                                const Formula &F,
-                                SCEVExpander &Rewriter,
-                                SmallVectorImpl<WeakVH> &DeadInsts) const {
+void LSRInstance::RewriteForPHI(
+    PHINode *PN, const LSRUse &LU, const LSRFixup &LF, const Formula &F,
+    SCEVExpander &Rewriter, SmallVectorImpl<WeakTrackingVH> &DeadInsts) const {
   DenseMap<BasicBlock *, Value *> Inserted;
   for (unsigned i = 0, e = PN->getNumIncomingValues(); i != e; ++i)
     if (PN->getIncomingValue(i) == LF.OperandValToReplace) {
@@ -4979,11 +5007,9 @@ void LSRInstance::RewriteForPHI(PHINode *PN,
 /// Emit instructions for the leading candidate expression for this LSRUse (this
 /// is called "expanding"), and update the UserInst to reference the newly
 /// expanded value.
-void LSRInstance::Rewrite(const LSRUse &LU,
-                          const LSRFixup &LF,
-                          const Formula &F,
-                          SCEVExpander &Rewriter,
-                          SmallVectorImpl<WeakVH> &DeadInsts) const {
+void LSRInstance::Rewrite(const LSRUse &LU, const LSRFixup &LF,
+                          const Formula &F, SCEVExpander &Rewriter,
+                          SmallVectorImpl<WeakTrackingVH> &DeadInsts) const {
   // First, find an insertion point that dominates UserInst. For PHI nodes,
   // find the nearest block which dominates all the relevant uses.
   if (PHINode *PN = dyn_cast<PHINode>(LF.UserInst)) {
@@ -5021,7 +5047,7 @@ void LSRInstance::ImplementSolution(
     const SmallVectorImpl<const Formula *> &Solution) {
   // Keep track of instructions we may have made dead, so that
   // we can remove them after we are done working.
-  SmallVector<WeakVH, 16> DeadInsts;
+  SmallVector<WeakTrackingVH, 16> DeadInsts;
 
   SCEVExpander Rewriter(SE, L->getHeader()->getModule()->getDataLayout(),
                         "lsr");
@@ -5271,7 +5297,7 @@ static bool ReduceLoopStrength(Loop *L, IVUsers &IU, ScalarEvolution &SE,
   // Remove any extra phis created by processing inner loops.
   Changed |= DeleteDeadPHIs(L->getHeader());
   if (EnablePhiElim && L->isLoopSimplifyForm()) {
-    SmallVector<WeakVH, 16> DeadInsts;
+    SmallVector<WeakTrackingVH, 16> DeadInsts;
     const DataLayout &DL = L->getHeader()->getModule()->getDataLayout();
     SCEVExpander Rewriter(SE, DL, "lsr");
 #ifndef NDEBUG

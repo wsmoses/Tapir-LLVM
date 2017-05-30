@@ -1,14 +1,15 @@
 ; ## Full FP16 support enabled by default.
 ; RUN: llc < %s -mtriple=nvptx64-nvidia-cuda -mcpu=sm_53 -asm-verbose=false \
-; RUN:          -O0 -disable-post-ra -disable-fp-elim \
+; RUN:          -O0 -disable-post-ra -disable-fp-elim -verify-machineinstrs \
 ; RUN: | FileCheck -check-prefixes CHECK,CHECK-F16 %s
 ; ## FP16 support explicitly disabled.
 ; RUN: llc < %s -mtriple=nvptx64-nvidia-cuda -mcpu=sm_53 -asm-verbose=false \
 ; RUN:          -O0 -disable-post-ra -disable-fp-elim --nvptx-no-f16-math \
+; RUN:           -verify-machineinstrs \
 ; RUN: | FileCheck -check-prefixes CHECK,CHECK-NOF16 %s
 ; ## FP16 is not supported by hardware.
 ; RUN: llc < %s -O0 -mtriple=nvptx64-nvidia-cuda -mcpu=sm_52 -asm-verbose=false \
-; RUN:          -disable-post-ra -disable-fp-elim \
+; RUN:          -disable-post-ra -disable-fp-elim -verify-machineinstrs \
 ; RUN: | FileCheck -check-prefixes CHECK,CHECK-NOF16 %s
 
 target datalayout = "e-m:o-i64:64-i128:128-n32:64-S128"
@@ -34,6 +35,21 @@ define half @test_ret_const() #0 {
 define half @test_fadd(half %a, half %b) #0 {
   %r = fadd half %a, %b
   ret half %r
+}
+
+; CHECK-LABEL: test_fadd_v1f16(
+; CHECK-DAG:  ld.param.b16    [[A:%h[0-9]+]], [test_fadd_v1f16_param_0];
+; CHECK-DAG:  ld.param.b16    [[B:%h[0-9]+]], [test_fadd_v1f16_param_1];
+; CHECK-F16-NEXT:   add.rn.f16     [[R:%h[0-9]+]], [[A]], [[B]];
+; CHECK-NOF16-DAG:  cvt.f32.f16    [[A32:%f[0-9]+]], [[A]]
+; CHECK-NOF16-DAG:  cvt.f32.f16    [[B32:%f[0-9]+]], [[B]]
+; CHECK-NOF16-NEXT: add.rn.f32     [[R32:%f[0-9]+]], [[A32]], [[B32]];
+; CHECK-NOF16-NEXT: cvt.rn.f16.f32 [[R:%h[0-9]+]], [[R32]]
+; CHECK-NEXT: st.param.b16    [func_retval0+0], [[R]];
+; CHECK-NEXT: ret;
+define <1 x half> @test_fadd_v1f16(<1 x half> %a, <1 x half> %b) #0 {
+  %r = fadd <1 x half> %a, %b
+  ret <1 x half> %r
 }
 
 ; Check that we can lower fadd with immediate arguments.
@@ -127,13 +143,13 @@ define half @test_fdiv(half %a, half %b) #0 {
 ; CHECK-LABEL: test_frem(
 ; CHECK-DAG:  ld.param.b16    [[A:%h[0-9]+]], [test_frem_param_0];
 ; CHECK-DAG:  ld.param.b16    [[B:%h[0-9]+]], [test_frem_param_1];
-; CHECK-DAG:  cvt.f32.f16     [[F0:%f[0-9]+]], [[A]];
-; CHECK-DAG:  cvt.f32.f16     [[F1:%f[0-9]+]], [[B]];
-; CHECK-NEXT: div.rn.f32      [[F2:%f[0-9]+]], [[F0]], [[F1]];
-; CHECK-NEXT: cvt.rmi.f32.f32 [[F3:%f[0-9]+]], [[F2]];
-; CHECK-NEXT: mul.f32         [[F4:%f[0-9]+]], [[F3]], [[F1]];
-; CHECK-NEXT: sub.f32         [[F5:%f[0-9]+]], [[F0]], [[F4]];
-; CHECK-NEXT: cvt.rn.f16.f32  [[R:%h[0-9]+]], [[F5]];
+; CHECK-DAG:  cvt.f32.f16     [[FA:%f[0-9]+]], [[A]];
+; CHECK-DAG:  cvt.f32.f16     [[FB:%f[0-9]+]], [[B]];
+; CHECK-NEXT: div.rn.f32      [[D:%f[0-9]+]], [[FA]], [[FB]];
+; CHECK-NEXT: cvt.rmi.f32.f32 [[DI:%f[0-9]+]], [[D]];
+; CHECK-NEXT: mul.f32         [[RI:%f[0-9]+]], [[DI]], [[FB]];
+; CHECK-NEXT: sub.f32         [[RF:%f[0-9]+]], [[FA]], [[RI]];
+; CHECK-NEXT: cvt.rn.f16.f32  [[R:%h[0-9]+]], [[RF]];
 ; CHECK-NEXT: st.param.b16    [func_retval0+0], [[R]];
 ; CHECK-NEXT: ret;
 define half @test_frem(half %a, half %b) #0 {
@@ -159,6 +175,20 @@ define void @test_store(half %a, half* %b) #0 {
 define half @test_load(half* %a) #0 {
   %r = load half, half* %a
   ret half %r
+}
+
+; CHECK-LABEL: .visible .func test_halfp0a1(
+; CHECK-DAG: ld.param.u64 %[[FROM:rd?[0-9]+]], [test_halfp0a1_param_0];
+; CHECK-DAG: ld.param.u64 %[[TO:rd?[0-9]+]], [test_halfp0a1_param_1];
+; CHECK-DAG: ld.u8        [[B0:%r[sd]?[0-9]+]], [%[[FROM]]]
+; CHECK-DAG: st.u8        [%[[TO]]], [[B0]]
+; CHECK-DAG: ld.u8        [[B1:%r[sd]?[0-9]+]], [%[[FROM]]+1]
+; CHECK-DAG: st.u8        [%[[TO]]+1], [[B1]]
+; CHECK: ret
+define void @test_halfp0a1(half * noalias readonly %from, half * %to) {
+  %1 = load half, half * %from , align 1
+  store half %1, half * %to , align 1
+  ret void
 }
 
 declare half @test_callee(half %a, half %b) #0
@@ -229,7 +259,7 @@ define half @test_tailcall_flipped(half %a, half %b) #0 {
 ; CHECK-LABEL: test_select(
 ; CHECK-DAG:  ld.param.b16    [[A:%h[0-9]+]], [test_select_param_0];
 ; CHECK-DAG:  ld.param.b16    [[B:%h[0-9]+]], [test_select_param_1];
-; CHECK:      setp.eq.b16     [[PRED:%p[0-9]+]], %rs{{.*}}, 1;
+; CHECK-DAG:  setp.eq.b16     [[PRED:%p[0-9]+]], %rs{{.*}}, 1;
 ; CHECK-NEXT: selp.b16        [[R:%h[0-9]+]], [[A]], [[B]], [[PRED]];
 ; CHECK-NEXT: st.param.b16    [func_retval0+0], [[R]];
 ; CHECK-NEXT: ret;
@@ -509,7 +539,7 @@ define i1 @test_fcmp_ord(half %a, half %b) #0 {
 ; CHECK-NOF16-DAG: cvt.f32.f16 [[AF:%f[0-9]+]], [[A]];
 ; CHECK-NOF16-DAG: cvt.f32.f16 [[BF:%f[0-9]+]], [[B]];
 ; CHECK-NOF16: setp.lt.f32    [[PRED:%p[0-9]+]], [[AF]], [[BF]]
-; CHECK-NEXT: @%p1 bra        [[LABEL:LBB.*]];
+; CHECK-NEXT: @[[PRED]] bra   [[LABEL:LBB.*]];
 ; CHECK:      st.u32  [%[[C]]],
 ; CHECK:      [[LABEL]]:
 ; CHECK:      st.u32  [%[[D]]],

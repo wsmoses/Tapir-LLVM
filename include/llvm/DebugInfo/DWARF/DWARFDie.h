@@ -1,4 +1,4 @@
-//===-- DWARFDie.h --------------------------------------------------------===//
+//===- DWARFDie.h -----------------------------------------------*- C++ -*-===//
 //
 //                     The LLVM Compiler Infrastructure
 //
@@ -7,22 +7,27 @@
 //
 //===----------------------------------------------------------------------===//
 
-#ifndef LLVM_LIB_DEBUGINFO_DWARFDIE_H
-#define LLVM_LIB_DEBUGINFO_DWARFDIE_H
+#ifndef LLVM_DEBUGINFO_DWARFDIE_H
+#define LLVM_DEBUGINFO_DWARFDIE_H
 
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/iterator.h"
 #include "llvm/ADT/iterator_range.h"
 #include "llvm/ADT/Optional.h"
+#include "llvm/DebugInfo/DIContext.h"
 #include "llvm/DebugInfo/DWARF/DWARFAttribute.h"
 #include "llvm/DebugInfo/DWARF/DWARFDebugInfoEntry.h"
+#include "llvm/DebugInfo/DWARF/DWARFDebugRangeList.h"
+#include "llvm/Support/Dwarf.h"
+#include <cassert>
+#include <cstdint>
+#include <iterator>
 
 namespace llvm {
-    
+
 class DWARFUnit;
-class DWARFDebugInfoEntry;
 class raw_ostream;
-  
+
 //===----------------------------------------------------------------------===//
 /// Utility class that carries the DWARF compile/type unit and the debug info
 /// entry in an object.
@@ -36,17 +41,17 @@ class raw_ostream;
 /// also simplifies the attribute extraction calls by not having to specify the
 /// DWARFUnit for each call.
 class DWARFDie {
-  DWARFUnit *U;
-  const DWARFDebugInfoEntry *Die;
+  DWARFUnit *U = nullptr;
+  const DWARFDebugInfoEntry *Die = nullptr;
+
 public:
-  DWARFDie() : U(nullptr), Die(nullptr) {}
+  DWARFDie() = default;
   DWARFDie(DWARFUnit *Unit, const DWARFDebugInfoEntry * D) : U(Unit), Die(D) {}
-  
+
   bool isValid() const { return U && Die; }
   explicit operator bool() const { return isValid(); }
   const DWARFDebugInfoEntry *getDebugInfoEntry() const { return Die; }
   DWARFUnit *getDwarfUnit() const { return U; }
-
 
   /// Get the abbreviation declaration for this DIE.
   ///
@@ -63,7 +68,7 @@ public:
     assert(isValid() && "must check validity prior to calling");
     return Die->getOffset();
   }
-  
+
   dwarf::Tag getTag() const {
     auto AbbrevDecl = getAbbreviationDeclarationPtr();
     if (AbbrevDecl)
@@ -75,11 +80,12 @@ public:
     assert(isValid() && "must check validity prior to calling");
     return Die->hasChildren();
   }
-  
+
   /// Returns true for a valid DIE that terminates a sibling chain.
   bool isNULL() const {
     return getAbbreviationDeclarationPtr() == nullptr;
   }
+
   /// Returns true if DIE represents a subprogram (not inlined).
   bool isSubprogramDIE() const;
 
@@ -91,13 +97,13 @@ public:
   /// \returns a valid DWARFDie instance if this object has a parent or an
   /// invalid DWARFDie instance if it doesn't.
   DWARFDie getParent() const;
-  
+
   /// Get the sibling of this DIE object.
   ///
   /// \returns a valid DWARFDie instance if this object has a sibling or an
   /// invalid DWARFDie instance if it doesn't.
   DWARFDie getSibling() const;
-  
+
   /// Get the first child of this DIE object.
   ///
   /// \returns a valid DWARFDie instance if this object has children or an
@@ -107,7 +113,7 @@ public:
       return DWARFDie(U, Die + 1);
     return DWARFDie();
   }
-  
+
   /// Dump the DIE and all of its attributes to the supplied stream.
   ///
   /// \param OS the stream to use for output.
@@ -115,7 +121,7 @@ public:
   /// children.
   /// \param indent the number of characters to indent each line that is output.
   void dump(raw_ostream &OS, unsigned recurseDepth, unsigned indent = 0) const;
-  
+
   /// Extract the specified attribute from this DIE.
   ///
   /// Extract an attribute value from this DIE only. This call doesn't look
@@ -126,7 +132,7 @@ public:
   /// \returns an optional DWARFFormValue that will have the form value if the
   /// attribute was successfully extracted.
   Optional<DWARFFormValue> find(dwarf::Attribute Attr) const;
-  
+
   /// Extract the first value of any attribute in Attrs from this DIE.
   ///
   /// Extract the first attribute that matches from this DIE only. This call
@@ -139,14 +145,6 @@ public:
   /// matching attribute in Attrs, or None if none of the attributes in Attrs
   /// exist in this DIE.
   Optional<DWARFFormValue> find(ArrayRef<dwarf::Attribute> Attrs) const;
-
-  /// Extract an attribute value from this DIE and recurse into any
-  /// DW_AT_specification or DW_AT_abstract_origin referenced DIEs.
-  ///
-  /// \param Attr the attribute to extract.
-  /// \returns an optional DWARFFormValue that will have the form value if the
-  /// attribute was successfully extracted.
-  Optional<DWARFFormValue> findRecursively(dwarf::Attribute Attr) const;
 
   /// Extract the first value of any attribute in Attrs from this DIE and
   /// recurse into any DW_AT_specification or DW_AT_abstract_origin referenced
@@ -182,7 +180,7 @@ public:
   ///
   /// \returns anm optional absolute section offset value for the attribute.
   Optional<uint64_t> getRangesBaseAttribute() const;
-  
+
   /// Get the DW_AT_high_pc attribute value as an address.
   ///
   /// In DWARF version 4 and later the high PC can be encoded as an offset from
@@ -198,7 +196,7 @@ public:
   /// Retrieves DW_AT_low_pc and DW_AT_high_pc from CU.
   /// Returns true if both attributes are present.
   bool getLowAndHighPC(uint64_t &LowPC, uint64_t &HighPC) const;
-  
+
   /// Get the address ranges for this DIE.
   ///
   /// Get the hi/low PC range if both attributes are available or exrtracts the
@@ -210,7 +208,7 @@ public:
   /// \returns a address range vector that might be empty if no address range
   /// information is available.
   DWARFAddressRangesVector getAddressRanges() const;
-  
+
   /// Get all address ranges for any DW_TAG_subprogram DIEs in this DIE or any
   /// of its children.
   ///
@@ -220,19 +218,19 @@ public:
   ///
   /// \param Ranges the addres range vector to fill in.
   void collectChildrenAddressRanges(DWARFAddressRangesVector &Ranges) const;
-  
+
   bool addressRangeContainsAddress(const uint64_t Address) const;
-  
+
   /// If a DIE represents a subprogram (or inlined subroutine), returns its
   /// mangled name (or short name, if mangled is missing). This name may be
   /// fetched from specification or abstract origin for this subprogram.
   /// Returns null if no name is found.
   const char *getSubroutineName(DINameKind Kind) const;
-  
+
   /// Return the DIE name resolving DW_AT_sepcification or DW_AT_abstract_origin
   /// references if necessary. Returns null if no name is found.
   const char *getName(DINameKind Kind) const;
-  
+
   /// Returns the declaration line (start line) for a DIE, assuming it specifies
   /// a subprogram. This may be fetched from specification or abstract origin
   /// for this subprogram by resolving DW_AT_sepcification or
@@ -249,15 +247,10 @@ public:
   /// DW_AT_call_line attribute in this DIE.
   /// \param CallColumn filled in with non-zero if successful, zero if there is
   /// no DW_AT_call_column attribute in this DIE.
+  /// \param CallDiscriminator filled in with non-zero if successful, zero if
+  /// there is no DW_AT_GNU_discriminator attribute in this DIE.
   void getCallerFrame(uint32_t &CallFile, uint32_t &CallLine,
-                      uint32_t &CallColumn) const;
-  
-  /// Get inlined chain for a given address, rooted at the current DIE.
-  /// Returns empty chain if address is not contained in address range
-  /// of current DIE.
-  void
-  getInlinedChainForAddress(const uint64_t Address,
-                            SmallVectorImpl<DWARFDie> &InlinedChain) const;
+                      uint32_t &CallColumn, uint32_t &CallDiscriminator) const;
 
   class attribute_iterator;
 
@@ -265,14 +258,14 @@ public:
   ///
   /// \returns an iterator range for the attributes of the current DIE.
   iterator_range<attribute_iterator> attributes() const;
-  
+
   class iterator;
-  
+
   iterator begin() const;
   iterator end() const;
   iterator_range<iterator> children() const;
 };
-  
+
 class DWARFDie::attribute_iterator :
     public iterator_facade_base<attribute_iterator, std::forward_iterator_tag,
                                 const DWARFAttribute> {
@@ -282,23 +275,24 @@ class DWARFDie::attribute_iterator :
   DWARFAttribute AttrValue;
   /// The attribute index within the abbreviation declaration in Die.
   uint32_t Index;
-  
+
   /// Update the attribute index and attempt to read the attribute value. If the
   /// attribute is able to be read, update AttrValue and the Index member
   /// variable. If the attribute value is not able to be read, an appropriate
   /// error will be set if the Err member variable is non-NULL and the iterator
   /// will be set to the end value so iteration stops.
   void updateForIndex(const DWARFAbbreviationDeclaration &AbbrDecl, uint32_t I);
+
 public:
   attribute_iterator() = delete;
   explicit attribute_iterator(DWARFDie D, bool End);
+
   attribute_iterator &operator++();
   explicit operator bool() const { return AttrValue.isValid(); }
   const DWARFAttribute &operator*() const { return AttrValue; }
   bool operator==(const attribute_iterator &X) const { return Index == X.Index; }
 };
 
-  
 inline bool operator==(const DWARFDie &LHS, const DWARFDie &RHS) {
   return LHS.getDebugInfoEntry() == RHS.getDebugInfoEntry() &&
       LHS.getDwarfUnit() == RHS.getDwarfUnit();
@@ -318,16 +312,19 @@ class DWARFDie::iterator : public iterator_facade_base<iterator,
   }
 public:
   iterator() = default;
+
   explicit iterator(DWARFDie D) : Die(D) {
     // If we start out with only a Null DIE then invalidate.
     skipNull();
   }
+
   iterator &operator++() {
     Die = Die.getSibling();
     // Don't include the NULL die when iterating.
     skipNull();
     return *this;
   }
+
   explicit operator bool() const { return Die.isValid(); }
   const DWARFDie &operator*() const { return Die; }
   bool operator==(const iterator &X) const { return Die == X.Die; }
@@ -349,4 +346,4 @@ inline iterator_range<DWARFDie::iterator> DWARFDie::children() const {
 
 } // end namespace llvm
 
-#endif  // LLVM_LIB_DEBUGINFO_DWARFDIE_H
+#endif // LLVM_DEBUGINFO_DWARFDIE_H

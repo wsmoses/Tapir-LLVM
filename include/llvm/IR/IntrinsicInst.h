@@ -171,6 +171,7 @@ namespace llvm {
       ebStrict
     };
 
+    bool isUnaryOp() const;
     RoundingMode getRoundingMode() const;
     ExceptionBehavior getExceptionBehavior() const;
 
@@ -182,6 +183,18 @@ namespace llvm {
       case Intrinsic::experimental_constrained_fmul:
       case Intrinsic::experimental_constrained_fdiv:
       case Intrinsic::experimental_constrained_frem:
+      case Intrinsic::experimental_constrained_sqrt:
+      case Intrinsic::experimental_constrained_pow:
+      case Intrinsic::experimental_constrained_powi:
+      case Intrinsic::experimental_constrained_sin:
+      case Intrinsic::experimental_constrained_cos:
+      case Intrinsic::experimental_constrained_exp:
+      case Intrinsic::experimental_constrained_exp2:
+      case Intrinsic::experimental_constrained_log:
+      case Intrinsic::experimental_constrained_log10:
+      case Intrinsic::experimental_constrained_log2:
+      case Intrinsic::experimental_constrained_rint:
+      case Intrinsic::experimental_constrained_nearbyint:
         return true;
       default: return false;
       }
@@ -201,8 +214,8 @@ namespace llvm {
     Value *getNumElements() const { return getArgOperand(2); }
     void setNumElements(Value *V) { setArgOperand(2, V); }
 
-    uint64_t getSrcAlignment() const { return getParamAlignment(1); }
-    uint64_t getDstAlignment() const { return getParamAlignment(2); }
+    uint64_t getSrcAlignment() const { return getParamAlignment(0); }
+    uint64_t getDstAlignment() const { return getParamAlignment(1); }
 
     uint64_t getElementSizeInBytes() const {
       Value *Arg = getArgOperand(3);

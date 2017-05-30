@@ -30,15 +30,17 @@ enum {
   CommentIndent = 30
 };
 
+cl::OptionCategory DAGISelCat("Options for -gen-dag-isel");
+
 // To reduce generated source code size.
-static cl::opt<bool>
-OmitComments("omit-comments", cl::desc("Do not generate comments"),
-             cl::init(false));
+static cl::opt<bool> OmitComments("omit-comments",
+                                  cl::desc("Do not generate comments"),
+                                  cl::init(false), cl::cat(DAGISelCat));
 
 static cl::opt<bool> InstrumentCoverage(
     "instrument-coverage",
     cl::desc("Generates tables to help identify patterns matched"),
-    cl::init(false));
+    cl::init(false), cl::cat(DAGISelCat));
 
 namespace {
 class MatcherTableEmitter {
@@ -955,7 +957,7 @@ void llvm::EmitMatcherTable(const Matcher *TheMatcher,
   formatted_raw_ostream OS(O);
 
   OS << "// The main instruction selector code.\n";
-  OS << "SDNode *SelectCode(SDNode *N) {\n";
+  OS << "void SelectCode(SDNode *N) {\n";
 
   MatcherTableEmitter MatcherEmitter(CGP);
 
@@ -970,7 +972,6 @@ void llvm::EmitMatcherTable(const Matcher *TheMatcher,
 
   OS << "  #undef TARGET_VAL\n";
   OS << "  SelectCodeCommon(N, MatcherTable,sizeof(MatcherTable));\n";
-  OS << "  return nullptr;\n";
   OS << "}\n";
 
   // Next up, emit the function for node and pattern predicates:

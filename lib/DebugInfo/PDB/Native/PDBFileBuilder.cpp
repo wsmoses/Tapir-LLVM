@@ -12,17 +12,17 @@
 #include "llvm/ADT/BitVector.h"
 
 #include "llvm/DebugInfo/MSF/MSFBuilder.h"
-#include "llvm/DebugInfo/MSF/StreamInterface.h"
-#include "llvm/DebugInfo/MSF/StreamWriter.h"
 #include "llvm/DebugInfo/PDB/GenericError.h"
 #include "llvm/DebugInfo/PDB/Native/DbiStream.h"
 #include "llvm/DebugInfo/PDB/Native/DbiStreamBuilder.h"
 #include "llvm/DebugInfo/PDB/Native/InfoStream.h"
 #include "llvm/DebugInfo/PDB/Native/InfoStreamBuilder.h"
+#include "llvm/DebugInfo/PDB/Native/PDBStringTableBuilder.h"
 #include "llvm/DebugInfo/PDB/Native/RawError.h"
-#include "llvm/DebugInfo/PDB/Native/StringTableBuilder.h"
 #include "llvm/DebugInfo/PDB/Native/TpiStream.h"
 #include "llvm/DebugInfo/PDB/Native/TpiStreamBuilder.h"
+#include "llvm/Support/BinaryStream.h"
+#include "llvm/Support/BinaryStreamWriter.h"
 
 using namespace llvm;
 using namespace llvm::codeview;
@@ -67,7 +67,9 @@ TpiStreamBuilder &PDBFileBuilder::getIpiBuilder() {
   return *Ipi;
 }
 
-StringTableBuilder &PDBFileBuilder::getStringTableBuilder() { return Strings; }
+PDBStringTableBuilder &PDBFileBuilder::getStringTableBuilder() {
+  return Strings;
+}
 
 Error PDBFileBuilder::addNamedStream(StringRef Name, uint32_t Size) {
   auto ExpectedStream = Msf->addStream(Size);
@@ -78,9 +80,9 @@ Error PDBFileBuilder::addNamedStream(StringRef Name, uint32_t Size) {
 }
 
 Expected<msf::MSFLayout> PDBFileBuilder::finalizeMsfLayout() {
-  uint32_t StringTableSize = Strings.finalize();
+  uint32_t StringsLen = Strings.calculateSerializedSize();
 
-  if (auto EC = addNamedStream("/names", StringTableSize))
+  if (auto EC = addNamedStream("/names", StringsLen))
     return std::move(EC);
   if (auto EC = addNamedStream("/LinkInfo", 0))
     return std::move(EC);
@@ -107,7 +109,15 @@ Expected<msf::MSFLayout> PDBFileBuilder::finalizeMsfLayout() {
   return Msf->build();
 }
 
+Expected<uint32_t> PDBFileBuilder::getNamedStreamIndex(StringRef Name) const {
+  uint32_t SN = 0;
+  if (!NamedStreams.get(Name, SN))
+    return llvm::make_error<pdb::RawError>(raw_error_code::no_stream);
+  return SN;
+}
+
 Error PDBFileBuilder::commit(StringRef Filename) {
+  assert(!Filename.empty());
   auto ExpectedLayout = finalizeMsfLayout();
   if (!ExpectedLayout)
     return ExpectedLayout.takeError();
@@ -118,8 +128,9 @@ Error PDBFileBuilder::commit(StringRef Filename) {
   if (OutFileOrError.getError())
     return llvm::make_error<pdb::GenericError>(generic_error_code::invalid_path,
                                                Filename);
-  FileBufferByteStream Buffer(std::move(*OutFileOrError));
-  StreamWriter Writer(Buffer);
+  FileBufferByteStream Buffer(std::move(*OutFileOrError),
+                              llvm::support::little);
+  BinaryStreamWriter Writer(Buffer);
 
   if (auto EC = Writer.writeObject(*Layout.SB))
     return EC;
@@ -131,9 +142,8 @@ Error PDBFileBuilder::commit(StringRef Filename) {
 
   auto DirStream =
       WritableMappedBlockStream::createDirectoryStream(Layout, Buffer);
-  StreamWriter DW(*DirStream);
-  if (auto EC = DW.writeInteger<uint32_t>(Layout.StreamSizes.size(),
-                                          llvm::support::little))
+  BinaryStreamWriter DW(*DirStream);
+  if (auto EC = DW.writeInteger<uint32_t>(Layout.StreamSizes.size()))
     return EC;
 
   if (auto EC = DW.writeArray(Layout.StreamSizes))
@@ -144,13 +154,13 @@ Error PDBFileBuilder::commit(StringRef Filename) {
       return EC;
   }
 
-  uint32_t StringTableStreamNo = 0;
-  if (!NamedStreams.get("/names", StringTableStreamNo))
-    return llvm::make_error<pdb::RawError>(raw_error_code::no_stream);
+  auto ExpectedSN = getNamedStreamIndex("/names");
+  if (!ExpectedSN)
+    return ExpectedSN.takeError();
 
   auto NS = WritableMappedBlockStream::createIndexedStream(Layout, Buffer,
-                                                           StringTableStreamNo);
-  StreamWriter NSWriter(*NS);
+                                                           *ExpectedSN);
+  BinaryStreamWriter NSWriter(*NS);
   if (auto EC = Strings.commit(NSWriter))
     return EC;
 

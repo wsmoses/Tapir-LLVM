@@ -19,6 +19,7 @@
 #include "llvm/Analysis/ConstantFolding.h"
 #include "llvm/Analysis/TargetLibraryInfo.h"
 #include "llvm/Analysis/ValueTracking.h"
+#include "llvm/IR/AssemblyAnnotationWriter.h"
 #include "llvm/IR/CFG.h"
 #include "llvm/IR/ConstantRange.h"
 #include "llvm/IR/Constants.h"
@@ -31,6 +32,7 @@
 #include "llvm/IR/PatternMatch.h"
 #include "llvm/IR/ValueHandle.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/FormattedStream.h"
 #include "llvm/Support/raw_ostream.h"
 #include <map>
 #include <stack>
@@ -140,7 +142,7 @@ public:
     return Val;
   }
 
-  ConstantRange getConstantRange() const {
+  const ConstantRange &getConstantRange() const {
     assert(isConstantRange() &&
            "Cannot get the constant-range of a non-constant-range!");
     return Range;
@@ -248,7 +250,7 @@ public:
     if (NewR.isFullSet())
       markOverdefined();
     else
-      markConstantRange(NewR);
+      markConstantRange(std::move(NewR));
   }
 };
 
@@ -362,6 +364,7 @@ namespace {
   /// This is the cache kept by LazyValueInfo which
   /// maintains information about queries across the clients' queries.
   class LazyValueInfoCache {
+    friend class LazyValueInfoAnnotatedWriter;
     /// This is all of the cached block information for exactly one Value*.
     /// The entries are sorted by the BasicBlock* of the
     /// entries, allowing us to do a lookup with a binary search.
@@ -373,19 +376,20 @@ namespace {
       SmallDenseMap<PoisoningVH<BasicBlock>, LVILatticeVal, 4> BlockVals;
     };
 
-    /// This is all of the cached information for all values,
-    /// mapped from Value* to key information.
-    DenseMap<Value *, std::unique_ptr<ValueCacheEntryTy>> ValueCache;
-
     /// This tracks, on a per-block basis, the set of values that are
     /// over-defined at the end of that block.
     typedef DenseMap<PoisoningVH<BasicBlock>, SmallPtrSet<Value *, 4>>
         OverDefinedCacheTy;
-    OverDefinedCacheTy OverDefinedCache;
-
     /// Keep track of all blocks that we have ever seen, so we
     /// don't spend time removing unused blocks from our caches.
     DenseSet<PoisoningVH<BasicBlock> > SeenBlocks;
+
+  protected:
+    /// This is all of the cached information for all values,
+    /// mapped from Value* to key information.
+    DenseMap<Value *, std::unique_ptr<ValueCacheEntryTy>> ValueCache;
+    OverDefinedCacheTy OverDefinedCache;
+
 
   public:
     void insertResult(Value *Val, BasicBlock *BB, const LVILatticeVal &Result) {
@@ -439,6 +443,7 @@ namespace {
       return BBI->second;
     }
 
+    void printCache(Function &F, raw_ostream &OS);
     /// clear - Empty the cache.
     void clear() {
       SeenBlocks.clear();
@@ -460,6 +465,61 @@ namespace {
 
     friend struct LVIValueHandle;
   };
+}
+
+
+namespace {
+
+  /// An assembly annotator class to print LazyValueCache information in
+  /// comments.
+  class LazyValueInfoAnnotatedWriter : public AssemblyAnnotationWriter {
+    const LazyValueInfoCache* LVICache;
+
+  public:
+    LazyValueInfoAnnotatedWriter(const LazyValueInfoCache *L) : LVICache(L) {}
+
+    virtual void emitBasicBlockStartAnnot(const BasicBlock *BB,
+                                          formatted_raw_ostream &OS) {
+      auto ODI = LVICache->OverDefinedCache.find(const_cast<BasicBlock*>(BB));
+      if (ODI == LVICache->OverDefinedCache.end())
+        return;
+      OS << "; OverDefined values for block are: \n";
+      for (auto *V : ODI->second)
+        OS << ";" << *V << "\n";
+
+      // Find if there are latticevalues defined for arguments of the function.
+      auto *F = const_cast<Function *>(BB->getParent());
+      for (auto &Arg : F->args()) {
+        auto VI = LVICache->ValueCache.find_as(&Arg);
+        if (VI == LVICache->ValueCache.end())
+          continue;
+        auto BBI = VI->second->BlockVals.find(const_cast<BasicBlock *>(BB));
+        if (BBI != VI->second->BlockVals.end())
+          OS << "; CachedLatticeValue for: '" << *VI->first << "' is: '"
+             << BBI->second << "'\n";
+      }
+    }
+
+    virtual void emitInstructionAnnot(const Instruction *I,
+                                      formatted_raw_ostream &OS) {
+
+      auto VI = LVICache->ValueCache.find_as(const_cast<Instruction *>(I));
+      if (VI == LVICache->ValueCache.end())
+        return;
+      OS << "; CachedLatticeValues for: '" << *VI->first << "'\n";
+      for (auto &BV : VI->second->BlockVals) {
+        OS << "; at beginning of BasicBlock: '";
+        BV.first->printAsOperand(OS, false);
+        OS << "' LatticeVal: '" << BV.second << "' \n";
+      }
+    }
+};
+}
+
+void LazyValueInfoCache::printCache(Function &F, raw_ostream &OS) {
+  LazyValueInfoAnnotatedWriter Writer(this);
+  F.print(OS, &Writer);
+
 }
 
 void LazyValueInfoCache::eraseValue(Value *V) {
@@ -631,6 +691,11 @@ namespace {
     /// Complete flush all previously computed values
     void clear() {
       TheCache.clear();
+    }
+
+    /// Printing the LazyValueInfoCache.
+    void printCache(Function &F, raw_ostream &OS) {
+       TheCache.printCache(F, OS);
     }
 
     /// This is part of the update interface to inform the cache
@@ -855,7 +920,7 @@ bool LazyValueInfoImpl::solveBlockValueNonLocal(LVILatticeVal &BBLV,
   // value is overdefined.
   if (BB == &BB->getParent()->getEntryBlock()) {
     assert(isa<Argument>(Val) && "Unknown live-in to the entry block");
-    // Bofore giving up, see if we can prove the pointer non-null local to
+    // Before giving up, see if we can prove the pointer non-null local to
     // this particular block.
     if (Val->getType()->isPointerTy() &&
         (isKnownNonNull(Val) || isObjectDereferencedInBlock(Val, BB))) {
@@ -1014,8 +1079,8 @@ bool LazyValueInfoImpl::solveBlockValueSelect(LVILatticeVal &BBLV,
   }
 
   if (TrueVal.isConstantRange() && FalseVal.isConstantRange()) {
-    ConstantRange TrueCR = TrueVal.getConstantRange();
-    ConstantRange FalseCR = FalseVal.getConstantRange();
+    const ConstantRange &TrueCR = TrueVal.getConstantRange();
+    const ConstantRange &FalseCR = FalseVal.getConstantRange();
     Value *LHS = nullptr;
     Value *RHS = nullptr;
     SelectPatternResult SPR = matchSelectPattern(SI, LHS, RHS);
@@ -1365,14 +1430,14 @@ static bool getEdgeValueLocal(Value *Val, BasicBlock *BBFrom,
     unsigned BitWidth = Val->getType()->getIntegerBitWidth();
     ConstantRange EdgesVals(BitWidth, DefaultCase/*isFullSet*/);
 
-    for (SwitchInst::CaseIt i : SI->cases()) {
-      ConstantRange EdgeVal(i.getCaseValue()->getValue());
+    for (auto Case : SI->cases()) {
+      ConstantRange EdgeVal(Case.getCaseValue()->getValue());
       if (DefaultCase) {
         // It is possible that the default destination is the destination of
         // some cases. There is no need to perform difference for those cases.
-        if (i.getCaseSuccessor() != BBTo)
+        if (Case.getCaseSuccessor() != BBTo)
           EdgesVals = EdgesVals.difference(EdgeVal);
-      } else if (i.getCaseSuccessor() == BBTo)
+      } else if (Case.getCaseSuccessor() == BBTo)
         EdgesVals = EdgesVals.unionWith(EdgeVal);
     }
     Result = LVILatticeVal::getRange(std::move(EdgesVals));
@@ -1384,8 +1449,8 @@ static bool getEdgeValueLocal(Value *Val, BasicBlock *BBFrom,
 /// \brief Compute the value of Val on the edge BBFrom -> BBTo or the value at
 /// the basic block if the edge does not constrain Val.
 bool LazyValueInfoImpl::getEdgeValue(Value *Val, BasicBlock *BBFrom,
-                                      BasicBlock *BBTo, LVILatticeVal &Result,
-                                      Instruction *CxtI) {
+                                     BasicBlock *BBTo, LVILatticeVal &Result,
+                                     Instruction *CxtI) {
   // If already a constant, there is nothing to compute.
   if (Constant *VC = dyn_cast<Constant>(Val)) {
     Result = LVILatticeVal::get(VC);
@@ -1554,7 +1619,7 @@ LazyValueInfo LazyValueAnalysis::run(Function &F, FunctionAnalysisManager &FAM) 
   auto &TLI = FAM.getResult<TargetLibraryAnalysis>(F);
   auto *DT = FAM.getCachedResult<DominatorTreeAnalysis>(F);
 
-  return LazyValueInfo(&AC, &TLI, DT);
+  return LazyValueInfo(&AC, &F.getParent()->getDataLayout(), &TLI, DT);
 }
 
 /// Returns true if we can statically tell that this value will never be a
@@ -1584,7 +1649,7 @@ Constant *LazyValueInfo::getConstant(Value *V, BasicBlock *BB,
   if (Result.isConstant())
     return Result.getConstant();
   if (Result.isConstantRange()) {
-    ConstantRange CR = Result.getConstantRange();
+    const ConstantRange &CR = Result.getConstantRange();
     if (const APInt *SingleVal = CR.getSingleElement())
       return ConstantInt::get(V->getContext(), *SingleVal);
   }
@@ -1621,7 +1686,7 @@ Constant *LazyValueInfo::getConstantOnEdge(Value *V, BasicBlock *FromBB,
   if (Result.isConstant())
     return Result.getConstant();
   if (Result.isConstantRange()) {
-    ConstantRange CR = Result.getConstantRange();
+    const ConstantRange &CR = Result.getConstantRange();
     if (const APInt *SingleVal = CR.getSingleElement())
       return ConstantInt::get(V->getContext(), *SingleVal);
   }
@@ -1647,7 +1712,7 @@ static LazyValueInfo::Tristate getPredicateResult(unsigned Pred, Constant *C,
     ConstantInt *CI = dyn_cast<ConstantInt>(C);
     if (!CI) return LazyValueInfo::Unknown;
 
-    ConstantRange CR = Result.getConstantRange();
+    const ConstantRange &CR = Result.getConstantRange();
     if (Pred == ICmpInst::ICMP_EQ) {
       if (!CR.contains(CI->getValue()))
         return LazyValueInfo::False;
@@ -1824,3 +1889,40 @@ void LazyValueInfo::eraseBlock(BasicBlock *BB) {
     getImpl(PImpl, AC, &DL, DT).eraseBlock(BB);
   }
 }
+
+
+void LazyValueInfo::printCache(Function &F, raw_ostream &OS) {
+  if (PImpl) {
+    getImpl(PImpl, AC, DL, DT).printCache(F, OS);
+  }
+}
+
+namespace {
+// Printer class for LazyValueInfo results.
+class LazyValueInfoPrinter : public FunctionPass {
+public:
+  static char ID; // Pass identification, replacement for typeid
+  LazyValueInfoPrinter() : FunctionPass(ID) {
+    initializeLazyValueInfoPrinterPass(*PassRegistry::getPassRegistry());
+  }
+
+  void getAnalysisUsage(AnalysisUsage &AU) const override {
+    AU.setPreservesAll();
+    AU.addRequired<LazyValueInfoWrapperPass>();
+  }
+
+  bool runOnFunction(Function &F) override {
+    dbgs() << "LVI for function '" << F.getName() << "':\n";
+    auto &LVI = getAnalysis<LazyValueInfoWrapperPass>().getLVI();
+    LVI.printCache(F, dbgs());
+    return false;
+  }
+};
+}
+
+char LazyValueInfoPrinter::ID = 0;
+INITIALIZE_PASS_BEGIN(LazyValueInfoPrinter, "print-lazy-value-info",
+                "Lazy Value Info Printer Pass", false, false)
+INITIALIZE_PASS_DEPENDENCY(LazyValueInfoWrapperPass)
+INITIALIZE_PASS_END(LazyValueInfoPrinter, "print-lazy-value-info",
+                "Lazy Value Info Printer Pass", false, false)

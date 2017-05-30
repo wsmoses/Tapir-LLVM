@@ -157,6 +157,7 @@ Value *SSAUpdater::GetValueInMiddleOfBlock(BasicBlock *BB) {
         SingularValue = nullptr;
     }
   }
+  // Record any values we discover whose definitions occur in detached blocks.
   if (ReattachPred) {
     assert(DetachPred &&
            "Reattached predecessor of a block with no detached predecessor.");
@@ -220,7 +221,6 @@ Value *SSAUpdater::GetValueInMiddleOfBlock(BasicBlock *BB) {
 }
 
 bool SSAUpdater::GetValueIsDetachedInBlock(BasicBlock *BB) {
-  // GetValueInMiddleOfBlock(BB);
   return getValIsDetached(VID)[BB];
 }
 
@@ -364,18 +364,6 @@ public:
   static Value *GetPHIValue(PHINode *PHI) {
     return PHI;
   }
-
-  /// MarkDetachedDef - Mark the definition Def as detached.
-  static void MarkDetachedDef(Value *Def, BasicBlock *BB, SSAUpdater *Updater) {
-    StoreInst *LastStore = nullptr;
-    for (Instruction &I : *BB)
-      if (StoreInst *SI = dyn_cast<StoreInst>(&I))
-        if (SI->getOperand(0) == Def)
-          LastStore = SI;
-    if (LastStore) {
-      Value *StoreDst = LastStore->getOperand(1);
-    }
-  }
 };
 
 } // end namespace llvm
@@ -513,11 +501,12 @@ run(const SmallVectorImpl<Instruction*> &Insts) const {
   for (LoadInst *ALoad : LiveInLoads) {
     BasicBlock *BB = ALoad->getParent();
     Value *NewVal = SSA.GetValueInMiddleOfBlock(BB);
+
+    // Skip loads whose definitions are detached.
     if (Instruction *Def = dyn_cast<Instruction>(NewVal))
-      if (SSA.GetValueIsDetachedInBlock(Def->getParent())) {
-        Value *LoadSrc = ALoad->getOperand(0);
+      if (SSA.GetValueIsDetachedInBlock(Def->getParent()))
         continue;
-      }
+
     replaceLoadWithValue(ALoad, NewVal);
 
     // Avoid assertions in unreachable code.
@@ -530,8 +519,7 @@ run(const SmallVectorImpl<Instruction*> &Insts) const {
   doExtraRewritesBeforeFinalDeletion();
 
   // Now that everything is rewritten, delete the old instructions
-  // from the function.  They should now all be dead or properly
-  // marked as using or defining detached values.
+  // from the function.  They should now all be dead.
   for (Instruction *User : Insts) {
     if (isa<StoreInst>(User) && !User->use_empty()) continue;
 

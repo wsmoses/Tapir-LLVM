@@ -1,12 +1,12 @@
 ; RUN: opt -loop-unroll -unroll-threshold=2000 -S < %s | llc -march=r600 -mcpu=cypress | FileCheck %s
-; XFAIL: *
 ; REQUIRES: asserts
 
-; CHECK: {{^}}@alu_limits:
+; CHECK: {{^}}alu_limits:
+; CHECK: CF_END
 
 %struct.foo = type {i32, i32, i32}
 
-define void @alu_limits(i32 addrspace(1)* %out, %struct.foo* %in, i32 %offset) {
+define amdgpu_kernel void @alu_limits(i32 addrspace(1)* %out, %struct.foo* %in, i32 %offset) {
 entry:
   %ptr = getelementptr inbounds %struct.foo, %struct.foo* %in, i32 1, i32 2
   %x = load i32, i32 *%ptr, align 4

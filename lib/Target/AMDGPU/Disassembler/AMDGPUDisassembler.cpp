@@ -22,6 +22,7 @@
 #include "AMDGPURegisterInfo.h"
 #include "SIDefines.h"
 #include "Utils/AMDGPUBaseInfo.h"
+#include "MCTargetDesc/AMDGPUMCTargetDesc.h"
 
 #include "llvm/MC/MCContext.h"
 #include "llvm/MC/MCFixedLenDisassembler.h"
@@ -97,9 +98,13 @@ static DecodeStatus decodeOperand_VSrc16(MCInst &Inst,
   return addOperand(Inst, DAsm->decodeOperand_VSrc16(Imm));
 }
 
-#define GET_SUBTARGETINFO_ENUM
-#include "AMDGPUGenSubtargetInfo.inc"
-#undef GET_SUBTARGETINFO_ENUM
+static DecodeStatus decodeOperand_VSrcV216(MCInst &Inst,
+                                         unsigned Imm,
+                                         uint64_t Addr,
+                                         const void *Decoder) {
+  auto DAsm = static_cast<const AMDGPUDisassembler*>(Decoder);
+  return addOperand(Inst, DAsm->decodeOperand_VSrcV216(Imm));
+}
 
 #include "AMDGPUGenDisassemblerTables.inc"
 
@@ -121,6 +126,7 @@ DecodeStatus AMDGPUDisassembler::tryDecodeInst(const uint8_t* Table,
   assert(MI.getOpcode() == 0);
   assert(MI.getNumOperands() == 0);
   MCInst TmpInst;
+  HasLiteral = false;
   const auto SavedBytes = Bytes;
   if (decodeInstruction(Table, TmpInst, Inst, Address, this, STI)) {
     MI = TmpInst;
@@ -179,6 +185,17 @@ DecodeStatus AMDGPUDisassembler::getInstruction(MCInst &MI, uint64_t &Size,
 
     Res = tryDecodeInst(DecoderTableAMDGPU64, MI, QW, Address);
   } while (false);
+
+  if (Res && (MI.getOpcode() == AMDGPU::V_MAC_F32_e64_vi ||
+              MI.getOpcode() == AMDGPU::V_MAC_F32_e64_si ||
+              MI.getOpcode() == AMDGPU::V_MAC_F16_e64_vi)) {
+    // Insert dummy unused src2_modifiers.
+    int Src2ModIdx = AMDGPU::getNamedOperandIdx(MI.getOpcode(),
+                                                AMDGPU::OpName::src2_modifiers);
+    auto I = MI.begin();
+    std::advance(I, Src2ModIdx);
+    MI.insert(I, MCOperand::createImm(0));
+  }
 
   Size = Res ? (MaxInstBytesNum - Bytes.size()) : 0;
   return Res;
@@ -264,6 +281,10 @@ MCOperand AMDGPUDisassembler::decodeOperand_VSrc16(unsigned Val) const {
   return decodeSrcOp(OPW16, Val);
 }
 
+MCOperand AMDGPUDisassembler::decodeOperand_VSrcV216(unsigned Val) const {
+  return decodeSrcOp(OPWV216, Val);
+}
+
 MCOperand AMDGPUDisassembler::decodeOperand_VGPR_32(unsigned Val) const {
   // Some instructions have operand restrictions beyond what the encoding
   // allows. Some ordinarily VSrc_32 operands are VGPR_32, so clear the extra
@@ -323,10 +344,15 @@ MCOperand AMDGPUDisassembler::decodeLiteralConstant() const {
   // For now all literal constants are supposed to be unsigned integer
   // ToDo: deal with signed/unsigned 64-bit integer constants
   // ToDo: deal with float/double constants
-  if (Bytes.size() < 4)
-    return errOperand(0, "cannot read literal, inst bytes left " +
-                         Twine(Bytes.size()));
-  return MCOperand::createImm(eatBytes<uint32_t>(Bytes));
+  if (!HasLiteral) {
+    if (Bytes.size() < 4) {
+      return errOperand(0, "cannot read literal, inst bytes left " +
+                        Twine(Bytes.size()));
+    }
+    HasLiteral = true;
+    Literal = eatBytes<uint32_t>(Bytes);
+  }
+  return MCOperand::createImm(Literal);
 }
 
 MCOperand AMDGPUDisassembler::decodeIntImmed(unsigned Imm) {
@@ -424,6 +450,7 @@ MCOperand AMDGPUDisassembler::decodeFPImmed(OpWidthTy Width, unsigned Imm) {
   case OPW64:
     return MCOperand::createImm(getInlineImmVal64(Imm));
   case OPW16:
+  case OPWV216:
     return MCOperand::createImm(getInlineImmVal16(Imm));
   default:
     llvm_unreachable("implement me");
@@ -437,6 +464,7 @@ unsigned AMDGPUDisassembler::getVgprClassId(const OpWidthTy Width) const {
   default: // fall
   case OPW32:
   case OPW16:
+  case OPWV216:
     return VGPR_32RegClassID;
   case OPW64: return VReg_64RegClassID;
   case OPW128: return VReg_128RegClassID;
@@ -450,6 +478,7 @@ unsigned AMDGPUDisassembler::getSgprClassId(const OpWidthTy Width) const {
   default: // fall
   case OPW32:
   case OPW16:
+  case OPWV216:
     return SGPR_32RegClassID;
   case OPW64: return SGPR_64RegClassID;
   case OPW128: return SGPR_128RegClassID;
@@ -463,6 +492,7 @@ unsigned AMDGPUDisassembler::getTtmpClassId(const OpWidthTy Width) const {
   default: // fall
   case OPW32:
   case OPW16:
+  case OPWV216:
     return TTMP_32RegClassID;
   case OPW64: return TTMP_64RegClassID;
   case OPW128: return TTMP_128RegClassID;
@@ -498,6 +528,7 @@ MCOperand AMDGPUDisassembler::decodeSrcOp(const OpWidthTy Width, unsigned Val) c
   switch (Width) {
   case OPW32:
   case OPW16:
+  case OPWV216:
     return decodeSpecialReg32(Val);
   case OPW64:
     return decodeSpecialReg64(Val);

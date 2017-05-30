@@ -74,12 +74,14 @@ define <32 x i8> @combine_pshufb_vpermps(<8 x float> %a) {
 define <32 x i8> @combine_and_pshufb(<32 x i8> %a0) {
 ; X32-LABEL: combine_and_pshufb:
 ; X32:       # BB#0:
-; X32-NEXT:    vandps {{\.LCPI.*}}, %ymm0, %ymm0
+; X32-NEXT:    vpxor %ymm1, %ymm1, %ymm1
+; X32-NEXT:    vpblendw {{.*#+}} ymm0 = ymm0[0],ymm1[1,2,3],ymm0[4],ymm1[5,6,7],ymm0[8],ymm1[9,10,11],ymm0[12],ymm1[13,14,15]
 ; X32-NEXT:    retl
 ;
 ; X64-LABEL: combine_and_pshufb:
 ; X64:       # BB#0:
-; X64-NEXT:    vandps {{.*}}(%rip), %ymm0, %ymm0
+; X64-NEXT:    vpxor %ymm1, %ymm1, %ymm1
+; X64-NEXT:    vpblendw {{.*#+}} ymm0 = ymm0[0],ymm1[1,2,3],ymm0[4],ymm1[5,6,7],ymm0[8],ymm1[9,10,11],ymm0[12],ymm1[13,14,15]
 ; X64-NEXT:    retq
   %1 = shufflevector <32 x i8> %a0, <32 x i8> zeroinitializer, <32 x i32> <i32 0, i32 1, i32 32, i32 32, i32 4, i32 5, i32 6, i32 7, i32 8, i32 9, i32 10, i32 11, i32 12, i32 13, i32 14, i32 15, i32 16, i32 17, i32 18, i32 19, i32 20, i32 21, i32 22, i32 23, i32 24, i32 25, i32 26, i32 27, i32 28, i32 29, i32 30, i32 31>
   %2 = call <32 x i8> @llvm.x86.avx2.pshuf.b(<32 x i8> %1, <32 x i8> <i8 0, i8 1, i8 -1, i8 -1, i8 -1, i8 -1, i8 -1, i8 -1, i8 8, i8 9, i8 -1, i8 -1, i8 -1, i8 -1, i8 -1, i8 -1, i8 0, i8 1, i8 -1, i8 -1, i8 -1, i8 -1, i8 -1, i8 -1, i8 8, i8 9, i8 -1, i8 -1, i8 -1, i8 -1, i8 -1, i8 -1>)
@@ -89,12 +91,14 @@ define <32 x i8> @combine_and_pshufb(<32 x i8> %a0) {
 define <32 x i8> @combine_pshufb_and(<32 x i8> %a0) {
 ; X32-LABEL: combine_pshufb_and:
 ; X32:       # BB#0:
-; X32-NEXT:    vandps {{\.LCPI.*}}, %ymm0, %ymm0
+; X32-NEXT:    vpxor %ymm1, %ymm1, %ymm1
+; X32-NEXT:    vpblendw {{.*#+}} ymm0 = ymm0[0],ymm1[1,2,3],ymm0[4],ymm1[5,6,7],ymm0[8],ymm1[9,10,11],ymm0[12],ymm1[13,14,15]
 ; X32-NEXT:    retl
 ;
 ; X64-LABEL: combine_pshufb_and:
 ; X64:       # BB#0:
-; X64-NEXT:    vandps {{.*}}(%rip), %ymm0, %ymm0
+; X64-NEXT:    vpxor %ymm1, %ymm1, %ymm1
+; X64-NEXT:    vpblendw {{.*#+}} ymm0 = ymm0[0],ymm1[1,2,3],ymm0[4],ymm1[5,6,7],ymm0[8],ymm1[9,10,11],ymm0[12],ymm1[13,14,15]
 ; X64-NEXT:    retq
   %1 = call <32 x i8> @llvm.x86.avx2.pshuf.b(<32 x i8> %a0, <32 x i8> <i8 0, i8 1, i8 -1, i8 -1, i8 -1, i8 -1, i8 -1, i8 -1, i8 8, i8 9, i8 -1, i8 -1, i8 -1, i8 -1, i8 -1, i8 -1, i8 0, i8 1, i8 -1, i8 -1, i8 -1, i8 -1, i8 -1, i8 -1, i8 8, i8 9, i8 -1, i8 -1, i8 -1, i8 -1, i8 -1, i8 -1>)
   %2 = shufflevector <32 x i8> %1, <32 x i8> zeroinitializer, <32 x i32> <i32 0, i32 1, i32 32, i32 32, i32 4, i32 5, i32 6, i32 7, i32 8, i32 9, i32 10, i32 11, i32 12, i32 13, i32 14, i32 15, i32 16, i32 17, i32 18, i32 19, i32 20, i32 21, i32 22, i32 23, i32 24, i32 25, i32 26, i32 27, i32 28, i32 29, i32 30, i32 31>
@@ -499,7 +503,7 @@ define <4 x i64> @combine_pshufb_as_zext128(<32 x i8> %a0) {
 ; X32-LABEL: combine_pshufb_as_zext128:
 ; X32:       # BB#0:
 ; X32-NEXT:    vpshufb {{.*#+}} xmm0 = xmm0[15,14,13,12,11,10,9,8,7,6,5,4,3,2,1,0]
-; X32-NEXT:    vpermq {{.*#+}} ymm0 = ymm0[0,1,0,1]
+; X32-NEXT:    vperm2i128 {{.*#+}} ymm0 = ymm0[0,1,0,1]
 ; X32-NEXT:    vpshufb {{.*#+}} ymm0 = ymm0[15,14],zero,zero,zero,zero,zero,zero,ymm0[13,12],zero,zero,zero,zero,zero,zero,ymm0[31,30],zero,zero,zero,zero,zero,zero,ymm0[29,28],zero,zero,zero,zero,zero,zero
 ; X32-NEXT:    retl
 ;
@@ -874,4 +878,30 @@ define <32 x i8> @constant_fold_pshufb_256() {
 ; X64-NEXT:    retq
   %1 = tail call <32 x i8> @llvm.x86.avx2.pshuf.b(<32 x i8> <i8 15, i8 14, i8 13, i8 12, i8 11, i8 10, i8 9, i8 8, i8 7, i8 6, i8 5, i8 4, i8 3, i8 2, i8 1, i8 0, i8 0, i8 -1, i8 -2, i8 -3, i8 -4, i8 -5, i8 -6, i8 -7, i8 -8, i8 -9, i8 -10, i8 -11, i8 -12, i8 -13, i8 -14, i8 -15>, <32 x i8> <i8 1, i8 -1, i8 -1, i8 -1, i8 undef, i8 undef, i8 -1, i8 -1, i8 15, i8 -1, i8 -1, i8 -1, i8 -1, i8 -1, i8 7, i8 6, i8 1, i8 -1, i8 -1, i8 -1, i8 undef, i8 undef, i8 -1, i8 -1, i8 15, i8 -1, i8 -1, i8 -1, i8 -1, i8 -1, i8 7, i8 6>)
   ret <32 x i8> %1
+}
+
+define <32 x i8> @PR27320(<8 x i32> %a0) {
+; X32-LABEL: PR27320:
+; X32:       # BB#0:
+; X32-NEXT:    vpshufb {{.*#+}} xmm1 = xmm0[12,13,13,14,15],zero,zero,zero,zero,zero,zero,zero,zero,zero,zero,zero
+; X32-NEXT:    vextracti128 $1, %ymm0, %xmm2
+; X32-NEXT:    vpshufb {{.*#+}} xmm2 = zero,zero,zero,zero,zero,xmm2[0,0,1,2,3,3,4,5,6,6,7]
+; X32-NEXT:    vpor %xmm1, %xmm2, %xmm1
+; X32-NEXT:    vpshufb {{.*#+}} xmm0 = xmm0[0,1,1,2,3,4,4,5,6,7,7,8,9,10,10,11]
+; X32-NEXT:    vinserti128 $1, %xmm1, %ymm0, %ymm0
+; X32-NEXT:    retl
+;
+; X64-LABEL: PR27320:
+; X64:       # BB#0:
+; X64-NEXT:    vpshufb {{.*#+}} xmm1 = xmm0[12,13,13,14,15],zero,zero,zero,zero,zero,zero,zero,zero,zero,zero,zero
+; X64-NEXT:    vextracti128 $1, %ymm0, %xmm2
+; X64-NEXT:    vpshufb {{.*#+}} xmm2 = zero,zero,zero,zero,zero,xmm2[0,0,1,2,3,3,4,5,6,6,7]
+; X64-NEXT:    vpor %xmm1, %xmm2, %xmm1
+; X64-NEXT:    vpshufb {{.*#+}} xmm0 = xmm0[0,1,1,2,3,4,4,5,6,7,7,8,9,10,10,11]
+; X64-NEXT:    vinserti128 $1, %xmm1, %ymm0, %ymm0
+; X64-NEXT:    retq
+  %1 = shufflevector <8 x i32> %a0, <8 x i32> undef, <8 x i32> <i32 0, i32 1, i32 2, i32 undef, i32 3, i32 4, i32 5, i32 undef>
+  %2 = bitcast <8 x i32> %1 to <32 x i8>
+  %3 = shufflevector <32 x i8> %2, <32 x i8> undef, <32 x i32> <i32 0, i32 1, i32 1, i32 2, i32 3, i32 4, i32 4, i32 5, i32 6, i32 7, i32 7, i32 8, i32 9, i32 10, i32 10, i32 11, i32 16, i32 17, i32 17, i32 18, i32 19, i32 20, i32 20, i32 21, i32 22, i32 23, i32 23, i32 24, i32 25, i32 26, i32 26, i32 27>
+  ret <32 x i8> %3
 }

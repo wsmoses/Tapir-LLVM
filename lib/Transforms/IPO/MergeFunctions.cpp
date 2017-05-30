@@ -207,11 +207,13 @@ private:
 
   /// A work queue of functions that may have been modified and should be
   /// analyzed again.
-  std::vector<WeakVH> Deferred;
+  std::vector<WeakTrackingVH> Deferred;
 
   /// Checks the rules of order relation introduced among functions set.
   /// Returns true, if sanity check has been passed, and false if failed.
-  bool doSanityCheck(std::vector<WeakVH> &Worklist);
+#ifndef NDEBUG
+  bool doSanityCheck(std::vector<WeakTrackingVH> &Worklist);
+#endif
 
   /// Insert a ComparableFunction into the FnTree, or merge it away if it's
   /// equal to one that's already present.
@@ -283,7 +285,8 @@ ModulePass *llvm::createMergeFunctionsPass() {
   return new MergeFunctions();
 }
 
-bool MergeFunctions::doSanityCheck(std::vector<WeakVH> &Worklist) {
+#ifndef NDEBUG
+bool MergeFunctions::doSanityCheck(std::vector<WeakTrackingVH> &Worklist) {
   if (const unsigned Max = NumFunctionsForSanityCheck) {
     unsigned TripleNumber = 0;
     bool Valid = true;
@@ -291,10 +294,12 @@ bool MergeFunctions::doSanityCheck(std::vector<WeakVH> &Worklist) {
     dbgs() << "MERGEFUNC-SANITY: Started for first " << Max << " functions.\n";
 
     unsigned i = 0;
-    for (std::vector<WeakVH>::iterator I = Worklist.begin(), E = Worklist.end();
+    for (std::vector<WeakTrackingVH>::iterator I = Worklist.begin(),
+                                               E = Worklist.end();
          I != E && i < Max; ++I, ++i) {
       unsigned j = i;
-      for (std::vector<WeakVH>::iterator J = I; J != E && j < Max; ++J, ++j) {
+      for (std::vector<WeakTrackingVH>::iterator J = I; J != E && j < Max;
+           ++J, ++j) {
         Function *F1 = cast<Function>(*I);
         Function *F2 = cast<Function>(*J);
         int Res1 = FunctionComparator(F1, F2, &GlobalNumbers).compare();
@@ -312,7 +317,7 @@ bool MergeFunctions::doSanityCheck(std::vector<WeakVH> &Worklist) {
           continue;
 
         unsigned k = j;
-        for (std::vector<WeakVH>::iterator K = J; K != E && k < Max;
+        for (std::vector<WeakTrackingVH>::iterator K = J; K != E && k < Max;
              ++k, ++K, ++TripleNumber) {
           if (K == J)
             continue;
@@ -351,6 +356,7 @@ bool MergeFunctions::doSanityCheck(std::vector<WeakVH> &Worklist) {
   }
   return true;
 }
+#endif
 
 bool MergeFunctions::runOnModule(Module &M) {
   if (skipModule(M))
@@ -381,12 +387,12 @@ bool MergeFunctions::runOnModule(Module &M) {
     // consider merging it. Otherwise it is dropped and never considered again.
     if ((I != S && std::prev(I)->first == I->first) ||
         (std::next(I) != IE && std::next(I)->first == I->first) ) {
-      Deferred.push_back(WeakVH(I->second));
+      Deferred.push_back(WeakTrackingVH(I->second));
     }
   }
   
   do {
-    std::vector<WeakVH> Worklist;
+    std::vector<WeakTrackingVH> Worklist;
     Deferred.swap(Worklist);
 
     DEBUG(doSanityCheck(Worklist));
@@ -395,7 +401,7 @@ bool MergeFunctions::runOnModule(Module &M) {
     DEBUG(dbgs() << "size of worklist: " << Worklist.size() << '\n');
 
     // Insert functions and merge them.
-    for (WeakVH &I : Worklist) {
+    for (WeakTrackingVH &I : Worklist) {
       if (!I)
         continue;
       Function *F = cast<Function>(I);
@@ -432,19 +438,15 @@ void MergeFunctions::replaceDirectCallers(Function *Old, Function *New) {
       // Transferring other attributes may help other optimizations, but that
       // should be done uniformly and not in this ad-hoc way.
       auto &Context = New->getContext();
-      auto NewFuncAttrs = New->getAttributes();
-      auto CallSiteAttrs = CS.getAttributes();
-
-      CallSiteAttrs = CallSiteAttrs.addAttributes(
-          Context, AttributeSet::ReturnIndex, NewFuncAttrs.getRetAttributes());
-
-      for (unsigned argIdx = 0; argIdx < CS.arg_size(); argIdx++) {
-        AttributeSet Attrs = NewFuncAttrs.getParamAttributes(argIdx);
-        if (Attrs.getNumSlots())
-          CallSiteAttrs = CallSiteAttrs.addAttributes(Context, argIdx, Attrs);
-      }
-
-      CS.setAttributes(CallSiteAttrs);
+      auto NewPAL = New->getAttributes();
+      SmallVector<AttributeSet, 4> NewArgAttrs;
+      for (unsigned argIdx = 0; argIdx < CS.arg_size(); argIdx++)
+        NewArgAttrs.push_back(NewPAL.getParamAttributes(argIdx));
+      // Don't transfer attributes from the function to the callee. Function
+      // attributes typically aren't relevant to the calling convention or ABI.
+      CS.setAttributes(AttributeList::get(Context, /*FnAttrs=*/AttributeSet(),
+                                          NewPAL.getRetAttributes(),
+                                          NewArgAttrs));
 
       remove(CS.getInstruction()->getParent()->getParent());
       U->set(BitcastNew);

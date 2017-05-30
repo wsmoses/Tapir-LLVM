@@ -1123,7 +1123,8 @@ MipsSETargetLowering::PerformDAGCombine(SDNode *N, DAGCombinerInfo &DCI) const {
   case ISD::MUL:
     return performMULCombine(N, DAG, DCI, this);
   case ISD::SHL:
-    return performSHLCombine(N, DAG, DCI, Subtarget);
+    Val = performSHLCombine(N, DAG, DCI, Subtarget);
+    break;
   case ISD::SRA:
     return performSRACombine(N, DAG, DCI, Subtarget);
   case ISD::SRL:
@@ -1546,11 +1547,24 @@ static SDValue lowerMSABinaryBitImmIntr(SDValue Op, SelectionDAG &DAG,
   return DAG.getNode(Opc, DL, VecTy, Op->getOperand(1), Exp2Imm);
 }
 
+static SDValue truncateVecElts(SDValue Op, SelectionDAG &DAG) {
+  SDLoc DL(Op);
+  EVT ResTy = Op->getValueType(0);
+  SDValue Vec = Op->getOperand(2);
+  bool BigEndian = !DAG.getSubtarget().getTargetTriple().isLittleEndian();
+  MVT ResEltTy = ResTy == MVT::v2i64 ? MVT::i64 : MVT::i32;
+  SDValue ConstValue = DAG.getConstant(Vec.getScalarValueSizeInBits() - 1,
+                                       DL, ResEltTy);
+  SDValue SplatVec = getBuildVectorSplat(ResTy, ConstValue, BigEndian, DAG);
+
+  return DAG.getNode(ISD::AND, DL, ResTy, Vec, SplatVec);
+}
+
 static SDValue lowerMSABitClear(SDValue Op, SelectionDAG &DAG) {
   EVT ResTy = Op->getValueType(0);
   SDLoc DL(Op);
   SDValue One = DAG.getConstant(1, DL, ResTy);
-  SDValue Bit = DAG.getNode(ISD::SHL, DL, ResTy, One, Op->getOperand(2));
+  SDValue Bit = DAG.getNode(ISD::SHL, DL, ResTy, One, truncateVecElts(Op, DAG));
 
   return DAG.getNode(ISD::AND, DL, ResTy, Op->getOperand(1),
                      DAG.getNOT(DL, Bit, ResTy));
@@ -1643,7 +1657,7 @@ SDValue MipsSETargetLowering::lowerINTRINSIC_WO_CHAIN(SDValue Op,
     if (Op->getConstantOperandVal(3) >= EltTy.getSizeInBits())
       report_fatal_error("Immediate out of range");
     APInt Mask = APInt::getHighBitsSet(EltTy.getSizeInBits(),
-                                       Op->getConstantOperandVal(3));
+                                       Op->getConstantOperandVal(3) + 1);
     return DAG.getNode(ISD::VSELECT, DL, VecTy,
                        DAG.getConstant(Mask, DL, VecTy, true),
                        Op->getOperand(2), Op->getOperand(1));
@@ -1658,7 +1672,7 @@ SDValue MipsSETargetLowering::lowerINTRINSIC_WO_CHAIN(SDValue Op,
     if (Op->getConstantOperandVal(3) >= EltTy.getSizeInBits())
       report_fatal_error("Immediate out of range");
     APInt Mask = APInt::getLowBitsSet(EltTy.getSizeInBits(),
-                                      Op->getConstantOperandVal(3));
+                                      Op->getConstantOperandVal(3) + 1);
     return DAG.getNode(ISD::VSELECT, DL, VecTy,
                        DAG.getConstant(Mask, DL, VecTy, true),
                        Op->getOperand(2), Op->getOperand(1));
@@ -1686,7 +1700,7 @@ SDValue MipsSETargetLowering::lowerINTRINSIC_WO_CHAIN(SDValue Op,
 
     return DAG.getNode(ISD::XOR, DL, VecTy, Op->getOperand(1),
                        DAG.getNode(ISD::SHL, DL, VecTy, One,
-                                   Op->getOperand(2)));
+                                   truncateVecElts(Op, DAG)));
   }
   case Intrinsic::mips_bnegi_b:
   case Intrinsic::mips_bnegi_h:
@@ -1722,7 +1736,7 @@ SDValue MipsSETargetLowering::lowerINTRINSIC_WO_CHAIN(SDValue Op,
 
     return DAG.getNode(ISD::OR, DL, VecTy, Op->getOperand(1),
                        DAG.getNode(ISD::SHL, DL, VecTy, One,
-                                   Op->getOperand(2)));
+                                   truncateVecElts(Op, DAG)));
   }
   case Intrinsic::mips_bseti_b:
   case Intrinsic::mips_bseti_h:
@@ -2209,7 +2223,7 @@ SDValue MipsSETargetLowering::lowerINTRINSIC_WO_CHAIN(SDValue Op,
   case Intrinsic::mips_sll_w:
   case Intrinsic::mips_sll_d:
     return DAG.getNode(ISD::SHL, DL, Op->getValueType(0), Op->getOperand(1),
-                       Op->getOperand(2));
+                       truncateVecElts(Op, DAG));
   case Intrinsic::mips_slli_b:
   case Intrinsic::mips_slli_h:
   case Intrinsic::mips_slli_w:
@@ -2239,7 +2253,7 @@ SDValue MipsSETargetLowering::lowerINTRINSIC_WO_CHAIN(SDValue Op,
   case Intrinsic::mips_sra_w:
   case Intrinsic::mips_sra_d:
     return DAG.getNode(ISD::SRA, DL, Op->getValueType(0), Op->getOperand(1),
-                       Op->getOperand(2));
+                       truncateVecElts(Op, DAG));
   case Intrinsic::mips_srai_b:
   case Intrinsic::mips_srai_h:
   case Intrinsic::mips_srai_w:
@@ -2269,7 +2283,7 @@ SDValue MipsSETargetLowering::lowerINTRINSIC_WO_CHAIN(SDValue Op,
   case Intrinsic::mips_srl_w:
   case Intrinsic::mips_srl_d:
     return DAG.getNode(ISD::SRL, DL, Op->getValueType(0), Op->getOperand(1),
-                       Op->getOperand(2));
+                       truncateVecElts(Op, DAG));
   case Intrinsic::mips_srli_b:
   case Intrinsic::mips_srli_h:
   case Intrinsic::mips_srli_w:
@@ -2529,11 +2543,10 @@ SDValue MipsSETargetLowering::lowerBUILD_VECTOR(SDValue Op,
         SplatBitSize != 64)
       return SDValue();
 
-    // If the value fits into a simm10 then we can use ldi.[bhwd]
-    // However, if it isn't an integer type we will have to bitcast from an
-    // integer type first. Also, if there are any undefs, we must lower them
-    // to defined values first.
-    if (ResTy.isInteger() && !HasAnyUndefs && SplatValue.isSignedIntN(10))
+    // If the value isn't an integer type we will have to bitcast
+    // from an integer type first. Also, if there are any undefs, we must
+    // lower them to defined values first.
+    if (ResTy.isInteger() && !HasAnyUndefs)
       return Op;
 
     EVT ViaVecTy;

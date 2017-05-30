@@ -25,8 +25,8 @@
 #include "llvm/IR/PassManager.h"
 #include "llvm/IR/Verifier.h"
 #include "llvm/LTO/LTO.h"
-#include "llvm/LTO/legacy/UpdateCompilerUsed.h"
 #include "llvm/MC/SubtargetFeature.h"
+#include "llvm/Object/ModuleSymbolTable.h"
 #include "llvm/Passes/PassBuilder.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/FileSystem.h"
@@ -117,15 +117,22 @@ Error Config::addSaveTemps(std::string OutputFileName,
 namespace {
 
 std::unique_ptr<TargetMachine>
-createTargetMachine(Config &Conf, StringRef TheTriple,
-                    const Target *TheTarget) {
+createTargetMachine(Config &Conf, const Target *TheTarget, Module &M) {
+  StringRef TheTriple = M.getTargetTriple();
   SubtargetFeatures Features;
   Features.getDefaultSubtargetFeatures(Triple(TheTriple));
   for (const std::string &A : Conf.MAttrs)
     Features.AddFeature(A);
 
+  Reloc::Model RelocModel;
+  if (Conf.RelocModel)
+    RelocModel = *Conf.RelocModel;
+  else
+    RelocModel =
+        M.getPICLevel() == PICLevel::NotPIC ? Reloc::Static : Reloc::PIC_;
+
   return std::unique_ptr<TargetMachine>(TheTarget->createTargetMachine(
-      TheTriple, Conf.CPU, Features.getString(), Conf.Options, Conf.RelocModel,
+      TheTriple, Conf.CPU, Features.getString(), Conf.Options, RelocModel,
       Conf.CodeModel, Conf.CGOptLevel));
 }
 
@@ -223,14 +230,16 @@ static void runNewPMCustomPasses(Module &Mod, TargetMachine *TM,
 }
 
 static void runOldPMPasses(Config &Conf, Module &Mod, TargetMachine *TM,
-                           bool IsThinLTO, ModuleSummaryIndex &CombinedIndex) {
+                           bool IsThinLTO, ModuleSummaryIndex *ExportSummary,
+                           const ModuleSummaryIndex *ImportSummary) {
   legacy::PassManager passes;
   passes.add(createTargetTransformInfoWrapperPass(TM->getTargetIRAnalysis()));
 
   PassManagerBuilder PMB;
   PMB.LibraryInfo = new TargetLibraryInfoImpl(Triple(TM->getTargetTriple()));
   PMB.Inliner = createFunctionInliningPass();
-  PMB.Summary = &CombinedIndex;
+  PMB.ExportSummary = ExportSummary;
+  PMB.ImportSummary = ImportSummary;
   // Unconditionally verify input since it is not verified before this
   // point and has unknown origin.
   PMB.VerifyInput = true;
@@ -247,7 +256,8 @@ static void runOldPMPasses(Config &Conf, Module &Mod, TargetMachine *TM,
 }
 
 bool opt(Config &Conf, TargetMachine *TM, unsigned Task, Module &Mod,
-         bool IsThinLTO, ModuleSummaryIndex &CombinedIndex) {
+         bool IsThinLTO, ModuleSummaryIndex *ExportSummary,
+         const ModuleSummaryIndex *ImportSummary) {
   // There's still no ThinLTO pipeline hooked up in the new pass manager,
   // once there is one, we can just remove this.
   if (LTOUseNewPM && IsThinLTO)
@@ -260,7 +270,7 @@ bool opt(Config &Conf, TargetMachine *TM, unsigned Task, Module &Mod,
   else if (LTOUseNewPM)
     runNewPMPasses(Mod, TM, Conf.OptLevel);
   else
-    runOldPMPasses(Conf, Mod, TM, IsThinLTO, CombinedIndex);
+    runOldPMPasses(Conf, Mod, TM, IsThinLTO, ExportSummary, ImportSummary);
   return !Conf.PostOptModuleHook || Conf.PostOptModuleHook(Task, Mod);
 }
 
@@ -308,7 +318,7 @@ void splitCodeGen(Config &C, TargetMachine *TM, AddStreamFn AddStream,
               std::unique_ptr<Module> MPartInCtx = std::move(MOrErr.get());
 
               std::unique_ptr<TargetMachine> TM =
-                  createTargetMachine(C, MPartInCtx->getTargetTriple(), T);
+                  createTargetMachine(C, T, *MPartInCtx);
 
               codegen(C, TM.get(), AddStream, ThreadId, *MPartInCtx);
             },
@@ -349,19 +359,6 @@ finalizeOptimizationRemarks(std::unique_ptr<tool_output_file> DiagOutputFile) {
   DiagOutputFile->os().flush();
 }
 
-static void handleAsmUndefinedRefs(Module &Mod, TargetMachine &TM) {
-  // Collect the list of undefined symbols used in asm and update
-  // llvm.compiler.used to prevent optimization to drop these from the output.
-  StringSet<> AsmUndefinedRefs;
-  ModuleSymbolTable::CollectAsmSymbols(
-      Triple(Mod.getTargetTriple()), Mod.getModuleInlineAsm(),
-      [&AsmUndefinedRefs](StringRef Name, object::BasicSymbolRef::Flags Flags) {
-        if (Flags & object::BasicSymbolRef::SF_Undefined)
-          AsmUndefinedRefs.insert(Name);
-      });
-  updateCompilerUsed(Mod, TM, AsmUndefinedRefs);
-}
-
 Error lto::backend(Config &C, AddStreamFn AddStream,
                    unsigned ParallelCodeGenParallelismLevel,
                    std::unique_ptr<Module> Mod,
@@ -370,10 +367,7 @@ Error lto::backend(Config &C, AddStreamFn AddStream,
   if (!TOrErr)
     return TOrErr.takeError();
 
-  std::unique_ptr<TargetMachine> TM =
-      createTargetMachine(C, Mod->getTargetTriple(), *TOrErr);
-
-  handleAsmUndefinedRefs(*Mod, *TM);
+  std::unique_ptr<TargetMachine> TM = createTargetMachine(C, *TOrErr, *Mod);
 
   // Setup optimization remarks.
   auto DiagFileOrErr = lto::setupOptimizationRemarks(
@@ -383,7 +377,8 @@ Error lto::backend(Config &C, AddStreamFn AddStream,
   auto DiagnosticOutputFile = std::move(*DiagFileOrErr);
 
   if (!C.CodeGenOnly) {
-    if (!opt(C, TM.get(), 0, *Mod, /*IsThinLTO=*/false, CombinedIndex)) {
+    if (!opt(C, TM.get(), 0, *Mod, /*IsThinLTO=*/false,
+             /*ExportSummary=*/&CombinedIndex, /*ImportSummary=*/nullptr)) {
       finalizeOptimizationRemarks(std::move(DiagnosticOutputFile));
       return Error::success();
     }
@@ -400,7 +395,7 @@ Error lto::backend(Config &C, AddStreamFn AddStream,
 }
 
 Error lto::thinBackend(Config &Conf, unsigned Task, AddStreamFn AddStream,
-                       Module &Mod, ModuleSummaryIndex &CombinedIndex,
+                       Module &Mod, const ModuleSummaryIndex &CombinedIndex,
                        const FunctionImporter::ImportMapTy &ImportList,
                        const GVSummaryMapTy &DefinedGlobals,
                        MapVector<StringRef, BitcodeModule> &ModuleMap) {
@@ -408,10 +403,7 @@ Error lto::thinBackend(Config &Conf, unsigned Task, AddStreamFn AddStream,
   if (!TOrErr)
     return TOrErr.takeError();
 
-  std::unique_ptr<TargetMachine> TM =
-      createTargetMachine(Conf, Mod.getTargetTriple(), *TOrErr);
-
-  handleAsmUndefinedRefs(Mod, *TM);
+  std::unique_ptr<TargetMachine> TM = createTargetMachine(Conf, *TOrErr, Mod);
 
   if (Conf.CodeGenOnly) {
     codegen(Conf, TM.get(), AddStream, Task, Mod);
@@ -452,7 +444,8 @@ Error lto::thinBackend(Config &Conf, unsigned Task, AddStreamFn AddStream,
   if (Conf.PostImportModuleHook && !Conf.PostImportModuleHook(Task, Mod))
     return Error::success();
 
-  if (!opt(Conf, TM.get(), Task, Mod, /*IsThinLTO=*/true, CombinedIndex))
+  if (!opt(Conf, TM.get(), Task, Mod, /*IsThinLTO=*/true,
+           /*ExportSummary=*/nullptr, /*ImportSummary=*/&CombinedIndex))
     return Error::success();
 
   codegen(Conf, TM.get(), AddStream, Task, Mod);

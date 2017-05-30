@@ -14,11 +14,11 @@
 #include "llvm/ADT/StringSet.h"
 #include "llvm/Support/Error.h"
 
-#include "llvm/DebugInfo/MSF/ByteStream.h"
-#include "llvm/DebugInfo/MSF/StreamReader.h"
 #include "llvm/DebugInfo/PDB/Native/PDBFile.h"
 #include "llvm/DebugInfo/PDB/Native/RawConstants.h"
 #include "llvm/DebugInfo/PDB/PDBTypes.h"
+#include "llvm/Support/BinaryByteStream.h"
+#include "llvm/Support/BinaryStreamReader.h"
 #include "llvm/Support/Endian.h"
 
 namespace llvm {
@@ -31,11 +31,13 @@ struct coff_section;
 namespace pdb {
 class DbiStream;
 struct DbiStreamHeader;
+class DbiModuleDescriptorBuilder;
 class PDBFile;
 
 class DbiStreamBuilder {
 public:
   DbiStreamBuilder(msf::MSFBuilder &Msf);
+  ~DbiStreamBuilder();
 
   DbiStreamBuilder(const DbiStreamBuilder &) = delete;
   DbiStreamBuilder &operator=(const DbiStreamBuilder &) = delete;
@@ -55,12 +57,13 @@ public:
 
   uint32_t calculateSerializedLength() const;
 
-  Error addModuleInfo(StringRef ObjFile, StringRef Module);
+  Expected<DbiModuleDescriptorBuilder &> addModuleInfo(StringRef ModuleName);
   Error addModuleSourceFile(StringRef Module, StringRef File);
+  Expected<uint32_t> getSourceFileNameIndex(StringRef FileName);
 
   Error finalizeMsfLayout();
 
-  Error commit(const msf::MSFLayout &Layout, const msf::WritableStream &Buffer);
+  Error commit(const msf::MSFLayout &Layout, WritableBinaryStreamRef MsfBuffer);
 
   // A helper function to create Section Contributions from COFF input
   // section headers.
@@ -79,6 +82,7 @@ private:
 
   Error finalize();
   uint32_t calculateModiSubstreamSize() const;
+  uint32_t calculateNamesOffset() const;
   uint32_t calculateSectionContribsStreamSize() const;
   uint32_t calculateSectionMapStreamSize() const;
   uint32_t calculateFileInfoSubstreamSize() const;
@@ -87,12 +91,6 @@ private:
 
   Error generateModiSubstream();
   Error generateFileInfoSubstream();
-
-  struct ModuleInfo {
-    std::vector<StringRef> SourceFiles;
-    StringRef Obj;
-    StringRef Mod;
-  };
 
   msf::MSFBuilder &Msf;
   BumpPtrAllocator &Allocator;
@@ -107,14 +105,13 @@ private:
 
   const DbiStreamHeader *Header;
 
-  StringMap<std::unique_ptr<ModuleInfo>> ModuleInfos;
-  std::vector<ModuleInfo *> ModuleInfoList;
+  StringMap<std::unique_ptr<DbiModuleDescriptorBuilder>> ModiMap;
+  std::vector<DbiModuleDescriptorBuilder *> ModiList;
 
   StringMap<uint32_t> SourceFileNames;
 
-  msf::WritableStreamRef NamesBuffer;
-  msf::MutableByteStream ModInfoBuffer;
-  msf::MutableByteStream FileInfoBuffer;
+  WritableBinaryStreamRef NamesBuffer;
+  MutableBinaryByteStream FileInfoBuffer;
   ArrayRef<SectionContrib> SectionContribs;
   ArrayRef<SecMapEntry> SectionMap;
   llvm::SmallVector<DebugStream, (int)DbgHeaderType::Max> DbgStreams;

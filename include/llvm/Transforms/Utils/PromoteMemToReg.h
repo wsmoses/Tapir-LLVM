@@ -29,7 +29,7 @@ class AssumptionCache;
 /// (transitively) using this alloca. This also enforces that there is only
 /// ever one layer of bitcasts or GEPs between the alloca and the lifetime
 /// markers.
-bool isAllocaPromotable(const AllocaInst *AI, DominatorTree &DT);
+bool isAllocaPromotable(const AllocaInst *AI);
 bool isAllocaParallelPromotable(const AllocaInst *AI, DominatorTree &DT);
 
 /// \brief Promote the specified list of alloca instructions into scalar
@@ -39,10 +39,7 @@ bool isAllocaParallelPromotable(const AllocaInst *AI, DominatorTree &DT);
 /// does not modify the CFG of the function at all.  All allocas must be from
 /// the same function.
 ///
-/// If AST is specified, the specified tracker is updated to reflect changes
-/// made to the IR.
 void PromoteMemToReg(ArrayRef<AllocaInst *> Allocas, DominatorTree &DT,
-                     AliasSetTracker *AST = nullptr,
                      AssumptionCache *AC = nullptr);
 
 } // End llvm namespace

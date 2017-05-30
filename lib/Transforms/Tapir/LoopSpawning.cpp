@@ -515,9 +515,9 @@ PHINode* LoopOutline::canonicalizeIVs(Type *Ty) {
   PHINode *CanonicalIV = Exp.getOrInsertCanonicalInductionVariable(L, Ty);
   DEBUG(dbgs() << "LS Canonical induction variable " << *CanonicalIV << "\n");
 
-  SmallVector<WeakVH, 16> DeadInsts;
+  SmallVector<WeakTrackingVH, 16> DeadInsts;
   Exp.replaceCongruentIVs(L, DT, DeadInsts);
-  for (WeakVH V : DeadInsts) {
+  for (WeakTrackingVH V : DeadInsts) {
     DEBUG(dbgs() << "LS erasing dead inst " << *V << "\n");
     Instruction *I = cast<Instruction>(V);
     I->eraseFromParent();
@@ -1198,15 +1198,6 @@ bool DACLoopSpawning::processLoop() {
 
     // LowerDbgDeclare(*(Header->getParent()));
 
-    if (DISubprogram *SP = Header->getParent()->getSubprogram()) {
-      // If we have debug info, add mapping for the metadata nodes that should not
-      // be cloned by CloneFunctionInto.
-      auto &MD = VMap.MD();
-      MD[SP->getUnit()].reset(SP->getUnit());
-      MD[SP->getType()].reset(SP->getType());
-      MD[SP->getFile()].reset(SP->getFile());
-    }
-
     Helper = CreateHelper(Inputs, Outputs, LoopBlocks,
                           Header, Preheader, ExitBlock,
                           VMap, Header->getParent()->getParent(),
@@ -1424,14 +1415,9 @@ bool DACLoopSpawning::processLoop() {
         SyncBlock = SuccBB;
     }
     // If the sync for this loop is found, serialize that sync.
-    if (SyncBlock) {
-      if (SyncInst *SI = dyn_cast<SyncInst>(SyncBlock->getTerminator())) {
+    if (SyncBlock)
+      if (SyncInst *SI = dyn_cast<SyncInst>(SyncBlock->getTerminator()))
         ReplaceInstWithInst(SI, BranchInst::Create(SI->getSuccessor(0)));
-        // BranchInst *ReplacementBr = BranchInst::Create(SI->getSuccessor(0), SI);
-        // ReplacementBr->setDebugLoc(SI->getDebugLoc());
-        // SI->eraseFromParent();
-      }
-    }
   }
 
   ++LoopsConvertedToDAC;
@@ -1779,15 +1765,6 @@ bool CilkABILoopSpawning::processLoop() {
     SmallVector<ReturnInst *, 4> Returns;  // Ignore returns cloned.
 
     // LowerDbgDeclare(*(Header->getParent()));
-
-    if (DISubprogram *SP = Header->getParent()->getSubprogram()) {
-      // If we have debug info, add mapping for the metadata nodes that should not
-      // be cloned by CloneFunctionInto.
-      auto &MD = VMap.MD();
-      MD[SP->getUnit()].reset(SP->getUnit());
-      MD[SP->getType()].reset(SP->getType());
-      MD[SP->getFile()].reset(SP->getFile());
-    }
 
     Helper = CreateHelper(Inputs, Outputs, L->getBlocks(),
                           Header, Preheader, ExitBlock/*L->getExitBlock()*/,

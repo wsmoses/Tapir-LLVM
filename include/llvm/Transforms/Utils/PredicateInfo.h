@@ -6,47 +6,46 @@
 // License. See LICENSE.TXT for details.
 //
 //===----------------------------------------------------------------------===//
-//
-// \file
-// \brief
-//
-// This file implements the PredicateInfo analysis, which creates an Extended
-// SSA form for operations used in branch comparisons and llvm.assume
-// comparisons.  Copies of these operations are inserted into the true/false
-// edge (and after assumes), and information attached to the copies.  All uses
-// of the original operation in blocks dominated by the true/false edge (and
-// assume), are replaced with uses of the copies.  This enables passes to easily
-// and sparsely propagate condition based info into the operations that may be
-// affected.
-//
-// Example:
-// %cmp = icmp eq i32 %x, 50
-// br i1 %cmp, label %true, label %false
-// true:
-// ret i32 %x
-// false:
-// ret i32 1
-//
-// will become
-//
-// %cmp = icmp eq i32, %x, 50
-// br i1 %cmp, label %true, label %false
-// true:
-// %x.0 = call @llvm.ssa_copy.i32(i32 %x)
-// ret i32 %x.0
-// false:
-// ret i32 1
-//
-// Using getPredicateInfoFor on x.0 will give you the comparison it is
-// dominated by (the icmp), and that you are located in the true edge of that
-// comparison, which tells you x.0 is 50.
-//
-// In order to reduce the number of copies inserted, predicateinfo is only
-// inserted where it would actually be live.  This means if there are no uses of
-// an operation dominated by the branch edges, or by an assume, the associated
-// predicate info is never inserted.
-//
-//
+///
+/// \file
+/// \brief  This file implements the PredicateInfo analysis, which creates an Extended
+/// SSA form for operations used in branch comparisons and llvm.assume
+/// comparisons.
+///
+/// Copies of these operations are inserted into the true/false edge (and after
+/// assumes), and information attached to the copies.  All uses of the original
+/// operation in blocks dominated by the true/false edge (and assume), are
+/// replaced with uses of the copies.  This enables passes to easily and sparsely
+/// propagate condition based info into the operations that may be affected.
+///
+/// Example:
+/// %cmp = icmp eq i32 %x, 50
+/// br i1 %cmp, label %true, label %false
+/// true:
+/// ret i32 %x
+/// false:
+/// ret i32 1
+///
+/// will become
+///
+/// %cmp = icmp eq i32, %x, 50
+/// br i1 %cmp, label %true, label %false
+/// true:
+/// %x.0 = call @llvm.ssa_copy.i32(i32 %x)
+/// ret i32 %x.0
+/// false:
+/// ret i32 1
+///
+/// Using getPredicateInfoFor on x.0 will give you the comparison it is
+/// dominated by (the icmp), and that you are located in the true edge of that
+/// comparison, which tells you x.0 is 50.
+///
+/// In order to reduce the number of copies inserted, predicateinfo is only
+/// inserted where it would actually be live.  This means if there are no uses of
+/// an operation dominated by the branch edges, or by an assume, the associated
+/// predicate info is never inserted.
+///
+///
 //===----------------------------------------------------------------------===//
 
 #ifndef LLVM_TRANSFORMS_UTILS_PREDICATEINFO_H
@@ -92,7 +91,7 @@ class LLVMContext;
 class raw_ostream;
 class OrderedBasicBlock;
 
-enum PredicateType { PT_Branch, PT_Assume };
+enum PredicateType { PT_Branch, PT_Assume, PT_Switch };
 
 // Base class for all predicate information we provide.
 // All of our predicate information has at least a comparison.
@@ -103,47 +102,88 @@ public:
   // This can be use by passes, when destroying predicateinfo, to know
   // whether they can just drop the intrinsic, or have to merge metadata.
   Value *OriginalOp;
-  Value *Condition;
   PredicateBase(const PredicateBase &) = delete;
   PredicateBase &operator=(const PredicateBase &) = delete;
   PredicateBase() = delete;
   virtual ~PredicateBase() = default;
 
 protected:
-  PredicateBase(PredicateType PT, Value *Op, Value *Condition)
-      : Type(PT), OriginalOp(Op), Condition(Condition) {}
+  PredicateBase(PredicateType PT, Value *Op) : Type(PT), OriginalOp(Op) {}
+};
+
+class PredicateWithCondition : public PredicateBase {
+public:
+  Value *Condition;
+  static inline bool classof(const PredicateBase *PB) {
+    return PB->Type == PT_Assume || PB->Type == PT_Branch || PB->Type == PT_Switch;
+  }
+
+protected:
+  PredicateWithCondition(PredicateType PT, Value *Op, Value *Condition)
+      : PredicateBase(PT, Op), Condition(Condition) {}
 };
 
 // Provides predicate information for assumes.  Since assumes are always true,
 // we simply provide the assume instruction, so you can tell your relative
 // position to it.
-class PredicateAssume : public PredicateBase {
+class PredicateAssume : public PredicateWithCondition {
 public:
   IntrinsicInst *AssumeInst;
   PredicateAssume(Value *Op, IntrinsicInst *AssumeInst, Value *Condition)
-      : PredicateBase(PT_Assume, Op, Condition), AssumeInst(AssumeInst) {}
+      : PredicateWithCondition(PT_Assume, Op, Condition),
+        AssumeInst(AssumeInst) {}
   PredicateAssume() = delete;
   static inline bool classof(const PredicateBase *PB) {
     return PB->Type == PT_Assume;
   }
 };
 
-// Provides predicate information for branches.
-class PredicateBranch : public PredicateBase {
+// Mixin class for edge predicates.  The FROM block is the block where the
+// predicate originates, and the TO block is the block where the predicate is
+// valid.
+class PredicateWithEdge : public PredicateWithCondition {
 public:
-  // This is the block that is conditional upon the condition.
-  BasicBlock *BranchBB;
-  // This is one of the true/false successors of BranchBB.
-  BasicBlock *SplitBB;
+  BasicBlock *From;
+  BasicBlock *To;
+  PredicateWithEdge() = delete;
+  static inline bool classof(const PredicateBase *PB) {
+    return PB->Type == PT_Branch || PB->Type == PT_Switch;
+  }
+
+protected:
+  PredicateWithEdge(PredicateType PType, Value *Op, BasicBlock *From,
+                    BasicBlock *To, Value *Cond)
+      : PredicateWithCondition(PType, Op, Cond), From(From), To(To) {}
+};
+
+// Provides predicate information for branches.
+class PredicateBranch : public PredicateWithEdge {
+public:
   // If true, SplitBB is the true successor, otherwise it's the false successor.
   bool TrueEdge;
   PredicateBranch(Value *Op, BasicBlock *BranchBB, BasicBlock *SplitBB,
                   Value *Condition, bool TakenEdge)
-      : PredicateBase(PT_Branch, Op, Condition), BranchBB(BranchBB),
-        SplitBB(SplitBB), TrueEdge(TakenEdge) {}
+      : PredicateWithEdge(PT_Branch, Op, BranchBB, SplitBB, Condition),
+        TrueEdge(TakenEdge) {}
   PredicateBranch() = delete;
   static inline bool classof(const PredicateBase *PB) {
     return PB->Type == PT_Branch;
+  }
+};
+
+class PredicateSwitch : public PredicateWithEdge {
+public:
+  Value *CaseValue;
+  // This is the switch instruction.
+  SwitchInst *Switch;
+  PredicateSwitch(Value *Op, BasicBlock *SwitchBB, BasicBlock *TargetBB,
+                  Value *CaseValue, SwitchInst *SI)
+      : PredicateWithEdge(PT_Switch, Op, SwitchBB, TargetBB,
+                          SI->getCondition()),
+        CaseValue(CaseValue), Switch(SI) {}
+  PredicateSwitch() = delete;
+  static inline bool classof(const PredicateBase *PB) {
+    return PB->Type == PT_Switch;
   }
 };
 
@@ -189,6 +229,7 @@ private:
   void buildPredicateInfo();
   void processAssume(IntrinsicInst *, BasicBlock *, SmallPtrSetImpl<Value *> &);
   void processBranch(BranchInst *, BasicBlock *, SmallPtrSetImpl<Value *> &);
+  void processSwitch(SwitchInst *, BasicBlock *, SmallPtrSetImpl<Value *> &);
   void renameUses(SmallPtrSetImpl<Value *> &);
   using ValueDFS = PredicateInfoClasses::ValueDFS;
   typedef SmallVectorImpl<ValueDFS> ValueDFSStack;

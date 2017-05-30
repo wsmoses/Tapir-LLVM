@@ -30,15 +30,12 @@
 #include "llvm/IR/Module.h"
 #include "llvm/IR/PatternMatch.h"
 #include "llvm/Support/CommandLine.h"
+#include "llvm/Support/KnownBits.h"
 #include "llvm/Transforms/Utils/BuildLibCalls.h"
 #include "llvm/Transforms/Utils/Local.h"
 
 using namespace llvm;
 using namespace PatternMatch;
-
-static cl::opt<bool>
-    ColdErrorCalls("error-reporting-is-cold", cl::init(true), cl::Hidden,
-                   cl::desc("Treat error-reporting calls as cold"));
 
 static cl::opt<bool>
     EnableUnsafeFPShrink("enable-double-float-shrink", cl::Hidden,
@@ -429,59 +426,68 @@ Value *LibCallSimplifier::optimizeStrNCpy(CallInst *CI, IRBuilder<> &B) {
   return Dst;
 }
 
-Value *LibCallSimplifier::optimizeStrLen(CallInst *CI, IRBuilder<> &B) {
+Value *LibCallSimplifier::optimizeStringLength(CallInst *CI, IRBuilder<> &B,
+                                               unsigned CharSize) {
   Value *Src = CI->getArgOperand(0);
 
   // Constant folding: strlen("xyz") -> 3
-  if (uint64_t Len = GetStringLength(Src))
+  if (uint64_t Len = GetStringLength(Src, CharSize))
     return ConstantInt::get(CI->getType(), Len - 1);
 
   // If s is a constant pointer pointing to a string literal, we can fold
-  // strlen(s + x) to strlen(s) - x, when x is known to be in the range 
+  // strlen(s + x) to strlen(s) - x, when x is known to be in the range
   // [0, strlen(s)] or the string has a single null terminator '\0' at the end.
-  // We only try to simplify strlen when the pointer s points to an array 
+  // We only try to simplify strlen when the pointer s points to an array
   // of i8. Otherwise, we would need to scale the offset x before doing the
-  // subtraction. This will make the optimization more complex, and it's not 
-  // very useful because calling strlen for a pointer of other types is 
+  // subtraction. This will make the optimization more complex, and it's not
+  // very useful because calling strlen for a pointer of other types is
   // very uncommon.
   if (GEPOperator *GEP = dyn_cast<GEPOperator>(Src)) {
-    if (!isGEPBasedOnPointerToString(GEP))
+    if (!isGEPBasedOnPointerToString(GEP, CharSize))
       return nullptr;
 
-    StringRef Str;
-    if (getConstantStringInfo(GEP->getOperand(0), Str, 0, false)) {
-      size_t NullTermIdx = Str.find('\0');
-      
-      // If the string does not have '\0', leave it to strlen to compute
-      // its length.
-      if (NullTermIdx == StringRef::npos)
-        return nullptr;
-     
+    ConstantDataArraySlice Slice;
+    if (getConstantDataArrayInfo(GEP->getOperand(0), Slice, CharSize)) {
+      uint64_t NullTermIdx;
+      if (Slice.Array == nullptr) {
+        NullTermIdx = 0;
+      } else {
+        NullTermIdx = ~((uint64_t)0);
+        for (uint64_t I = 0, E = Slice.Length; I < E; ++I) {
+          if (Slice.Array->getElementAsInteger(I + Slice.Offset) == 0) {
+            NullTermIdx = I;
+            break;
+          }
+        }
+        // If the string does not have '\0', leave it to strlen to compute
+        // its length.
+        if (NullTermIdx == ~((uint64_t)0))
+          return nullptr;
+      }
+
       Value *Offset = GEP->getOperand(2);
-      unsigned BitWidth = Offset->getType()->getIntegerBitWidth();
-      APInt KnownZero(BitWidth, 0);
-      APInt KnownOne(BitWidth, 0);
-      computeKnownBits(Offset, KnownZero, KnownOne, DL, 0, nullptr, CI, 
-                       nullptr);
-      KnownZero.flipAllBits();
-      size_t ArrSize = 
+      KnownBits Known = computeKnownBits(Offset, DL, 0, nullptr, CI, nullptr);
+      Known.Zero.flipAllBits();
+      uint64_t ArrSize =
              cast<ArrayType>(GEP->getSourceElementType())->getNumElements();
 
-      // KnownZero's bits are flipped, so zeros in KnownZero now represent 
-      // bits known to be zeros in Offset, and ones in KnowZero represent 
+      // KnownZero's bits are flipped, so zeros in KnownZero now represent
+      // bits known to be zeros in Offset, and ones in KnowZero represent
       // bits unknown in Offset. Therefore, Offset is known to be in range
-      // [0, NullTermIdx] when the flipped KnownZero is non-negative and 
+      // [0, NullTermIdx] when the flipped KnownZero is non-negative and
       // unsigned-less-than NullTermIdx.
       //
-      // If Offset is not provably in the range [0, NullTermIdx], we can still 
-      // optimize if we can prove that the program has undefined behavior when 
-      // Offset is outside that range. That is the case when GEP->getOperand(0) 
+      // If Offset is not provably in the range [0, NullTermIdx], we can still
+      // optimize if we can prove that the program has undefined behavior when
+      // Offset is outside that range. That is the case when GEP->getOperand(0)
       // is a pointer to an object whose memory extent is NullTermIdx+1.
-      if ((KnownZero.isNonNegative() && KnownZero.ule(NullTermIdx)) || 
+      if ((Known.Zero.isNonNegative() && Known.Zero.ule(NullTermIdx)) ||
           (GEP->isInBounds() && isa<GlobalVariable>(GEP->getOperand(0)) &&
-           NullTermIdx == ArrSize - 1))
-        return B.CreateSub(ConstantInt::get(CI->getType(), NullTermIdx), 
+           NullTermIdx == ArrSize - 1)) {
+        Offset = B.CreateSExtOrTrunc(Offset, CI->getType());
+        return B.CreateSub(ConstantInt::get(CI->getType(), NullTermIdx),
                            Offset);
+      }
     }
 
     return nullptr;
@@ -489,8 +495,8 @@ Value *LibCallSimplifier::optimizeStrLen(CallInst *CI, IRBuilder<> &B) {
 
   // strlen(x?"foo":"bars") --> x ? 3 : 4
   if (SelectInst *SI = dyn_cast<SelectInst>(Src)) {
-    uint64_t LenTrue = GetStringLength(SI->getTrueValue());
-    uint64_t LenFalse = GetStringLength(SI->getFalseValue());
+    uint64_t LenTrue = GetStringLength(SI->getTrueValue(), CharSize);
+    uint64_t LenFalse = GetStringLength(SI->getFalseValue(), CharSize);
     if (LenTrue && LenFalse) {
       Function *Caller = CI->getParent()->getParent();
       emitOptimizationRemark(CI->getContext(), "simplify-libcalls", *Caller,
@@ -508,6 +514,17 @@ Value *LibCallSimplifier::optimizeStrLen(CallInst *CI, IRBuilder<> &B) {
     return B.CreateZExt(B.CreateLoad(Src, "strlenfirst"), CI->getType());
 
   return nullptr;
+}
+
+Value *LibCallSimplifier::optimizeStrLen(CallInst *CI, IRBuilder<> &B) {
+  return optimizeStringLength(CI, B, 8);
+}
+
+Value *LibCallSimplifier::optimizeWcslen(CallInst *CI, IRBuilder<> &B) {
+  Module &M = *CI->getParent()->getParent()->getParent();
+  unsigned WCharSize = TLI->getWCharSize(M) * 8;
+
+  return optimizeStringLength(CI, B, WCharSize);
 }
 
 Value *LibCallSimplifier::optimizeStrPBrk(CallInst *CI, IRBuilder<> &B) {
@@ -542,7 +559,7 @@ Value *LibCallSimplifier::optimizeStrTo(CallInst *CI, IRBuilder<> &B) {
   if (isa<ConstantPointerNull>(EndPtr)) {
     // With a null EndPtr, this function won't capture the main argument.
     // It would be readonly too, except that it still may write to errno.
-    CI->addAttribute(1, Attribute::NoCapture);
+    CI->addParamAttr(0, Attribute::NoCapture);
   }
 
   return nullptr;
@@ -809,7 +826,7 @@ Value *LibCallSimplifier::optimizeMemMove(CallInst *CI, IRBuilder<> &B) {
 
 // TODO: Does this belong in BuildLibCalls or should all of those similar
 // functions be moved here?
-static Value *emitCalloc(Value *Num, Value *Size, const AttributeSet &Attrs,
+static Value *emitCalloc(Value *Num, Value *Size, const AttributeList &Attrs,
                          IRBuilder<> &B, const TargetLibraryInfo &TLI) {
   LibFunc Func;
   if (!TLI.getLibFunc("calloc", Func) || !TLI.has(Func))
@@ -819,7 +836,7 @@ static Value *emitCalloc(Value *Num, Value *Size, const AttributeSet &Attrs,
   const DataLayout &DL = M->getDataLayout();
   IntegerType *PtrType = DL.getIntPtrType((B.GetInsertBlock()->getContext()));
   Value *Calloc = M->getOrInsertFunction("calloc", Attrs, B.getInt8PtrTy(),
-                                         PtrType, PtrType, nullptr);
+                                         PtrType, PtrType);
   CallInst *CI = B.CreateCall(Calloc, { Num, Size }, "calloc");
 
   if (const auto *F = dyn_cast<Function>(Calloc->stripPointerCasts()))
@@ -846,6 +863,9 @@ static Value *foldMallocMemset(CallInst *Memset, IRBuilder<> &B,
 
   // Is the inner call really malloc()?
   Function *InnerCallee = Malloc->getCalledFunction();
+  if (!InnerCallee)
+    return nullptr;
+
   LibFunc Func;
   if (!TLI.getLibFunc(*InnerCallee, Func) || !TLI.has(Func) ||
       Func != LibFunc_malloc)
@@ -930,6 +950,24 @@ static Value *optimizeUnaryDoubleFP(CallInst *CI, IRBuilder<> &B,
   if (V == nullptr)
     return nullptr;
   
+  // If call isn't an intrinsic, check that it isn't within a function with the
+  // same name as the float version of this call.
+  //
+  // e.g. inline float expf(float val) { return (float) exp((double) val); }
+  //
+  // A similar such definition exists in the MinGW-w64 math.h header file which
+  // when compiled with -O2 -ffast-math causes the generation of infinite loops
+  // where expf is called.
+  if (!Callee->isIntrinsic()) {
+    const Function *F = CI->getFunction();
+    StringRef FName = F->getName();
+    StringRef CalleeName = Callee->getName();
+    if ((FName.size() == (CalleeName.size() + 1)) &&
+        (FName.back() == 'f') &&
+        FName.startswith(CalleeName))
+      return nullptr;
+  }
+
   // Propagate fast-math flags from the existing call to the new call.
   IRBuilder<>::FastMathFlagGuard Guard(B);
   B.setFastMathFlags(CI->getFastMathFlags());
@@ -1219,7 +1257,7 @@ Value *LibCallSimplifier::optimizeExp2(CallInst *CI, IRBuilder<> &B) {
       Module *M = CI->getModule();
       Value *NewCallee =
           M->getOrInsertFunction(TLI->getName(LdExp), Op->getType(),
-                                 Op->getType(), B.getInt32Ty(), nullptr);
+                                 Op->getType(), B.getInt32Ty());
       CallInst *CI = B.CreateCall(NewCallee, {One, LdExpArg});
       if (const Function *F = dyn_cast<Function>(Callee->stripPointerCasts()))
         CI->setCallingConv(F->getCallingConv());
@@ -1434,16 +1472,16 @@ static void insertSinCosCall(IRBuilder<> &B, Function *OrigCallee, Value *Arg,
     // x86_64 can't use {float, float} since that would be returned in both
     // xmm0 and xmm1, which isn't what a real struct would do.
     ResTy = T.getArch() == Triple::x86_64
-    ? static_cast<Type *>(VectorType::get(ArgTy, 2))
-    : static_cast<Type *>(StructType::get(ArgTy, ArgTy, nullptr));
+                ? static_cast<Type *>(VectorType::get(ArgTy, 2))
+                : static_cast<Type *>(StructType::get(ArgTy, ArgTy));
   } else {
     Name = "__sincospi_stret";
-    ResTy = StructType::get(ArgTy, ArgTy, nullptr);
+    ResTy = StructType::get(ArgTy, ArgTy);
   }
 
   Module *M = OrigCallee->getParent();
   Value *Callee = M->getOrInsertFunction(Name, OrigCallee->getAttributes(),
-                                         ResTy, ArgTy, nullptr);
+                                         ResTy, ArgTy);
 
   if (Instruction *ArgInst = dyn_cast<Instruction>(Arg)) {
     // If the argument is an instruction, it must dominate all uses so put our
@@ -1625,14 +1663,14 @@ Value *LibCallSimplifier::optimizeErrorReporting(CallInst *CI, IRBuilder<> &B,
   // Proceedings of PACT'98, Oct. 1998, IEEE
   if (!CI->hasFnAttr(Attribute::Cold) &&
       isReportingError(Callee, CI, StreamArg)) {
-    CI->addAttribute(AttributeSet::FunctionIndex, Attribute::Cold);
+    CI->addAttribute(AttributeList::FunctionIndex, Attribute::Cold);
   }
 
   return nullptr;
 }
 
 static bool isReportingError(Function *Callee, CallInst *CI, int StreamArg) {
-  if (!ColdErrorCalls || !Callee || !Callee->isDeclaration())
+  if (!Callee || !Callee->isDeclaration())
     return false;
 
   if (StreamArg < 0)
@@ -2010,6 +2048,8 @@ Value *LibCallSimplifier::optimizeStringMemoryLibCall(CallInst *CI,
       return optimizeMemMove(CI, Builder);
     case LibFunc_memset:
       return optimizeMemSet(CI, Builder);
+    case LibFunc_wcslen:
+      return optimizeWcslen(CI, Builder);
     default:
       break;
     }
@@ -2160,8 +2200,9 @@ Value *LibCallSimplifier::optimizeCall(CallInst *CI) {
     case LibFunc_round:
       return replaceUnaryCall(CI, Builder, Intrinsic::round);
     case LibFunc_nearbyint:
-    case LibFunc_rint:
       return replaceUnaryCall(CI, Builder, Intrinsic::nearbyint);
+    case LibFunc_rint:
+      return replaceUnaryCall(CI, Builder, Intrinsic::rint);
     case LibFunc_trunc:
       return replaceUnaryCall(CI, Builder, Intrinsic::trunc);
     case LibFunc_acos:

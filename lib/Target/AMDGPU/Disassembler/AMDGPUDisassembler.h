@@ -39,6 +39,8 @@ class Twine;
 class AMDGPUDisassembler : public MCDisassembler {
 private:
   mutable ArrayRef<uint8_t> Bytes;
+  mutable uint32_t Literal;
+  mutable bool HasLiteral;
 
 public:
   AMDGPUDisassembler(const MCSubtargetInfo &STI, MCContext &Ctx) :
@@ -67,6 +69,7 @@ public:
   MCOperand decodeOperand_VS_32(unsigned Val) const;
   MCOperand decodeOperand_VS_64(unsigned Val) const;
   MCOperand decodeOperand_VSrc16(unsigned Val) const;
+  MCOperand decodeOperand_VSrcV216(unsigned Val) const;
 
   MCOperand decodeOperand_VReg_64(unsigned Val) const;
   MCOperand decodeOperand_VReg_96(unsigned Val) const;
@@ -85,6 +88,7 @@ public:
     OPW64,
     OPW128,
     OPW16,
+    OPWV216,
     OPW_LAST_,
     OPW_FIRST_ = OPW32
   };
