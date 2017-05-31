@@ -535,14 +535,14 @@ bool Thumb1FrameLowering::emitPopSpecialFixUp(MachineBasicBlock &MBB,
 
   // Look for a temporary register to use.
   // First, compute the liveness information.
-  LivePhysRegs UsedRegs(STI.getRegisterInfo());
+  const TargetRegisterInfo &TRI = *STI.getRegisterInfo();
+  LivePhysRegs UsedRegs(TRI);
   UsedRegs.addLiveOuts(MBB);
   // The semantic of pristines changed recently and now,
   // the callee-saved registers that are touched in the function
   // are not part of the pristines set anymore.
   // Add those callee-saved now.
-  const TargetRegisterInfo *TRI = STI.getRegisterInfo();
-  const MCPhysReg *CSRegs = TRI->getCalleeSavedRegs(&MF);
+  const MCPhysReg *CSRegs = TRI.getCalleeSavedRegs(&MF);
   for (unsigned i = 0; CSRegs[i]; ++i)
     UsedRegs.addReg(CSRegs[i]);
 
@@ -561,12 +561,12 @@ bool Thumb1FrameLowering::emitPopSpecialFixUp(MachineBasicBlock &MBB,
   // And some temporary register, just in case.
   unsigned TemporaryReg = 0;
   BitVector PopFriendly =
-      TRI->getAllocatableSet(MF, TRI->getRegClass(ARM::tGPRRegClassID));
+      TRI.getAllocatableSet(MF, TRI.getRegClass(ARM::tGPRRegClassID));
   assert(PopFriendly.any() && "No allocatable pop-friendly register?!");
   // Rebuild the GPRs from the high registers because they are removed
   // form the GPR reg class for thumb1.
   BitVector GPRsNoLRSP =
-      TRI->getAllocatableSet(MF, TRI->getRegClass(ARM::hGPRRegClassID));
+      TRI.getAllocatableSet(MF, TRI.getRegClass(ARM::hGPRRegClassID));
   GPRsNoLRSP |= PopFriendly;
   GPRsNoLRSP.reset(ARM::LR);
   GPRsNoLRSP.reset(ARM::SP);
@@ -698,13 +698,14 @@ spillCalleeSavedRegisters(MachineBasicBlock &MBB,
       CopyRegs.insert(ArgReg);
 
   // Push the low registers and lr
+  const MachineRegisterInfo &MRI = MF.getRegInfo();
   if (!LoRegsToSave.empty()) {
     MachineInstrBuilder MIB =
         BuildMI(MBB, MI, DL, TII.get(ARM::tPUSH)).add(predOps(ARMCC::AL));
     for (unsigned Reg : {ARM::R4, ARM::R5, ARM::R6, ARM::R7, ARM::LR}) {
       if (LoRegsToSave.count(Reg)) {
-        bool isKill = !MF.getRegInfo().isLiveIn(Reg);
-        if (isKill)
+        bool isKill = !MRI.isLiveIn(Reg);
+        if (isKill && !MRI.isReserved(Reg))
           MBB.addLiveIn(Reg);
 
         MIB.addReg(Reg, getKillRegState(isKill));
@@ -746,8 +747,8 @@ spillCalleeSavedRegisters(MachineBasicBlock &MBB,
     SmallVector<unsigned, 4> RegsToPush;
     while (HiRegToSave != AllHighRegsEnd && CopyReg != AllCopyRegsEnd) {
       if (HiRegsToSave.count(*HiRegToSave)) {
-        bool isKill = !MF.getRegInfo().isLiveIn(*HiRegToSave);
-        if (isKill)
+        bool isKill = !MRI.isLiveIn(*HiRegToSave);
+        if (isKill && !MRI.isReserved(*HiRegToSave))
           MBB.addLiveIn(*HiRegToSave);
 
         // Emit a MOV from the high reg to the low reg.
