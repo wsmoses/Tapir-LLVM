@@ -1237,7 +1237,6 @@ class RecordVal {
 
 public:
   RecordVal(Init *N, RecTy *T, bool P);
-  RecordVal(StringRef N, RecTy *T, bool P);
 
   StringRef getName() const;
   Init *getNameInit() const { return Name; }
@@ -1340,7 +1339,6 @@ public:
   }
 
   void setName(Init *Name);      // Also updates RecordKeeper.
-  void setName(StringRef Name);  // Also updates RecordKeeper.
 
   ArrayRef<SMLoc> getLoc() const { return Locs; }
 
@@ -1363,10 +1361,6 @@ public:
     return false;
   }
 
-  bool isTemplateArg(StringRef Name) const {
-    return isTemplateArg(StringInit::get(Name));
-  }
-
   const RecordVal *getValue(const Init *Name) const {
     for (const RecordVal &Val : Values)
       if (Val.Name == Name) return &Val;
@@ -1378,22 +1372,16 @@ public:
   }
 
   RecordVal *getValue(const Init *Name) {
-    for (RecordVal &Val : Values)
-      if (Val.Name == Name) return &Val;
-    return nullptr;
+    return const_cast<RecordVal *>(static_cast<const Record *>(this)->getValue(Name));
   }
 
   RecordVal *getValue(StringRef Name) {
-    return getValue(StringInit::get(Name));
+    return const_cast<RecordVal *>(static_cast<const Record *>(this)->getValue(Name));
   }
 
   void addTemplateArg(Init *Name) {
     assert(!isTemplateArg(Name) && "Template arg already defined!");
     TemplateArgs.push_back(Name);
-  }
-
-  void addTemplateArg(StringRef Name) {
-    addTemplateArg(StringInit::get(Name));
   }
 
   void addValue(const RecordVal &RV) {
@@ -1492,7 +1480,7 @@ public:
   /// its value as a string, throwing an exception if the field does not exist
   /// or if the value is not a string.
   ///
-  std::string getValueAsString(StringRef FieldName) const;
+  StringRef getValueAsString(StringRef FieldName) const;
 
   /// This method looks up the specified field and returns
   /// its value as a BitsInit, throwing an exception if the field does not exist
@@ -1522,7 +1510,7 @@ public:
   /// returns its value as a vector of strings, throwing an exception if the
   /// field does not exist or if the value is not the right type.
   ///
-  std::vector<std::string> getValueAsListOfStrings(StringRef FieldName) const;
+  std::vector<StringRef> getValueAsListOfStrings(StringRef FieldName) const;
 
   /// This method looks up the specified field and returns its
   /// value as a Record, throwing an exception if the field does not exist or if

@@ -86,6 +86,7 @@ void llvm::CloneIntoFunction(Function *NewFunc, const Function *OldFunc,
                              SmallVectorImpl<ReturnInst *> &Returns,
                              const StringRef NameSuffix,
                              SmallPtrSetImpl<BasicBlock *> *ExitBlocks,
+                             DISubprogram *SP,
                              ClonedCodeInfo *CodeInfo,
                              ValueMapTypeRemapper *TypeMapper,
                              ValueMaterializer *Materializer) {
@@ -95,7 +96,10 @@ void llvm::CloneIntoFunction(Function *NewFunc, const Function *OldFunc,
     for (BasicBlock *Pred : predecessors(EB))
       ExitBlockPreds.insert(Pred);
 
-  DenseMap<const MDNode *, MDNode *> DbgCache;
+  // When we remap instructions, we want to avoid duplicating inlined
+  // DISubprograms, so record all subprograms we find as we duplicate
+  // instructions and then freeze them in the MD map.
+  DebugInfoFinder DIFinder;
 
   // Loop over all of the basic blocks in the function, cloning them as
   // appropriate.
@@ -106,7 +110,7 @@ void llvm::CloneIntoFunction(Function *NewFunc, const Function *OldFunc,
 
     // Create a new basic block and copy instructions into it!
     BasicBlock *CBB = CloneBasicBlock(BB, VMap, NameSuffix, NewFunc, CodeInfo,
-                                      &DbgCache);
+                                      SP ? &DIFinder : nullptr);
 
     // Add basic block mapping.
     VMap[BB] = CBB;
@@ -150,6 +154,12 @@ void llvm::CloneIntoFunction(Function *NewFunc, const Function *OldFunc,
       }
     }
   }
+
+  // for (DISubprogram *ISP : DIFinder.subprograms()) {
+  //   if (ISP != SP) {
+  //     VMap.MD()[ISP].reset(ISP);
+  //   }
+  // }
 
   // Loop over all of the instructions in the function, fixing up operand
   // references as we go.  This uses VMap to do all the hard work.
@@ -245,6 +255,7 @@ Function *llvm::CreateHelper(const ValueSet &Inputs,
 
   SmallVector<AttributeSet, 4> NewArgAttrs(NewFunc->arg_size());
   AttributeList OldAttrs = OldFunc->getAttributes();
+
   // Clone any argument attributes
   for (Argument &OldArg : OldFunc->args()) {
     // Check if we're passing this argument to the helper.  We check Inputs here
@@ -263,30 +274,31 @@ Function *llvm::CreateHelper(const ValueSet &Inputs,
                          AttributeSet(), NewArgAttrs));
 
   // Clone the metadata from the old function into the new.
+  bool MustCloneSP =
+      OldFunc->getParent() && OldFunc->getParent() == NewFunc->getParent();
+  DISubprogram *SP = OldFunc->getSubprogram();
+  if (SP) {
+    assert(!MustCloneSP || ModuleLevelChanges);
+    // Add mappings for some DebugInfo nodes that we don't want duplicated
+    // even if they're distinct.
+    auto &MD = VMap.MD();
+    MD[SP->getUnit()].reset(SP->getUnit());
+    MD[SP->getType()].reset(SP->getType());
+    MD[SP->getFile()].reset(SP->getFile());
+    // If we're not cloning into the same module, no need to clone the
+    // subprogram
+    if (!MustCloneSP)
+      MD[SP].reset(SP);
+  }
+
   SmallVector<std::pair<unsigned, MDNode *>, 1> MDs;
   OldFunc->getAllMetadata(MDs);
   for (auto MD : MDs) {
-    MDNode *NewMD;
-    bool MustCloneSP =
-        (MD.first == LLVMContext::MD_dbg && OldFunc->getParent() &&
-         OldFunc->getParent() == NewFunc->getParent());
-    if (MustCloneSP) {
-      auto *SP = cast<DISubprogram>(MD.second);
-      // TODO: Look for ways to refine debug information for outlined function.
-      NewMD = DISubprogram::getDistinct(
-          NewFunc->getContext(), SP->getScope(), SP->getName(),
-          SP->getLinkageName(), SP->getFile(), SP->getLine(), SP->getType(),
-          SP->isLocalToUnit(), SP->isDefinition(), SP->getScopeLine(),
-          SP->getContainingType(), SP->getVirtuality(), SP->getVirtualIndex(),
-          SP->getThisAdjustment(), SP->getFlags(), SP->isOptimized(),
-          SP->getUnit(), SP->getTemplateParams(), SP->getDeclaration(),
-          SP->getVariables(), SP->getThrownTypes());
-    } else
-      NewMD =
-          MapMetadata(MD.second, VMap,
-                      ModuleLevelChanges ? RF_None : RF_NoModuleLevelChanges,
-                      TypeMapper, Materializer);
-    NewFunc->addMetadata(MD.first, *NewMD);
+    NewFunc->addMetadata(
+        MD.first,
+        *MapMetadata(MD.second, VMap,
+                     ModuleLevelChanges ? RF_None : RF_NoModuleLevelChanges,
+                     TypeMapper, Materializer));
   }
 
   // We assume that the Helper reads and writes its arguments.  If the parent
@@ -318,7 +330,7 @@ Function *llvm::CreateHelper(const ValueSet &Inputs,
 
   // Clone Blocks into the new function.
   CloneIntoFunction(NewFunc, OldFunc, Blocks, VMap, ModuleLevelChanges,
-                    Returns, NameSuffix, ExitBlocks, CodeInfo,
+                    Returns, NameSuffix, ExitBlocks, SP, CodeInfo,
                     TypeMapper, Materializer);
 
   // Add a branch in the new function to the cloned Header.

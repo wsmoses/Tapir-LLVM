@@ -61,7 +61,6 @@
 #include "llvm/DebugInfo/PDB/PDBSymbolExe.h"
 #include "llvm/DebugInfo/PDB/PDBSymbolFunc.h"
 #include "llvm/DebugInfo/PDB/PDBSymbolThunk.h"
-#include "llvm/ObjectYAML/CodeViewYAML.h"
 #include "llvm/Support/BinaryByteStream.h"
 #include "llvm/Support/COM.h"
 #include "llvm/Support/CommandLine.h"
@@ -536,8 +535,10 @@ static void yamlToPdb(StringRef Path) {
       ExitOnErr(DbiBuilder.addModuleSourceFile(MI.Mod, S));
     if (MI.Modi.hasValue()) {
       const auto &ModiStream = *MI.Modi;
-      for (auto Symbol : ModiStream.Symbols)
-        ModiBuilder.addSymbol(Symbol.toCodeViewSymbol(Allocator));
+      for (auto Symbol : ModiStream.Symbols) {
+        ModiBuilder.addSymbol(
+            Symbol.toCodeViewSymbol(Allocator, CodeViewContainer::Pdb));
+      }
     }
     if (MI.FileLineInfo.hasValue()) {
       const auto &FLI = *MI.FileLineInfo;

@@ -363,6 +363,32 @@ public:
     }
   }
 
+  /// Calls the callback for each entry in the modulePaths StringMap that
+  /// should be written to the module path string table. This hides the details
+  /// of whether they are being pulled from the entire index or just those in a
+  /// provided ModuleToSummariesForIndex map.
+  void
+  forEachModule(std::function<
+                void(const StringMapEntry<std::pair<uint64_t, ModuleHash>> &)>
+                    Callback) {
+    if (ModuleToSummariesForIndex) {
+      for (const auto &M : *ModuleToSummariesForIndex) {
+        const auto &MPI = Index.modulePaths().find(M.first);
+        if (MPI == Index.modulePaths().end()) {
+          // This should only happen if the bitcode file was empty, in which
+          // case we shouldn't be importing (the ModuleToSummariesForIndex
+          // would only include the module we are writing and index for).
+          assert(ModuleToSummariesForIndex->size() == 1);
+          continue;
+        }
+        Callback(*MPI);
+      }
+    } else {
+      for (const auto &MPSE : Index.modulePaths())
+        Callback(MPSE);
+    }
+  }
+
   /// Main entry point for writing a combined index to bitcode.
   void write();
 
@@ -370,26 +396,10 @@ private:
   void writeModStrings();
   void writeCombinedGlobalValueSummary();
 
-  /// Indicates whether the provided \p ModulePath should be written into
-  /// the module string table, e.g. if full index written or if it is in
-  /// the provided subset.
-  bool doIncludeModule(StringRef ModulePath) {
-    return !ModuleToSummariesForIndex ||
-           ModuleToSummariesForIndex->count(ModulePath);
-  }
-
-  bool hasValueId(GlobalValue::GUID ValGUID) {
-    const auto &VMI = GUIDToValueIdMap.find(ValGUID);
-    return VMI != GUIDToValueIdMap.end();
-  }
-  void assignValueId(GlobalValue::GUID ValGUID) {
-    unsigned &ValueId = GUIDToValueIdMap[ValGUID];
-    if (ValueId == 0)
-      ValueId = ++GlobalValueId;
-  }
-  unsigned getValueId(GlobalValue::GUID ValGUID) {
+  Optional<unsigned> getValueId(GlobalValue::GUID ValGUID) {
     auto VMI = GUIDToValueIdMap.find(ValGUID);
-    assert(VMI != GUIDToValueIdMap.end());
+    if (VMI == GUIDToValueIdMap.end())
+      return None;
     return VMI->second;
   }
   std::map<GlobalValue::GUID, unsigned> &valueIds() { return GUIDToValueIdMap; }
@@ -872,7 +882,7 @@ static uint64_t getEncodedGVSummaryFlags(GlobalValueSummary::GVFlags Flags) {
   uint64_t RawFlags = 0;
 
   RawFlags |= Flags.NotEligibleToImport; // bool
-  RawFlags |= (Flags.LiveRoot << 1);
+  RawFlags |= (Flags.Live << 1);
   // Linkage don't need to be remapped at that time for the summary. Any future
   // change to the getEncodedLinkage() function will need to be taken into
   // account here as well.
@@ -3179,41 +3189,41 @@ void IndexBitcodeWriter::writeModStrings() {
   unsigned AbbrevHash = Stream.EmitAbbrev(std::move(Abbv));
 
   SmallVector<unsigned, 64> Vals;
-  for (const auto &MPSE : Index.modulePaths()) {
-    if (!doIncludeModule(MPSE.getKey()))
-      continue;
-    StringEncoding Bits =
-        getStringEncoding(MPSE.getKey().data(), MPSE.getKey().size());
-    unsigned AbbrevToUse = Abbrev8Bit;
-    if (Bits == SE_Char6)
-      AbbrevToUse = Abbrev6Bit;
-    else if (Bits == SE_Fixed7)
-      AbbrevToUse = Abbrev7Bit;
+  forEachModule(
+      [&](const StringMapEntry<std::pair<uint64_t, ModuleHash>> &MPSE) {
+        StringEncoding Bits =
+            getStringEncoding(MPSE.getKey().data(), MPSE.getKey().size());
+        unsigned AbbrevToUse = Abbrev8Bit;
+        if (Bits == SE_Char6)
+          AbbrevToUse = Abbrev6Bit;
+        else if (Bits == SE_Fixed7)
+          AbbrevToUse = Abbrev7Bit;
 
-    Vals.push_back(MPSE.getValue().first);
+        Vals.push_back(MPSE.getValue().first);
 
-    for (const auto P : MPSE.getKey())
-      Vals.push_back((unsigned char)P);
+        for (const auto P : MPSE.getKey())
+          Vals.push_back((unsigned char)P);
 
-    // Emit the finished record.
-    Stream.EmitRecord(bitc::MST_CODE_ENTRY, Vals, AbbrevToUse);
+        // Emit the finished record.
+        Stream.EmitRecord(bitc::MST_CODE_ENTRY, Vals, AbbrevToUse);
 
-    Vals.clear();
-    // Emit an optional hash for the module now
-    auto &Hash = MPSE.getValue().second;
-    bool AllZero = true; // Detect if the hash is empty, and do not generate it
-    for (auto Val : Hash) {
-      if (Val)
-        AllZero = false;
-      Vals.push_back(Val);
-    }
-    if (!AllZero) {
-      // Emit the hash record.
-      Stream.EmitRecord(bitc::MST_CODE_HASH, Vals, AbbrevHash);
-    }
+        Vals.clear();
+        // Emit an optional hash for the module now
+        auto &Hash = MPSE.getValue().second;
+        bool AllZero =
+            true; // Detect if the hash is empty, and do not generate it
+        for (auto Val : Hash) {
+          if (Val)
+            AllZero = false;
+          Vals.push_back(Val);
+        }
+        if (!AllZero) {
+          // Emit the hash record.
+          Stream.EmitRecord(bitc::MST_CODE_HASH, Vals, AbbrevHash);
+        }
 
-    Vals.clear();
-  }
+        Vals.clear();
+      });
   Stream.ExitBlock();
 }
 
@@ -3435,12 +3445,6 @@ void IndexBitcodeWriter::writeCombinedGlobalValueSummary() {
   Stream.EnterSubblock(bitc::GLOBALVAL_SUMMARY_BLOCK_ID, 3);
   Stream.EmitRecord(bitc::FS_VERSION, ArrayRef<uint64_t>{INDEX_VERSION});
 
-  // Create value IDs for undefined references.
-  forEachSummary([&](GVInfo I) {
-    for (auto &RI : I.second->refs())
-      assignValueId(RI.getGUID());
-  });
-
   for (const auto &GVI : valueIds()) {
     Stream.EmitRecord(bitc::FS_VALUE_GUID,
                       ArrayRef<uint64_t>{GVI.second, GVI.first});
@@ -3514,9 +3518,9 @@ void IndexBitcodeWriter::writeCombinedGlobalValueSummary() {
     GlobalValueSummary *S = I.second;
     assert(S);
 
-    assert(hasValueId(I.first));
-    unsigned ValueId = getValueId(I.first);
-    SummaryToValueIdMap[S] = ValueId;
+    auto ValueId = getValueId(I.first);
+    assert(ValueId);
+    SummaryToValueIdMap[S] = *ValueId;
 
     if (auto *AS = dyn_cast<AliasSummary>(S)) {
       // Will process aliases as a post-pass because the reader wants all
@@ -3526,11 +3530,14 @@ void IndexBitcodeWriter::writeCombinedGlobalValueSummary() {
     }
 
     if (auto *VS = dyn_cast<GlobalVarSummary>(S)) {
-      NameVals.push_back(ValueId);
+      NameVals.push_back(*ValueId);
       NameVals.push_back(Index.getModuleId(VS->modulePath()));
       NameVals.push_back(getEncodedGVSummaryFlags(VS->flags()));
       for (auto &RI : VS->refs()) {
-        NameVals.push_back(getValueId(RI.getGUID()));
+        auto RefValueId = getValueId(RI.getGUID());
+        if (!RefValueId)
+          continue;
+        NameVals.push_back(*RefValueId);
       }
 
       // Emit the finished record.
@@ -3544,15 +3551,22 @@ void IndexBitcodeWriter::writeCombinedGlobalValueSummary() {
     auto *FS = cast<FunctionSummary>(S);
     writeFunctionTypeMetadataRecords(Stream, FS);
 
-    NameVals.push_back(ValueId);
+    NameVals.push_back(*ValueId);
     NameVals.push_back(Index.getModuleId(FS->modulePath()));
     NameVals.push_back(getEncodedGVSummaryFlags(FS->flags()));
     NameVals.push_back(FS->instCount());
-    NameVals.push_back(FS->refs().size());
+    // Fill in below
+    NameVals.push_back(0);
 
+    unsigned Count = 0;
     for (auto &RI : FS->refs()) {
-      NameVals.push_back(getValueId(RI.getGUID()));
+      auto RefValueId = getValueId(RI.getGUID());
+      if (!RefValueId)
+        continue;
+      NameVals.push_back(*RefValueId);
+      Count++;
     }
+    NameVals[4] = Count;
 
     bool HasProfileData = false;
     for (auto &EI : FS->calls()) {
@@ -3565,15 +3579,19 @@ void IndexBitcodeWriter::writeCombinedGlobalValueSummary() {
       // If this GUID doesn't have a value id, it doesn't have a function
       // summary and we don't need to record any calls to it.
       GlobalValue::GUID GUID = EI.first.getGUID();
-      if (!hasValueId(GUID)) {
+      auto CallValueId = getValueId(GUID);
+      if (!CallValueId) {
         // For SamplePGO, the indirect call targets for local functions will
         // have its original name annotated in profile. We try to find the
         // corresponding PGOFuncName as the GUID.
         GUID = Index.getGUIDFromOriginalID(GUID);
-        if (GUID == 0 || !hasValueId(GUID))
+        if (GUID == 0)
+          continue;
+        CallValueId = getValueId(GUID);
+        if (!CallValueId)
           continue;
       }
-      NameVals.push_back(getValueId(GUID));
+      NameVals.push_back(*CallValueId);
       if (HasProfileData)
         NameVals.push_back(static_cast<uint8_t>(EI.second.Hotness));
     }

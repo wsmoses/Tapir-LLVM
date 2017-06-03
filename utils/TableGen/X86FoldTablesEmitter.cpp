@@ -101,6 +101,11 @@ const char *const NoFoldSet[] = {
     "BTS16rr", "BTS32rr", "BTS64rr",
     "BTS16mr", "BTS32mr", "BTS64mr",
 
+    // insertps cannot be folded without adjusting the immediate. There's custom
+    // code to handle it in X86InstrInfo.cpp, ignore it here.
+    "INSERTPSrr", "INSERTPSrm",
+    "VINSERTPSrr", "VINSERTPSrm", "VINSERTPSZrr", "VINSERTPSZrm",
+
     // Memory folding is enabled only when optimizing for size by DAG
     // patterns only. (issue detailed in D28744 review)
     "VCVTSS2SDrm",            "VCVTSS2SDrr",
@@ -292,7 +297,7 @@ getMemOperandSize(const Record *MemRec, const bool IntrinsicSensitive = false) {
         (MemRec->getName() == "sdmem" || MemRec->getName() == "ssmem"))
       return 128;
 
-    std::string Name =
+    StringRef Name =
         MemRec->getValueAsDef("ParserMatchClass")->getValueAsString("Name");
     if (Name == "Mem8")
       return 8;
@@ -368,7 +373,7 @@ static inline const CodeGenInstruction *
 getAltRegInst(const CodeGenInstruction *I, const RecordKeeper &Records,
               const CodeGenTarget &Target) {
 
-  std::string AltRegInstStr = I->TheDef->getValueAsString("FoldGenRegForm");
+  StringRef AltRegInstStr = I->TheDef->getValueAsString("FoldGenRegForm");
   Record *AltRegInstRec = Records.getDef(AltRegInstStr);
   assert(AltRegInstRec &&
          "Alternative register form instruction def not found");

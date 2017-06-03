@@ -47,6 +47,7 @@ void CloneIntoFunction(Function *NewFunc, const Function *OldFunc,
                        SmallVectorImpl<ReturnInst *> &Returns,
                        const StringRef NameSuffix,
                        SmallPtrSetImpl<BasicBlock *> *ExitBlocks = nullptr,
+                       DISubprogram *SP = nullptr,
                        ClonedCodeInfo *CodeInfo = nullptr,
                        ValueMapTypeRemapper *TypeMapper = nullptr,
                        ValueMaterializer *Materializer = nullptr);

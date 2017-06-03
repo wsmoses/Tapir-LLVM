@@ -1158,7 +1158,7 @@ Function *llvm::cilk::extractDetachBodyToFunction(DetachInst &detach,
     extracted = CreateHelper(Inputs, Outputs, blocks,
                              Spawned, Detacher, Continue,
                              VMap, F.getParent(),
-                             /*ModuleLevelChanges=*/false, Returns, ".cilk",
+                             F.getSubprogram() != nullptr, Returns, ".cilk",
                              &ExitBlocks, nullptr, nullptr, nullptr);
 
     assert(Returns.empty() && "Returns cloned when cloning detached CFG.");

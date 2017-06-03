@@ -1200,8 +1200,8 @@ bool DACLoopSpawning::processLoop() {
 
     Helper = CreateHelper(Inputs, Outputs, LoopBlocks,
                           Header, Preheader, ExitBlock,
-                          VMap, Header->getParent()->getParent(),
-                          /*ModuleLevelChanges=*/false, Returns, ".ls",
+                          VMap, M,
+                          F->getSubprogram() != nullptr, Returns, ".ls",
                           &ExitsToSplit, nullptr, nullptr, nullptr);
 
     assert(Returns.empty() && "Returns cloned when cloning loop.");
@@ -1366,7 +1366,7 @@ bool DACLoopSpawning::processLoop() {
 
   // Add alignment assumptions to arguments of helper, based on alignment of
   // values in old function.
-  AddAlignmentAssumptions(Header->getParent(), Inputs, VMap,
+  AddAlignmentAssumptions(F, Inputs, VMap,
                           Preheader->getTerminator(), AC, DT);
 
   // Add call to new helper function in original function.
@@ -1768,8 +1768,8 @@ bool CilkABILoopSpawning::processLoop() {
 
     Helper = CreateHelper(Inputs, Outputs, L->getBlocks(),
                           Header, Preheader, ExitBlock/*L->getExitBlock()*/,
-                          VMap, Header->getParent()->getParent(),
-                          /*ModuleLevelChanges=*/false, Returns, ".ls",
+                          VMap, M,
+                          F->getSubprogram() != nullptr, Returns, ".ls",
                           nullptr, nullptr, nullptr);
 
     assert(Returns.empty() && "Returns cloned when cloning loop.");
