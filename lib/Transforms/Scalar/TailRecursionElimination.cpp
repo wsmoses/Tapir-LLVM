@@ -669,6 +669,38 @@ eliminateRecursiveTailCall(CallInst *CI, ReturnInst *Ret, BasicBlock *&OldEntry,
   return true;
 }
 
+static void getReturnBlocksToSync(
+    BasicBlock *Entry, SyncInst *Sync,
+    SmallVectorImpl<BasicBlock *> &ReturnBlocksToSync) {
+  // Walk the CFG from the entry block, stopping traversal at any sync within
+  // the same region.  Record all blocks found that are terminated by a return
+  // instruction.
+  Value *SyncRegion = Sync->getSyncRegion();
+  SmallVector<BasicBlock *, 8> WorkList;
+  SmallPtrSet<BasicBlock *, 8> Visited;
+  WorkList.push_back(Entry);
+  while (!WorkList.empty()) {
+    BasicBlock *BB = WorkList.pop_back_val();
+    if (!Visited.insert(BB).second)
+      continue;
+
+    // Skip paths that are synced within the same region.
+    if (SyncInst *SI = dyn_cast<SyncInst>(BB->getTerminator()))
+      if (SI->getSyncRegion() == SyncRegion)
+        continue;
+
+    // If we find a return, we must add a sync before it if we eliminate a
+    // recursive tail call.
+    if (isa<ReturnInst>(BB->getTerminator()))
+      ReturnBlocksToSync.push_back(BB);
+
+    // Queue up successors to search.
+    for (BasicBlock *Succ : successors(BB))
+      if (Succ != Sync->getParent())
+        WorkList.push_back(Succ);
+  }
+}
+
 static bool foldReturnAndProcessPred(BasicBlock *BB, ReturnInst *Ret,
                                      BasicBlock *&OldEntry,
                                      bool &TailCallsAreMarkedTail,
@@ -682,12 +714,15 @@ static bool foldReturnAndProcessPred(BasicBlock *BB, ReturnInst *Ret,
   // predecessors and perform TRC there. Look for predecessors that end
   // in unconditional branch and recursive call(s).
   SmallVector<BranchInst*, 8> UncondBranchPreds;
+  SmallVector<SyncInst*, 8> SyncPreds;
   for (pred_iterator PI = pred_begin(BB), E = pred_end(BB); PI != E; ++PI) {
     BasicBlock *Pred = *PI;
     TerminatorInst *PTI = Pred->getTerminator();
     if (BranchInst *BI = dyn_cast<BranchInst>(PTI))
       if (BI->isUnconditional())
         UncondBranchPreds.push_back(BI);
+    if (SyncInst *SI = dyn_cast<SyncInst>(PTI))
+      SyncPreds.push_back(SI);
   }
 
   while (!UncondBranchPreds.empty()) {
@@ -711,7 +746,67 @@ static bool foldReturnAndProcessPred(BasicBlock *BB, ReturnInst *Ret,
       Change = true;
     }
   }
+  BasicBlock *OldEntryBlock = &BB->getParent()->getEntryBlock();
+  while (!SyncPreds.empty()) {
+    SyncInst *SI = SyncPreds.pop_back_val();
+    BasicBlock *Pred = SI->getParent();
+    if (CallInst *CI =
+        findTRECandidate(SI, CannotTailCallElimCallsMarkedTail, TTI)) {
+      // Check that all instructions between the candidate tail call and the
+      // sync can be moved above the call.  In particular, we disallow
+      // accumulator recursion elimination for tail calls before a sync.
+      BasicBlock::iterator BBI(CI);
+      for (++BBI; &*BBI != SI; ++BBI)
+        if (!canMoveAboveCall(&*BBI, CI))
+          break;
+      if (&*BBI != SI)
+        continue;
 
+      // Get the sync region for this sync.
+      Value *SyncRegion = SI->getSyncRegion();
+
+      // Check that the sync region begins in the entry block of the function.
+      if (cast<Instruction>(SyncRegion)->getParent() != OldEntryBlock) {
+        DEBUG(dbgs() << "Cannot eliminate tail call " << *CI <<
+              ": sync region does not start in entry block.");
+        continue;
+      }
+
+      // Get returns reachable from newly created loop.
+      SmallVector<BasicBlock *, 8> ReturnBlocksToSync;
+      getReturnBlocksToSync(OldEntryBlock, SI, ReturnBlocksToSync);
+
+      // Remove the sync.
+      ReturnInst *RI = FoldReturnIntoUncondBranch(Ret, BB, Pred);
+
+      // Cleanup: if all predecessors of BB have been eliminated by
+      // FoldReturnIntoUncondBranch, delete it.  It is important to empty it,
+      // because the ret instruction in there is still using a value which
+      // eliminateRecursiveTailCall will attempt to remove.
+      if (!BB->hasAddressTaken() && pred_begin(BB) == pred_end(BB))
+        BB->eraseFromParent();
+
+      bool EliminatedTail =
+        eliminateRecursiveTailCall(CI, RI, OldEntry, TailCallsAreMarkedTail,
+                                   ArgumentPHIs);
+
+      // If a recursive tail was eliminated, fix up the syncs and sync region in
+      // the CFG.
+      if (EliminatedTail) {
+        // Move the sync region start to the new entry block.
+        BasicBlock *NewEntry = &OldEntry->getParent()->getEntryBlock();
+        cast<Instruction>(SyncRegion)->moveBefore(&*(NewEntry->begin()));
+        // Insert syncs before relevant return blocks.
+        for (BasicBlock *RetBlock : ReturnBlocksToSync) {
+          BasicBlock *NewRetBlock = SplitBlock(RetBlock,
+                                               RetBlock->getTerminator());
+          ReplaceInstWithInst(RetBlock->getTerminator(),
+                              SyncInst::Create(NewRetBlock, SyncRegion));
+        }
+        Change = true;
+      }
+    }
+  }
   return Change;
 }
 
@@ -728,81 +823,20 @@ static bool processReturningBlock(ReturnInst *Ret, BasicBlock *&OldEntry,
                                     ArgumentPHIs);
 }
 
-static bool removeSyncs(Function& F) {
-  bool removedSync = false;
-  if (!F.getFunctionType()->getReturnType()->isVoidTy()) return false;
-  for (Function::iterator BBI = F.begin(), E = F.end(); BBI != E; /*in loop*/) {
-    BasicBlock *BB = &*BBI++;
-    if (ReturnInst* ret = dyn_cast<ReturnInst>(BB->getTerminator())) {
-      bool canDesync = false;
-      for (auto& a : *BB) {
-        if (a.mayReadOrWriteMemory()) {
-          canDesync = true; break;
-        }
-      }
-      if (canDesync) continue;
-
-      SmallVector<BasicBlock *, 32> blocks;
-      for (pred_iterator i = pred_begin(BB), e = pred_end(BB); i != e; ) blocks.push_back(*i++);
-
-      for (auto Pred : blocks) {
-        auto term = Pred->getTerminator();
-        if (isa<SyncInst>(term)) {
-          removedSync = true;
-          term->eraseFromParent();
-          IRBuilder<> build(Pred);
-          build.CreateBr(BB);
-          if (!BB->getFirstNonPHIOrDbg()->isTerminator()) continue; // todo consider removing this need
-          FoldReturnIntoUncondBranch(ret, BB, Pred);
-        } else if(isa<BranchInst>(term) && term->getNumSuccessors()==1) {
-          if (!BB->getFirstNonPHIOrDbg()->isTerminator()) continue; // todo consider removing this need
-          FoldReturnIntoUncondBranch(ret, BB, Pred);
-        }
-      }
-
-      while (auto up = BB->getUniquePredecessor()) {
-        if(llvm::MergeBlockIntoPredecessor(BB)) { BB = up; BBI = F.begin(); }
-        else break;
-      }
-    }
-  }
-  return removedSync;
-}
-
-static void recreateSyncs(bool removedSync, Function &F) {
-  if (removedSync) {
-    SmallVector<BasicBlock *, 32> blocks;
-    for (BasicBlock& BB : F) { blocks.push_back(&BB); }
-
-    for (BasicBlock* BB : blocks) {
-      if (ReturnInst *Ret = dyn_cast<ReturnInst>(BB->getTerminator())) {
-        auto tret = BB->splitBasicBlock(Ret);
-        BB->getTerminator()->eraseFromParent();
-        IRBuilder<> build(BB);
-        build.CreateSync(tret);
-      }
-    }
-  }
-}
-
 static bool eliminateTailRecursion(Function &F, const TargetTransformInfo *TTI) {
   if (F.getFnAttribute("disable-tail-calls").getValueAsString() == "true")
     return false;
+
+  bool MadeChange = false;
+  bool AllCallsAreTailCalls = false;
+  MadeChange |= markTails(F, AllCallsAreTailCalls);
+  if (!AllCallsAreTailCalls)
+    return MadeChange;
 
   // If this function is a varargs function, we won't be able to PHI the args
   // right, so don't even try to convert it...
   if (F.getFunctionType()->isVarArg())
     return false;
-
-  bool removedSync = removeSyncs(F);
-
-  bool MadeChange = false;
-  bool AllCallsAreTailCalls = false;
-  MadeChange |= markTails(F, AllCallsAreTailCalls);
-  if (!AllCallsAreTailCalls) {
-    recreateSyncs(removedSync, F);
-    return MadeChange;
-  }
 
   BasicBlock *OldEntry = nullptr;
   bool TailCallsAreMarkedTail = false;
@@ -846,7 +880,6 @@ static bool eliminateTailRecursion(Function &F, const TargetTransformInfo *TTI) 
     }
   }
 
-  recreateSyncs(removedSync, F);
   return MadeChange;
 }
 

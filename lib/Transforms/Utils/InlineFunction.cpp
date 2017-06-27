@@ -44,6 +44,7 @@
 #include "llvm/IR/Module.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Transforms/Utils/Local.h"
+#include "llvm/Transforms/Utils/TapirUtils.h"
 #include <algorithm>
 
 using namespace llvm;
@@ -1788,6 +1789,23 @@ bool llvm::InlineFunction(CallSite CS, InlineFunctionInfo &IFI,
     DIBuilder DIB(*Caller->getParent());
     for (auto &AI : IFI.StaticAllocas)
       replaceDbgDeclareForAlloca(AI, AI, DIB, /*Deref=*/false);
+
+    // Move any syncregion_start's into the entry basic block.
+    for (BasicBlock::iterator I = FirstNewBlock->begin(),
+         E = FirstNewBlock->end(); I != E; ) {
+      IntrinsicInst *II = dyn_cast<IntrinsicInst>(I++);
+      if (!II) continue;
+      if (Intrinsic::syncregion_start != II->getIntrinsicID())
+        continue;
+
+      while (isa<IntrinsicInst>(I) &&
+             Intrinsic::syncregion_start ==
+             cast<IntrinsicInst>(I)->getIntrinsicID())
+        ++I;
+
+      DetachedCtxEntryBlock->getInstList().splice(
+          InsertPoint, FirstNewBlock->getInstList(), II->getIterator(), I);
+    }
   }
 
   bool InlinedMustTailCalls = false, InlinedDeoptimizeCalls = false;

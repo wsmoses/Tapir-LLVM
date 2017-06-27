@@ -58,7 +58,8 @@ struct SpawnUnswitch : public FunctionPass {
                   break;
                 }
                 for (BasicBlock *PredPred : predecessors(Pred)) {
-                  if (isa<DetachInst>(PredPred->getTerminator())) { // outer spawn
+                  if (DetachInst *DI = dyn_cast<DetachInst>(PredPred->getTerminator())) { // outer spawn
+                    Value *SyncRegion = DI->getSyncRegion();
                     effective = true;
                     // move cmp instruction to outside spawn
                     Instruction *pi = PredPred->getTerminator();
@@ -70,7 +71,7 @@ struct SpawnUnswitch : public FunctionPass {
                     ReplaceInstWithInst(PredPred->getTerminator(), replaceDetach);
 
                     // detach now goes straight to body
-                    DetachInst* newDetach = DetachInst::Create(body, end);
+                    DetachInst* newDetach = DetachInst::Create(body, end, SyncRegion);
                     ReplaceInstWithInst(Pred->getTerminator(), newDetach);
                   }
                 }

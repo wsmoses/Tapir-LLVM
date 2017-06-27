@@ -50,6 +50,7 @@
 #include "llvm/Transforms/Tapir/Outline.h"
 #include "llvm/Transforms/Utils/PromoteMemToReg.h"
 #include "llvm/Transforms/Utils/LoopUtils.h"
+#include "llvm/Transforms/Utils/TapirUtils.h"
 #include "llvm/Transforms/Utils/ValueMapper.h"
 #include <utility>
 
@@ -412,6 +413,7 @@ protected:
                                      PHINode *CanonicalIV,
                                      Argument *Limit,
                                      Argument *Grainsize,
+                                     Instruction *SyncRegion,
                                      DominatorTree *DT,
                                      LoopInfo *LI,
                                      bool CanonicalIVFlagNUW = false,
@@ -675,6 +677,7 @@ void DACLoopSpawning::implementDACIterSpawnOnHelper(Function *Helper,
                                                     PHINode *CanonicalIV,
                                                     Argument *Limit,
                                                     Argument *Grainsize,
+                                                    Instruction *SyncRegion,
                                                     DominatorTree *DT,
                                                     LoopInfo *LI,
                                                     bool CanonicalIVFlagNUW,
@@ -697,7 +700,7 @@ void DACLoopSpawning::implementDACIterSpawnOnHelper(Function *Helper,
   if (&(Helper->getEntryBlock()) == Preheader)
     // Split the entry block.  We'll want to create a backedge into
     // the split block later.
-    DACHead = SplitBlock(Preheader, &(Preheader->front()), DT, LI);
+    DACHead = SplitBlock(Preheader, Preheader->getTerminator(), DT, LI);
 
   BasicBlock *RecurHead, *RecurDet, *RecurCont;
   Value *IterCount;
@@ -804,12 +807,12 @@ void DACLoopSpawning::implementDACIterSpawnOnHelper(Function *Helper,
   {
     IRBuilder<> Builder(RecurHead->getTerminator());
     // Create the detach.
-    DetachInst *DI = Builder.CreateDetach(RecurDet, RecurCont);
+    DetachInst *DI = Builder.CreateDetach(RecurDet, RecurCont, SyncRegion);
     DI->setDebugLoc(Header->getTerminator()->getDebugLoc());
     RecurHead->getTerminator()->eraseFromParent();
     // Create the reattach.
     Builder.SetInsertPoint(RecurDet->getTerminator());
-    ReattachInst *RI = Builder.CreateReattach(RecurCont);
+    ReattachInst *RI = Builder.CreateReattach(RecurCont, SyncRegion);
     RI->setDebugLoc(Header->getTerminator()->getDebugLoc());
     RecurDet->getTerminator()->eraseFromParent();
   }
@@ -1083,6 +1086,13 @@ bool DACLoopSpawning::processLoop() {
   std::vector<BasicBlock *> LoopBlocks;
   SmallPtrSet<BasicBlock *, 4> ExitsToSplit;
 
+  // Get the sync region containing this Tapir loop.
+  const Instruction *InputSyncRegion;
+  {
+    const DetachInst *DI = cast<DetachInst>(Header->getTerminator());
+    InputSyncRegion = cast<Instruction>(DI->getSyncRegion());
+  }
+
   // Add start iteration, end iteration, and grainsize to inputs.
   {
     LoopBlocks = L->getBlocks();
@@ -1173,7 +1183,9 @@ bool DACLoopSpawning::processLoop() {
     // the set for the loop body.
     SmallVector<Value *, 8> BodyInputsToRemove;
     for (Value *V : BodyInputs)
-      if (!Inputs.count(V))
+      if (V == InputSyncRegion)
+        BodyInputsToRemove.push_back(V);
+      else if (!Inputs.count(V))
         Inputs.insert(V);
       else
         BodyInputsToRemove.push_back(V);
@@ -1202,7 +1214,8 @@ bool DACLoopSpawning::processLoop() {
                           Header, Preheader, ExitBlock,
                           VMap, M,
                           F->getSubprogram() != nullptr, Returns, ".ls",
-                          &ExitsToSplit, nullptr, nullptr, nullptr);
+                          &ExitsToSplit, InputSyncRegion,
+                          nullptr, nullptr, nullptr);
 
     assert(Returns.empty() && "Returns cloned when cloning loop.");
 
@@ -1220,7 +1233,9 @@ bool DACLoopSpawning::processLoop() {
                                            HelperExit->getTerminator(),
                                            DT, LI);
     IRBuilder<> Builder(&(HelperExit->front()));
-    SyncInst *NewSync = Builder.CreateSync(NewHelperExit);
+    SyncInst *NewSync = Builder.CreateSync(
+        NewHelperExit,
+        cast<Instruction>(VMap[InputSyncRegion]));
     // Set debug info of new sync to match that of terminator of the header of
     // the cloned loop.
     NewSync->setDebugLoc(HelperHeader->getTerminator()->getDebugLoc());
@@ -1309,13 +1324,14 @@ bool DACLoopSpawning::processLoop() {
   // BasicBlock *NewHeader = cast<BasicBlock>(VMap[Header]);
   // SerializeDetachedCFG(cast<DetachInst>(NewHeader->getTerminator()), nullptr);
   implementDACIterSpawnOnHelper(Helper, NewPreheader,
-                               cast<BasicBlock>(VMap[Header]),
-                               cast<PHINode>(VMap[CanonicalIV]),
-                               cast<Argument>(VMap[InputMap[LimitVar]]),
-                               cast<Argument>(VMap[InputMap[GrainVar]]),
-                               /*DT=*/nullptr, /*LI=*/nullptr,
-                               CanonicalSCEV->getNoWrapFlags(SCEV::FlagNUW),
-                               CanonicalSCEV->getNoWrapFlags(SCEV::FlagNSW));
+                                cast<BasicBlock>(VMap[Header]),
+                                cast<PHINode>(VMap[CanonicalIV]),
+                                cast<Argument>(VMap[InputMap[LimitVar]]),
+                                cast<Argument>(VMap[InputMap[GrainVar]]),
+                                cast<Instruction>(VMap[InputSyncRegion]),
+                                /*DT=*/nullptr, /*LI=*/nullptr,
+                                CanonicalSCEV->getNoWrapFlags(SCEV::FlagNUW),
+                                CanonicalSCEV->getNoWrapFlags(SCEV::FlagNSW));
 
   if (verifyFunction(*Helper, &dbgs()))
     return false;
@@ -1337,8 +1353,8 @@ bool DACLoopSpawning::processLoop() {
     assert(ClonedLoopBodyEntry &&
            "Head of cloned loop body has multiple successors.");
     bool ContainsDynamicAllocas =
-      MoveStaticAllocasInClonedBlock(Helper, ClonedLoopBodyEntry,
-                                     ReattachPoints);
+      MoveStaticAllocasInBlock(&Helper->getEntryBlock(), ClonedLoopBodyEntry,
+                               ReattachPoints);
 
     // If the cloned loop contained dynamic alloca instructions, wrap the cloned
     // loop with llvm.stacksave/llvm.stackrestore intrinsics.
@@ -1399,25 +1415,41 @@ bool DACLoopSpawning::processLoop() {
 
   // Remove sync of loop in parent.
   {
-    // Start searching for the sync instruction for this loop from the loop's
-    // designated exit block.
-    BasicBlock *SyncBlock = ExitBlock;
-    // Scan the unique chain of blocks dominated by the exit block until a block
-    // terminated by a sync is found.  If the chain ends before then, exit
-    // early.
-    while (SyncBlock &&
-           isa<BranchInst>(SyncBlock->getTerminator())) {
-      BasicBlock *SuccBB = SyncBlock->getSingleSuccessor();
-      if (!SuccBB ||
-          SyncBlock != SuccBB->getSinglePredecessor())
-        SyncBlock = nullptr;
-      else
-        SyncBlock = SuccBB;
+    // Get the sync region for this loop's detached iterations.
+    DetachInst *HeadDetach = cast<DetachInst>(Header->getTerminator());
+    Value *SyncRegion = HeadDetach->getSyncRegion();
+    // Check the Tapir instructions contained in this sync region.  Look for a
+    // single sync instruction among those Tapir instructions.  Meanwhile,
+    // verify that the only detach instruction in this sync region is the detach
+    // in theloop header.  If these conditions are met, then we assume that the
+    // sync applies to this loop.  Otherwise, something more complicated is
+    // going on, and we give up.
+    SyncInst *LoopSync = nullptr;
+    bool SingleSyncJustForLoop = true;
+    for (User *U : SyncRegion->users()) {
+      // Skip the detach in the loop header.
+      if (HeadDetach == U) continue;
+      // Remember the first sync instruction we find.  If we find multiple sync
+      // instructions, then something nontrivial is going on.
+      if (SyncInst *SI = dyn_cast<SyncInst>(U)) {
+        if (!LoopSync)
+          LoopSync = SI;
+        else
+          SingleSyncJustForLoop = false;
+      }
+      // If we find a detach instruction that is not the loop header's, then
+      // something nontrivial is going on.
+      if (isa<DetachInst>(U))
+        SingleSyncJustForLoop = false;
     }
-    // If the sync for this loop is found, serialize that sync.
-    if (SyncBlock)
-      if (SyncInst *SI = dyn_cast<SyncInst>(SyncBlock->getTerminator()))
-        ReplaceInstWithInst(SI, BranchInst::Create(SI->getSuccessor(0)));
+    if (LoopSync && SingleSyncJustForLoop)
+      // Replace the sync with a branch.
+      ReplaceInstWithInst(LoopSync,
+                          BranchInst::Create(LoopSync->getSuccessor(0)));
+    else if (!LoopSync)
+      DEBUG(dbgs() << "No sync found for this loop.");
+    else
+      DEBUG(dbgs() << "No single sync found that only affects this loop.");
   }
 
   ++LoopsConvertedToDAC;

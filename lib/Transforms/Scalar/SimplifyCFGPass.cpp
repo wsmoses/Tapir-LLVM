@@ -150,10 +150,10 @@ static bool removeUselessSyncs(Function &F) {
           BasicBlock *Pred = *PI;
           TerminatorInst *PT = Pred->getTerminator();
           // Stop the traversal at the entry block of a detached CFG.
-          if (isa<DetachInst>(PT)) {
-            if (PT->getSuccessor(0) == Pred)
+          if (DetachInst *DI = dyn_cast<DetachInst>(PT)) {
+            if (DI->getDetached() == PBB)
               continue;
-            else // PT->getSuccessor(1) == Pred
+            else // DI->getContinue() == PBB
               // This detach reaches the sync through the continuation edge.
               ReachingDetach = true;
           }
@@ -161,10 +161,21 @@ static bool removeUselessSyncs(Function &F) {
             break;
 
           // Ignore predecessors via a reattach, which belong to child detached
-          // contexts.  Also ignore sync instructions, which sync detached
-          // contexts before Sync executes.
-          if (isa<ReattachInst>(PT) || isa<SyncInst>(PT))
+          // contexts.
+          if (isa<ReattachInst>(PT))
             continue;
+
+          // For a predecessor terminated by a sync instruction, check the sync
+          // region it belongs to.  If the sync belongs to a different sync
+          // region, add the block that starts that region.  Otherwise, ignore
+          // the predecessor.
+          if (SyncInst *SI = dyn_cast<SyncInst>(PT)) {
+            if (SI->getSyncRegion() != Sync->getSyncRegion())
+              for (User *U : SI->getSyncRegion()->users())
+                if (isa<DetachInst>(U))
+                  WorkList.push_back(cast<Instruction>(U)->getParent());
+            continue;
+          }
 
           WorkList.push_back(Pred);
         }

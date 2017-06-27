@@ -5257,43 +5257,85 @@ bool LLParser::ParseBr(Instruction *&Inst, PerFunctionState &PFS) {
 }
 
 /// ParseDetach
-///   ::= 'detach' TypeAndValue ',' TypeAndValue
+///   ::= 'detach' within SyncRegion ',' TypeAndValue ',' TypeAndValue
 bool LLParser::ParseDetach(Instruction *&Inst, PerFunctionState &PFS) {
   LocTy Loc, Loc2;
+  Value *SR;
   BasicBlock *Op1, *Op2;
 
+  if (ParseToken(lltok::kw_within, "expected 'within' after detach"))
+    return true;
+
+  if (Lex.getKind() != lltok::kw_none && Lex.getKind() != lltok::LocalVar &&
+      Lex.getKind() != lltok::LocalVarID)
+    return TokError("expected scope value for detach");
+
+  if (ParseValue(Type::getTokenTy(Context), SR, PFS))
+    return true;
+
+  if (ParseToken(lltok::comma, "expected ',' after detach scope"))
+    return true;
+
   if (ParseTypeAndBasicBlock(Op1, Loc, PFS) ||
-      ParseToken(lltok::comma, "expected ',' after true destination") ||
+      ParseToken(lltok::comma, "expected ',' after detached destination") ||
       ParseTypeAndBasicBlock(Op2, Loc2, PFS))
     return true;
 
-  Inst = DetachInst::Create(Op1, Op2);
+  Inst = DetachInst::Create(Op1, Op2, SR);
   return false;
 }
 
 /// ParseReattach
-///   ::= 'reattach' TypeAndValue
+///   ::= 'reattach' within SyncRegion ',' TypeAndValue
 bool LLParser::ParseReattach(Instruction *&Inst, PerFunctionState &PFS) {
   LocTy Loc;
+  Value *SR;
   BasicBlock *Op;
+
+  if (ParseToken(lltok::kw_within, "expected 'within' after reatach"))
+    return true;
+
+  if (Lex.getKind() != lltok::kw_none && Lex.getKind() != lltok::LocalVar &&
+      Lex.getKind() != lltok::LocalVarID)
+    return TokError("expected scope value for reattach");
+
+  if (ParseValue(Type::getTokenTy(Context), SR, PFS))
+    return true;
+
+  if (ParseToken(lltok::comma, "expected ',' after reattach scope"))
+    return true;
 
   if (ParseTypeAndBasicBlock(Op, Loc, PFS))
     return true;
 
-  Inst = ReattachInst::Create(Context, Op);
+  Inst = ReattachInst::Create(Op, SR);
   return false;
 }
 
 /// ParseSync
-///   ::= 'sync' TypeAndValue
+///   ::= 'sync' within SyncRegion ',' TypeAndValue
 bool LLParser::ParseSync(Instruction *&Inst, PerFunctionState &PFS) {
   LocTy Loc;
+  Value *SR;
   BasicBlock *Op;
+
+  if (ParseToken(lltok::kw_within, "expected 'within' after reatach"))
+    return true;
+
+  if (Lex.getKind() != lltok::kw_none && Lex.getKind() != lltok::LocalVar &&
+      Lex.getKind() != lltok::LocalVarID)
+    return TokError("expected scope value for reattach");
+
+  if (ParseValue(Type::getTokenTy(Context), SR, PFS))
+    return true;
+
+  if (ParseToken(lltok::comma, "expected ',' after scope in sync"))
+    return true;
 
   if (ParseTypeAndBasicBlock(Op, Loc, PFS))
     return true;
 
-  Inst = SyncInst::Create(Op);
+  Inst = SyncInst::Create(Op, SR);
   return false;
 }
 

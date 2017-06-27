@@ -26,7 +26,7 @@
    ;; Unnamed variable slots
    '("%[-]?[0-9]+" . font-lock-variable-name-face)
    ;; Types
-   `(,(regexp-opt '("void" "i1" "i8" "i16" "i32" "i64" "i128" "float" "double" "type" "label" "opaque") 'symbols) . font-lock-type-face)
+   `(,(regexp-opt '("void" "i1" "i8" "i16" "i32" "i64" "i128" "float" "double" "type" "label" "opaque" "token") 'symbols) . font-lock-type-face)
    ;; Integer literals
    '("\\b[-]?[0-9]+\\b" . font-lock-preprocessor-face)
    ;; Floating point constants
@@ -45,7 +45,7 @@
    ;; Floating-point operators
    `(,(regexp-opt '("fadd" "fsub" "fmul" "fdiv" "frem") 'symbols) . font-lock-keyword-face)
    ;; Special instructions
-   `(,(regexp-opt '("phi" "tail" "call" "select" "to" "shl" "lshr" "ashr" "fcmp" "icmp" "va_arg" "landingpad") 'symbols) . font-lock-keyword-face)
+   `(,(regexp-opt '("phi" "tail" "call" "select" "to" "shl" "lshr" "ashr" "fcmp" "icmp" "va_arg" "landingpad" "within") 'symbols) . font-lock-keyword-face)
    ;; Control instructions
    `(,(regexp-opt '("ret" "br" "switch" "invoke" "resume" "unwind" "unreachable" "indirectbr" "detach" "reattach" "sync") 'symbols) . font-lock-keyword-face)
    ;; Memory operators

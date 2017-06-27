@@ -4050,8 +4050,8 @@ Error BitcodeReader::parseFunctionBody(Function *F) {
       I = new UnreachableInst(Context);
       InstructionList.push_back(I);
       break;
-    case bitc::FUNC_CODE_INST_DETACH: { // DETACH: [bb#, bb#]
-      if (Record.size() != 2)
+    case bitc::FUNC_CODE_INST_DETACH: { // DETACH: [bb#, bb#, val]
+      if (Record.size() != 3)
         return error("Invalid record");
       BasicBlock *Detached = getBasicBlock(Record[0]);
       if (!Detached)
@@ -4060,27 +4060,46 @@ Error BitcodeReader::parseFunctionBody(Function *F) {
       BasicBlock *Continue = getBasicBlock(Record[1]);
       if (!Continue)
         return error("Invalid record");
-      I = DetachInst::Create(Detached, Continue);
+
+      Value *SyncRegion =
+        getValue(Record, 2, NextValueNo, Type::getTokenTy(Context));
+      if (!SyncRegion)
+        return error("Invalid record");
+
+      I = DetachInst::Create(Detached, Continue, SyncRegion);
       InstructionList.push_back(I);
       break;
     }
-      case bitc::FUNC_CODE_INST_REATTACH: { // REATTACH
-      if (Record.size() != 1)
+      case bitc::FUNC_CODE_INST_REATTACH: { // REATTACH: [bb#, val]
+      if (Record.size() != 2)
         return error("Invalid record");
+
       BasicBlock *DetachContinue = getBasicBlock(Record[0]);
       if (!DetachContinue)
         return error("Invalid record");
-      I = ReattachInst::Create(Context, DetachContinue);
+
+      Value *SyncRegion =
+        getValue(Record, 1, NextValueNo, Type::getTokenTy(Context));
+      if (!SyncRegion)
+        return error("Invalid record");
+
+      I = ReattachInst::Create(DetachContinue, SyncRegion);
       InstructionList.push_back(I);
       break;
     }
-    case bitc::FUNC_CODE_INST_SYNC: { // Sync: [bb#]
+    case bitc::FUNC_CODE_INST_SYNC: { // Sync: [bb#, val]
       if (Record.size() != 1)
         return error("Invalid record");
       BasicBlock *Continue = getBasicBlock(Record[0]);
       if (!Continue)
         return error("Invalid record");
-      I = SyncInst::Create(Continue);
+
+      Value *SyncRegion =
+        getValue(Record, 1, NextValueNo, Type::getTokenTy(Context));
+      if (!SyncRegion)
+        return error("Invalid record");
+
+      I = SyncInst::Create(Continue, SyncRegion);
       InstructionList.push_back(I);
       break;
     }

@@ -11,8 +11,9 @@
 // Tapir instructions.
 //
 //===----------------------------------------------------------------------===//
-#ifndef LLVM_TRANSFORMS_OUTLINE_H
-#define LLVM_TRANSFORMS_OUTLINE_H
+
+#ifndef LLVM_TRANSFORMS_TAPIR_OUTLINE_H
+#define LLVM_TRANSFORMS_TAPIR_OUTLINE_H
 
 #include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/SmallVector.h"
@@ -69,17 +70,10 @@ Function *CreateHelper(const ValueSet &Inputs,
                        SmallVectorImpl<ReturnInst *> &Returns,
                        const StringRef NameSuffix,
                        SmallPtrSetImpl<BasicBlock *> *ExitBlocks = nullptr,
+                       const Instruction *InputSyncRegion = nullptr,
                        ClonedCodeInfo *CodeInfo = nullptr,
                        ValueMapTypeRemapper *TypeMapper = nullptr,
                        ValueMaterializer *Materializer = nullptr);
-
-/// Move static allocas in a cloned block into the entry block of helper.  Leave
-/// lifetime markers behind for those static allocas.  Returns true if the
-/// cloned block still contains dynamic allocas, which cannot be moved.
-bool MoveStaticAllocasInClonedBlock(
-    Function *Helper,
-    BasicBlock *ClonedBlock,
-    SmallVectorImpl<Instruction *> &ClonedExitPoints);
 
 // Add alignment assumptions to parameters of outlined function, based on known
 // alignment data in the caller.

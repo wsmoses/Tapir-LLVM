@@ -18,6 +18,7 @@
 #include "llvm/IR/DebugInfoMetadata.h"
 #include "llvm/Transforms/Tapir/Outline.h"
 #include "llvm/Transforms/Utils/Local.h"
+#include "llvm/Transforms/Utils/TapirUtils.h"
 
 using namespace llvm;
 
@@ -119,7 +120,8 @@ static CallInst *EmitCilkSetJmp(IRBuilder<> &B, Value *SF, Module& M) {
   B.CreateStore(FrameAddr, FrameSaveSlot, /*isVolatile=*/true);
 
   // Store stack pointer in the 2nd slot
-  Value *StackAddr = B.CreateCall(Intrinsic::getDeclaration(&M, Intrinsic::stacksave));
+  Value *StackAddr = B.CreateCall(
+      Intrinsic::getDeclaration(&M, Intrinsic::stacksave));
 
   Value *StackSaveSlot = GEP(B, Buf, 2);
   B.CreateStore(StackAddr, StackSaveSlot, /*isVolatile=*/true);
@@ -159,15 +161,18 @@ static Function *Get__cilkrts_pop_frame(Module &M) {
 
   // sf->worker->current_stack_frame = sf.call_parent;
   StoreField(B,
-             LoadField(B, SF, StackFrameBuilder::call_parent),
+             LoadField(B, SF, StackFrameBuilder::call_parent,
+                       /*isVolatile=*/true),
              LoadField(B, SF, StackFrameBuilder::worker,
                        /*isVolatile=*/true),
-             WorkerBuilder::current_stack_frame);
+             WorkerBuilder::current_stack_frame,
+             /*isVolatile=*/true);
 
   // sf->call_parent = 0;
   StoreField(B,
-             Constant::getNullValue(TypeBuilder<__cilkrts_stack_frame*, false>::get(Ctx)),
-             SF, StackFrameBuilder::call_parent);
+             Constant::getNullValue(
+                 TypeBuilder<__cilkrts_stack_frame*, false>::get(Ctx)),
+             SF, StackFrameBuilder::call_parent, /*isVolatile=*/true);
 
   B.CreateRetVoid();
 
@@ -214,7 +219,8 @@ static Function *Get__cilkrts_detach(Module &M) {
                        /*isVolatile=*/true);
 
   // __cilkrts_stack_frame *volatile *tail = w->tail;
-  Value *Tail = LoadField(B, W, WorkerBuilder::tail);
+  Value *Tail = LoadField(B, W, WorkerBuilder::tail,
+                          /*isVolatile=*/true);
 
   // sf->spawn_helper_pedigree = w->pedigree;
   StoreField(B,
@@ -244,17 +250,19 @@ static Function *Get__cilkrts_detach(Module &M) {
              PedigreeBuilder::next);
 
   // *tail++ = sf->call_parent;
-  B.CreateStore(LoadField(B, SF, StackFrameBuilder::call_parent), Tail);
+  B.CreateStore(LoadField(B, SF, StackFrameBuilder::call_parent,
+                          /*isVolatile=*/true),
+                Tail, /*isVolatile=*/true);
   Tail = B.CreateConstGEP1_32(Tail, 1);
 
   // w->tail = tail;
-  StoreField(B, Tail, W, WorkerBuilder::tail);
+  StoreField(B, Tail, W, WorkerBuilder::tail, /*isVolatile=*/true);
 
   // sf->flags |= CILK_FRAME_DETACHED;
   {
-    Value *F = LoadField(B, SF, StackFrameBuilder::flags);
+    Value *F = LoadField(B, SF, StackFrameBuilder::flags, /*isVolatile=*/true);
     F = B.CreateOr(F, ConstantInt::get(F->getType(), CILK_FRAME_DETACHED));
-    StoreField(B, F, SF, StackFrameBuilder::flags);
+    StoreField(B, F, SF, StackFrameBuilder::flags, /*isVolatile=*/true);
   }
 
   B.CreateRetVoid();
@@ -386,9 +394,10 @@ static Function *GetCilkSyncFn(Module &M, bool instrument = false) {
                             /*isVolatile=*/true);
     Rank = GEP(B, Rank, WorkerBuilder::pedigree);
     Rank = GEP(B, Rank, PedigreeBuilder::rank);
-    B.CreateStore(B.CreateAdd(B.CreateLoad(Rank),
-                              ConstantInt::get(Rank->getType()->getPointerElementType(),
-                                               1)),
+    B.CreateStore(B.CreateAdd(
+                      B.CreateLoad(Rank),
+                      ConstantInt::get(Rank->getType()->getPointerElementType(),
+                                       1)),
                   Rank);
     if (instrument)
       // cilk_sync_end
@@ -479,8 +488,10 @@ static Function *Get__cilkrts_enter_frame_1(Module &M) {
     W->addIncoming(Wfast, FastPath);
 
     StoreField(B,
-               LoadField(B, W, WorkerBuilder::current_stack_frame),
-               SF, StackFrameBuilder::call_parent);
+               LoadField(B, W, WorkerBuilder::current_stack_frame,
+                         /*isVolatile=*/true),
+               SF, StackFrameBuilder::call_parent,
+               /*isVolatile=*/true);
 
     StoreField(B, W, SF, StackFrameBuilder::worker, /*isVolatile=*/true);
     StoreField(B, SF, W, WorkerBuilder::current_stack_frame,
@@ -533,8 +544,10 @@ static Function *Get__cilkrts_enter_frame_fast_1(Module &M) {
              ConstantInt::get(Ty, CILK_FRAME_VERSION),
              SF, StackFrameBuilder::flags, /*isVolatile=*/true);
   StoreField(B,
-             LoadField(B, W, WorkerBuilder::current_stack_frame),
-             SF, StackFrameBuilder::call_parent);
+             LoadField(B, W, WorkerBuilder::current_stack_frame,
+                       /*isVolatile=*/true),
+             SF, StackFrameBuilder::call_parent,
+             /*isVolatile=*/true);
   StoreField(B, W, SF, StackFrameBuilder::worker, /*isVolatile=*/true);
   StoreField(B, SF, W, WorkerBuilder::current_stack_frame, /*isVolatile=*/true);
 
@@ -1159,7 +1172,7 @@ Function *llvm::cilk::extractDetachBodyToFunction(DetachInst &detach,
                              Spawned, Detacher, Continue,
                              VMap, F.getParent(),
                              F.getSubprogram() != nullptr, Returns, ".cilk",
-                             &ExitBlocks, nullptr, nullptr, nullptr);
+                             &ExitBlocks, nullptr, nullptr, nullptr, nullptr);
 
     assert(Returns.empty() && "Returns cloned when cloning detached CFG.");
 
@@ -1203,8 +1216,8 @@ Function *llvm::cilk::extractDetachBodyToFunction(DetachInst &detach,
 
     // Move allocas in cloned detached block to entry of helper function.
     BasicBlock *ClonedDetachedBlock = cast<BasicBlock>(VMap[Spawned]);
-    MoveStaticAllocasInClonedBlock(extracted, ClonedDetachedBlock,
-                                   ReattachPoints);
+    MoveStaticAllocasInBlock(&extracted->getEntryBlock(), ClonedDetachedBlock,
+                             ReattachPoints);
 
     // We should not need to add new llvm.stacksave/llvm.stackrestore
     // intrinsics, because calling and returning from the helper will

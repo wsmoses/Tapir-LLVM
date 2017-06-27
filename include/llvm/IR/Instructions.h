@@ -4655,14 +4655,18 @@ class DetachInst : public TerminatorInst {
   /// Ops list - The operands are ordered: Detached, Continue.
   DetachInst(const DetachInst &DI);
   void AssertOK();
-  // DetachInst constructors (where {D, C} are blocks):
-  // DetachInst(BB *D, BB *C)          - 'detach D, C'
-  // DetachInst(BB *D, BB *C, Inst *I) - 'detach D, C', insert before I
-  // DetachInst(BB *D, BB *C, BB *I)   - 'detach D, C', insert at end
+  // DetachInst constructors (where {D, C} are blocks and SR is a token):
+  // DetachInst(BB *D, BB *C, Value *SR)          - 'detach SR, D, C'
+  // DetachInst(BB *D, BB *C, Value *SR, Inst *I)
+  //                                        - 'detach SR, D, C', insert before I
+  // DetachInst(BB *D, BB *C, Value *SR, BB *I)
+  //                                        - 'detach SR, D, C', insert at end
   DetachInst(BasicBlock *Detached, BasicBlock *Continue,
-            Instruction *InsertBefore = nullptr);
+             Value *SyncRegion,
+             Instruction *InsertBefore = nullptr);
   DetachInst(BasicBlock *Detached, BasicBlock *Continue,
-            BasicBlock *InsertAtEnd);
+             Value *SyncRegion,
+             BasicBlock *InsertAtEnd);
 protected:
   // Note: Instruction needs to be a friend here to call cloneImpl.
   friend class Instruction;
@@ -4670,35 +4674,38 @@ protected:
 
 public:
   static DetachInst *Create(BasicBlock *Detached, BasicBlock *Continue,
-                           Instruction *InsertBefore = nullptr) {
-    return new(2) DetachInst(Detached, Continue, InsertBefore);
+                            Value *SyncRegion,
+                            Instruction *InsertBefore = nullptr) {
+    return new(3) DetachInst(Detached, Continue, SyncRegion, InsertBefore);
   }
   static DetachInst *Create(BasicBlock *Detached, BasicBlock *Continue,
-                           BasicBlock *InsertAtEnd) {
-    return new(2) DetachInst(Detached, Continue, InsertAtEnd);
+                            Value *SyncRegion,
+                            BasicBlock *InsertAtEnd) {
+    return new(3) DetachInst(Detached, Continue, SyncRegion, InsertAtEnd);
   }
 
-  /// Transparently provide more efficient getOperand methods.
+  /// Provide fast operand accessors
   DECLARE_TRANSPARENT_OPERAND_ACCESSORS(Value);
+
+  Value *getSyncRegion() const {
+    return Op<-3>();
+  }
+
+  void setSyncRegion(Value *SyncRegion) {
+    Op<-3>() = SyncRegion;
+  }
 
   unsigned getNumSuccessors() const { return 2; }
 
   BasicBlock *getSuccessor(unsigned i) const {
-    assert(i < 2 && "Successor # out of range for detach!");
+    assert(i < getNumSuccessors() && "Successor # out of range for detach!");
     return cast_or_null<BasicBlock>((&Op<-1>() - i)->get());
   }
 
   void setSuccessor(unsigned idx, BasicBlock *NewSucc) {
-    assert(idx < 2 && "Successor # out of range for detach!");
+    assert(idx < getNumSuccessors() && "Successor # out of range for detach!");
     *(&Op<-1>() - idx) = (Value*)NewSucc;
   }
-
-  /// \brief Swap the successors of this detach instruction.
-  ///
-  /// Swaps the successors of the spawn instruction. This also swaps any
-  /// branch weight metadata associated with the instruction so that it
-  /// continues to map correctly to each operand.
-  void swapSuccessors();
 
   // Methods for support type inquiry through isa, cast, and dyn_cast:
   static inline bool classof(const Instruction *I) {
@@ -4737,30 +4744,40 @@ DEFINE_TRANSPARENT_OPERAND_ACCESSORS(DetachInst, Value)
 class ReattachInst : public TerminatorInst {
   ReattachInst(const ReattachInst &RI);
   void AssertOK();
-  // ReattachInst constructors (where D is a block):
-  // ReattachInst(BB *D)          - 'reattach D'
-  // ReattachInst(BB *D, Inst *I) - 'reattach D'        insert before I
-  // ReattachInst(BB *D, BB *I)   - 'reattach D'        insert at end
-  explicit ReattachInst(LLVMContext &C, BasicBlock *DetachContinue,
+  // ReattachInst constructors (where C is a block and SR is a token):
+  // ReattachInst(BB *C, Value *SR)          - 'reattach SR, C'
+  // ReattachInst(BB *C, Value *SR, Inst *I) - 'reattach SR, C', insert before I
+  // ReattachInst(BB *C, Value *SR, BB *I)   - 'reattach SR, C', insert at end
+  explicit ReattachInst(BasicBlock *DetachContinue, Value *SyncRegion,
                         Instruction *InsertBefore = nullptr);
-  ReattachInst(LLVMContext &C, BasicBlock *DetachContinue, BasicBlock *InsertAtEnd);
+  ReattachInst(BasicBlock *DetachContinue, Value *SyncRegion,
+               BasicBlock *InsertAtEnd);
 protected:
   // Note: Instruction needs to be a friend here to call cloneImpl.
   friend class Instruction;
   ReattachInst *cloneImpl() const;
 
 public:
-  static ReattachInst *Create(LLVMContext &C, BasicBlock *DetachContinue,
+  static ReattachInst *Create(BasicBlock *DetachContinue, Value *SyncRegion,
                               Instruction *InsertBefore = nullptr) {
-    return new(1) ReattachInst(C, DetachContinue, InsertBefore);
+    return new(2) ReattachInst(DetachContinue, SyncRegion, InsertBefore);
   }
-  static ReattachInst *Create(LLVMContext &C, BasicBlock *DetachContinue,
+
+  static ReattachInst *Create(BasicBlock *DetachContinue, Value *SyncRegion,
                               BasicBlock *InsertAtEnd) {
-    return new(1) ReattachInst(C, DetachContinue, InsertAtEnd);
+    return new(2) ReattachInst(DetachContinue, SyncRegion, InsertAtEnd);
   }
 
   /// Transparently provide more efficient getOperand methods.
   DECLARE_TRANSPARENT_OPERAND_ACCESSORS(Value);
+
+  Value *getSyncRegion() const {
+    return Op<-2>();
+  }
+
+  void setSyncRegion(Value *SyncRegion) {
+    Op<-2>() = SyncRegion;
+  }
 
   unsigned getNumSuccessors() const { return 1; }
 
@@ -4776,11 +4793,12 @@ public:
     return isa<Instruction>(V) && classof(cast<Instruction>(V));
   }
   BasicBlock *getSuccessor(unsigned i) const {
-    assert(i==0 && "Successor # out of range for Reattach!");
+    assert(i < getNumSuccessors() && "Successor # out of range for reattach!");
     return cast_or_null<BasicBlock>((&Op<-1>() - i)->get());
   }
   void setSuccessor(unsigned idx, BasicBlock *NewSucc) {
-    assert(idx==0 && "Successor # out of range for Reattach!");
+    assert(idx < getNumSuccessors() &&
+           "Successor # out of range for reattach!");
     *(&Op<-1>() - idx) = NewSucc;
   }
 private:
@@ -4805,15 +4823,17 @@ DEFINE_TRANSPARENT_OPERAND_ACCESSORS(ReattachInst, Value)
 /// SyncInst - Sync instruction.
 ///
 class SyncInst : public TerminatorInst {
-  /// Ops list - A sync is like an unconditional branch to its continuation.
+  /// Ops list - A sync looks like an unconditional branch to its continuation.
   SyncInst(const SyncInst &SI);
   void AssertOK();
-  // SyncInst constructor (where C is a block):
-  // SyncInst(BB *C)          - 'sync C'
-  // SyncInst(BB *C, Inst *I) - 'sync C'        insert before I
-  // SyncInst(BB *C, BB *I)   - 'sync C'        insert at end
-  explicit SyncInst(BasicBlock *Continue, Instruction *InsertBefore = nullptr);
-  SyncInst(BasicBlock *Continue, BasicBlock *InsertAtEnd);
+  // SyncInst constructor (where C is a block and SR is a token):
+  // SyncInst(BB *C, Value *SR)          - 'sync SR, C'
+  // SyncInst(BB *C, Value *SR, Inst *I) - 'sync SR, C'        insert before I
+  // SyncInst(BB *C, Value *SR, BB *I)   - 'sync SR, C'        insert at end
+  explicit SyncInst(BasicBlock *Continue, Value *SyncRegion,
+                    Instruction *InsertBefore = nullptr);
+  SyncInst(BasicBlock *Continue, Value *SyncRegion,
+           BasicBlock *InsertAtEnd);
 protected:
   // Note: Instruction needs to be a friend here to call cloneImpl.
   friend class Instruction;
@@ -4821,15 +4841,25 @@ protected:
 
 public:
   static SyncInst *Create(BasicBlock *Continue,
+                          Value *SyncRegion,
                           Instruction *InsertBefore = nullptr) {
-    return new(1) SyncInst(Continue, InsertBefore);
+    return new(2) SyncInst(Continue, SyncRegion, InsertBefore);
   }
-  static SyncInst *Create(BasicBlock *Continue, BasicBlock *InsertAtEnd) {
-    return new(1) SyncInst(Continue, InsertAtEnd);
+  static SyncInst *Create(BasicBlock *Continue,
+                          Value *SyncRegion, BasicBlock *InsertAtEnd) {
+    return new(2) SyncInst(Continue, SyncRegion, InsertAtEnd);
   }
 
   /// Transparently provide more efficient getOperand methods.
   DECLARE_TRANSPARENT_OPERAND_ACCESSORS(Value);
+
+  Value *getSyncRegion() const {
+    return Op<-2>();
+  }
+
+  void setSyncRegion(Value *SyncRegion) {
+    Op<-2>() = SyncRegion;
+  }
 
   unsigned getNumSuccessors() const { return 1; }
 
@@ -4842,11 +4872,11 @@ public:
   }
 
   BasicBlock *getSuccessor(unsigned i) const {
-    assert(i==0 && "Successor # out of range for Sync!");
+    assert(i < getNumSuccessors() && "Successor # out of range for sync!");
     return cast_or_null<BasicBlock>((&Op<-1>() - i)->get());
   }
   void setSuccessor(unsigned idx, BasicBlock *NewSucc) {
-    assert(idx==0 && "Successor # out of range for Sync!");
+    assert(idx < getNumSuccessors() && "Successor # out of range for sync!");
     *(&Op<-1>() - idx) = NewSucc;
   }
 private:

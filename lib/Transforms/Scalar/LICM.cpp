@@ -65,6 +65,7 @@
 #include "llvm/Transforms/Utils/Local.h"
 #include "llvm/Transforms/Utils/LoopUtils.h"
 #include "llvm/Transforms/Utils/SSAUpdater.h"
+#include "llvm/Transforms/Utils/TapirUtils.h"
 #include <algorithm>
 #include <utility>
 using namespace llvm;

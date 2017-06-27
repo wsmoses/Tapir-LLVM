@@ -545,6 +545,7 @@ ModRefInfo AAResults::getModRefInfo(const SyncInst *S,
       if (Result == MRI_ModRef)
 	return Result;
     }
+
     // Add predecessors
     for (const_pred_iterator PI = pred_begin(BB), E = pred_end(BB);
 	 PI != E; ++PI) {
@@ -556,8 +557,10 @@ ModRefInfo AAResults::getModRefInfo(const SyncInst *S,
 	continue;
       // If this block is detached, ignore the predecessor that
       // detaches it.
-      if (isa<DetachInst>(PT) && PT->getSuccessor(0) == BB)
-	continue;
+      if (const DetachInst *Det = dyn_cast<DetachInst>(PT))
+        if (Det->getDetached() == BB)
+          continue;
+
       WorkList.push_back(Pred);
     }
   }

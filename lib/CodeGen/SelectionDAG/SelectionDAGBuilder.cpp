@@ -5811,7 +5811,11 @@ SelectionDAGBuilder::visitIntrinsicCall(const CallInst &I, unsigned Intrinsic) {
     visitVectorReduce(I, Intrinsic);
     return nullptr;
   }
-
+    // Tapir intrinsics
+    //
+    // Lower the starting point of a sync region to a no-op.
+  case Intrinsic::syncregion_start:
+    return nullptr;
   }
 }
 

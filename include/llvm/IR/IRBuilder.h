@@ -840,21 +840,24 @@ public:
     return Insert(new UnreachableInst(Context));
   }
 
-  /// \brief Create a detach 'detach Detached, Continue' instruction.
+  /// \brief Create a detach instruction, 'detach within SyncRegion, Detached,
+  // Continue'.
   DetachInst *CreateDetach(BasicBlock *Detached, BasicBlock *Continue,
-                           MDNode *BranchWeights = nullptr) {
-    return Insert(addBranchMetadata(DetachInst::Create(Detached, Continue),
+                           Value *SyncRegion, MDNode *BranchWeights = nullptr) {
+    return Insert(addBranchMetadata(DetachInst::Create(Detached, Continue,
+                                                       SyncRegion),
                                     BranchWeights, nullptr));
   }
 
-  /// \brief Create a reattach 'reattach DetachContinue' instruction.
-  ReattachInst *CreateReattach(BasicBlock *DetachContinue) {
-    return Insert(ReattachInst::Create(Context, DetachContinue));
+  /// \brief Create a reattach instruction, 'reattach within SyncRegion,
+  /// DetachContinue'.
+  ReattachInst *CreateReattach(BasicBlock *DetachContinue, Value *SyncRegion) {
+    return Insert(ReattachInst::Create(DetachContinue, SyncRegion));
   }
 
-  /// \brief Create a sync 'sync Continue' instruction.
-  SyncInst *CreateSync(BasicBlock *Continue) {
-    return Insert(SyncInst::Create(Continue));
+  /// \brief Create a sync instruction, 'sync within SyncRegion, Continue'.
+  SyncInst *CreateSync(BasicBlock *Continue, Value *SyncRegion) {
+    return Insert(SyncInst::Create(Continue, SyncRegion));
   }
 
   //===--------------------------------------------------------------------===//
