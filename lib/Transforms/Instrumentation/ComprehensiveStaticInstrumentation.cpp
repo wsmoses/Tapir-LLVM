@@ -10,6 +10,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "llvm/Transforms/CSI.h"
 #include "llvm/ADT/SmallSet.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/SmallVector.h"
@@ -27,41 +28,85 @@
 
 using namespace llvm;
 
-namespace {
-const char *const CsiRtUnitInitName = "__csirt_unit_init";
-const char *const CsiRtUnitCtorName = "csirt.unit_ctor";
-const char *const CsiFunctionBaseIdName = "__csi_unit_func_base_id";
-const char *const CsiFunctionExitBaseIdName = "__csi_unit_func_exit_base_id";
-const char *const CsiBasicBlockBaseIdName = "__csi_unit_bb_base_id";
-const char *const CsiCallsiteBaseIdName = "__csi_unit_callsite_base_id";
-const char *const CsiLoadBaseIdName = "__csi_unit_load_base_id";
-const char *const CsiStoreBaseIdName = "__csi_unit_store_base_id";
-const char *const CsiUnitFedTableName = "__csi_unit_fed_table";
-const char *const CsiFuncIdVariablePrefix = "__csi_func_id_";
-const char *const CsiUnitFedTableArrayName = "__csi_unit_fed_tables";
-const char *const CsiInitCallsiteToFunctionName =
-    "__csi_init_callsite_to_function";
-const char *const CsiDisableInstrumentationName =
-    "__csi_disable_instrumentation";
+#define DEBUG_TYPE "csi"
 
-const int64_t CsiCallsiteUnknownTargetId = -1;
-// See llvm/tools/clang/lib/CodeGen/CodeGenModule.h:
-const int CsiUnitCtorPriority = 65535;
+static cl::opt<bool>  ClInstrumentFuncEntryExit(
+    "csi-instrument-func-entry-exit", cl::init(true),
+    cl::desc("Instrument function entry and exit"), cl::Hidden);
+static cl::opt<bool>  ClInstrumentBasicBlocks(
+    "csi-instrument-basic-blocks", cl::init(true),
+    cl::desc("Instrument basic blocks"), cl::Hidden);
+static cl::opt<bool>  ClInstrumentMemoryAccesses(
+    "csi-instrument-memory-accesses", cl::init(true),
+    cl::desc("Instrument memory accesses"), cl::Hidden);
+static cl::opt<bool>  ClInstrumentCalls(
+    "csi-instrument-function-calls", cl::init(true),
+    cl::desc("Instrument function calls"), cl::Hidden);
+static cl::opt<bool>  ClInstrumentAtomics(
+    "csi-instrument-atomics", cl::init(true),
+    cl::desc("Instrument atomics"), cl::Hidden);
+static cl::opt<bool>  ClInstrumentMemIntrinsics(
+    "csi-instrument-memintrinsics", cl::init(true),
+    cl::desc("Instrument memintrinsics (memset/memcpy/memmove)"), cl::Hidden);
+
+namespace {
+
+static CSIOptions OverrideFromCL(CSIOptions Options) {
+  Options.InstrumentFuncEntryExit |= ClInstrumentFuncEntryExit;
+  Options.InstrumentBasicBlocks |= ClInstrumentBasicBlocks;
+  Options.InstrumentMemoryAccesses |= ClInstrumentMemoryAccesses;
+  Options.InstrumentCalls |= ClInstrumentCalls;
+  Options.InstrumentAtomics |= ClInstrumentAtomics;
+  Options.InstrumentMemIntrinsics |= ClInstrumentMemIntrinsics;
+  return Options;
+}
+
+/// The Comprehensive Static Instrumentation pass.
+/// Inserts calls to user-defined hooks at predefined points in the IR.
+struct ComprehensiveStaticInstrumentation : public ModulePass {
+  static char ID; // Pass identification, replacement for typeid.
+
+  ComprehensiveStaticInstrumentation(
+      const CSIOptions &Options = CSIOptions())
+      : ModulePass(ID), Options(OverrideFromCL(Options)) {
+    initializeComprehensiveStaticInstrumentationPass(
+        *PassRegistry::getPassRegistry());
+  }
+  StringRef getPassName() const override {
+    return "ComprehensiveStaticInstrumentation";
+  }
+  bool runOnModule(Module &M) override;
+  void getAnalysisUsage(AnalysisUsage &AU) const override;
+
+private:
+  CSIOptions Options;
+}; // struct ComprehensiveStaticInstrumentation
+} // anonymous namespace
+
+char ComprehensiveStaticInstrumentation::ID = 0;
+
+INITIALIZE_PASS(ComprehensiveStaticInstrumentation, "csi",
+                "ComprehensiveStaticInstrumentation pass", false, false)
+
+ModulePass *llvm::createComprehensiveStaticInstrumentationPass(
+    const CSIOptions &Options) {
+  return new ComprehensiveStaticInstrumentation(Options);
+}
 
 /// Return the first DILocation in the given basic block, or nullptr
 /// if none exists.
-DILocation *getFirstDebugLoc(BasicBlock &BB) {
-  for (Instruction &Inst : BB) {
-    if (DILocation *Loc = Inst.getDebugLoc()) {
+static const DILocation *getFirstDebugLoc(const BasicBlock &BB) {
+  for (const Instruction &Inst : BB)
+    if (const DILocation *Loc = Inst.getDebugLoc())
       return Loc;
-    }
-  }
+
   return nullptr;
 }
 
 /// Set DebugLoc on the call instruction to a CSI hook, based on the
 /// debug information of the instrumented instruction.
-void setInstrumentationDebugLoc(Instruction *Instrumented, Instruction *Call) {
+static void setInstrumentationDebugLoc(Instruction *Instrumented,
+                                       Instruction *Call) {
   DISubprogram *Subprog = Instrumented->getFunction()->getSubprogram();
   if (Subprog) {
     if (Instrumented->getDebugLoc()) {
@@ -75,10 +120,11 @@ void setInstrumentationDebugLoc(Instruction *Instrumented, Instruction *Call) {
 
 /// Set DebugLoc on the call instruction to a CSI hook, based on the
 /// debug information of the instrumented instruction.
-void setInstrumentationDebugLoc(BasicBlock &Instrumented, Instruction *Call) {
+static void setInstrumentationDebugLoc(BasicBlock &Instrumented,
+                                       Instruction *Call) {
   DISubprogram *Subprog = Instrumented.getParent()->getSubprogram();
   if (Subprog) {
-    if (DILocation *FirstDebugLoc = getFirstDebugLoc(Instrumented))
+    if (const DILocation *FirstDebugLoc = getFirstDebugLoc(Instrumented))
       Call->setDebugLoc(FirstDebugLoc);
     else {
       LLVMContext &C = Instrumented.getParent()->getParent()->getContext();
@@ -89,7 +135,8 @@ void setInstrumentationDebugLoc(BasicBlock &Instrumented, Instruction *Call) {
 
 /// Set DebugLoc on the call instruction to a CSI hook, based on the
 /// debug information of the instrumented instruction.
-void setInstrumentationDebugLoc(Function &Instrumented, Instruction *Call) {
+static void setInstrumentationDebugLoc(Function &Instrumented,
+                                       Instruction *Call) {
   DISubprogram *Subprog = Instrumented.getSubprogram();
   if (Subprog) {
     LLVMContext &C = Instrumented.getParent()->getContext();
@@ -97,436 +144,14 @@ void setInstrumentationDebugLoc(Function &Instrumented, Instruction *Call) {
   }
 }
 
-/// Maintains a mapping from CSI ID to front-end data for that ID.
-///
-/// The front-end data currently is the source location that a given
-/// CSI ID corresponds to.
-class FrontEndDataTable {
-public:
-  FrontEndDataTable() : BaseId(nullptr), IdCounter(0) {}
-  FrontEndDataTable(Module &M, StringRef BaseIdName);
+bool CSIImpl::run() {
+  initializeCsi();
 
-  /// The number of entries in this FED table
-  uint64_t size() const { return LocalIdToSourceLocationMap.size(); }
+  for (Function &F : M)
+    instrumentFunction(F);
 
-  /// The GlobalVariable holding the base ID for this FED table.
-  GlobalVariable *baseId() const { return BaseId; }
-
-  /// Add the given Function to this FED table.
-  /// \returns The local ID of the Function.
-  uint64_t add(Function &F);
-
-  /// Add the given BasicBlock to this FED table.
-  /// \returns The local ID of the BasicBlock.
-  uint64_t add(BasicBlock &BB);
-
-  /// Add the given Instruction to this FED table.
-  /// \returns The local ID of the Instruction.
-  uint64_t add(Instruction &I);
-
-  /// Get the local ID of the given Value.
-  uint64_t getId(Value *V);
-
-  /// Converts a local to global ID conversion.
-  ///
-  /// This is done by using the given IRBuilder to insert a load to
-  /// the base ID global variable followed by an add of the base value
-  /// and the local ID.
-  ///
-  /// \returns A Value holding the global ID corresponding to the
-  /// given local ID.
-  Value *localToGlobalId(uint64_t LocalId, IRBuilder<> IRB) const;
-
-  /// Get the Type for a pointer to a FED table entry.
-  ///
-  /// A FED table entry is just a source location.
-  static PointerType *getPointerType(LLVMContext &C);
-
-  /// Insert this FED table into the given Module.
-  ///
-  /// The FED table is constructed as a ConstantArray indexed by local
-  /// IDs.  The runtime is responsible for performing the mapping that
-  /// allows the table to be indexed by global ID.
-  Constant *insertIntoModule(Module &M) const;
-
-private:
-  struct SourceLocation {
-    StringRef Name;
-    int32_t Line;
-    StringRef File;
-  };
-
-  /// The GlobalVariable holding the base ID for this FED table.
-  GlobalVariable *BaseId;
-  /// Counter of local IDs used so far.
-  uint64_t IdCounter;
-  /// Map of local ID to SourceLocation.
-  std::map<uint64_t, SourceLocation> LocalIdToSourceLocationMap;
-  /// Map of Value to Local ID.
-  std::map<Value *, uint64_t> ValueToLocalIdMap;
-
-  /// Create a struct type to match the "struct SourceLocation" type.
-  /// (and the source_loc_t type in csi.h).
-  static StructType *getSourceLocStructType(LLVMContext &C);
-
-  /// Append the debug information to the table, assigning it the next
-  /// available ID.
-  ///
-  /// \returns The local ID of the appended information.
-  /// @{
-  uint64_t add(DILocation *Loc);
-  uint64_t add(DISubprogram *Subprog);
-  /// @}
-
-  /// Append the line and file information to the table, assigning it
-  /// the next available ID.
-  ///
-  /// \returns The new local ID of the DILocation.
-  uint64_t add(int32_t Line, StringRef File, StringRef Name = "");
-};
-
-/// Represents a property value passed to hooks.
-class CsiProperty {
-public:
-  CsiProperty() {}
-
-  /// Return the coerced type of a property.
-  ///
-  /// TODO: Right now, this function simply returns a 64-bit integer.  Although
-  /// this solution works for x86_64, it should be generalized to handle other
-  /// architectures in the future.
-  static Type *getCoercedType(LLVMContext &C, StructType *Ty) {
-    // Must match the definition of property type in csi.h
-    // return StructType::get(IntegerType::get(C, 64),
-    //                        nullptr);
-    // We return an integer type, rather than a struct type, to deal with x86_64
-    // type coercion on struct bit fields.
-    return IntegerType::get(C, 64);
-  }
-
-  /// Return a constant value holding this property.
-  virtual Constant *getValueImpl(LLVMContext &C) const = 0;
-
-  Constant *getValue(IRBuilder<> &IRB) const {
-    return getValueImpl(IRB.getContext());
-  }
-};
-
-class CsiFuncProperty : public CsiProperty {
-public:
-  CsiFuncProperty() {}
-
-  /// Return the Type of a property.
-  static Type *getType(LLVMContext &C) {
-    // Must match the definition of property type in csi.h
-    return CsiProperty::getCoercedType(
-        C, StructType::get(IntegerType::get(C, 64)));
-  }
-  /// Return a constant value holding this property.
-  Constant *getValueImpl(LLVMContext &C) const override {
-    // Must match the definition of property type in csi.h
-    // StructType *StructTy = getType(C);
-    // return ConstantStruct::get(StructTy,
-    //                            ConstantInt::get(IntegerType::get(C, 64), 0),
-    //                            nullptr);
-    // TODO: This solution works for x86, but should be generalized to support
-    // other architectures in the future.
-    return ConstantInt::get(getType(C), 0);
-  }
-};
-
-class CsiFuncExitProperty : public CsiProperty {
-public:
-  CsiFuncExitProperty() {}
-
-  /// Return the Type of a property.
-  static Type *getType(LLVMContext &C) {
-    // Must match the definition of property type in csi.h
-    return CsiProperty::getCoercedType(
-        C, StructType::get(IntegerType::get(C, 64)));
-  }
-  /// Return a constant value holding this property.
-  Constant *getValueImpl(LLVMContext &C) const override {
-    // Must match the definition of property type in csi.h
-    // StructType *StructTy = getType(C);
-    // return ConstantStruct::get(StructTy,
-    //                            ConstantInt::get(IntegerType::get(C, 64), 0),
-    //                            nullptr);
-    // TODO: This solution works for x86, but should be generalized to support
-    // other architectures in the future.
-    return ConstantInt::get(getType(C), 0);
-  }
-};
-
-class CsiBBProperty : public CsiProperty {
-public:
-  CsiBBProperty() {}
-
-  /// Return the Type of a property.
-  static Type *getType(LLVMContext &C) {
-    // Must match the definition of property type in csi.h
-    return CsiProperty::getCoercedType(
-        C, StructType::get(IntegerType::get(C, 64)));
-  }
-
-  /// Return a constant value holding this property.
-  Constant *getValueImpl(LLVMContext &C) const override {
-    // Must match the definition of property type in csi.h
-    // StructType *StructTy = getType(C);
-    // return ConstantStruct::get(StructTy,
-    //                            ConstantInt::get(IntegerType::get(C, 64), 0),
-    //                            nullptr);
-    // TODO: This solution works for x86, but should be generalized to support
-    // other architectures in the future.
-    return ConstantInt::get(getType(C), 0);
-  }
-};
-
-class CsiCallProperty : public CsiProperty {
-public:
-  CsiCallProperty() {
-    PropValue.Bits = 0;
-  }
-
-  /// Return the Type of a property.
-  static Type *getType(LLVMContext &C) {
-    // Must match the definition of property type in csi.h
-    return CsiProperty::getCoercedType(
-        C, StructType::get(IntegerType::get(C, PropBits.IsIndirect),
-                           IntegerType::get(C, PropBits.Padding)));
-  }
-  /// Return a constant value holding this property.
-  Constant *getValueImpl(LLVMContext &C) const override {
-    // Must match the definition of property type in csi.h
-    // StructType *StructTy = getType(C);
-    // return ConstantStruct::get(
-    //     StructTy,
-    //     ConstantInt::get(IntegerType::get(C, PropBits.IsIndirect),
-    //                      PropValue.IsIndirect),
-    //     ConstantInt::get(IntegerType::get(C, PropBits.Padding), 0),
-    //     nullptr);
-    // TODO: This solution works for x86, but should be generalized to support
-    // other architectures in the future.
-    return ConstantInt::get(getType(C), PropValue.Bits);
-  }
-
-  /// Set the value of the IsIndirect property.
-  void setIsIndirect(bool v) {
-    PropValue.Fields.IsIndirect = v;
-  }
-
-private:
-  typedef union {
-    // Must match the definition of property type in csi.h
-    struct {
-      unsigned IsIndirect : 1;
-      uint64_t Padding : 63;
-    } Fields;
-    uint64_t Bits;
-  } Property;
-
-  /// The underlying values of the properties.
-  Property PropValue;
-
-  typedef struct {
-    int IsIndirect;
-    int Padding;
-  } PropertyBits;
-
-  /// The number of bits representing each property.
-  static constexpr PropertyBits PropBits = { 1, (64-1) };
-};
-
-class CsiLoadStoreProperty : public CsiProperty {
-public:
-  CsiLoadStoreProperty() {
-    PropValue.Bits = 0;
-  }
-  /// Return the Type of a property.
-  static Type *getType(LLVMContext &C) {
-    // Must match the definition of property type in csi.h
-    return CsiProperty::getCoercedType(
-        C, StructType::get(IntegerType::get(C, PropBits.Alignment),
-                           IntegerType::get(C, PropBits.IsVtableAccess),
-                           IntegerType::get(C, PropBits.IsConstant),
-                           IntegerType::get(C, PropBits.IsOnStack),
-                           IntegerType::get(C, PropBits.MayBeCaptured),
-                           IntegerType::get(C, PropBits.LoadReadBeforeWriteInBB),
-                           IntegerType::get(C, PropBits.Padding)));
-  }
-  /// Return a constant value holding this property.
-  Constant *getValueImpl(LLVMContext &C) const override {
-    // Must match the definition of property type in csi.h
-    // return ConstantStruct::get(
-    //     StructTy,
-    //     ConstantInt::get(IntegerType::get(C, PropBits.Alignment),
-    //                      PropValue.Alignment),
-    //     ConstantInt::get(IntegerType::get(C, PropBits.IsVtableAccess),
-    //                      PropValue.IsVtableAccess),
-    //     ConstantInt::get(IntegerType::get(C, PropBits.IsConstant),
-    //                      PropValue.IsVtableAccess),
-    //     ConstantInt::get(IntegerType::get(C, PropBits.IsOnStack),
-    //                      PropValue.IsVtableAccess),
-    //     ConstantInt::get(IntegerType::get(C, PropBits.MayBeCaptured),
-    //                      PropValue.IsVtableAccess),
-    //     ConstantInt::get(IntegerType::get(C, PropBits.LoadReadBeforeWriteInBB),
-    //                      PropValue.LoadReadBeforeWriteInBB),
-    //     ConstantInt::get(IntegerType::get(C, PropBits.Padding), 0),
-    //     nullptr);
-    return ConstantInt::get(getType(C), PropValue.Bits);
-  }
-
-  /// Set the value of the Alignment property.
-  void setAlignment(char v) {
-    PropValue.Fields.Alignment = v;
-  }
-  /// Set the value of the IsVtableAccess property.
-  void setIsVtableAccess(bool v) {
-    PropValue.Fields.IsVtableAccess = v;
-  }
-  /// Set the value of the IsConstant property.
-  void setIsConstant(bool v) {
-    PropValue.Fields.IsConstant = v;
-  }
-  /// Set the value of the IsOnStack property.
-  void setIsOnStack(bool v) {
-    PropValue.Fields.IsOnStack = v;
-  }
-  /// Set the value of the MayBeCaptured property.
-  void setMayBeCaptured(bool v) {
-    PropValue.Fields.MayBeCaptured = v;
-  }
-  /// Set the value of the LoadReadBeforeWriteInBB property.
-  void setLoadReadBeforeWriteInBB(bool v) {
-    PropValue.Fields.LoadReadBeforeWriteInBB = v;
-  }
-
-private:
-  typedef union {
-    // Must match the definition of property type in csi.h
-    struct {
-      unsigned Alignment : 8;
-      unsigned IsVtableAccess : 1;
-      unsigned IsConstant : 1;
-      unsigned IsOnStack : 1;
-      unsigned MayBeCaptured : 1;
-      unsigned LoadReadBeforeWriteInBB : 1;
-      uint64_t Padding : 53;
-    } Fields;
-    uint64_t Bits;
-  } Property;
-
-  /// The underlying values of the properties.
-  Property PropValue;
-
-  typedef struct {
-    int Alignment;
-    int IsVtableAccess;
-    int IsConstant;
-    int IsOnStack;
-    int MayBeCaptured;
-    int LoadReadBeforeWriteInBB;
-    int Padding;
-  } PropertyBits;
-
-  /// The number of bits representing each property.
-  static constexpr PropertyBits PropBits = { 8, 1, 1, 1, 1, 1, (64-8-1-1-1-1-1) };
-};
-
-/// The Comprehensive Static Instrumentation pass.
-/// Inserts calls to user-defined hooks at predefined points in the IR.
-struct ComprehensiveStaticInstrumentation : public ModulePass {
-  static char ID;
-
-  ComprehensiveStaticInstrumentation() : ModulePass(ID) {}
-  StringRef getPassName() const override;
-  bool runOnModule(Module &M) override;
-  void getAnalysisUsage(AnalysisUsage &AU) const override;
-
-private:
-  /// Initialize llvm::Functions for the CSI hooks.
-  /// @{
-  void initializeLoadStoreHooks(Module &M);
-  void initializeFuncHooks(Module &M);
-  void initializeBasicBlockHooks(Module &M);
-  void initializeCallsiteHooks(Module &M);
-  /// @}
-
-  /// Initialize the front-end data table structures.
-  void initializeFEDTables(Module &M);
-
-  /// Generate a function that stores global function IDs into a set
-  /// of externally-visible global variables.
-  void generateInitCallsiteToFunction(Module &M);
-
-  /// Get the number of bytes accessed via the given address.
-  int getNumBytesAccessed(Value *Addr, const DataLayout &DL);
-
-  /// Compute CSI properties on the given ordered list of loads and stores.
-  void computeLoadAndStoreProperties(
-      SmallVectorImpl<std::pair<Instruction *, CsiLoadStoreProperty>>
-      &LoadAndStoreProperties,
-      SmallVectorImpl<Instruction *> &BBLoadsAndStores,
-      const DataLayout &DL);
-
-  /// Insert calls to the instrumentation hooks.
-  /// @{
-  void addLoadStoreInstrumentation(Instruction *I, Function *BeforeFn,
-                                   Function *AfterFn, Value *CsiId,
-                                   Type *AddrType, Value *Addr, int NumBytes,
-                                   CsiLoadStoreProperty &Prop);
-  void instrumentLoadOrStore(Instruction *I, CsiLoadStoreProperty &Prop,
-                             const DataLayout &DL);
-  void instrumentAtomic(Instruction *I, const DataLayout &DL);
-  void instrumentMemIntrinsic(Instruction *I);
-  void instrumentCallsite(Instruction *I);
-  void instrumentBasicBlock(BasicBlock &BB);
-  void instrumentFunction(Function &F);
-  /// @}
-
-  /// Insert a conditional call to the given hook function before the
-  /// given instruction. The condition is based on the value of
-  /// __csi_disable_instrumentation.
-  void insertConditionalHookCall(Instruction *I, Function *HookFunction,
-                                 ArrayRef<Value *> HookArgs);
-
-  /// Return true if the given function should not be instrumented.
-  bool shouldNotInstrumentFunction(Function &F);
-
-  /// Initialize the CSI pass.
-  void initializeCsi(Module &M);
-  /// Finalize the CSI pass.
-  void finalizeCsi(Module &M);
-
-  FrontEndDataTable FunctionFED, FunctionExitFED, BasicBlockFED, CallsiteFED,
-      LoadFED, StoreFED;
-
-  Function *CsiBeforeCallsite, *CsiAfterCallsite;
-  Function *CsiFuncEntry, *CsiFuncExit;
-  Function *CsiBBEntry, *CsiBBExit;
-  Function *CsiBeforeRead, *CsiAfterRead;
-  Function *CsiBeforeWrite, *CsiAfterWrite;
-
-  CallGraph *CG;
-  Function *MemmoveFn, *MemcpyFn, *MemsetFn;
-  Function *InitCallsiteToFunction;
-  // GlobalVariable *DisableInstrGV;
-  Type *IntptrTy;
-  std::map<std::string, uint64_t> FuncOffsetMap;
-}; // struct ComprehensiveStaticInstrumentation
-} // anonymous namespace
-
-char ComprehensiveStaticInstrumentation::ID = 0;
-
-INITIALIZE_PASS(ComprehensiveStaticInstrumentation, "csi",
-                "ComprehensiveStaticInstrumentation pass", false, false)
-
-StringRef ComprehensiveStaticInstrumentation::getPassName() const {
-  return "ComprehensiveStaticInstrumentation";
-}
-
-ModulePass *llvm::createComprehensiveStaticInstrumentationPass() {
-  return new ComprehensiveStaticInstrumentation();
+  finalizeCsi();
+  return true; // We always insert the unit constructor.
 }
 
 FrontEndDataTable::FrontEndDataTable(Module &M, StringRef BaseIdName) {
@@ -538,25 +163,25 @@ FrontEndDataTable::FrontEndDataTable(Module &M, StringRef BaseIdName) {
   assert(BaseId);
 }
 
-uint64_t FrontEndDataTable::add(Function &F) {
+uint64_t FrontEndDataTable::add(const Function &F) {
   uint64_t Id = add(F.getSubprogram());
   ValueToLocalIdMap[&F] = Id;
   return Id;
 }
 
-uint64_t FrontEndDataTable::add(BasicBlock &BB) {
+uint64_t FrontEndDataTable::add(const BasicBlock &BB) {
   uint64_t Id = add(getFirstDebugLoc(BB));
   ValueToLocalIdMap[&BB] = Id;
   return Id;
 }
 
-uint64_t FrontEndDataTable::add(Instruction &I) {
+uint64_t FrontEndDataTable::add(const Instruction &I) {
   uint64_t Id = add(I.getDebugLoc());
   ValueToLocalIdMap[&I] = Id;
   return Id;
 }
 
-uint64_t FrontEndDataTable::getId(Value *V) {
+uint64_t FrontEndDataTable::getId(const Value *V) {
   assert(ValueToLocalIdMap.find(V) != ValueToLocalIdMap.end() &&
          "Value not in ID map.");
   return ValueToLocalIdMap[V];
@@ -578,35 +203,37 @@ PointerType *FrontEndDataTable::getPointerType(LLVMContext &C) {
 }
 
 StructType *FrontEndDataTable::getSourceLocStructType(LLVMContext &C) {
-  return StructType::get(/* Name */ PointerType::get(IntegerType::get(C, 8), 0),
-                         /* Line */ IntegerType::get(C, 32),
-                         /* File */ PointerType::get(IntegerType::get(C, 8), 0));
+  return StructType::get(
+      /* Name */ PointerType::get(IntegerType::get(C, 8), 0),
+      /* Line */ IntegerType::get(C, 32),
+      /* Column */ IntegerType::get(C, 32),
+      /* File */ PointerType::get(IntegerType::get(C, 8), 0));
 }
 
-uint64_t FrontEndDataTable::add(DILocation *Loc) {
-  if (Loc) {
-    return add((int32_t)Loc->getLine(), Loc->getFilename(), "");
-  } else {
-    return add(-1, "", "");
-  }
+uint64_t FrontEndDataTable::add(const DILocation *Loc) {
+  if (Loc)
+    return add((int32_t)Loc->getLine(), (int32_t)Loc->getColumn(),
+               Loc->getFilename());
+  else
+    return add();
 }
 
-uint64_t FrontEndDataTable::add(DISubprogram *Subprog) {
-  if (Subprog) {
-    return add((int32_t)Subprog->getLine(),
+uint64_t FrontEndDataTable::add(const DISubprogram *Subprog) {
+  if (Subprog)
+    return add((int32_t)Subprog->getLine(), -1,
                (Subprog->getDirectory() + Subprog->getFilename()).str(),
                Subprog->getName());
-  } else {
-    return add(-1, "", "");
-  }
+  else
+    return add();
 }
 
-uint64_t FrontEndDataTable::add(int32_t Line, StringRef File, StringRef Name) {
+uint64_t FrontEndDataTable::add(int32_t Line, int32_t Column, StringRef File,
+                                StringRef Name) {
   uint64_t Id = IdCounter++;
   assert(LocalIdToSourceLocationMap.find(Id) ==
              LocalIdToSourceLocationMap.end() &&
          "Id already exists in FED table.");
-  LocalIdToSourceLocationMap[Id] = {Name, Line, File};
+  LocalIdToSourceLocationMap[Id] = {Name, Line, Column, File};
   return Id;
 }
 
@@ -621,6 +248,7 @@ Constant *FrontEndDataTable::insertIntoModule(Module &M) const {
   for (const auto it : LocalIdToSourceLocationMap) {
     const SourceLocation &E = it.second;
     Constant *Line = ConstantInt::get(Int32Ty, E.Line);
+    Constant *Column = ConstantInt::get(Int32Ty, E.Column);
     Constant *File;
     {
       Constant *FileStrConstant = ConstantDataArray::getString(C, E.File);
@@ -655,7 +283,8 @@ Constant *FrontEndDataTable::insertIntoModule(Module &M) const {
       Name =
         ConstantExpr::getGetElementPtr(GV->getValueType(), GV, GepArgs);
     }
-    FEDEntries.push_back(ConstantStruct::get(FedType, Name, Line, File));
+    FEDEntries.push_back(ConstantStruct::get(FedType, Name, Line, Column,
+                                             File));
   }
 
   ArrayType *FedArrayType = ArrayType::get(FedType, FEDEntries.size());
@@ -666,47 +295,43 @@ Constant *FrontEndDataTable::insertIntoModule(Module &M) const {
   return ConstantExpr::getGetElementPtr(GV->getValueType(), GV, GepArgs);
 }
 
-void ComprehensiveStaticInstrumentation::initializeFuncHooks(Module &M) {
+void CSIImpl::initializeFuncHooks() {
   LLVMContext &C = M.getContext();
   IRBuilder<> IRB(C);
   Type *FuncPropertyTy = CsiFuncProperty::getType(C);
-  CsiFuncEntry = checkCsiInterfaceFunction(M.getOrInsertFunction(
-      "__csi_func_entry", IRB.getVoidTy(), IRB.getInt64Ty(), FuncPropertyTy,
-      nullptr));
+  CsiFuncEntry = checkCsiInterfaceFunction(
+      M.getOrInsertFunction("__csi_func_entry", IRB.getVoidTy(),
+                            IRB.getInt64Ty(), FuncPropertyTy));
   Type *FuncExitPropertyTy = CsiFuncExitProperty::getType(C);
   CsiFuncExit = checkCsiInterfaceFunction(
       M.getOrInsertFunction("__csi_func_exit", IRB.getVoidTy(),
                             IRB.getInt64Ty(), IRB.getInt64Ty(),
-                            FuncExitPropertyTy, nullptr));
-  CsiFuncExit = checkCsiInterfaceFunction(
-      M.getOrInsertFunction("__csi_func_exit", IRB.getVoidTy(),
-                            IRB.getInt64Ty(), IRB.getInt64Ty(),
-                            FuncExitPropertyTy, nullptr));
+                            FuncExitPropertyTy));
 }
 
-void ComprehensiveStaticInstrumentation::initializeBasicBlockHooks(Module &M) {
+void CSIImpl::initializeBasicBlockHooks() {
   LLVMContext &C = M.getContext();
   IRBuilder<> IRB(C);
   Type *PropertyTy = CsiBBProperty::getType(C);
   CsiBBEntry = checkCsiInterfaceFunction(M.getOrInsertFunction(
-      "__csi_bb_entry", IRB.getVoidTy(), IRB.getInt64Ty(), PropertyTy, nullptr));
+      "__csi_bb_entry", IRB.getVoidTy(), IRB.getInt64Ty(), PropertyTy));
   CsiBBExit = checkCsiInterfaceFunction(M.getOrInsertFunction(
-      "__csi_bb_exit", IRB.getVoidTy(), IRB.getInt64Ty(), PropertyTy, nullptr));
+      "__csi_bb_exit", IRB.getVoidTy(), IRB.getInt64Ty(), PropertyTy));
 }
 
-void ComprehensiveStaticInstrumentation::initializeCallsiteHooks(Module &M) {
+void CSIImpl::initializeCallsiteHooks() {
   LLVMContext &C = M.getContext();
   IRBuilder<> IRB(C);
   Type *PropertyTy = CsiCallProperty::getType(C);
   CsiBeforeCallsite = checkCsiInterfaceFunction(
       M.getOrInsertFunction("__csi_before_call", IRB.getVoidTy(),
-                            IRB.getInt64Ty(), IRB.getInt64Ty(), PropertyTy, nullptr));
+                            IRB.getInt64Ty(), IRB.getInt64Ty(), PropertyTy));
   CsiAfterCallsite = checkCsiInterfaceFunction(
       M.getOrInsertFunction("__csi_after_call", IRB.getVoidTy(),
-                            IRB.getInt64Ty(), IRB.getInt64Ty(), PropertyTy, nullptr));
+                            IRB.getInt64Ty(), IRB.getInt64Ty(), PropertyTy));
 }
 
-void ComprehensiveStaticInstrumentation::initializeLoadStoreHooks(Module &M) {
+void CSIImpl::initializeLoadStoreHooks() {
   LLVMContext &C = M.getContext();
   IRBuilder<> IRB(C);
   Type *LoadPropertyTy = CsiLoadStoreProperty::getType(C);
@@ -717,31 +342,30 @@ void ComprehensiveStaticInstrumentation::initializeLoadStoreHooks(Module &M) {
 
   CsiBeforeRead = checkCsiInterfaceFunction(
       M.getOrInsertFunction("__csi_before_load", RetType, IRB.getInt64Ty(),
-                            AddrType, NumBytesType, LoadPropertyTy, nullptr));
+                            AddrType, NumBytesType, LoadPropertyTy));
   CsiAfterRead = checkCsiInterfaceFunction(
       M.getOrInsertFunction("__csi_after_load", RetType, IRB.getInt64Ty(),
-                            AddrType, NumBytesType, LoadPropertyTy, nullptr));
+                            AddrType, NumBytesType, LoadPropertyTy));
 
   CsiBeforeWrite = checkCsiInterfaceFunction(
       M.getOrInsertFunction("__csi_before_store", RetType, IRB.getInt64Ty(),
-                            AddrType, NumBytesType, StorePropertyTy, nullptr));
+                            AddrType, NumBytesType, StorePropertyTy));
   CsiAfterWrite = checkCsiInterfaceFunction(
       M.getOrInsertFunction("__csi_after_store", RetType, IRB.getInt64Ty(),
-                            AddrType, NumBytesType, StorePropertyTy, nullptr));
+                            AddrType, NumBytesType, StorePropertyTy));
 
   MemmoveFn = checkCsiInterfaceFunction(
       M.getOrInsertFunction("memmove", IRB.getInt8PtrTy(), IRB.getInt8PtrTy(),
-                            IRB.getInt8PtrTy(), IntptrTy, nullptr));
+                            IRB.getInt8PtrTy(), IntptrTy));
   MemcpyFn = checkCsiInterfaceFunction(
       M.getOrInsertFunction("memcpy", IRB.getInt8PtrTy(), IRB.getInt8PtrTy(),
-                            IRB.getInt8PtrTy(), IntptrTy, nullptr));
+                            IRB.getInt8PtrTy(), IntptrTy));
   MemsetFn = checkCsiInterfaceFunction(
       M.getOrInsertFunction("memset", IRB.getInt8PtrTy(), IRB.getInt8PtrTy(),
-                            IRB.getInt32Ty(), IntptrTy, nullptr));
+                            IRB.getInt32Ty(), IntptrTy));
 }
 
-int ComprehensiveStaticInstrumentation::getNumBytesAccessed(
-    Value *Addr, const DataLayout &DL) {
+int CSIImpl::getNumBytesAccessed(Value *Addr, const DataLayout &DL) {
   Type *OrigPtrTy = Addr->getType();
   Type *OrigTy = cast<PointerType>(OrigPtrTy)->getElementType();
   assert(OrigTy->isSized());
@@ -753,7 +377,7 @@ int ComprehensiveStaticInstrumentation::getNumBytesAccessed(
   return TypeSize / 8;
 }
 
-void ComprehensiveStaticInstrumentation::addLoadStoreInstrumentation(
+void CSIImpl::addLoadStoreInstrumentation(
     Instruction *I, Function *BeforeFn, Function *AfterFn, Value *CsiId,
     Type *AddrType, Value *Addr, int NumBytes, CsiLoadStoreProperty &Prop) {
   IRBuilder<> IRB(I);
@@ -770,8 +394,8 @@ void ComprehensiveStaticInstrumentation::addLoadStoreInstrumentation(
                                 IRB.getInt32(NumBytes), PropVal});
 }
 
-void ComprehensiveStaticInstrumentation::instrumentLoadOrStore(
-    Instruction *I, CsiLoadStoreProperty &Prop, const DataLayout &DL) {
+void CSIImpl::instrumentLoadOrStore(Instruction *I, CsiLoadStoreProperty &Prop,
+                                    const DataLayout &DL) {
   IRBuilder<> IRB(I);
   bool IsWrite = isa<StoreInst>(I);
   Value *Addr = IsWrite ? cast<StoreInst>(I)->getPointerOperand()
@@ -795,8 +419,7 @@ void ComprehensiveStaticInstrumentation::instrumentLoadOrStore(
   }
 }
 
-void ComprehensiveStaticInstrumentation::instrumentAtomic(
-    Instruction *I, const DataLayout &DL) {
+void CSIImpl::instrumentAtomic(Instruction *I, const DataLayout &DL) {
   // For now, print a message that this code contains atomics.
   dbgs() << "WARNING: Uninstrumented atomic operations in program-under-test!\n";
 }
@@ -809,8 +432,7 @@ void ComprehensiveStaticInstrumentation::instrumentAtomic(
 // Since our pass runs after everyone else, the calls should not be
 // replaced back with intrinsics. If that becomes wrong at some point,
 // we will need to call e.g. __csi_memset to avoid the intrinsics.
-void ComprehensiveStaticInstrumentation::instrumentMemIntrinsic(
-    Instruction *I) {
+void CSIImpl::instrumentMemIntrinsic(Instruction *I) {
   IRBuilder<> IRB(I);
   if (MemSetInst *M = dyn_cast<MemSetInst>(I)) {
     Instruction *Call = IRB.CreateCall(
@@ -831,7 +453,7 @@ void ComprehensiveStaticInstrumentation::instrumentMemIntrinsic(
   }
 }
 
-void ComprehensiveStaticInstrumentation::instrumentBasicBlock(BasicBlock &BB) {
+void CSIImpl::instrumentBasicBlock(BasicBlock &BB) {
   IRBuilder<> IRB(&*BB.getFirstInsertionPt());
   //LLVMContext &C = IRB.getContext();
   uint64_t LocalId = BasicBlockFED.add(BB);
@@ -845,7 +467,7 @@ void ComprehensiveStaticInstrumentation::instrumentBasicBlock(BasicBlock &BB) {
                             {CsiId, PropVal});
 }
 
-void ComprehensiveStaticInstrumentation::instrumentCallsite(Instruction *I) {
+void CSIImpl::instrumentCallsite(Instruction *I) {
   bool IsInvoke = false;
   Function *Called = NULL;
   if (CallInst *CI = dyn_cast<CallInst>(I)) {
@@ -860,15 +482,16 @@ void ComprehensiveStaticInstrumentation::instrumentCallsite(Instruction *I) {
   }
 
   IRBuilder<> IRB(I);
-  //LLVMContext &C = IRB.getContext();
   uint64_t LocalId = CallsiteFED.add(*I);
   Value *CallsiteId = CallsiteFED.localToGlobalId(LocalId, IRB);
   Value *FuncId = NULL;
   GlobalVariable *FuncIdGV = NULL;
   if (Called) {
     Module *M = I->getParent()->getParent()->getParent();
-    std::string GVName = CsiFuncIdVariablePrefix + Called->getName().str();
-    FuncIdGV = dyn_cast<GlobalVariable>(M->getOrInsertGlobal(GVName, IRB.getInt64Ty()));
+    std::string GVName =
+      CsiFuncIdVariablePrefix + Called->getName().str();
+    FuncIdGV = dyn_cast<GlobalVariable>(M->getOrInsertGlobal(GVName,
+                                                             IRB.getInt64Ty()));
     assert(FuncIdGV);
     FuncIdGV->setConstant(false);
     FuncIdGV->setLinkage(GlobalValue::WeakAnyLinkage);
@@ -922,7 +545,8 @@ void ComprehensiveStaticInstrumentation::instrumentCallsite(Instruction *I) {
   }
 }
 
-void ComprehensiveStaticInstrumentation::insertConditionalHookCall(Instruction *I, Function *HookFunction, ArrayRef<Value *> HookArgs) {
+void CSIImpl::insertConditionalHookCall(Instruction *I, Function *HookFunction,
+                                        ArrayRef<Value *> HookArgs) {
   IRBuilder<> IRB(I);
   // Value *Cond = IRB.CreateICmpEQ(IRB.CreateLoad(DisableInstrGV), IRB.getInt1(false));
   // TerminatorInst *TI = SplitBlockAndInsertIfThen(Cond, I, false);
@@ -934,7 +558,7 @@ void ComprehensiveStaticInstrumentation::insertConditionalHookCall(Instruction *
 }
 
 
-void ComprehensiveStaticInstrumentation::initializeFEDTables(Module &M) {
+void CSIImpl::initializeFEDTables() {
   FunctionFED = FrontEndDataTable(M, CsiFunctionBaseIdName);
   FunctionExitFED = FrontEndDataTable(M, CsiFunctionExitBaseIdName);
   BasicBlockFED = FrontEndDataTable(M, CsiBasicBlockBaseIdName);
@@ -943,8 +567,7 @@ void ComprehensiveStaticInstrumentation::initializeFEDTables(Module &M) {
   StoreFED = FrontEndDataTable(M, CsiStoreBaseIdName);
 }
 
-void ComprehensiveStaticInstrumentation::generateInitCallsiteToFunction(
-    Module &M) {
+void CSIImpl::generateInitCallsiteToFunction() {
   LLVMContext &C = M.getContext();
   BasicBlock *EntryBB = BasicBlock::Create(C, "", InitCallsiteToFunction);
   IRBuilder<> IRB(ReturnInst::Create(C, EntryBB));
@@ -955,7 +578,7 @@ void ComprehensiveStaticInstrumentation::generateInitCallsiteToFunction(
   // a store of each function's global ID to the corresponding weak
   // global variable.
   for (const auto &it : FuncOffsetMap) {
-    std::string GVName = CsiFuncIdVariablePrefix + it.first;
+    std::string GVName = CsiFuncIdVariablePrefix + it.first.str();
     GlobalVariable *GV = nullptr;
     if ((GV = M.getGlobalVariable(GVName)) == nullptr) {
       GV = new GlobalVariable(M, IRB.getInt64Ty(), false,
@@ -967,23 +590,25 @@ void ComprehensiveStaticInstrumentation::generateInitCallsiteToFunction(
   }
 }
 
-void ComprehensiveStaticInstrumentation::initializeCsi(Module &M) {
+void CSIImpl::initializeCsi() {
   IntptrTy = M.getDataLayout().getIntPtrType(M.getContext());
 
-  initializeFEDTables(M);
-  initializeFuncHooks(M);
-  initializeLoadStoreHooks(M);
-  initializeBasicBlockHooks(M);
-  initializeCallsiteHooks(M);
+  initializeFEDTables();
+  if (Options.InstrumentFuncEntryExit)
+    initializeFuncHooks();
+  if (Options.InstrumentMemoryAccesses)
+    initializeLoadStoreHooks();
+  if (Options.InstrumentBasicBlocks)
+    initializeBasicBlockHooks();
+  if (Options.InstrumentCalls)
+    initializeCallsiteHooks();
 
   FunctionType *FnType =
-      FunctionType::get(Type::getVoidTy(M.getContext()), {}, false);
+    FunctionType::get(Type::getVoidTy(M.getContext()), {}, false);
   InitCallsiteToFunction = checkCsiInterfaceFunction(
       M.getOrInsertFunction(CsiInitCallsiteToFunctionName, FnType));
   assert(InitCallsiteToFunction);
   InitCallsiteToFunction->setLinkage(GlobalValue::InternalLinkage);
-
-  CG = &getAnalysis<CallGraphWrapperPass>().getCallGraph();
 
   /*
   The runtime declares this as a __thread var --- need to change this decl generation
@@ -996,16 +621,17 @@ void ComprehensiveStaticInstrumentation::initializeCsi(Module &M) {
 }
 
 // Create a struct type to match the unit_fed_entry_t type in csirt.c.
-StructType *getUnitFedTableType(LLVMContext &C, PointerType *EntryPointerType) {
+static StructType *getUnitFedTableType(LLVMContext &C,
+                                       PointerType *EntryPointerType) {
   return StructType::get(IntegerType::get(C, 64),
-                         PointerType::get(IntegerType::get(C, 64), 0),
+                         Type::getInt8PtrTy(C, 0),
                          EntryPointerType);
 }
 
-Constant *fedTableToUnitFedTable(Module &M, StructType *UnitFedTableType,
-                                 FrontEndDataTable &FedTable) {
+static Constant *fedTableToUnitFedTable(Module &M, StructType *UnitFedTableType,
+                                        FrontEndDataTable &FedTable) {
   Constant *NumEntries =
-      ConstantInt::get(IntegerType::get(M.getContext(), 64), FedTable.size());
+    ConstantInt::get(IntegerType::get(M.getContext(), 64), FedTable.size());
   Constant *BaseIdPtr =
     ConstantExpr::getPointerCast(FedTable.baseId(),
                                  Type::getInt8PtrTy(M.getContext(), 0));
@@ -1014,7 +640,7 @@ Constant *fedTableToUnitFedTable(Module &M, StructType *UnitFedTableType,
                              InsertedTable);
 }
 
-void ComprehensiveStaticInstrumentation::finalizeCsi(Module &M) {
+void CSIImpl::finalizeCsi() {
   LLVMContext &C = M.getContext();
 
   // Add CSI global constructor, which calls unit init.
@@ -1037,11 +663,11 @@ void ComprehensiveStaticInstrumentation::finalizeCsi(Module &M) {
       M.getOrInsertFunction(CsiRtUnitInitName, InitFunctionTy));
   assert(InitFunction);
 
-  // Insert __csi_func_id_<f> weak symbols for all defined functions
-  // and generate the runtime code that stores to all of them.
-  generateInitCallsiteToFunction(M);
+  // Insert __csi_func_id_<f> weak symbols for all defined functions and
+  // generate the runtime code that stores to all of them.
+  generateInitCallsiteToFunction();
 
-  SmallVector<Constant *, 4> UnitFedTables({
+  SmallVector<Constant *, 6> UnitFedTables({
       fedTableToUnitFedTable(M, UnitFedTableType, BasicBlockFED),
       fedTableToUnitFedTable(M, UnitFedTableType, FunctionFED),
       fedTableToUnitFedTable(M, UnitFedTableType, FunctionExitFED),
@@ -1075,18 +701,12 @@ void ComprehensiveStaticInstrumentation::finalizeCsi(Module &M) {
   CNCtor->addCalledFunction(Call, CNFunc);
 }
 
-void ComprehensiveStaticInstrumentation::getAnalysisUsage(
-    AnalysisUsage &AU) const {
-  AU.addRequired<CallGraphWrapperPass>();
-}
-
-bool ComprehensiveStaticInstrumentation::shouldNotInstrumentFunction(
-    Function &F) {
+bool CSIImpl::shouldNotInstrumentFunction(Function &F) {
   Module &M = *F.getParent();
   // Never instrument the CSI ctor.
-  if (F.hasName() && F.getName() == CsiRtUnitCtorName) {
+  if (F.hasName() && F.getName() == CsiRtUnitCtorName)
     return true;
-  }
+
   // Don't instrument functions that will run before or
   // simultaneously with CSI ctors.
   GlobalVariable *GV = M.getGlobalVariable("llvm.global_ctors");
@@ -1148,7 +768,7 @@ static bool isAtomic(Instruction *I) {
   return false;
 }
 
-void ComprehensiveStaticInstrumentation::computeLoadAndStoreProperties(
+void CSIImpl::computeLoadAndStoreProperties(
     SmallVectorImpl<std::pair<Instruction *, CsiLoadStoreProperty>> &LoadAndStoreProperties,
     SmallVectorImpl<Instruction *> &BBLoadsAndStores,
     const DataLayout &DL) {
@@ -1204,18 +824,7 @@ void ComprehensiveStaticInstrumentation::computeLoadAndStoreProperties(
   BBLoadsAndStores.clear();
 }
 
-bool ComprehensiveStaticInstrumentation::runOnModule(Module &M) {
-  initializeCsi(M);
-
-  for (Function &F : M) {
-    instrumentFunction(F);
-  }
-
-  finalizeCsi(M);
-  return true; // We always insert the unit constructor.
-}
-
-void ComprehensiveStaticInstrumentation::instrumentFunction(Function &F) {
+void CSIImpl::instrumentFunction(Function &F) {
   // This is required to prevent instrumenting the call to
   // __csi_module_init from within the module constructor.
   if (F.empty() || shouldNotInstrumentFunction(F)) {
@@ -1256,52 +865,68 @@ void ComprehensiveStaticInstrumentation::instrumentFunction(Function &F) {
   }
 
 
-  // Instrument basic blocks Note that we do this before other
-  // instrumentation so that we put this at the beginning of the basic
-  // block, and then the function entry call goes before the call to
-  // basic block entry.
+  // Instrument basic blocks.  Note that we do this before other instrumentation
+  // so that we put this at the beginning of the basic block, and then the
+  // function entry call goes before the call to basic block entry.
   uint64_t LocalId = FunctionFED.add(F);
   FuncOffsetMap[F.getName()] = LocalId;
-  for (BasicBlock *BB : BasicBlocks) {
-    instrumentBasicBlock(*BB);
-  }
+  if (Options.InstrumentBasicBlocks)
+    for (BasicBlock *BB : BasicBlocks)
+      instrumentBasicBlock(*BB);
 
   // Do this work in a separate loop after copying the iterators so that we
   // aren't modifying the list as we're iterating.
-  for (std::pair<Instruction *, CsiLoadStoreProperty> p : LoadAndStoreProperties) {
-    instrumentLoadOrStore(p.first, p.second, DL);
-  }
+  if (Options.InstrumentMemoryAccesses)
+    for (std::pair<Instruction *, CsiLoadStoreProperty> p :
+           LoadAndStoreProperties)
+      instrumentLoadOrStore(p.first, p.second, DL);
 
   // Instrument atomic memory accesses in any case (they can be used to
   // implement synchronization).
-  for (Instruction *I : AtomicAccesses) {
-    instrumentAtomic(I, DL);
-  }
+  if (Options.InstrumentAtomics)
+    for (Instruction *I : AtomicAccesses)
+      instrumentAtomic(I, DL);
 
-  for (Instruction *I : MemIntrinsics) {
-    instrumentMemIntrinsic(I);
-  }
+  if (Options.InstrumentMemIntrinsics)
+    for (Instruction *I : MemIntrinsics)
+      instrumentMemIntrinsic(I);
 
-  for (Instruction *I : Callsites) {
-    instrumentCallsite(I);
-  }
+  if (Options.InstrumentCalls)
+    for (Instruction *I : Callsites)
+      instrumentCallsite(I);
 
   // Instrument function entry/exit points.
-  IRBuilder<> IRB(&*F.getEntryBlock().getFirstInsertionPt());
-  //LLVMContext &C = IRB.getContext();
-  CsiFuncProperty FuncEntryProp;
-  CsiFuncExitProperty FuncExitProp;
-  Value *FuncId = FunctionFED.localToGlobalId(LocalId, IRB);
-  Value *PropVal = FuncEntryProp.getValue(IRB);
-  insertConditionalHookCall(&*IRB.GetInsertPoint(), CsiFuncEntry,
-                            {FuncId, PropVal});
+  if (Options.InstrumentFuncEntryExit) {
+    IRBuilder<> IRB(&*F.getEntryBlock().getFirstInsertionPt());
+    //LLVMContext &C = IRB.getContext();
+    CsiFuncProperty FuncEntryProp;
+    CsiFuncExitProperty FuncExitProp;
+    Value *FuncId = FunctionFED.localToGlobalId(LocalId, IRB);
+    Value *PropVal = FuncEntryProp.getValue(IRB);
+    insertConditionalHookCall(&*IRB.GetInsertPoint(), CsiFuncEntry,
+                              {FuncId, PropVal});
 
-  for (Instruction *I : ReturnInstructions) {
-    IRBuilder<> IRBRet(I);
-    uint64_t ExitLocalId = FunctionExitFED.add(F);
-    Value *ExitCsiId = FunctionExitFED.localToGlobalId(ExitLocalId, IRBRet);
-    PropVal = FuncExitProp.getValue(IRBRet);
-    insertConditionalHookCall(I, CsiFuncExit,
-                              {ExitCsiId, FuncId, PropVal});
+    for (Instruction *I : ReturnInstructions) {
+      IRBuilder<> IRBRet(I);
+      uint64_t ExitLocalId = FunctionExitFED.add(F);
+      Value *ExitCsiId = FunctionExitFED.localToGlobalId(ExitLocalId, IRBRet);
+      PropVal = FuncExitProp.getValue(IRBRet);
+      insertConditionalHookCall(I, CsiFuncExit,
+                                {ExitCsiId, FuncId, PropVal});
+    }
   }
+}
+
+void ComprehensiveStaticInstrumentation::getAnalysisUsage(
+    AnalysisUsage &AU) const {
+  AU.addRequired<CallGraphWrapperPass>();
+}
+
+bool ComprehensiveStaticInstrumentation::runOnModule(Module &M) {
+  if (skipModule(M))
+    return false;
+
+  CallGraph *CG = &getAnalysis<CallGraphWrapperPass>().getCallGraph();
+
+  return CSIImpl(M, CG, Options).run();
 }
