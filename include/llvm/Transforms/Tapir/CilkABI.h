@@ -227,13 +227,19 @@ public:
     TypeBuilderCache::iterator I = cache.find(&C);
     if (I != cache.end())
       return I->second;
-    StructType *Ty = StructType::create(C, "__cilkrts_pedigree");
-    cache[&C] = Ty;
-    Ty->setBody(
+    StructType *ExistingTy = StructType::getOrCreate(C, "struct.__cilkrts_pedigree");
+    cache[&C] = ExistingTy;
+    StructType *NewTy = StructType::create(C);
+    NewTy->setBody(
         TypeBuilder<uint64_t,            X>::get(C), // rank
         TypeBuilder<__cilkrts_pedigree*, X>::get(C)  // next
                 );
-    return Ty;
+    if (ExistingTy->isOpaque())
+      ExistingTy->setBody(NewTy->elements());
+    else
+      assert(ExistingTy->isLayoutIdentical(NewTy) &&
+             "Conflicting definition of tye struct.__cilkrts_pedigree");
+    return ExistingTy;
   }
   enum {
     rank,
@@ -249,7 +255,10 @@ public:
     TypeBuilderCache::iterator I = cache.find(&C);
     if (I != cache.end())
       return I->second;
-    StructType *Ty = StructType::create(C, "__cilkrts_worker");
+    // Try looking up this type by name.
+    StructType *Ty = StructType::getOrCreate(C, "struct.__cilkrts_worker");
+    assert(Ty->isOpaque() &&
+           "Conflicting definition of type struct.__cilkrts_worker.");
     cache[&C] = Ty;
     Ty->setBody(
         TypeBuilder<__cilkrts_stack_frame**, X>::get(C), // tail
@@ -293,7 +302,7 @@ public:
     TypeBuilderCache::iterator I = cache.find(&C);
     if (I != cache.end())
       return I->second;
-    StructType *Ty = StructType::create(C, "__cilkrts_stack_frame");
+    StructType *Ty = StructType::create(C, "struct.__cilkrts_stack_frame");
     cache[&C] = Ty;
     Ty->setBody(
         TypeBuilder<uint32_t,               X>::get(C), // flags
