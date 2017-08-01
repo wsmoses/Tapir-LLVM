@@ -1,0 +1,30 @@
+version: 2
+jobs:
+  build:
+    resource_class: xlarge
+    docker:
+      - image: wsmoses/tapir:latest
+
+    steps:
+      - checkout
+      - run:
+          name: submodules
+          command: |
+            git submodule sync
+            git submodule update --init --recursive
+      - run:
+          name: cmake
+          command: |
+            mkdir build
+            cd build
+            cmake ..
+      - run:
+          name: make
+          command: |
+            cd build
+            make
+      - run:
+          name: test
+          command: |
+            cd build
+            make test
