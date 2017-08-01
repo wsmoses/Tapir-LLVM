@@ -1,0 +1,3 @@
+[submodule "tools/clang"]
+	path = tools/clang
+	url = https://github.com/wsmoses/Cilk-Clang
