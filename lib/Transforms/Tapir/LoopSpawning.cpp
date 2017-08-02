@@ -555,7 +555,11 @@ Value* LoopOutline::canonicalizeLoopLatch(PHINode *IV, Value *Limit) {
   Builder.CreateCondBr(NewCondition, Header, ExitBlock);
 
   // Erase the old conditional branch.
+  Value *OldCond = LatchBr->getCondition();
   LatchBr->eraseFromParent();
+  if (!OldCond->hasNUsesOrMore(1))
+    if (Instruction *OldCondInst = dyn_cast<Instruction>(OldCond))
+      OldCondInst->eraseFromParent();
 
   return NewCondition;
 }
@@ -1112,6 +1116,7 @@ bool DACLoopSpawning::processLoop() {
         dbgs() << "Handled exits of loop:";
         for (BasicBlock *HE : HandledExits)
           dbgs() << *HE;
+        dbgs() << "\n";
       });
     for (BasicBlock *HE : HandledExits)
       LoopBlocks.push_back(HE);
@@ -1125,6 +1130,7 @@ bool DACLoopSpawning::processLoop() {
           dbgs() << "Loop exits to split:";
           for (BasicBlock *ETS : ExitsToSplit)
             dbgs() << *ETS;
+          dbgs() << "\n";
         });
     }
 
@@ -1160,11 +1166,31 @@ bool DACLoopSpawning::processLoop() {
     InputMap[CanonicalIV] = StartArg;
 
     // Add argument for end.
-    if (isa<Constant>(LimitVar)) {
+    //
+    // In the general case, the loop limit is the result of some computation
+    // that the pass added to the loop's preheader.  In this case, the variable
+    // storing the loop limit is used exactly once, in the canonicalized loop
+    // latch.  In this case, the pass wants to prevent outlining from passing
+    // the loop-limit variable as an arbitrary argument to the outlined
+    // function.  Hence, this pass adds the loop-limit variable as an argument
+    // manually.
+    // 
+    // There are two special cases to consider: the loop limit is a constant, or
+    // the loop limit is used elsewhere within the loop.  To handle these two
+    // cases, this pass adds an explict argument for the end of the loop, to
+    // supports the subsequent transformation to using recursive
+    // divide-and-conquer.  After the loop is outlined, this pass will rewrite
+    // the latch in the outlined loop to use this explicit argument.
+    // Furthermore, this pass does not prevent outliner from recognizing the
+    // loop limit as a potential argument to the function.
+    if (isa<Constant>(LimitVar) || !LimitVar->hasOneUse()) {
       Argument *EndArg = new Argument(LimitVar->getType(), "end");
       Inputs.insert(EndArg);
       InputMap[LimitVar] = EndArg;
     } else {
+      // If the limit var is not constant and has exactly one use, then the
+      // limit var is the result of some nontrivial computation, and that one
+      // use is the new condition inserted.
       Inputs.insert(LimitVar);
       InputMap[LimitVar] = LimitVar;
     }
@@ -1191,6 +1217,10 @@ bool DACLoopSpawning::processLoop() {
         BodyInputsToRemove.push_back(V);
     for (Value *V : BodyInputsToRemove)
       BodyInputs.remove(V);
+    DEBUG({
+        for (Value *V : BodyInputs)
+          dbgs() << "Remaining body input: " << *V << "\n";
+      });
     for (Value *V : BodyOutputs)
       dbgs() << "EL output: " << *V << "\n";
     assert(0 == BodyOutputs.size() &&
@@ -1308,16 +1338,24 @@ bool DACLoopSpawning::processLoop() {
                        /*TypeMapper=*/nullptr, /*Materializer=*/nullptr);
   }
 
-  // If the loop limit is constant, then rewrite the loop latch
-  // condition to use the end-iteration argument.
-  if (isa<Constant>(LimitVar)) {
+  // The loop has been outlined by this point.  To handle the special cases
+  // where the loop limit was constant or used elsewhere within the loop, this
+  // pass rewrites the outlined loop-latch condition to use the explicit
+  // end-iteration argument.
+  if (isa<Constant>(LimitVar) || !LimitVar->hasOneUse()) {
     CmpInst *HelperCond = cast<CmpInst>(VMap[NewCond]);
-    assert(HelperCond->getOperand(1) == LimitVar);
+    assert(((isa<Constant>(LimitVar) &&
+             HelperCond->getOperand(1) == LimitVar) ||
+            (!LimitVar->hasOneUse() &&
+             HelperCond->getOperand(1) == VMap[LimitVar])) &&
+           "Unexpected condition in loop latch.");
     IRBuilder<> Builder(HelperCond);
     Value *NewHelperCond = Builder.CreateICmpULT(HelperCond->getOperand(0),
                                                  VMap[InputMap[LimitVar]]);
     HelperCond->replaceAllUsesWith(NewHelperCond);
     HelperCond->eraseFromParent();
+    DEBUG(dbgs() << "Rewritten Latch: " <<
+          *(cast<Instruction>(NewHelperCond)->getParent()));
   }
 
   // DEBUGGING: Simply serialize the cloned loop.
@@ -1388,22 +1426,27 @@ bool DACLoopSpawning::processLoop() {
   // Add call to new helper function in original function.
   {
     // Setup arguments for call.
-    SetVector<Value *> TopCallArgs;
+    SmallVector<Value *, 4> TopCallArgs;
     // Add start iteration 0.
     assert(CanonicalSCEV->getStart()->isZero() &&
            "Canonical IV does not start at zero.");
-    TopCallArgs.insert(ConstantInt::get(CanonicalIV->getType(), 0));
+    TopCallArgs.push_back(ConstantInt::get(CanonicalIV->getType(), 0));
     // Add loop limit.
-    TopCallArgs.insert(LimitVar);
+    TopCallArgs.push_back(LimitVar);
     // Add grainsize.
-    TopCallArgs.insert(GrainVar);
+    TopCallArgs.push_back(GrainVar);
     // Add the rest of the arguments.
     for (Value *V : BodyInputs)
-      TopCallArgs.insert(V);
+      TopCallArgs.push_back(V);
+    DEBUG({
+        for (Value *TCArg : TopCallArgs)
+          dbgs() << "Top call arg: " << *TCArg << "\n";
+      });
 
     // Create call instruction.
     IRBuilder<> Builder(Preheader->getTerminator());
-    CallInst *TopCall = Builder.CreateCall(Helper, TopCallArgs.getArrayRef());
+    CallInst *TopCall = Builder.CreateCall(Helper,
+                                           ArrayRef<Value *>(TopCallArgs));
 
     // Use a fast calling convention for the helper.
     TopCall->setCallingConv(CallingConv::Fast);
