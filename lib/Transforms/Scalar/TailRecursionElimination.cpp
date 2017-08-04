@@ -724,6 +724,7 @@ static bool foldReturnAndProcessPred(BasicBlock *BB, ReturnInst *Ret,
     if (SyncInst *SI = dyn_cast<SyncInst>(PTI))
       SyncPreds.push_back(SI);
   }
+  BasicBlock *OldEntryBlock = &BB->getParent()->getEntryBlock();
 
   while (!UncondBranchPreds.empty()) {
     BranchInst *BI = UncondBranchPreds.pop_back_val();
@@ -746,7 +747,9 @@ static bool foldReturnAndProcessPred(BasicBlock *BB, ReturnInst *Ret,
       Change = true;
     }
   }
-  BasicBlock *OldEntryBlock = &BB->getParent()->getEntryBlock();
+
+  // If this loop runs, then the previous one could not have erased BB, because
+  // BB has a predecessor that is not an unconditional branch.
   while (!SyncPreds.empty()) {
     SyncInst *SI = SyncPreds.pop_back_val();
     BasicBlock *Pred = SI->getParent();
