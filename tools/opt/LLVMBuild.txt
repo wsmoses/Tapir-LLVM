@@ -28,6 +28,7 @@ required_libraries =
  IPO
  Instrumentation
  Scalar
+ TapirOpts
  ObjCARC
  Passes
  all-targets
