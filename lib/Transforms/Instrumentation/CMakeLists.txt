@@ -2,6 +2,7 @@ add_llvm_library(LLVMInstrumentation
   AddressSanitizer.cpp
   BoundsChecking.cpp
   CGProfile.cpp
+  CilkSanitizer.cpp
   DataFlowSanitizer.cpp
   GCOVProfiling.cpp
   MemorySanitizer.cpp
@@ -14,6 +15,7 @@ add_llvm_library(LLVMInstrumentation
   ThreadSanitizer.cpp
   EfficiencySanitizer.cpp
   HWAddressSanitizer.cpp
+  ComprehensiveStaticInstrumentation.cpp
 
   ADDITIONAL_HEADER_DIRS
   ${LLVM_MAIN_INCLUDE_DIR}/llvm/Transforms

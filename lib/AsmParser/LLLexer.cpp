@@ -853,6 +853,9 @@ lltok::Kind LLLexer::LexIdentifier() {
   INSTKEYWORD(invoke,      Invoke);
   INSTKEYWORD(resume,      Resume);
   INSTKEYWORD(unreachable, Unreachable);
+  INSTKEYWORD(detach,      Detach);
+  INSTKEYWORD(reattach,    Reattach);
+  INSTKEYWORD(sync,        Sync);
 
   INSTKEYWORD(alloca,      Alloca);
   INSTKEYWORD(load,        Load);

@@ -524,6 +524,10 @@ enum FunctionCodes {
   // 53 is unused.
   // 54 is unused.
   FUNC_CODE_OPERAND_BUNDLE = 55, // OPERAND_BUNDLE: [tag#, value...]
+
+  FUNC_CODE_INST_DETACH      = 56, // DETACH: [bb#, bb#]
+  FUNC_CODE_INST_REATTACH    = 57, // REATTACH
+  FUNC_CODE_INST_SYNC        = 58, // SYNC: [bb#]
 };
 
 enum UseListCodes {

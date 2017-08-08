@@ -436,6 +436,48 @@ BasicBlock *BasicBlock::splitBasicBlock(iterator I, const Twine &BBName) {
   return New;
 }
 
+BasicBlock *BasicBlock::splitBasicBlockWithTerminator(const Twine &BBName) {
+  auto term = getTerminator();
+  assert(term && "Can't use splitBasicBlock on degenerate BB!");
+  assert(term->getNumSuccessors() == 1 && "Number of successors must be 1");
+
+  BasicBlock *New = BasicBlock::Create(getContext(), BBName, getParent(),
+                                       this->getNextNode());
+
+  // Save DebugLoc of split point before invalidating iterator.
+  DebugLoc Loc = term->getDebugLoc();
+  // Move all of the specified instructions from the original basic block into
+  // the new basic block.
+  auto suc = term->getSuccessor(0);
+  term->setSuccessor(0, New);
+
+  // Add a branch instruction to the newly formed basic block.
+  BranchInst *BI = BranchInst::Create(suc, New);
+  BI->setDebugLoc(Loc);
+
+  // Now we must loop through all of the successors of the New block (which
+  // _were_ the successors of the 'this' block), and update any PHI nodes in
+  // successors.  If there were PHI nodes in the successors, then they need to
+  // know that incoming branches will be from New, not from Old.
+  //
+  for (succ_iterator I = succ_begin(New), E = succ_end(New); I != E; ++I) {
+    // Loop over any phi nodes in the basic block, updating the BB field of
+    // incoming values...
+    BasicBlock *Successor = *I;
+    PHINode *PN;
+    for (BasicBlock::iterator II = Successor->begin();
+         (PN = dyn_cast<PHINode>(II)); ++II) {
+      int IDX = PN->getBasicBlockIndex(this);
+      while (IDX != -1) {
+        PN->setIncomingBlock((unsigned)IDX, New);
+        IDX = PN->getBasicBlockIndex(this);
+      }
+    }
+  }
+
+  return New;
+}
+
 void BasicBlock::replaceSuccessorsPhiUsesWith(BasicBlock *New) {
   TerminatorInst *TI = getTerminator();
   if (!TI)

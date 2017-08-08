@@ -87,6 +87,7 @@ struct CriticalEdgeSplittingOptions {
   bool MergeIdenticalEdges = false;
   bool DontDeleteUselessPHIs = false;
   bool PreserveLCSSA = false;
+  bool SplitDetachContinue = false;
 
   CriticalEdgeSplittingOptions(DominatorTree *DT = nullptr,
                                LoopInfo *LI = nullptr)
@@ -104,6 +105,11 @@ struct CriticalEdgeSplittingOptions {
 
   CriticalEdgeSplittingOptions &setPreserveLCSSA() {
     PreserveLCSSA = true;
+    return *this;
+  }
+
+  CriticalEdgeSplittingOptions &setSplitDetachContinue() {
+    SplitDetachContinue = true;
     return *this;
   }
 };

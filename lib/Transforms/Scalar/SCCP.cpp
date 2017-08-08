@@ -570,6 +570,14 @@ private:
 
   void visitReturnInst(ReturnInst &I);
   void visitTerminatorInst(TerminatorInst &TI);
+  void visitReattachInst(ReattachInst &I) {
+    markOverdefined(&I);
+    visitTerminatorInst(I);
+  }
+  void visitSyncInst(SyncInst &I) {
+    markOverdefined(&I);
+    visitTerminatorInst(I);
+  }
 
   void visitCastInst(CastInst &I);
   void visitSelectInst(SelectInst &I);
@@ -693,6 +701,13 @@ void SCCPSolver::getFeasibleSuccessors(TerminatorInst &TI,
     return;
   }
 
+  if (isa<DetachInst>(&TI) ||
+      isa<ReattachInst>(&TI) ||
+      isa<SyncInst>(&TI)) {
+    // All destinations are executable.
+    Succs.assign(TI.getNumSuccessors(), true);
+    return;
+  }
   LLVM_DEBUG(dbgs() << "Unknown terminator instruction: " << TI << '\n');
   llvm_unreachable("SCCP: Don't know how to handle this terminator!");
 }
