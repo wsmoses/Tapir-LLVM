@@ -1547,6 +1547,7 @@ bool InstCombiner::SimplifyStoreAtEndOfBlock(StoreInst &SI) {
   if (StoreBB == DestBB || OtherBB == DestBB)
     return false;
 
+  assert(OtherBB);
   // Verify that the other block ends in a branch and is not otherwise empty.
   BasicBlock::iterator BBI(OtherBB->getTerminator());
   BranchInst *OtherBr = dyn_cast<BranchInst>(BBI);

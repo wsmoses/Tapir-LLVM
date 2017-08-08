@@ -585,7 +585,7 @@ AnalysisUsage *PMTopLevelManager::findAnalysisUsage(Pass *P) {
     // of dependencies.
     AnalysisUsage AU;
     P->getAnalysisUsage(AU);
-    
+
     AUFoldingSetNode* Node = nullptr;
     FoldingSetNodeID ID;
     AUFoldingSetNode::Profile(ID, AU);

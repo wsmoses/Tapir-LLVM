@@ -941,7 +941,9 @@ bool JumpThreadingPass::ProcessBlock(BasicBlock *BB) {
   // predecessors of our predecessor block.
   if (BasicBlock *SinglePred = BB->getSinglePredecessor()) {
     const TerminatorInst *TI = SinglePred->getTerminator();
-    if (!TI->isExceptional() && TI->getNumSuccessors() == 1 &&
+    if (!TI->isExceptional() &&
+        !isa<SyncInst>(SinglePred->getTerminator()) &&  // Can't remove syncs
+        TI->getNumSuccessors() == 1 &&
         SinglePred != BB && !hasAddressTakenAndUsed(BB)) {
       // If SinglePred was a loop header, BB becomes one.
       if (LoopHeaders.erase(SinglePred))
@@ -1308,7 +1310,8 @@ bool JumpThreadingPass::SimplifyPartiallyRedundantLoad(LoadInst *LI) {
       }
     }
 
-    if (!PredAvailable) {
+    if (!PredAvailable ||
+        isa<ReattachInst>(PredBB->getTerminator())) {
       OneUnavailablePred = PredBB;
       continue;
     }
@@ -1351,6 +1354,9 @@ bool JumpThreadingPass::SimplifyPartiallyRedundantLoad(LoadInst *LI) {
   // unconditional branch, we know that it isn't a critical edge.
   if (PredsScanned.size() == AvailablePreds.size()+1 &&
       OneUnavailablePred->getTerminator()->getNumSuccessors() == 1) {
+    // If the predecessor is a reattach, we can't split the edge
+    if (isa<ReattachInst>(OneUnavailablePred->getTerminator()))
+      return false;
     UnavailablePred = OneUnavailablePred;
   } else if (PredsScanned.size() != AvailablePreds.size()) {
     // Otherwise, we had multiple unavailable predecessors or we had a critical
@@ -1363,8 +1369,10 @@ bool JumpThreadingPass::SimplifyPartiallyRedundantLoad(LoadInst *LI) {
 
     // Add all the unavailable predecessors to the PredsToSplit list.
     for (BasicBlock *P : predecessors(LoadBB)) {
-      // If the predecessor is an indirect goto, we can't split the edge.
-      if (isa<IndirectBrInst>(P->getTerminator()))
+      // If the predecessor is an indirect goto or a reattach, we
+      // can't split the edge.
+      if (isa<IndirectBrInst>(P->getTerminator()) ||
+          isa<ReattachInst>(P->getTerminator()))
         return false;
 
       if (!AvailablePredSet.count(P))

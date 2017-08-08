@@ -40,6 +40,13 @@ void appendToGlobalCtors(Module &M, Function *F, int Priority,
 void appendToGlobalDtors(Module &M, Function *F, int Priority,
                          Constant *Data = nullptr);
 
+// Validate the result of Module::getOrInsertFunction called for an
+// interface function of ComprehensiveStaticInstrumentation. If the
+// instrumented module defines a function with the same name, their
+// prototypes must match, otherwise getOrInsertFunction returns a
+// bitcast.
+Function *checkCsiInterfaceFunction(Constant *FuncOrBitcast);
+
 // Validate the result of Module::getOrInsertFunction called for an interface
 // function of given sanitizer. If the instrumented module defines a function
 // with the same name, their prototypes must match, otherwise
