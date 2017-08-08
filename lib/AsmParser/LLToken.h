@@ -328,6 +328,11 @@ enum Kind {
   kw_insertvalue,
   kw_blockaddress,
 
+  // Tapir types
+  kw_detach,
+  kw_reattach,
+  kw_sync,
+
   // Metadata types.
   kw_distinct,
 

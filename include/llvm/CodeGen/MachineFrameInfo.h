@@ -99,7 +99,7 @@ class MachineFrameInfo {
     /// and/or GC related) over a statepoint. We know that the address of the
     /// slot can't alias any LLVM IR value.  This is very similar to a Spill
     /// Slot, but is created by statepoint lowering is SelectionDAG, not the
-    /// register allocator. 
+    /// register allocator.
     bool isStatepointSpillSlot;
 
     /// If this stack object is originated from an Alloca instruction
@@ -156,9 +156,13 @@ class MachineFrameInfo {
   /// Objects list, this is also the index to the 0th object in the list.
   unsigned NumFixedObjects = 0;
 
+//Public hack added to allow cilk codes to seem like having var objects
+// to fix rsp/rbp issues
+public:
   /// This boolean keeps track of whether any variable
   /// sized objects have been allocated yet.
   bool HasVarSizedObjects = false;
+private:
 
   /// This boolean keeps track of whether there is a call
   /// to builtin \@llvm.frameaddress.

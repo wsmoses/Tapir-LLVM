@@ -508,6 +508,14 @@ private:
   // Terminators
   void visitReturnInst(ReturnInst &I);
   void visitTerminatorInst(TerminatorInst &TI);
+  void visitReattachInst(ReattachInst &I) {
+    markOverdefined(&I);
+    visitTerminatorInst(I);
+  }
+  void visitSyncInst(SyncInst &I) {
+    markOverdefined(&I);
+    visitTerminatorInst(I);
+  }
 
   void visitCastInst(CastInst &I);
   void visitSelectInst(SelectInst &I);
@@ -627,6 +635,13 @@ void SCCPSolver::getFeasibleSuccessors(TerminatorInst &TI,
     return;
   }
 
+  if (isa<DetachInst>(&TI) ||
+      isa<ReattachInst>(&TI) ||
+      isa<SyncInst>(&TI)) {
+    // All destinations are executable.
+    Succs.assign(TI.getNumSuccessors(), true);
+    return;
+  }
   DEBUG(dbgs() << "Unknown terminator instruction: " << TI << '\n');
   llvm_unreachable("SCCP: Don't know how to handle this terminator!");
 }
@@ -688,6 +703,11 @@ bool SCCPSolver::isEdgeFeasible(BasicBlock *From, BasicBlock *To) {
     // At this point, the indirectbr is branching on a blockaddress.
     return Addr->getBasicBlock() == To;
   }
+
+  if (isa<ReattachInst>(TI) ||
+      isa<DetachInst>(TI) ||
+      isa<SyncInst>(TI))
+    return true;
 
   DEBUG(dbgs() << "Unknown terminator instruction: " << *TI << '\n');
   llvm_unreachable("SCCP: Don't know how to handle this terminator!");

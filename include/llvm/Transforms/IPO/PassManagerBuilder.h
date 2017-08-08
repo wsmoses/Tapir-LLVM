@@ -113,7 +113,14 @@ public:
     /// passes at the end of the main CallGraphSCC passes and before any
     /// function simplification passes run by CGPassManager.
     EP_CGSCCOptimizerLate,
+
+    /// EP_TapirLate - This extension point allows adding passes just before
+    /// Tapir instructions are lowered to calls into a parallel runtime system.
+    EP_TapirLate,
   };
+
+  /// Whether the Cilk Calls should be instrumented
+  bool InstrumentCilk;
 
   /// The Optimization Level - Specify the basic optimization level.
   ///    0 = -O0, 1 = -O1, 2 = -O2, 3 = -O3
@@ -122,6 +129,12 @@ public:
   /// SizeLevel - How much we're optimizing for size.
   ///    0 = none, 1 = -Os, 2 = -Oz
   unsigned SizeLevel;
+
+  /// The Pre-lowering to parallel runtime calls optimization level
+  ///    0 = -P0 = leave with detach instructions, 1 = no optimizations before conversion, 2 = optimize before conversion
+  unsigned ParallelLevel;
+
+  bool Rhino;
 
   /// LibraryInfo - Specifies information about the runtime library for the
   /// optimizer.  If this is non-null, it is added to both the function and
@@ -189,6 +202,7 @@ private:
   void addPGOInstrPasses(legacy::PassManagerBase &MPM);
   void addFunctionSimplificationPasses(legacy::PassManagerBase &MPM);
   void addInstructionCombiningPass(legacy::PassManagerBase &MPM) const;
+  void prepopulateModulePassManager(legacy::PassManagerBase &MPM);
 
 public:
   /// populateFunctionPassManager - This fills in the function pass manager,
