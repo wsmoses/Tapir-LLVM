@@ -842,12 +842,12 @@ emitCallAndSwitchStatement(Function *newFunction, BasicBlock *codeReplacer,
 
             if (DT) {
               DominatesDef = DT->dominates(DefBlock, OldTarget);
-              
+
               // If the output value is used by a phi in the target block,
               // then we need to test for dominance of the phi's predecessor
               // instead.  Unfortunately, this a little complicated since we
               // have already rewritten uses of the value to uses of the reload.
-              BasicBlock* pred = FindPhiPredForUseInBlock(Reloads[out], 
+              BasicBlock* pred = FindPhiPredForUseInBlock(Reloads[out],
                                                           OldTarget);
               if (pred && DT && DT->dominates(DefBlock, pred))
                 DominatesDef = true;
@@ -894,7 +894,7 @@ emitCallAndSwitchStatement(Function *newFunction, BasicBlock *codeReplacer,
     } else {
       // Otherwise we must have code extracted an unwind or something, just
       // return whatever we want.
-      ReturnInst::Create(Context, 
+      ReturnInst::Create(Context,
                          Constant::getNullValue(OldFnRetTy), TheSwitch);
     }
 
@@ -1015,13 +1015,13 @@ Function *CodeExtractor::extractCodeRegion() {
   Function *oldFunction = header->getParent();
 
   // This takes place of the original loop
-  BasicBlock *codeReplacer = BasicBlock::Create(header->getContext(), 
+  BasicBlock *codeReplacer = BasicBlock::Create(header->getContext(),
                                                 "codeRepl", oldFunction,
                                                 header);
 
   // The new function needs a root node because other nodes can branch to the
   // head of the region, but the entry node of a function cannot have preds.
-  BasicBlock *newFuncRoot = BasicBlock::Create(header->getContext(), 
+  BasicBlock *newFuncRoot = BasicBlock::Create(header->getContext(),
                                                "newFuncRoot");
   newFuncRoot->getInstList().push_back(BranchInst::Create(header));
 

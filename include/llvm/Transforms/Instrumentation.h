@@ -198,6 +198,25 @@ inline ModulePass *createDataFlowSanitizerPassForJIT(
 }
 #endif
 
+// Insert CilkSanitizer (Cilk determinacy race detection) instrumentation
+ModulePass *createCilkSanitizerPass();
+
+// Options for comprehensive static instrumentation
+struct CSIOptions {
+  bool InstrumentFuncEntryExit = true;
+  bool InstrumentBasicBlocks = true;
+  bool InstrumentMemoryAccesses = true;
+  bool InstrumentCalls = true;
+  bool InstrumentAtomics = true;
+  bool InstrumentMemIntrinsics = true;
+
+  CSIOptions() = default;
+};
+
+// Insert ComprehensiveStaticInstrumentation instrumentation
+ModulePass *createComprehensiveStaticInstrumentationPass(
+    const CSIOptions &Options = CSIOptions());
+
 // BoundsChecking - This pass instruments the code to perform run-time bounds
 // checking on loads, stores, and other memory intrinsics.
 FunctionPass *createBoundsCheckingPass();

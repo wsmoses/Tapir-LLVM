@@ -36,6 +36,7 @@ class BasicBlock;
 class BitCastInst;
 class BranchInst;
 class CallInst;
+class DetachInst;
 class DbgValueInst;
 class ExtractElementInst;
 class FCmpInst;
@@ -61,6 +62,7 @@ class MDNode;
 class MVT;
 class PHINode;
 class PtrToIntInst;
+class ReattachInst;
 class ReturnInst;
 class SDDbgValue;
 class SExtInst;
@@ -69,6 +71,7 @@ class ShuffleVectorInst;
 class SIToFPInst;
 class StoreInst;
 class SwitchInst;
+class SyncInst;
 class DataLayout;
 class TargetLibraryInfo;
 class TargetLowering;
@@ -787,6 +790,9 @@ private:
   void visitCatchRet(const CatchReturnInst &I);
   void visitCatchPad(const CatchPadInst &I);
   void visitCleanupPad(const CleanupPadInst &CPI);
+  void visitDetach(const DetachInst& I);
+  void visitReattach(const ReattachInst& I);
+  void visitSync(const SyncInst& I);
 
   BranchProbability getEdgeProbability(const MachineBasicBlock *Src,
                                        const MachineBasicBlock *Dst) const;

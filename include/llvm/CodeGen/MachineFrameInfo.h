@@ -99,7 +99,7 @@ class MachineFrameInfo {
     /// and/or GC related) over a statepoint. We know that the address of the
     /// slot can't alias any LLVM IR value.  This is very similar to a Spill
     /// Slot, but is created by statepoint lowering is SelectionDAG, not the
-    /// register allocator. 
+    /// register allocator.
     bool isStatepointSpillSlot;
 
     /// If this stack object is originated from an Alloca instruction
