@@ -1410,9 +1410,28 @@ bool llvm::isGuaranteedToExecute(const Instruction &Inst,
   CurLoop->getExitBlocks(ExitBlocks);
 
   // Verify that the block dominates each of the exit blocks of the loop.
-  for (BasicBlock *ExitBlock : ExitBlocks)
-    if (!DT->dominates(Inst.getParent(), ExitBlock))
+  for (unsigned i=0,e=ExitBlocks.size(); i<e; i++)
+    if (!DT->dominates(Inst.getParent(), ExitBlocks[i])) {
+      bool valid = false;
+      for( BasicBlock* b : CurLoop->getBlocks() ) {
+        if( auto RE = dyn_cast<ReattachInst>(b->getTerminator()) ) {
+          if( b == Inst.getParent() || DT->dominates(Inst.getParent(), b) ) {
+            bool tv = true;
+            for(unsigned i2=0; i2!=e; ++i2){
+              if( !DT->dominates( RE->getSuccessor(0), ExitBlocks[i2] ) )  {
+                tv = false; break;
+              }
+            }
+            if( tv ) {
+              valid = true;
+              break;
+            }
+          }
+        }
+      }
+      if (valid) continue;
       return false;
+    }
 
   // As a degenerate case, if the loop is statically infinite then we haven't
   // proven anything since there are no exit blocks.
