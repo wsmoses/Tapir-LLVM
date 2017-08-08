@@ -3412,6 +3412,15 @@ void InnerLoopVectorizer::createVectorizedLoopSkeleton() {
   assert(VectorPH && "Invalid loop structure");
   assert(ExitBlock && "Must have an exit block");
 
+  BasicBlock *sync_split = nullptr;
+  if (isa<SyncInst>(VectorPH->getTerminator())) {
+    sync_split = VectorPH->splitBasicBlockWithTerminator("vector.sync_split");
+    DT->splitBlock(sync_split);
+    //DT->changeImmediateDominator(LoopExitBlock, LoopBypassBlocks[0]);
+    DT->verifyDomTree();
+    VectorPH = sync_split;
+  }
+
   // Some loops have a single integer induction variable, while other loops
   // don't. One example is c++ iterators that often have multiple pointer
   // induction variables. In the code below we also support a case where we
@@ -3444,6 +3453,7 @@ void InnerLoopVectorizer::createVectorizedLoopSkeleton() {
     ParentLoop->addChildLoop(Lp);
     ParentLoop->addBasicBlockToLoop(ScalarPH, *LI);
     ParentLoop->addBasicBlockToLoop(MiddleBlock, *LI);
+    if (sync_split) ParentLoop->addBasicBlockToLoop(sync_split, *LI);
   } else {
     LI->addTopLevelLoop(Lp);
   }
@@ -4381,6 +4391,7 @@ void InnerLoopVectorizer::sinkScalarOperands(Instruction *PredInst) {
     }
   } while (Changed);
 }
+
 
 void InnerLoopVectorizer::predicateInstructions() {
 
