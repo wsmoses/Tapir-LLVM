@@ -762,7 +762,7 @@ static bool foldReturnAndProcessPred(BasicBlock *BB, ReturnInst *Ret,
       // accumulator recursion elimination for tail calls before a sync.
       BasicBlock::iterator BBI(CI);
       for (++BBI; &*BBI != SI; ++BBI)
-        if (!canMoveAboveCall(&*BBI, CI))
+        if (!canMoveAboveCall(&*BBI, CI, AA))
           break;
       if (&*BBI != SI)
         continue;
@@ -793,7 +793,7 @@ static bool foldReturnAndProcessPred(BasicBlock *BB, ReturnInst *Ret,
 
       bool EliminatedTail =
         eliminateRecursiveTailCall(CI, RI, OldEntry, TailCallsAreMarkedTail,
-                                   ArgumentPHIs);
+                                   ArgumentPHIs, AA);
 
       // If a recursive tail was eliminated, fix up the syncs and sync region in
       // the CFG.
