@@ -1200,7 +1200,7 @@ Function *llvm::cilk::extractDetachBodyToFunction(DetachInst &detach,
   }
   if (call)
     *call = TopCall;
-  
+
   // Move allocas in the newly cloned detached CFG to the entry block of the
   // helper.
   {
