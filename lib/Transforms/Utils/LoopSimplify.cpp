@@ -526,7 +526,7 @@ ReprocessLoop:
       Changed = true;
   }
   // Ensure that the preheader is not terminated by a sync.
-  if (isa<SyncInst>(Preheader->getTerminator())) {
+  if (Preheader && isa<SyncInst>(Preheader->getTerminator())) {
     DEBUG(dbgs() << "LoopSimplify: Splitting sync-terminated preheader.\n");
     SplitEdge(Preheader, L->getHeader(), DT, LI);
     Preheader = L->getLoopPreheader();
