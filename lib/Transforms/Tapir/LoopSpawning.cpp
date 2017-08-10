@@ -1174,7 +1174,7 @@ bool DACLoopSpawning::processLoop() {
     // the loop-limit variable as an arbitrary argument to the outlined
     // function.  Hence, this pass adds the loop-limit variable as an argument
     // manually.
-    // 
+    //
     // There are two special cases to consider: the loop limit is a constant, or
     // the loop limit is used elsewhere within the loop.  To handle these two
     // cases, this pass adds an explict argument for the end of the loop, to

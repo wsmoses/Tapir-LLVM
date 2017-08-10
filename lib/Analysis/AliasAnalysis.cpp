@@ -146,21 +146,21 @@ ModRefInfo AAResults::getModRefInfo(Instruction *I, ImmutableCallSite Call) {
       for (BasicBlock::iterator I = BB->begin(), E = BB->end(); I != E; ++I) {
         // Fail fast if we encounter an invalid CFG.
         assert(!(D == &*I) &&
-	       "Invalid CFG found: Detached CFG reaches its own Detach instruction.");
+               "Invalid CFG found: Detached CFG reaches its own Detach instruction.");
 
         // Ignore sync instructions in this analysis
         if (isa<SyncInst>(&*I) || isa<DetachInst>(&*I))
           continue;
 
         if (isa<LoadInst>(&*I) ||
-	    isa<StoreInst>(&*I) ||
-	    isa<AtomicCmpXchgInst>(&*I) ||
-	    isa<AtomicRMWInst>(&*I) ||
-	    (&*I)->isFenceLike() ||
-	    ImmutableCallSite(&*I))
+            isa<StoreInst>(&*I) ||
+            isa<AtomicCmpXchgInst>(&*I) ||
+            isa<AtomicRMWInst>(&*I) ||
+            (&*I)->isFenceLike() ||
+            ImmutableCallSite(&*I))
           Result = ModRefInfo(Result | getModRefInfo((Instruction*) &*I, Call));
         if (&*I == (&(Instruction&)Call))
-	  return MRI_NoModRef;
+          return MRI_NoModRef;
       }
 
       // Add successors
@@ -186,6 +186,7 @@ ModRefInfo AAResults::getModRefInfo(Instruction *I, ImmutableCallSite Call) {
 ModRefInfo AAResults::getModRefInfo(ImmutableCallSite CS,
                                     const MemoryLocation &Loc) {
   ModRefInfo Result = MRI_ModRef;
+
   for (const auto &AA : AAs) {
     Result = ModRefInfo(Result & AA->getModRefInfo(CS, Loc));
 

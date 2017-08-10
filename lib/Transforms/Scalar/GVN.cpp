@@ -1057,7 +1057,7 @@ bool GVN::PerformLoadPRE(LoadInst *LI, AvailValInBlkVect &ValuesPerBlock,
     }
 
     if (Pred->getTerminator()->getNumSuccessors() != 1 &&
-	!isa<DetachInst>(Pred->getTerminator())) {
+        !isa<DetachInst>(Pred->getTerminator())) {
       if (isa<IndirectBrInst>(Pred->getTerminator())) {
         DEBUG(dbgs() << "COULD NOT PRE LOAD BECAUSE OF INDBR CRITICAL EDGE '"
               << Pred->getName() << "': " << *LI << '\n');
@@ -1261,10 +1261,10 @@ bool GVN::processNonLocalLoad(LoadInst *LI) {
     if (!(DepInfo.getInst()))
       continue;
     if (isa<DetachInst>(DepInfo.getInst())||
-	isa<SyncInst>(DepInfo.getInst())) {
+        isa<SyncInst>(DepInfo.getInst())) {
       DEBUG(dbgs() << "GVN: Cannot process" << *LI <<
-	    " due to dependency on" <<
-	    *(DepInfo.getInst()) << "\n");
+            " due to dependency on" <<
+            *(DepInfo.getInst()) << "\n");
       return false;
     }
   }
@@ -1835,7 +1835,6 @@ bool GVN::processInstruction(Instruction *I) {
 }
 
 /// runOnFunction - This is the main transformation entry point for a function.
-
 bool GVN::runImpl(Function &F, AssumptionCache &RunAC, DominatorTree &RunDT,
                   const TargetLibraryInfo &RunTLI, AAResults &RunAA,
                   MemoryDependenceResults *RunMD, LoopInfo *LI,
@@ -2098,7 +2097,7 @@ bool GVN::performScalarPRE(Instruction *CurInst) {
     // on the function.
     unsigned SuccNum = GetSuccessorNumber(PREPred, CurrentBlock);
     if (isCriticalEdge(PREPred->getTerminator(), SuccNum) &&
-	!isa<DetachInst>(PREPred->getTerminator())) {
+        !isa<DetachInst>(PREPred->getTerminator())) {
       toSplit.push_back(std::make_pair(PREPred->getTerminator(), SuccNum));
       return false;
     }
