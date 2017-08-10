@@ -417,7 +417,6 @@ BasicBlock *BasicBlock::splitBasicBlock(iterator I, const Twine &BBName) {
   return New;
 }
 
-
 BasicBlock *BasicBlock::splitBasicBlockWithTerminator(const Twine &BBName) {
   auto term = getTerminator();
   assert(term && "Can't use splitBasicBlock on degenerate BB!");

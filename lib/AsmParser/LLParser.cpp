@@ -5343,7 +5343,7 @@ bool LLParser::ParseSync(Instruction *&Inst, PerFunctionState &PFS) {
   Value *SR;
   BasicBlock *Op;
 
-  if (ParseToken(lltok::kw_within, "expected 'within' after reatach"))
+  if (ParseToken(lltok::kw_within, "expected 'within' after sync"))
     return true;
 
   if (Lex.getKind() != lltok::kw_none && Lex.getKind() != lltok::LocalVar &&
