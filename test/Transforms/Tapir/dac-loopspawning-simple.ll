@@ -14,7 +14,7 @@ entry:
 pfor.detach.preheader:                            ; preds = %entry
 ; CHECK: pfor.detach.preheader:
 ; CHECK: [[LIMIT:%[0-9]+]] = add [[TYPE:i[0-9]+]] %n, -1
-; CHECK: call fastcc void @foo_pfor.detach.ls(
+; CHECK: call fastcc void @[[OUTLINED:[a-zA-Z0-9._]+]](
 ; CHECK: [[TYPE]] 0
 ; CHECK: [[TYPE]] [[LIMIT]]
 ; CHECK: [[TYPE]] {{[%]?[a-zA-Z0-9._]+}}
@@ -25,6 +25,8 @@ pfor.cond.cleanup.loopexit:                       ; preds = %pfor.inc
   br label %pfor.cond.cleanup
 
 pfor.cond.cleanup:                                ; preds = %pfor.cond.cleanup.loopexit, %entry
+; CHECK: pfor.cond.cleanup
+; CHECK-NOT: sync within %syncreg, label %0
   sync within %syncreg, label %0
 
 ; <label>:0:                                      ; preds = %pfor.cond.cleanup
@@ -36,10 +38,11 @@ pfor.detach:                                      ; preds = %pfor.detach.prehead
 ; CHECK-NOT: %pfor.detach.preheader
 ; CHECK: detach
 
-; CHECK-LABEL: define internal fastcc void @foo_pfor.detach.ls(
+; CHECK: define internal fastcc void @[[OUTLINED]](
 ; CHECK: [[TYPE]] [[START:%[a-zA-Z0-9._]+]]
 ; CHECK: [[TYPE]] [[END:%[a-zA-Z0-9._]+]]
 ; CHECK: [[TYPE]] [[GRAIN:%[a-zA-Z0-9._]+]]
+; CHECK: [[NEWSYNCREG:%[a-zA-Z0-9._]+]] = call token @llvm.syncregion.start(
 
 ; CHECK: {{^(; <label>:)?}}[[DACSTART:[a-zA-Z0-9._]+]]:
 ; CHECK: [[ITERSTART:%[a-zA-Z0-9._]+]] = phi [[TYPE]] [{{.*}}[[START]]{{.*}}]
@@ -50,17 +53,18 @@ pfor.detach:                                      ; preds = %pfor.detach.prehead
 ; CHECK: {{^(; <label>:)?}}[[RECUR]]:
 ; CHECK-NEXT: [[HALFCOUNT:%[a-zA-Z0-9._]+]] = lshr [[TYPE]] [[ITERCOUNT]], 1
 ; CHECK-NEXT: [[MIDITER:%[a-zA-Z0-9._]+]] = add {{.*}} [[TYPE]] [[ITERSTART]], [[HALFCOUNT]]
-; CHECK-NEXT: detach within %[[NEWSYNCREG:[a-zA-Z0-9._]+]], label %[[DETACHED:[a-zA-Z0-9._]+]], label %[[CONTINUE:[a-zA-Z0-9._]+]]
+; CHECK-NEXT: detach within [[NEWSYNCREG]], label %[[DETACHED:[a-zA-Z0-9._]+]], label %[[CONTINUE:[a-zA-Z0-9._]+]]
 
 ; CHECK: {{^(; <label>:)?}}[[DETACHED]]:
-; CHECK-NEXT: call fastcc void @foo_pfor.detach.ls([[TYPE]] [[ITERSTART]], [[TYPE]] [[MIDITER]], [[TYPE]] [[GRAIN]]
-; CHECK-NEXT: reattach within %[[NEWSYNCREG]], label %[[CONTINUE]]
+; CHECK-NEXT: call fastcc void @[[OUTLINED]]([[TYPE]] [[ITERSTART]], [[TYPE]] [[MIDITER]], [[TYPE]] [[GRAIN]]
+; CHECK-NEXT: reattach within [[NEWSYNCREG]], label %[[CONTINUE]]
 
 ; CHECK: {{^(; <label>:)?}}[[CONTINUE]]:
 ; CHECK-NEXT: [[MIDITERP1:%[a-zA-Z0-9._]+]] = add {{.*}} [[TYPE]] [[MIDITER]], 1
 ; CHECK-NEXT: br label %[[DACSTART]]
   %i.06 = phi i32 [ %inc, %pfor.inc ], [ 0, %pfor.detach.preheader ]
   detach within %syncreg, label %pfor.body, label %pfor.inc
+; CHECK: sync within [[NEWSYNCREG]]
 ; CHECK: br label %pfor.body.ls
 
 pfor.body:                                        ; preds = %pfor.detach
@@ -68,10 +72,10 @@ pfor.body:                                        ; preds = %pfor.detach
   tail call void @bar(i32 %i.06) #2
 ; CHECK-NEXT: tail call void @bar(i32 %i.06.ls)
   reattach within %syncreg, label %pfor.inc
-; CHECK-NEXT: br label %pfor.inc.ls
+; CHECK-NEXT: br label %[[INC:[a-zA-Z0-9._]+]]
 
 pfor.inc:                                         ; preds = %pfor.body, %pfor.detach
-; CHECK: pfor.inc.ls:
+; CHECK: {{^(; <label>:)?}}[[INC]]:
 ; CHECK-NEXT: [[LOCALCMP:%[0-9]+]] = icmp ult {{.*}} [[LOCALITER:%[a-zA-Z0-9._]+]], [[END]]
   %inc = add nuw nsw i32 %i.06, 1
 ; CHECK-NEXT: add {{.*}} [[LOCALITER]], 1
