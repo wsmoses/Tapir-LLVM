@@ -709,7 +709,10 @@ void PassManagerBuilder::populateModulePassManager(
   // resulted in single-entry-single-exit or empty blocks. Clean up the CFG.
   MPM.add(createCFGSimplificationPass());
 
-  addExtensionsToPM(EP_TapirLate, MPM);
+  if (RerunAfterTapirLowering || (ParallelLevel == 0))
+    // Add passes to run just before Tapir lowering.
+    addExtensionsToPM(EP_TapirLate, MPM);
+
   if (!TapirHasBeenLowered) {
     // First handle Tapir loops.
     MPM.add(createIndVarSimplifyPass());

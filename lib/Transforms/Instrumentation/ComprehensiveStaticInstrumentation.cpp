@@ -150,11 +150,12 @@ bool CSIImpl::run() {
   for (Function &F : M)
     instrumentFunction(F);
 
+  collectUnitFEDTables();
   finalizeCsi();
   return true; // We always insert the unit constructor.
 }
 
-FrontEndDataTable::FrontEndDataTable(Module &M, StringRef BaseIdName) {
+ForensicTable::ForensicTable(Module &M, StringRef BaseIdName) {
   LLVMContext &C = M.getContext();
   IntegerType *Int64Ty = IntegerType::get(C, 64);
   IdCounter = 0;
@@ -163,32 +164,15 @@ FrontEndDataTable::FrontEndDataTable(Module &M, StringRef BaseIdName) {
   assert(BaseId);
 }
 
-uint64_t FrontEndDataTable::add(const Function &F) {
-  uint64_t Id = add(F.getSubprogram());
-  ValueToLocalIdMap[&F] = Id;
-  return Id;
-}
-
-uint64_t FrontEndDataTable::add(const BasicBlock &BB) {
-  uint64_t Id = add(getFirstDebugLoc(BB));
-  ValueToLocalIdMap[&BB] = Id;
-  return Id;
-}
-
-uint64_t FrontEndDataTable::add(const Instruction &I) {
-  uint64_t Id = add(I.getDebugLoc());
-  ValueToLocalIdMap[&I] = Id;
-  return Id;
-}
-
-uint64_t FrontEndDataTable::getId(const Value *V) {
-  assert(ValueToLocalIdMap.find(V) != ValueToLocalIdMap.end() &&
-         "Value not in ID map.");
+uint64_t ForensicTable::getId(const Value *V) {
+  if (!ValueToLocalIdMap.count(V))
+    ValueToLocalIdMap[V] = IdCounter++;
+  assert(ValueToLocalIdMap.count(V) && "Value not in ID map.");
   return ValueToLocalIdMap[V];
 }
 
-Value *FrontEndDataTable::localToGlobalId(uint64_t LocalId,
-                                          IRBuilder<> IRB) const {
+Value *ForensicTable::localToGlobalId(uint64_t LocalId,
+                                      IRBuilder<> &IRB) const {
   assert(BaseId);
   LLVMContext &C = IRB.getContext();
   LoadInst *Base = IRB.CreateLoad(BaseId);
@@ -196,6 +180,24 @@ Value *FrontEndDataTable::localToGlobalId(uint64_t LocalId,
   Base->setMetadata(LLVMContext::MD_invariant_load, MD);
   Value *Offset = IRB.getInt64(LocalId);
   return IRB.CreateAdd(Base, Offset);
+}
+
+uint64_t FrontEndDataTable::add(const Function &F) {
+  uint64_t ID = getId(&F);
+  add(ID, F.getSubprogram());
+  return ID;
+}
+
+uint64_t FrontEndDataTable::add(const BasicBlock &BB) {
+  uint64_t ID = getId(&BB);
+  add(ID, getFirstDebugLoc(BB));
+  return ID;
+}
+
+uint64_t FrontEndDataTable::add(const Instruction &I) {
+  uint64_t ID = getId(&I);
+  add(ID, I.getDebugLoc());
+  return ID;
 }
 
 PointerType *FrontEndDataTable::getPointerType(LLVMContext &C) {
@@ -210,31 +212,31 @@ StructType *FrontEndDataTable::getSourceLocStructType(LLVMContext &C) {
       /* File */ PointerType::get(IntegerType::get(C, 8), 0));
 }
 
-uint64_t FrontEndDataTable::add(const DILocation *Loc) {
-  if (Loc)
-    return add((int32_t)Loc->getLine(), (int32_t)Loc->getColumn(),
-               Loc->getFilename());
-  else
-    return add();
+void FrontEndDataTable::add(uint64_t ID, const DILocation *Loc) {
+  if (Loc) {
+    // TODO: Add location information for inlining
+    const DISubprogram *Subprog = Loc->getScope()->getSubprogram();
+    add(ID, (int32_t)Loc->getLine(), (int32_t)Loc->getColumn(),
+        Loc->getFilename(), Loc->getDirectory(), Subprog->getName());
+  } else
+    add(ID);
 }
 
-uint64_t FrontEndDataTable::add(const DISubprogram *Subprog) {
+void FrontEndDataTable::add(uint64_t ID, const DISubprogram *Subprog) {
   if (Subprog)
-    return add((int32_t)Subprog->getLine(), -1,
-               (Subprog->getDirectory() + Subprog->getFilename()).str(),
-               Subprog->getName());
+    add(ID, (int32_t)Subprog->getLine(), -1, Subprog->getFilename(),
+        Subprog->getDirectory(), Subprog->getName());
   else
-    return add();
+    add(ID);
 }
 
-uint64_t FrontEndDataTable::add(int32_t Line, int32_t Column, StringRef File,
-                                StringRef Name) {
-  uint64_t Id = IdCounter++;
-  assert(LocalIdToSourceLocationMap.find(Id) ==
+void FrontEndDataTable::add(uint64_t ID, int32_t Line, int32_t Column,
+                            StringRef Filename, StringRef Directory,
+                            StringRef Name) {
+  assert(LocalIdToSourceLocationMap.find(ID) ==
              LocalIdToSourceLocationMap.end() &&
          "Id already exists in FED table.");
-  LocalIdToSourceLocationMap[Id] = {Name, Line, Column, File};
-  return Id;
+  LocalIdToSourceLocationMap[ID] = {Name, Line, Column, Filename, Directory};
 }
 
 Constant *FrontEndDataTable::insertIntoModule(Module &M) const {
@@ -243,15 +245,18 @@ Constant *FrontEndDataTable::insertIntoModule(Module &M) const {
   IntegerType *Int32Ty = IntegerType::get(C, 32);
   Constant *Zero = ConstantInt::get(Int32Ty, 0);
   Value *GepArgs[] = {Zero, Zero};
-  SmallVector<Constant *, 4> FEDEntries;
+  SmallVector<Constant *, 6> FEDEntries;
 
-  for (const auto it : LocalIdToSourceLocationMap) {
-    const SourceLocation &E = it.second;
+  for (uint64_t LocalID = 0; LocalID < IdCounter; ++LocalID) {
+    const SourceLocation &E = LocalIdToSourceLocationMap.find(LocalID)->second;
     Constant *Line = ConstantInt::get(Int32Ty, E.Line);
     Constant *Column = ConstantInt::get(Int32Ty, E.Column);
     Constant *File;
     {
-      Constant *FileStrConstant = ConstantDataArray::getString(C, E.File);
+      std::string Filename = E.Filename.str();
+      if (!E.Directory.empty())
+        Filename = E.Directory.str() + "/" + Filename;
+      Constant *FileStrConstant = ConstantDataArray::getString(C, Filename);
       GlobalVariable *GV = M.getGlobalVariable("__csi_unit_filename", true);
       if (GV == NULL) {
         GV = new GlobalVariable(M, FileStrConstant->getType(),
@@ -266,7 +271,10 @@ Constant *FrontEndDataTable::insertIntoModule(Module &M) const {
         ConstantExpr::getGetElementPtr(GV->getValueType(), GV, GepArgs);
     }
     Constant *Name;
-    {
+    if (E.Name.empty())
+      Name = ConstantPointerNull::get(PointerType::get(
+                                          IntegerType::get(C, 8), 0));
+    else {
       Constant *NameStrConstant = ConstantDataArray::getString(C, E.Name);
       GlobalVariable *GV =
         M.getGlobalVariable(("__csi_unit_function_name_" + E.Name).str(), true);
@@ -283,6 +291,8 @@ Constant *FrontEndDataTable::insertIntoModule(Module &M) const {
       Name =
         ConstantExpr::getGetElementPtr(GV->getValueType(), GV, GepArgs);
     }
+    // The order of arguments to ConstantStruct::get() must match the
+    // source_loc_t type in csi.h.
     FEDEntries.push_back(ConstantStruct::get(FedType, Name, Line, Column,
                                              File));
   }
@@ -353,6 +363,11 @@ void CSIImpl::initializeLoadStoreHooks() {
   CsiAfterWrite = checkCsiInterfaceFunction(
       M.getOrInsertFunction("__csi_after_store", RetType, IRB.getInt64Ty(),
                             AddrType, NumBytesType, StorePropertyTy));
+}
+
+void CSIImpl::initializeMemIntrinsicsHooks() {
+  LLVMContext &C = M.getContext();
+  IRBuilder<> IRB(C);
 
   MemmoveFn = checkCsiInterfaceFunction(
       M.getOrInsertFunction("memmove", IRB.getInt8PtrTy(), IRB.getInt8PtrTy(),
@@ -432,7 +447,7 @@ void CSIImpl::instrumentAtomic(Instruction *I, const DataLayout &DL) {
 // Since our pass runs after everyone else, the calls should not be
 // replaced back with intrinsics. If that becomes wrong at some point,
 // we will need to call e.g. __csi_memset to avoid the intrinsics.
-void CSIImpl::instrumentMemIntrinsic(Instruction *I) {
+bool CSIImpl::instrumentMemIntrinsic(Instruction *I) {
   IRBuilder<> IRB(I);
   if (MemSetInst *M = dyn_cast<MemSetInst>(I)) {
     Instruction *Call = IRB.CreateCall(
@@ -442,6 +457,7 @@ void CSIImpl::instrumentMemIntrinsic(Instruction *I) {
                                            IRB.CreateIntCast(M->getArgOperand(2), IntptrTy, false)});
     setInstrumentationDebugLoc(I, Call);
     I->eraseFromParent();
+    return true;
   } else if (MemTransferInst *M = dyn_cast<MemTransferInst>(I)) {
     Instruction *Call = IRB.CreateCall(
                                        isa<MemCpyInst>(M) ? MemcpyFn : MemmoveFn,
@@ -450,7 +466,9 @@ void CSIImpl::instrumentMemIntrinsic(Instruction *I) {
                                            IRB.CreateIntCast(M->getArgOperand(2), IntptrTy, false)});
     setInstrumentationDebugLoc(I, Call);
     I->eraseFromParent();
+    return true;
   }
+  return false;
 }
 
 void CSIImpl::instrumentBasicBlock(BasicBlock &BB) {
@@ -468,6 +486,10 @@ void CSIImpl::instrumentBasicBlock(BasicBlock &BB) {
 }
 
 void CSIImpl::instrumentCallsite(Instruction *I) {
+  // Ignore calls to debug intrinsics
+  if (isa<DbgInfoIntrinsic>(I))
+    return;
+
   bool IsInvoke = false;
   Function *Called = NULL;
   if (CallInst *CI = dyn_cast<CallInst>(I)) {
@@ -477,9 +499,9 @@ void CSIImpl::instrumentCallsite(Instruction *I) {
     IsInvoke = true;
   }
 
-  if (Called && Called->getName().startswith("llvm.dbg")) {
-    return;
-  }
+  // if (Called && Called->getName().startswith("llvm.dbg")) {
+  //   return;
+  // }
 
   IRBuilder<> IRB(I);
   uint64_t LocalId = CallsiteFED.add(*I);
@@ -567,6 +589,12 @@ void CSIImpl::initializeFEDTables() {
   StoreFED = FrontEndDataTable(M, CsiStoreBaseIdName);
 }
 
+uint64_t CSIImpl::getLocalFunctionID(Function &F) {
+  uint64_t LocalId = FunctionFED.add(F);
+  FuncOffsetMap[F.getName()] = LocalId;
+  return LocalId;
+}
+
 void CSIImpl::generateInitCallsiteToFunction() {
   LLVMContext &C = M.getContext();
   BasicBlock *EntryBB = BasicBlock::Create(C, "", InitCallsiteToFunction);
@@ -591,7 +619,7 @@ void CSIImpl::generateInitCallsiteToFunction() {
 }
 
 void CSIImpl::initializeCsi() {
-  IntptrTy = M.getDataLayout().getIntPtrType(M.getContext());
+  IntptrTy = DL.getIntPtrType(M.getContext());
 
   initializeFEDTables();
   if (Options.InstrumentFuncEntryExit)
@@ -602,6 +630,8 @@ void CSIImpl::initializeCsi() {
     initializeBasicBlockHooks();
   if (Options.InstrumentCalls)
     initializeCallsiteHooks();
+  if (Options.InstrumentMemIntrinsics)
+    initializeMemIntrinsicsHooks();
 
   FunctionType *FnType =
     FunctionType::get(Type::getVoidTy(M.getContext()), {}, false);
@@ -621,15 +651,16 @@ void CSIImpl::initializeCsi() {
 }
 
 // Create a struct type to match the unit_fed_entry_t type in csirt.c.
-static StructType *getUnitFedTableType(LLVMContext &C,
-                                       PointerType *EntryPointerType) {
+StructType *CSIImpl::getUnitFedTableType(LLVMContext &C,
+                                         PointerType *EntryPointerType) {
   return StructType::get(IntegerType::get(C, 64),
                          Type::getInt8PtrTy(C, 0),
                          EntryPointerType);
 }
 
-static Constant *fedTableToUnitFedTable(Module &M, StructType *UnitFedTableType,
-                                        FrontEndDataTable &FedTable) {
+Constant *CSIImpl::fedTableToUnitFedTable(Module &M,
+                                          StructType *UnitFedTableType,
+                                          FrontEndDataTable &FedTable) {
   Constant *NumEntries =
     ConstantInt::get(IntegerType::get(M.getContext(), 64), FedTable.size());
   Constant *BaseIdPtr =
@@ -640,15 +671,29 @@ static Constant *fedTableToUnitFedTable(Module &M, StructType *UnitFedTableType,
                              InsertedTable);
 }
 
-void CSIImpl::finalizeCsi() {
+void CSIImpl::collectUnitFEDTables() {
   LLVMContext &C = M.getContext();
+  StructType *UnitFedTableType =
+      getUnitFedTableType(C, FrontEndDataTable::getPointerType(C));
 
-  // Add CSI global constructor, which calls unit init.
-  Function *Ctor =
-      Function::Create(FunctionType::get(Type::getVoidTy(C), false),
-                       GlobalValue::InternalLinkage, CsiRtUnitCtorName, &M);
-  BasicBlock *CtorBB = BasicBlock::Create(C, "", Ctor);
-  IRBuilder<> IRB(ReturnInst::Create(C, CtorBB));
+  // The order of the FED tables here must match the enum in csirt.c and the
+  // instrumentation_counts_t in csi.h.
+  UnitFedTables.push_back(
+      fedTableToUnitFedTable(M, UnitFedTableType, FunctionFED));
+  UnitFedTables.push_back(
+      fedTableToUnitFedTable(M, UnitFedTableType, FunctionExitFED));
+  UnitFedTables.push_back(
+      fedTableToUnitFedTable(M, UnitFedTableType, BasicBlockFED));
+  UnitFedTables.push_back(
+      fedTableToUnitFedTable(M, UnitFedTableType, CallsiteFED));
+  UnitFedTables.push_back(
+      fedTableToUnitFedTable(M, UnitFedTableType, LoadFED));
+  UnitFedTables.push_back(
+      fedTableToUnitFedTable(M, UnitFedTableType, StoreFED));
+}
+
+CallInst *CSIImpl::createRTUnitInitCall(IRBuilder<> &IRB) {
+  LLVMContext &C = M.getContext();
 
   StructType *UnitFedTableType =
       getUnitFedTableType(C, FrontEndDataTable::getPointerType(C));
@@ -659,22 +704,9 @@ void CSIImpl::finalizeCsi() {
                                        InitCallsiteToFunction->getType()});
   FunctionType *InitFunctionTy =
       FunctionType::get(IRB.getVoidTy(), InitArgTypes, false);
-  Function *InitFunction = checkCsiInterfaceFunction(
+  RTUnitInit = checkCsiInterfaceFunction(
       M.getOrInsertFunction(CsiRtUnitInitName, InitFunctionTy));
-  assert(InitFunction);
-
-  // Insert __csi_func_id_<f> weak symbols for all defined functions and
-  // generate the runtime code that stores to all of them.
-  generateInitCallsiteToFunction();
-
-  SmallVector<Constant *, 6> UnitFedTables({
-      fedTableToUnitFedTable(M, UnitFedTableType, BasicBlockFED),
-      fedTableToUnitFedTable(M, UnitFedTableType, FunctionFED),
-      fedTableToUnitFedTable(M, UnitFedTableType, FunctionExitFED),
-      fedTableToUnitFedTable(M, UnitFedTableType, CallsiteFED),
-      fedTableToUnitFedTable(M, UnitFedTableType, LoadFED),
-      fedTableToUnitFedTable(M, UnitFedTableType, StoreFED),
-  });
+  assert(RTUnitInit);
 
   ArrayType *UnitFedTableArrayType =
       ArrayType::get(UnitFedTableType, UnitFedTables.size());
@@ -687,17 +719,34 @@ void CSIImpl::finalizeCsi() {
   Value *GepArgs[] = {Zero, Zero};
 
   // Insert call to __csirt_unit_init
-  CallInst *Call = IRB.CreateCall(
-      InitFunction,
+  return IRB.CreateCall(
+      RTUnitInit,
       {IRB.CreateGlobalStringPtr(M.getName()),
-       ConstantExpr::getGetElementPtr(GV->getValueType(), GV, GepArgs),
-       InitCallsiteToFunction});
+          ConstantExpr::getGetElementPtr(GV->getValueType(), GV, GepArgs),
+          InitCallsiteToFunction});
+}
+
+void CSIImpl::finalizeCsi() {
+  LLVMContext &C = M.getContext();
+
+  // Add CSI global constructor, which calls unit init.
+  Function *Ctor =
+      Function::Create(FunctionType::get(Type::getVoidTy(C), false),
+                       GlobalValue::InternalLinkage, CsiRtUnitCtorName, &M);
+  BasicBlock *CtorBB = BasicBlock::Create(C, "", Ctor);
+  IRBuilder<> IRB(ReturnInst::Create(C, CtorBB));
+
+  // Insert __csi_func_id_<f> weak symbols for all defined functions and
+  // generate the runtime code that stores to all of them.
+  generateInitCallsiteToFunction();
+
+  CallInst *Call = createRTUnitInitCall(IRB);
 
   // Add the constructor to the global list
   appendToGlobalCtors(M, Ctor, CsiUnitCtorPriority);
 
   CallGraphNode *CNCtor = CG->getOrInsertFunction(Ctor);
-  CallGraphNode *CNFunc = CG->getOrInsertFunction(InitFunction);
+  CallGraphNode *CNFunc = CG->getOrInsertFunction(RTUnitInit);
   CNCtor->addCalledFunction(Call, CNFunc);
 }
 
@@ -731,13 +780,13 @@ bool CSIImpl::shouldNotInstrumentFunction(Function &F) {
   return false;
 }
 
-static bool isVtableAccess(Instruction *I) {
+bool CSIImpl::isVtableAccess(Instruction *I) {
   if (MDNode *Tag = I->getMetadata(LLVMContext::MD_tbaa))
     return Tag->isTBAAVtableAccess();
   return false;
 }
 
-static bool addrPointsToConstantData(Value *Addr) {
+bool CSIImpl::addrPointsToConstantData(Value *Addr) {
   // If this is a GEP, just analyze its pointer operand.
   if (GetElementPtrInst *GEP = dyn_cast<GetElementPtrInst>(Addr))
     Addr = GEP->getPointerOperand();
@@ -754,7 +803,7 @@ static bool addrPointsToConstantData(Value *Addr) {
   return false;
 }
 
-static bool isAtomic(Instruction *I) {
+bool CSIImpl::isAtomic(Instruction *I) {
   if (LoadInst *LI = dyn_cast<LoadInst>(I))
     return LI->isAtomic() && LI->getSyncScopeID() != SyncScope::SingleThread;
   if (StoreInst *SI = dyn_cast<StoreInst>(I))
@@ -836,9 +885,8 @@ void CSIImpl::instrumentFunction(Function &F) {
   SmallVector<Instruction *, 8> ReturnInstructions;
   SmallVector<Instruction *, 8> MemIntrinsics;
   SmallVector<Instruction *, 8> Callsites;
-  std::vector<BasicBlock *> BasicBlocks;
+  SmallVector<BasicBlock *, 8> BasicBlocks;
   SmallVector<Instruction*, 8> AtomicAccesses;
-  const DataLayout &DL = F.getParent()->getDataLayout();
 
   // Compile lists of all instrumentation points before anything is modified.
   for (BasicBlock &BB : F) {
@@ -864,12 +912,11 @@ void CSIImpl::instrumentFunction(Function &F) {
     BasicBlocks.push_back(&BB);
   }
 
+  uint64_t LocalId = getLocalFunctionID(F);
 
   // Instrument basic blocks.  Note that we do this before other instrumentation
   // so that we put this at the beginning of the basic block, and then the
   // function entry call goes before the call to basic block entry.
-  uint64_t LocalId = FunctionFED.add(F);
-  FuncOffsetMap[F.getName()] = LocalId;
   if (Options.InstrumentBasicBlocks)
     for (BasicBlock *BB : BasicBlocks)
       instrumentBasicBlock(*BB);
@@ -898,7 +945,6 @@ void CSIImpl::instrumentFunction(Function &F) {
   // Instrument function entry/exit points.
   if (Options.InstrumentFuncEntryExit) {
     IRBuilder<> IRB(&*F.getEntryBlock().getFirstInsertionPt());
-    //LLVMContext &C = IRB.getContext();
     CsiFuncProperty FuncEntryProp;
     CsiFuncExitProperty FuncExitProp;
     Value *FuncId = FunctionFED.localToGlobalId(LocalId, IRB);
@@ -908,7 +954,8 @@ void CSIImpl::instrumentFunction(Function &F) {
 
     for (Instruction *I : ReturnInstructions) {
       IRBuilder<> IRBRet(I);
-      uint64_t ExitLocalId = FunctionExitFED.add(F);
+      // uint64_t ExitLocalId = FunctionExitFED.add(F);
+      uint64_t ExitLocalId = FunctionExitFED.add(*I);
       Value *ExitCsiId = FunctionExitFED.localToGlobalId(ExitLocalId, IRBRet);
       PropVal = FuncExitProp.getValue(IRBRet);
       insertConditionalHookCall(I, CsiFuncExit,

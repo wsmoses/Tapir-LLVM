@@ -43,20 +43,51 @@ static const int64_t CsiCallsiteUnknownTargetId = -1;
 // See llvm/tools/clang/lib/CodeGen/CodeGenModule.h:
 static const int CsiUnitCtorPriority = 65535;
 
+/// Maintains a mapping from CSI ID to static data for that ID.
+class ForensicTable {
+public:
+  ForensicTable() : BaseId(nullptr), IdCounter(0) {}
+  ForensicTable(Module &M, StringRef BaseIdName);
+
+  /// The number of entries in this forensic table
+  uint64_t size() const { return IdCounter; }
+
+  /// Get the local ID of the given Value.
+  uint64_t getId(const Value *V);
+
+  /// The GlobalVariable holding the base ID for this forensic table.
+  GlobalVariable *baseId() const { return BaseId; }
+
+  /// Converts a local to global ID conversion.
+  ///
+  /// This is done by using the given IRBuilder to insert a load to the base ID
+  /// global variable followed by an add of the base value and the local ID.
+  ///
+  /// \returns A Value holding the global ID corresponding to the
+  /// given local ID.
+  Value *localToGlobalId(uint64_t LocalId, IRBuilder<> &IRB) const;
+
+protected:
+  /// The GlobalVariable holding the base ID for this FED table.
+  GlobalVariable *BaseId;
+  /// Counter of local IDs used so far.
+  uint64_t IdCounter;
+  /// Map of Value to Local ID.
+  DenseMap<const Value *, uint64_t> ValueToLocalIdMap;
+};
+
 /// Maintains a mapping from CSI ID to front-end data for that ID.
 ///
 /// The front-end data currently is the source location that a given
 /// CSI ID corresponds to.
-class FrontEndDataTable {
+class FrontEndDataTable : public ForensicTable {
 public:
-  FrontEndDataTable() : BaseId(nullptr), IdCounter(0) {}
-  FrontEndDataTable(Module &M, StringRef BaseIdName);
+  FrontEndDataTable() : ForensicTable() {}
+  FrontEndDataTable(Module &M, StringRef BaseIdName)
+      : ForensicTable(M, BaseIdName) {}
 
   /// The number of entries in this FED table
   uint64_t size() const { return LocalIdToSourceLocationMap.size(); }
-
-  /// The GlobalVariable holding the base ID for this FED table.
-  GlobalVariable *baseId() const { return BaseId; }
 
   /// Add the given Function to this FED table.
   /// \returns The local ID of the Function.
@@ -69,19 +100,6 @@ public:
   /// Add the given Instruction to this FED table.
   /// \returns The local ID of the Instruction.
   uint64_t add(const Instruction &I);
-
-  /// Get the local ID of the given Value.
-  uint64_t getId(const Value *V);
-
-  /// Converts a local to global ID conversion.
-  ///
-  /// This is done by using the given IRBuilder to insert a load to
-  /// the base ID global variable followed by an add of the base value
-  /// and the local ID.
-  ///
-  /// \returns A Value holding the global ID corresponding to the
-  /// given local ID.
-  Value *localToGlobalId(uint64_t LocalId, IRBuilder<> IRB) const;
 
   /// Get the Type for a pointer to a FED table entry.
   ///
@@ -100,17 +118,12 @@ private:
     StringRef Name;
     int32_t Line;
     int32_t Column;
-    StringRef File;
+    StringRef Filename;
+    StringRef Directory;
   };
 
-  /// The GlobalVariable holding the base ID for this FED table.
-  GlobalVariable *BaseId;
-  /// Counter of local IDs used so far.
-  uint64_t IdCounter;
   /// Map of local ID to SourceLocation.
   DenseMap<uint64_t, SourceLocation> LocalIdToSourceLocationMap;
-  /// Map of Value to Local ID.
-  DenseMap<const Value *, uint64_t> ValueToLocalIdMap;
 
   /// Create a struct type to match the "struct SourceLocation" type.
   /// (and the source_loc_t type in csi.h).
@@ -121,16 +134,17 @@ private:
   ///
   /// \returns The local ID of the appended information.
   /// @{
-  uint64_t add(const DILocation *Loc);
-  uint64_t add(const DISubprogram *Subprog);
+  void add(uint64_t ID, const DILocation *Loc);
+  void add(uint64_t ID, const DISubprogram *Subprog);
   /// @}
 
   /// Append the line and file information to the table, assigning it
   /// the next available ID.
   ///
   /// \returns The new local ID of the DILocation.
-  uint64_t add(int32_t Line = -1, int32_t Column = -1, StringRef File = "",
-               StringRef Name = "");
+  void add(uint64_t ID, int32_t Line = -1, int32_t Column = -1,
+           StringRef Filename = "", StringRef Directory = "",
+           StringRef Name = "");
 };
 
 /// Represents a property value passed to hooks.
@@ -162,13 +176,16 @@ public:
 
 class CsiFuncProperty : public CsiProperty {
 public:
-  CsiFuncProperty() {}
+  CsiFuncProperty() {
+    PropValue.Bits = 0;
+  }
 
   /// Return the Type of a property.
   static Type *getType(LLVMContext &C) {
     // Must match the definition of property type in csi.h
     return CsiProperty::getCoercedType(
-        C, StructType::get(IntegerType::get(C, 64)));
+        C, StructType::get(IntegerType::get(C, PropBits.MaySpawn),
+                           IntegerType::get(C, PropBits.Padding)));
   }
   /// Return a constant value holding this property.
   Constant *getValueImpl(LLVMContext &C) const override {
@@ -179,19 +196,48 @@ public:
     //                            nullptr);
     // TODO: This solution works for x86, but should be generalized to support
     // other architectures in the future.
-    return ConstantInt::get(getType(C), 0);
+    return ConstantInt::get(getType(C), PropValue.Bits);
   }
+
+  /// Set the value of the MightDetach property.
+  void setMaySpawn(bool v) {
+    PropValue.Fields.MaySpawn = v;
+  }
+
+private:
+  typedef union {
+    // Must match the definition of property type in csi.h
+    struct {
+      unsigned MaySpawn : 1;
+      uint64_t Padding : 63;
+    } Fields;
+    uint64_t Bits;
+  } Property;
+
+  /// The underlying values of the properties.
+  Property PropValue;
+
+  typedef struct {
+    int MaySpawn;
+    int Padding;
+  } PropertyBits;
+
+  /// The number of bits representing each property.
+  static constexpr PropertyBits PropBits = { 1, (64-1) };
 };
 
 class CsiFuncExitProperty : public CsiProperty {
 public:
-  CsiFuncExitProperty() {}
+  CsiFuncExitProperty() {
+      PropValue.Bits = 0;
+  }
 
   /// Return the Type of a property.
   static Type *getType(LLVMContext &C) {
     // Must match the definition of property type in csi.h
     return CsiProperty::getCoercedType(
-        C, StructType::get(IntegerType::get(C, 64)));
+        C, StructType::get(IntegerType::get(C, PropBits.MaySpawn),
+                           IntegerType::get(C, PropBits.Padding)));
   }
   /// Return a constant value holding this property.
   Constant *getValueImpl(LLVMContext &C) const override {
@@ -202,19 +248,49 @@ public:
     //                            nullptr);
     // TODO: This solution works for x86, but should be generalized to support
     // other architectures in the future.
-    return ConstantInt::get(getType(C), 0);
+    return ConstantInt::get(getType(C), PropValue.Bits);
   }
+
+  /// Set the value of the MightDetach property.
+  void setMaySpawn(bool v) {
+    PropValue.Fields.MaySpawn = v;
+  }
+
+private:
+  typedef union {
+    // Must match the definition of property type in csi.h
+    struct {
+      unsigned MaySpawn : 1;
+      uint64_t Padding : 63;
+    } Fields;
+    uint64_t Bits;
+  } Property;
+
+  /// The underlying values of the properties.
+  Property PropValue;
+
+  typedef struct {
+    int MaySpawn;
+    int Padding;
+  } PropertyBits;
+
+  /// The number of bits representing each property.
+  static constexpr PropertyBits PropBits = { 1, (64-1) };
 };
 
 class CsiBBProperty : public CsiProperty {
 public:
-  CsiBBProperty() {}
+  CsiBBProperty() {
+    PropValue.Bits = 0;
+  }
 
   /// Return the Type of a property.
   static Type *getType(LLVMContext &C) {
     // Must match the definition of property type in csi.h
     return CsiProperty::getCoercedType(
-        C, StructType::get(IntegerType::get(C, 64)));
+        C, StructType::get(IntegerType::get(C, PropBits.IsLandingPad),
+                           IntegerType::get(C, PropBits.IsEHPad),
+                           IntegerType::get(C, PropBits.Padding)));
   }
 
   /// Return a constant value holding this property.
@@ -226,8 +302,41 @@ public:
     //                            nullptr);
     // TODO: This solution works for x86, but should be generalized to support
     // other architectures in the future.
-    return ConstantInt::get(getType(C), 0);
+    return ConstantInt::get(getType(C), PropValue.Bits);
   }
+
+  /// Set the value of the IsLandingPad property.
+  void setIsLandingPad(bool v) {
+    PropValue.Fields.IsLandingPad = v;
+  }
+
+  /// Set the value of the IsEHPad property.
+  void setIsEHPad(bool v) {
+    PropValue.Fields.IsEHPad = v;
+  }
+
+private:
+  typedef union {
+    // Must match the definition of property type in csi.h
+    struct {
+      unsigned IsLandingPad : 1;
+      unsigned IsEHPad : 1;
+      uint64_t Padding : 62;
+    } Fields;
+    uint64_t Bits;
+  } Property;
+
+  /// The underlying values of the properties.
+  Property PropValue;
+
+  typedef struct {
+    int IsLandingPad;
+    int IsEHPad;
+    int Padding;
+  } PropertyBits;
+
+  /// The number of bits representing each property.
+  static constexpr PropertyBits PropBits = { 1, 1, (64-1-1) };
 };
 
 class CsiCallProperty : public CsiProperty {
@@ -385,9 +494,24 @@ struct CSIImpl {
 public:
   CSIImpl(Module &M, CallGraph *CG,
           const CSIOptions &Options = CSIOptions())
-      : M(M), CG(CG), Options(Options) {}
+      : M(M), DL(M.getDataLayout()), CG(CG), Options(Options),
+        CsiFuncEntry(nullptr), CsiFuncExit(nullptr), CsiBBEntry(nullptr),
+        CsiBBExit(nullptr), CsiBeforeCallsite(nullptr),
+        CsiAfterCallsite(nullptr), CsiBeforeRead(nullptr),
+        CsiAfterRead(nullptr), CsiBeforeWrite(nullptr), CsiAfterWrite(nullptr),
+        MemmoveFn(nullptr), MemcpyFn(nullptr), MemsetFn(nullptr),
+        InitCallsiteToFunction(nullptr), RTUnitInit(nullptr)
+  {}
 
   bool run();
+
+  /// Get the number of bytes accessed via the given address.
+  static int getNumBytesAccessed(Value *Addr, const DataLayout &DL);
+
+  /// Members to extract properties of loads/stores.
+  static bool isVtableAccess(Instruction *I);
+  static bool addrPointsToConstantData(Value *Addr);
+  static bool isAtomic(Instruction *I);
 
 protected:
   /// Initialize the CSI pass.
@@ -401,17 +525,26 @@ protected:
   void initializeFuncHooks();
   void initializeBasicBlockHooks();
   void initializeCallsiteHooks();
+  void initializeMemIntrinsicsHooks();
   /// @}
 
+  static StructType *getUnitFedTableType(LLVMContext &C,
+                                         PointerType *EntryPointerType);
+  static Constant *fedTableToUnitFedTable(Module &M,
+                                          StructType *UnitFedTableType,
+                                          FrontEndDataTable &FedTable);
   /// Initialize the front-end data table structures.
   void initializeFEDTables();
+  /// Collect unit front-end data table structures for finalization.
+  void collectUnitFEDTables();
 
+  virtual CallInst *createRTUnitInitCall(IRBuilder<> &IRB);
+
+  // Get the local ID of the given function.
+  uint64_t getLocalFunctionID(Function &F);
   /// Generate a function that stores global function IDs into a set
   /// of externally-visible global variables.
   void generateInitCallsiteToFunction();
-
-  /// Get the number of bytes accessed via the given address.
-  int getNumBytesAccessed(Value *Addr, const DataLayout &DL);
 
   /// Compute CSI properties on the given ordered list of loads and stores.
   void computeLoadAndStoreProperties(
@@ -429,7 +562,7 @@ protected:
   void instrumentLoadOrStore(Instruction *I, CsiLoadStoreProperty &Prop,
                              const DataLayout &DL);
   void instrumentAtomic(Instruction *I, const DataLayout &DL);
-  void instrumentMemIntrinsic(Instruction *I);
+  bool instrumentMemIntrinsic(Instruction *I);
   void instrumentCallsite(Instruction *I);
   void instrumentBasicBlock(BasicBlock &BB);
   void instrumentFunction(Function &F);
@@ -445,21 +578,29 @@ protected:
   bool shouldNotInstrumentFunction(Function &F);
 
   Module &M;
+  const DataLayout &DL;
   CallGraph *CG;
   CSIOptions Options;
 
   FrontEndDataTable FunctionFED, FunctionExitFED, BasicBlockFED, CallsiteFED,
       LoadFED, StoreFED;
 
-  Function *CsiBeforeCallsite, *CsiAfterCallsite;
+  SmallVector<Constant *, 6> UnitFedTables;
+
+  // Instrumentation hooks
   Function *CsiFuncEntry, *CsiFuncExit;
   Function *CsiBBEntry, *CsiBBExit;
+  Function *CsiBeforeCallsite, *CsiAfterCallsite;
   Function *CsiBeforeRead, *CsiAfterRead;
   Function *CsiBeforeWrite, *CsiAfterWrite;
 
   Function *MemmoveFn, *MemcpyFn, *MemsetFn;
   Function *InitCallsiteToFunction;
   // GlobalVariable *DisableInstrGV;
+
+  // Runtime unit initialization
+  Function *RTUnitInit;
+
   Type *IntptrTy;
   DenseMap<StringRef, uint64_t> FuncOffsetMap;
 };

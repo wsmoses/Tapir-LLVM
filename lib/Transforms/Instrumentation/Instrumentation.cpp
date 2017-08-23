@@ -59,6 +59,7 @@ void llvm::initializeInstrumentation(PassRegistry &Registry) {
   initializeAddressSanitizerPass(Registry);
   initializeAddressSanitizerModulePass(Registry);
   initializeBoundsCheckingPass(Registry);
+  initializeCilkSanitizerPass(Registry);
   initializeGCOVProfilerLegacyPassPass(Registry);
   initializePGOInstrumentationGenLegacyPassPass(Registry);
   initializePGOInstrumentationUseLegacyPassPass(Registry);
