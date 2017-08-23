@@ -95,6 +95,7 @@ void initializeCallGraphDOTPrinterPass(PassRegistry&);
 void initializeCallGraphPrinterLegacyPassPass(PassRegistry&);
 void initializeCallGraphViewerPass(PassRegistry&);
 void initializeCallGraphWrapperPassPass(PassRegistry&);
+void initializeCilkSanitizerPass(PassRegistry&);
 void initializeCodeGenPreparePass(PassRegistry&);
 void initializeComprehensiveStaticInstrumentationPass(PassRegistry&);
 void initializeConstantHoistingLegacyPassPass(PassRegistry&);

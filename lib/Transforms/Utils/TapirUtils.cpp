@@ -289,3 +289,30 @@ const BasicBlock *llvm::GetDetachedCtx(const BasicBlock *BB) {
   // function containing the given block.
   return &(BB->getParent()->getEntryBlock());
 }
+
+/// isCriticalContinueEdge - Return true if the specified edge is a critical
+/// detach-continue edge.  Critical detach-continue edges are critical edges -
+/// from a block with multiple successors to a block with multiple predecessors
+/// - even after ignoring all reattach edges.
+bool llvm::isCriticalContinueEdge(const TerminatorInst *TI, unsigned SuccNum) {
+  assert(SuccNum < TI->getNumSuccessors() && "Illegal edge specification!");
+  if (TI->getNumSuccessors() == 1) return false;
+
+  // Edge must come from a detach.
+  if (!isa<DetachInst>(TI)) return false;
+  // Edge must go to the continuation.
+  if (SuccNum != 1) return false;
+
+  const BasicBlock *Dest = TI->getSuccessor(SuccNum);
+  const_pred_iterator I = pred_begin(Dest), E = pred_end(Dest);
+
+  // If there is more than one predecessor, this is a critical edge...
+  assert(I != E && "No preds, but we have an edge to the block?");
+  const BasicBlock *DetachPred = TI->getParent();
+  for (; I != E; ++I) {
+    if (DetachPred == *I) continue;
+    if (isa<ReattachInst>((*I)->getTerminator())) continue;
+    return true;
+  }
+  return false;
+}

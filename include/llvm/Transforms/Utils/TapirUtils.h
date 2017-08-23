@@ -23,6 +23,7 @@ namespace llvm {
 class BasicBlock;
 class DetachInst;
 class DominatorTree;
+class TerminatorInst;
 
 /// Move static allocas in a block into the specified entry block.  Leave
 /// lifetime markers behind for those static allocas.  Returns true if the
@@ -40,6 +41,12 @@ BranchInst* SerializeDetachedCFG(DetachInst *DI, DominatorTree *DT = nullptr);
 /// the specified block.
 const BasicBlock *GetDetachedCtx(const BasicBlock *BB);
 BasicBlock *GetDetachedCtx(BasicBlock *BB);
+
+/// isCriticalContinueEdge - Return true if the specified edge is a critical
+/// detach-continue edge.  Critical detach-continue edges are critical edges -
+/// from a block with multiple successors to a block with multiple predecessors
+/// - even after ignoring all reattach edges.
+bool isCriticalContinueEdge(const TerminatorInst *TI, unsigned SuccNum);
 
 } // End llvm namespace
 
