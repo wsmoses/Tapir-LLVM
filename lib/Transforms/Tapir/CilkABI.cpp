@@ -17,6 +17,7 @@
 #include "llvm/Transforms/Tapir/CilkABI.h"
 #include "llvm/IR/DebugInfoMetadata.h"
 #include "llvm/Transforms/Tapir/Outline.h"
+#include "llvm/Transforms/Utils/EscapeEnumerator.h"
 #include "llvm/Transforms/Utils/Local.h"
 #include "llvm/Transforms/Utils/TapirUtils.h"
 
@@ -719,7 +720,7 @@ Value* GetOrInitCilkStackFrame(Function& F,
       IRB.CreateCall(CILK_CSI_FUNC(enter_begin, *F.getParent()), begin_args);
     }
   }
-  llvm::Value* args[1] = { alloc };
+  Value *args[1] = { alloc };
   if (Helper)
     IRB.CreateCall(CILKRTS_FUNC(enter_frame_fast_1, *F.getParent()), args);
   else
@@ -731,20 +732,27 @@ Value* GetOrInitCilkStackFrame(Function& F,
     IRB.CreateCall(CILK_CSI_FUNC(enter_end, *F.getParent()), end_args);
   }
 
-  // The function exits are unified before lowering.
-  ReturnInst *retInst = nullptr;
-  for (BasicBlock &BB : F) {
-    TerminatorInst* TI = BB.getTerminator();
-    if (!TI) continue;
-    if (ReturnInst* RI = llvm::dyn_cast<ReturnInst>(TI)) {
-      assert(!retInst && "Multiple returns found.");
-      retInst = RI;
-    }
+  EscapeEnumerator EE(F, "cilkabi_epilogue", false);
+  while (IRBuilder<> *AtExit = EE.Next()) {
+    if (isa<ReturnInst>(AtExit->GetInsertPoint()))
+      AtExit->CreateCall(GetCilkParentEpilogue(*F.getParent(), instrument),
+                         args, "");
   }
 
-  assert(retInst && "No returns found.");
-  CallInst::Create(GetCilkParentEpilogue(*F.getParent(), instrument), args, "",
-                   retInst);
+  // // The function exits are unified before lowering.
+  // ReturnInst *retInst = nullptr;
+  // for (BasicBlock &BB : F) {
+  //   TerminatorInst* TI = BB.getTerminator();
+  //   if (!TI) continue;
+  //   if (ReturnInst* RI = llvm::dyn_cast<ReturnInst>(TI)) {
+  //     assert(!retInst && "Multiple returns found.");
+  //     retInst = RI;
+  //   }
+  // }
+
+  // assert(retInst && "No returns found.");
+  // CallInst::Create(GetCilkParentEpilogue(*F.getParent(), instrument), args, "",
+  //                  retInst);
   return alloc;
 }
 
@@ -825,49 +833,77 @@ bool makeFunctionDetachable(Function &extracted,
       IRB.CreateCall(CILK_CSI_FUNC(detach_end, *M));
   }
 
-  // Handle returns
-  ReturnInst* Ret = nullptr;
-  for (BasicBlock &BB : extracted) {
-    TerminatorInst* TI = BB.getTerminator();
-    if (!TI) continue;
-    if (ReturnInst* RI = dyn_cast<ReturnInst>(TI)) {
-      assert(Ret == nullptr && "Multiple return");
-      Ret = RI;
+  EscapeEnumerator EE(extracted, "cilkabi_epilogue", false);
+  while (IRBuilder<> *AtExit = EE.Next()) {
+    if (isa<ReturnInst>(AtExit->GetInsertPoint()))
+      AtExit->CreateCall(GetCilkParentEpilogue(*M, instrument), args, "");
+    else if (ResumeInst *RI = dyn_cast<ResumeInst>(AtExit->GetInsertPoint())) {
+      /*
+        sf.flags = sf.flags | CILK_FRAME_EXCEPTING;
+        sf.except_data = Exn;
+      */
+      IRBuilder<> B(RI);
+      Value *Exn = AtExit->CreateExtractValue(RI->getValue(),
+                                              ArrayRef<unsigned>(0));
+      Value *Flags = LoadField(*AtExit, SF, StackFrameBuilder::flags,
+                               /*isVolatile=*/true);
+      Flags = AtExit->CreateOr(Flags,
+                               ConstantInt::get(Flags->getType(),
+                                                CILK_FRAME_EXCEPTING));
+      StoreField(*AtExit, Exn, SF, StackFrameBuilder::except_data);
+      /*
+        __cilkrts_pop_frame(&sf);
+        if (sf->flags)
+          __cilkrts_leave_frame(&sf);
+      */
+      AtExit->CreateCall(GetCilkParentEpilogue(*M, instrument), args, "");
+      // CallInst::Create(GetCilkParentEpilogue(*M, instrument), args, "", RI);
     }
   }
-  assert(Ret && "No return from extract function");
 
-  /*
-     __cilkrts_pop_frame(&sf);
-     if (sf->flags)
-       __cilkrts_leave_frame(&sf);
-  */
-  CallInst::Create(GetCilkParentEpilogue(*M, instrument), args, "", Ret);
+  // // Handle returns
+  // ReturnInst* Ret = nullptr;
+  // for (BasicBlock &BB : extracted) {
+  //   TerminatorInst* TI = BB.getTerminator();
+  //   if (!TI) continue;
+  //   if (ReturnInst* RI = dyn_cast<ReturnInst>(TI)) {
+  //     assert(Ret == nullptr && "Multiple return");
+  //     Ret = RI;
+  //   }
+  // }
+  // assert(Ret && "No return from extract function");
 
-  // Handle resumes
-  for (BasicBlock &BB : extracted) {
-    if (!isa<ResumeInst>(BB.getTerminator()))
-      continue;
-    ResumeInst *RI = cast<ResumeInst>(BB.getTerminator());
-    /*
-      sf.flags = sf.flags | CILK_FRAME_EXCEPTING;
-      sf.except_data = Exn;
-     */
-    IRBuilder<> B(RI);
-    Value *Exn = B.CreateExtractValue(RI->getValue(), ArrayRef<unsigned>(0));
-    Value *Flags = LoadField(B, SF, StackFrameBuilder::flags,
-                             /*isVolatile=*/true);
-    Flags = B.CreateOr(Flags,
-                       ConstantInt::get(Flags->getType(),
-                                        CILK_FRAME_EXCEPTING));
-    StoreField(B, Exn, SF, StackFrameBuilder::except_data);
-    /*
-      __cilkrts_pop_frame(&sf);
-      if (sf->flags)
-        __cilkrts_leave_frame(&sf);
-    */
-    CallInst::Create(GetCilkParentEpilogue(*M, instrument), args, "", RI);
-  }
+  // /*
+  //    __cilkrts_pop_frame(&sf);
+  //    if (sf->flags)
+  //      __cilkrts_leave_frame(&sf);
+  // */
+  // CallInst::Create(GetCilkParentEpilogue(*M, instrument), args, "", Ret);
+
+  // // Handle resumes
+  // for (BasicBlock &BB : extracted) {
+  //   if (!isa<ResumeInst>(BB.getTerminator()))
+  //     continue;
+  //   ResumeInst *RI = cast<ResumeInst>(BB.getTerminator());
+  //   /*
+  //     sf.flags = sf.flags | CILK_FRAME_EXCEPTING;
+  //     sf.except_data = Exn;
+  //    */
+  //   IRBuilder<> B(RI);
+  //   Value *Exn = B.CreateExtractValue(RI->getValue(), ArrayRef<unsigned>(0));
+  //   Value *Flags = LoadField(B, SF, StackFrameBuilder::flags,
+  //                            /*isVolatile=*/true);
+  //   Flags = B.CreateOr(Flags,
+  //                      ConstantInt::get(Flags->getType(),
+  //                                       CILK_FRAME_EXCEPTING));
+  //   StoreField(B, Exn, SF, StackFrameBuilder::except_data);
+  //   /*
+  //     __cilkrts_pop_frame(&sf);
+  //     if (sf->flags)
+  //       __cilkrts_leave_frame(&sf);
+  //   */
+  //   CallInst::Create(GetCilkParentEpilogue(*M, instrument), args, "", RI);
+  // }
 
   return true;
 }

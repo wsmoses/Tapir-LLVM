@@ -431,7 +431,7 @@ void PassManagerBuilder::populateModulePassManager(
 
     if (ParallelLevel > 0) {
       MPM.add(createInferFunctionAttrsLegacyPass());
-      MPM.add(createUnifyFunctionExitNodesPass());
+      // MPM.add(createUnifyFunctionExitNodesPass());
       MPM.add(createLowerTapirToCilkPass(ParallelLevel == 2, InstrumentCilk));
       // The lowering pass may leave cruft around.  Clean it up.
       MPM.add(createCFGSimplificationPass());
@@ -736,7 +736,7 @@ void PassManagerBuilder::populateModulePassManager(
     // RTS.
 
     MPM.add(createInferFunctionAttrsLegacyPass());
-    MPM.add(createUnifyFunctionExitNodesPass());
+    // MPM.add(createUnifyFunctionExitNodesPass());
     MPM.add(createLowerTapirToCilkPass(ParallelLevel == 2, InstrumentCilk));
     // The lowering pass may leave cruft around.  Clean it up.
     MPM.add(createCFGSimplificationPass());
