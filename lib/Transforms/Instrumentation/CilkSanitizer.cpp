@@ -19,6 +19,7 @@
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/Analysis/CFG.h"
+#include "llvm/Analysis/CallGraph.h"
 #include "llvm/Analysis/CaptureTracking.h"
 #include "llvm/Analysis/DetachSSA.h"
 #include "llvm/Analysis/MemorySSA.h"
@@ -50,6 +51,7 @@ STATISTIC(NumOmittedReadsBeforeWrite,
           "Number of reads ignored due to following writes");
 STATISTIC(NumOmittedReadsFromConstants,
           "Number of reads from constant data");
+STATISTIC(NumOmittedNonCaptured, "Number of accesses ignored due to capturing");
 STATISTIC(NumInstrumentedDetaches, "Number of instrumented detaches");
 STATISTIC(NumInstrumentedDetachExits, "Number of instrumented detach exits");
 STATISTIC(NumInstrumentedSyncs, "Number of instrumented syncs");
@@ -77,7 +79,7 @@ public:
 
   /// Add the given instruction to this table.
   /// \returns The local ID of the Instruction.
-  uint64_t add(Instruction &I, const DataLayout &DL);
+  uint64_t add(Instruction &I, Value *Addr, const DataLayout &DL);
 
   /// Get the Type for a pointer to a table entry.
   ///
@@ -133,6 +135,7 @@ struct CilkSanitizerImpl : public CSIImpl {
     Options.InstrumentBasicBlocks = false;
     // Options.InstrumentCalls = false;
     Options.InstrumentMemoryAccesses = false;
+    Options.InstrumentMemIntrinsics = false;
   }
   bool run();
 
@@ -157,6 +160,8 @@ struct CilkSanitizerImpl : public CSIImpl {
 
   // Insert hooks at relevant program points
   bool instrumentLoadOrStore(Instruction *I, const DataLayout &DL);
+  bool instrumentAtomic(Instruction *I, const DataLayout &DL);
+  bool instrumentMemIntrinsic(Instruction *I, const DataLayout &DL);
   bool instrumentCallsite(Instruction *I, DominatorTree *DT);
   bool instrumentDetach(DetachInst *DI, DominatorTree *DT);
   bool instrumentSync(SyncInst *SI);
@@ -176,8 +181,7 @@ private:
   // Instrumentation hooks
   Function *CsanFuncEntry, *CsanFuncExit; 
   Function *CsanRead, *CsanWrite;
-  // Function *CsanAtomicXchg, *CsanAtomicAdd, *CsanAtomicSub, *CsanAtomicOr,
-  //   *CsanAtomicXor, *CsanAtomicNand, *CsanAtomicCAS;
+  Function *CsanLargeRead, *CsanLargeWrite;
   Function *CsanDetach, *CsanDetachContinue;
   Function *CsanTaskEntry, *CsanTaskExit;
   Function *CsanSync;
@@ -196,7 +200,9 @@ private:
 /// CilkSanitizer: instrument the code in module to find races.
 struct CilkSanitizer : public ModulePass {
   static char ID;  // Pass identification, replacement for typeid.
-  CilkSanitizer() : ModulePass(ID) {}
+  CilkSanitizer() : ModulePass(ID) {
+    initializeCilkSanitizerPass(*PassRegistry::getPassRegistry());
+  }
   StringRef getPassName() const override {
     return "CilkSanitizer";
   }
@@ -206,13 +212,16 @@ struct CilkSanitizer : public ModulePass {
 } // namespace
 
 char CilkSanitizer::ID = 0;
+
 INITIALIZE_PASS_BEGIN(
     CilkSanitizer, "csan",
     "CilkSanitizer: detects determinacy races in Cilk programs.",
     false, false)
-INITIALIZE_PASS_DEPENDENCY(TargetLibraryInfoWrapperPass)
+INITIALIZE_PASS_DEPENDENCY(CallGraphWrapperPass)
 INITIALIZE_PASS_DEPENDENCY(DominatorTreeWrapperPass)
+INITIALIZE_PASS_DEPENDENCY(TargetLibraryInfoWrapperPass)
 // INITIALIZE_PASS_DEPENDENCY(DetachSSAWrapperPass)
+// INITIALIZE_PASS_DEPENDENCY(MemorySSAWrapperPass)
 INITIALIZE_PASS_END(
     CilkSanitizer, "csan",
     "CilkSanitizer: detects determinacy races in Cilk programs.",
@@ -231,13 +240,9 @@ ModulePass *llvm::createCilkSanitizerPass() {
 }
 
 uint64_t ObjectTable::add(Instruction &I,
+                          Value *Addr,
                           const DataLayout &DL) {
-  assert((isa<StoreInst>(I) || isa<LoadInst>(I)) &&
-         "Invalid instruction to add to the object table.");
   uint64_t ID = getId(&I);
-  Value *Addr = isa<StoreInst>(I)
-    ? cast<StoreInst>(I).getPointerOperand()
-    : cast<LoadInst>(I).getPointerOperand();
   Value *Obj = GetUnderlyingObject(Addr, DL);
 
   // First, if the underlying object is a global variable, get that variable's
@@ -248,13 +253,6 @@ uint64_t ObjectTable::add(Instruction &I,
     for (auto *GVE : DbgGVExprs) {
       auto *DGV = GVE->getVariable();
       if (DGV->getName() != "") {
-        DEBUG({
-            if (isa<StoreInst>(I))
-              dbgs() << "StoreObj[" << ID << "] = global variable "
-                     << DGV->getName() << "\n";
-            else
-              dbgs() << "LoadObj[" << ID << "] = global variable "
-                     << DGV->getName() << "\n";});
         add(ID, DGV->getLine(), DGV->getFilename(), DGV->getDirectory(),
             DGV->getName());
         return ID;
@@ -270,13 +268,6 @@ uint64_t ObjectTable::add(Instruction &I,
     if (auto *DDI = FindAllocaDbgDeclare(Obj)) {
       auto *LV = DDI->getVariable();
       if (LV->getName() != "") {
-        DEBUG({
-            if (isa<StoreInst>(I))
-              dbgs() << "StoreObj[" << ID << "] = local variable "
-                     << LV->getName() << "\n";
-            else
-              dbgs() << "LoadObj[" << ID << "] = local variable "
-                     << LV->getName() << "\n";});
         add(ID, LV->getLine(), LV->getFilename(), LV->getDirectory(),
             LV->getName());
         return ID;
@@ -290,13 +281,6 @@ uint64_t ObjectTable::add(Instruction &I,
   for (auto *DVI : DbgValues) {
     auto *LV = DVI->getVariable();
     if (LV->getName() != "") {
-      DEBUG({
-          if (isa<StoreInst>(I))
-            dbgs() << "StoreObj[" << ID << "] = local variable "
-                   << LV->getName() << "\n";
-          else
-            dbgs() << "LoadObj[" << ID << "] = local variable "
-                   << LV->getName() << "\n";});
       add(ID, LV->getLine(), LV->getFilename(), LV->getDirectory(),
           LV->getName());
       return ID;
@@ -526,6 +510,7 @@ void CilkSanitizerImpl::initializeCsanHooks() {
   Type *RetType = IRB.getVoidTy();
   Type *AddrType = IRB.getInt8PtrTy();
   Type *NumBytesType = IRB.getInt32Ty();
+  Type *LargeNumBytesType = IntptrTy;
   Type *IDType = IRB.getInt64Ty();
 
   CsanFuncEntry = checkCsiInterfaceFunction(
@@ -545,6 +530,12 @@ void CilkSanitizerImpl::initializeCsanHooks() {
   CsanWrite = checkCsiInterfaceFunction(
       M.getOrInsertFunction("__csan_store", RetType, IDType,
                             AddrType, NumBytesType, StorePropertyTy));
+  CsanLargeRead = checkCsiInterfaceFunction(
+      M.getOrInsertFunction("__csan_large_load", RetType, IDType,
+                            AddrType, LargeNumBytesType, LoadPropertyTy));
+  CsanLargeWrite = checkCsiInterfaceFunction(
+      M.getOrInsertFunction("__csan_large_store", RetType, IDType,
+                            AddrType, LargeNumBytesType, StorePropertyTy));
   // CsanWrite = checkCsiInterfaceFunction(
   //     M.getOrInsertFunction("__csan_atomic_exchange", RetType, IDType,
   //                           AddrType, NumBytesType, StorePropertyTy));
@@ -603,6 +594,13 @@ static bool shouldInstrumentReadWriteFromAddress(const Module *M, Value *Addr) {
   return true;
 }
 
+static bool FunctionMightSpawn(Function &F) {
+  for (BasicBlock &BB : F)
+    if (isa<DetachInst>(BB.getTerminator()))
+      return true;
+  return false;
+}
+
 void CilkSanitizerImpl::chooseInstructionsToInstrument(
     SmallVectorImpl<Instruction *> &Local, SmallVectorImpl<Instruction *> &All,
     const DataLayout &DL) {
@@ -630,17 +628,18 @@ void CilkSanitizerImpl::chooseInstructionsToInstrument(
         continue;
       }
     }
-    // Value *Addr = isa<StoreInst>(*I)
-    //     ? cast<StoreInst>(I)->getPointerOperand()
-    //     : cast<LoadInst>(I)->getPointerOperand();
-    // if (isa<AllocaInst>(GetUnderlyingObject(Addr, DL)) &&
-    //     !PointerMayBeCaptured(Addr, true, true)) {
-    //   // The variable is addressable but not captured, so it cannot be
-    //   // referenced from a different thread and participate in a data race
-    //   // (see llvm/Analysis/CaptureTracking.h for details).
-    //   NumOmittedNonCaptured++;
-    //   continue;
-    // }
+    Value *Addr = isa<StoreInst>(*I)
+        ? cast<StoreInst>(I)->getPointerOperand()
+        : cast<LoadInst>(I)->getPointerOperand();
+    if (isa<AllocaInst>(GetUnderlyingObject(Addr, DL)) &&
+        !PointerMayBeCaptured(Addr, true, true) &&
+        !FunctionMightSpawn(*I->getFunction())) {
+      // The variable is addressable but not captured, so it cannot be
+      // referenced from a different thread and participate in a data race
+      // (see llvm/Analysis/CaptureTracking.h for details).
+      NumOmittedNonCaptured++;
+      continue;
+    }
     All.push_back(I);
   }
   Local.clear();
@@ -679,6 +678,8 @@ bool CilkSanitizerImpl::instrumentFunction(Function &F) {
     for (Instruction &Inst : BB) {
       if (isa<LoadInst>(Inst) || isa<StoreInst>(Inst))
         LocalLoadsAndStores.push_back(&Inst);
+      else if (isa<AtomicRMWInst>(Inst) || isa<AtomicCmpXchgInst>(Inst))
+        AtomicAccesses.push_back(&Inst);
       else if (isa<CallInst>(Inst) || isa<InvokeInst>(Inst)) {
         if (CallInst *CI = dyn_cast<CallInst>(&Inst))
           maybeMarkSanitizerLibraryCallNoBuiltin(CI, TLI);
@@ -701,8 +702,11 @@ bool CilkSanitizerImpl::instrumentFunction(Function &F) {
   for (auto Inst : AllLoadsAndStores)
     Res |= instrumentLoadOrStore(Inst, DL);
 
+  for (auto Inst : AtomicAccesses)
+    Res |= instrumentAtomic(Inst, DL);
+
   for (auto Inst : MemIntrinCalls)
-    Res |= instrumentMemIntrinsic(Inst);
+    Res |= instrumentMemIntrinsic(Inst, DL);
 
   for (auto Inst : Callsites)
     Res |= instrumentCallsite(Inst, DT);
@@ -763,7 +767,7 @@ bool CilkSanitizerImpl::instrumentLoadOrStore(Instruction *I,
   Prop.setAlignment(Alignment);
   if (IsWrite) {
     uint64_t LocalId = StoreFED.add(*I);
-    uint64_t StoreObjId = StoreObj.add(*I, DL);
+    uint64_t StoreObjId = StoreObj.add(*I, Addr, DL);
     assert(LocalId == StoreObjId &&
            "Store received different ID's in FED and object tables.");
     Value *CsiId = StoreFED.localToGlobalId(LocalId, IRB);
@@ -776,7 +780,7 @@ bool CilkSanitizerImpl::instrumentLoadOrStore(Instruction *I,
     NumInstrumentedWrites++;
   } else {
     uint64_t LocalId = LoadFED.add(*I);
-    uint64_t LoadObjId = LoadObj.add(*I, DL);
+    uint64_t LoadObjId = LoadObj.add(*I, Addr, DL);
     assert(LocalId == LoadObjId &&
            "Load received different ID's in FED and object tables.");
     Value *CsiId = LoadFED.localToGlobalId(LocalId, IRB);
@@ -789,6 +793,132 @@ bool CilkSanitizerImpl::instrumentLoadOrStore(Instruction *I,
     NumInstrumentedReads++;
   }
   return true;
+}
+
+bool CilkSanitizerImpl::instrumentAtomic(Instruction *I, const DataLayout &DL) {
+  IRBuilder<> IRB(I);
+  CsiLoadStoreProperty Prop;
+  Value *Addr;
+  if (AtomicRMWInst *RMWI = dyn_cast<AtomicRMWInst>(I)) {
+    Addr = RMWI->getPointerOperand();
+  } else if (AtomicCmpXchgInst *CASI = dyn_cast<AtomicCmpXchgInst>(I)) {
+    Addr = CASI->getPointerOperand();
+  } else {
+    return false;
+  }
+
+  if (isa<AllocaInst>(GetUnderlyingObject(Addr, DL)) &&
+      !PointerMayBeCaptured(Addr, true, true) &&
+      !FunctionMightSpawn(*I->getFunction())) {
+    // The variable is addressable but not captured, so it cannot be
+    // referenced from a different thread and participate in a data race
+    // (see llvm/Analysis/CaptureTracking.h for details).
+    NumOmittedNonCaptured++;
+    return false;
+  }
+
+  uint64_t LocalId = StoreFED.add(*I);
+  uint64_t StoreObjId = StoreObj.add(*I, Addr, DL);
+  assert(LocalId == StoreObjId &&
+         "Store received different ID's in FED and object tables.");
+  Value *CsiId = StoreFED.localToGlobalId(LocalId, IRB);
+  Value *Args[] = {CsiId,
+                   IRB.CreatePointerCast(Addr, IRB.getInt8PtrTy()),
+                   IRB.getInt32(getNumBytesAccessed(Addr, DL)),
+                   Prop.getValue(IRB)};
+  Instruction *Call = IRB.CreateCall(CsanWrite, Args);
+  IRB.SetInstDebugLocation(Call);
+  NumInstrumentedWrites++;
+  return true;
+}
+
+bool CilkSanitizerImpl::instrumentMemIntrinsic(Instruction *I,
+                                               const DataLayout &DL) {
+  CsiLoadStoreProperty Prop;
+  IRBuilder<> IRB(I);
+  if (MemSetInst *M = dyn_cast<MemSetInst>(I)) {
+    // Check if we need to instrument the memset.
+    Value *Addr = M->getArgOperand(0);
+    if (isa<AllocaInst>(GetUnderlyingObject(Addr, DL)) &&
+        !PointerMayBeCaptured(Addr, true, true) &&
+        !FunctionMightSpawn(*I->getFunction())) {
+      // The variable is addressable but not captured, so it cannot be
+      // referenced from a different thread and participate in a data race
+      // (see llvm/Analysis/CaptureTracking.h for details).
+      NumOmittedNonCaptured++;
+      return false;
+    }
+
+    if (ConstantInt *CI = dyn_cast<ConstantInt>(M->getArgOperand(3)))
+      Prop.setAlignment(CI->getZExtValue());
+    uint64_t LocalId = StoreFED.add(*I);
+    uint64_t StoreObjId = StoreObj.add(*I, Addr, DL);
+    assert(LocalId == StoreObjId &&
+           "Store received different ID's in FED and object tables.");
+    Value *CsiId = StoreFED.localToGlobalId(LocalId, IRB);
+    Value *Args[] = {CsiId,
+                     IRB.CreatePointerCast(Addr, IRB.getInt8PtrTy()),
+                     IRB.CreateIntCast(M->getArgOperand(2), IntptrTy, false),
+                     Prop.getValue(IRB)};
+    Instruction *Call = IRB.CreateCall(CsanLargeWrite, Args);
+    IRB.SetInstDebugLocation(Call);
+    return true;
+
+  } else if (MemTransferInst *M = dyn_cast<MemTransferInst>(I)) {
+    if (ConstantInt *CI = dyn_cast<ConstantInt>(M->getArgOperand(3)))
+      Prop.setAlignment(CI->getZExtValue());
+    Value *StoreAddr = M->getArgOperand(0);
+    Value *LoadAddr = M->getArgOperand(1);
+    bool Instrumented = false;
+
+    // First check if we need to instrument the store.
+    if (isa<AllocaInst>(GetUnderlyingObject(StoreAddr, DL)) &&
+        !PointerMayBeCaptured(StoreAddr, true, true) &&
+        !FunctionMightSpawn(*I->getFunction())) {
+      // The variable is addressable but not captured, so it cannot be
+      // referenced from a different thread and participate in a data race
+      // (see llvm/Analysis/CaptureTracking.h for details).
+      NumOmittedNonCaptured++;
+    } else {
+      // Instrument the store
+      uint64_t StoreId = StoreFED.add(*I);
+      uint64_t StoreObjId = StoreObj.add(*I, StoreAddr, DL);
+      assert(StoreId == StoreObjId &&
+             "Store received different ID's in FED and object tables.");
+      Value *StoreCsiId = StoreFED.localToGlobalId(StoreId, IRB);
+      Value *StoreArgs[] = {StoreCsiId,
+                            IRB.CreatePointerCast(StoreAddr, IRB.getInt8PtrTy()),
+                            IRB.CreateIntCast(M->getArgOperand(2), IntptrTy, false),
+                            Prop.getValue(IRB)};
+      Instruction *WriteCall = IRB.CreateCall(CsanLargeWrite, StoreArgs);
+      IRB.SetInstDebugLocation(WriteCall);
+      Instrumented = true;
+    }
+    if (isa<AllocaInst>(GetUnderlyingObject(LoadAddr, DL)) &&
+        !PointerMayBeCaptured(LoadAddr, true, true) &&
+        !FunctionMightSpawn(*I->getFunction())) {
+      // The variable is addressable but not captured, so it cannot be
+      // referenced from a different thread and participate in a data race
+      // (see llvm/Analysis/CaptureTracking.h for details).
+      NumOmittedNonCaptured++;
+    } else {
+      // Instrument the load
+      uint64_t LoadId = LoadFED.add(*I);
+      uint64_t LoadObjId = LoadObj.add(*I, LoadAddr, DL);
+      assert(LoadId == LoadObjId &&
+             "Load received different ID's in FED and object tables.");
+      Value *LoadCsiId = StoreFED.localToGlobalId(LoadId, IRB);
+      Value *LoadArgs[] = {LoadCsiId,
+                           IRB.CreatePointerCast(LoadAddr, IRB.getInt8PtrTy()),
+                           IRB.CreateIntCast(M->getArgOperand(2), IntptrTy, false),
+                           Prop.getValue(IRB)};
+      Instruction *ReadCall = IRB.CreateCall(CsanLargeRead, LoadArgs);
+      IRB.SetInstDebugLocation(ReadCall);
+      Instrumented = true;
+    }
+    return Instrumented;
+  }
+  return false;
 }
 
 bool CilkSanitizerImpl::instrumentCallsite(Instruction *I, DominatorTree *DT) {
