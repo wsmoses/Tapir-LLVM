@@ -594,10 +594,37 @@ static bool shouldInstrumentReadWriteFromAddress(const Module *M, Value *Addr) {
   return true;
 }
 
-static bool FunctionMightSpawn(Function &F) {
-  for (BasicBlock &BB : F)
-    if (isa<DetachInst>(BB.getTerminator()))
+// Examine the uses of a given AllocaInst to determine if some use is detached.
+static bool MightHaveDetachedUse(const AllocaInst *AI) {
+  const BasicBlock *AllocaCtx = GetDetachedCtx(AI->getParent());
+  SmallVector<const Use *, 20> Worklist;
+  SmallSet<const Use *, 20> Visited;
+
+  for (const Use &U : AI->uses()) {
+    Visited.insert(&U);
+    Worklist.push_back(&U);
+  }
+
+  while (!Worklist.empty()) {
+    const Use *U = Worklist.pop_back_val();
+    Instruction *I = cast<Instruction>(U->getUser());
+    if (AllocaCtx != GetDetachedCtx(I->getParent()))
       return true;
+
+    switch (I->getOpcode()) {
+    case Instruction::BitCast:
+    case Instruction::GetElementPtr:
+    case Instruction::PHI:
+    case Instruction::Select:
+    case Instruction::AddrSpaceCast:
+      for (Use &UU : I->uses())
+        if (Visited.insert(&UU).second)
+          Worklist.push_back(&UU);
+      break;
+    default:
+      break;
+    }
+  }
   return false;
 }
 
@@ -631,9 +658,10 @@ void CilkSanitizerImpl::chooseInstructionsToInstrument(
     Value *Addr = isa<StoreInst>(*I)
         ? cast<StoreInst>(I)->getPointerOperand()
         : cast<LoadInst>(I)->getPointerOperand();
-    if (isa<AllocaInst>(GetUnderlyingObject(Addr, DL)) &&
+    Value *Obj = GetUnderlyingObject(Addr, DL);
+    if (isa<AllocaInst>(Obj) &&
         !PointerMayBeCaptured(Addr, true, true) &&
-        !FunctionMightSpawn(*I->getFunction())) {
+        !MightHaveDetachedUse(cast<AllocaInst>(Obj))) {
       // The variable is addressable but not captured, so it cannot be
       // referenced from a different thread and participate in a data race
       // (see llvm/Analysis/CaptureTracking.h for details).
@@ -807,9 +835,10 @@ bool CilkSanitizerImpl::instrumentAtomic(Instruction *I, const DataLayout &DL) {
     return false;
   }
 
-  if (isa<AllocaInst>(GetUnderlyingObject(Addr, DL)) &&
+  Value *Obj = GetUnderlyingObject(Addr, DL);
+  if (isa<AllocaInst>(Obj) &&
       !PointerMayBeCaptured(Addr, true, true) &&
-      !FunctionMightSpawn(*I->getFunction())) {
+      !MightHaveDetachedUse(cast<AllocaInst>(Obj))) {
     // The variable is addressable but not captured, so it cannot be
     // referenced from a different thread and participate in a data race
     // (see llvm/Analysis/CaptureTracking.h for details).
@@ -839,9 +868,10 @@ bool CilkSanitizerImpl::instrumentMemIntrinsic(Instruction *I,
   if (MemSetInst *M = dyn_cast<MemSetInst>(I)) {
     // Check if we need to instrument the memset.
     Value *Addr = M->getArgOperand(0);
-    if (isa<AllocaInst>(GetUnderlyingObject(Addr, DL)) &&
+    Value *Obj = GetUnderlyingObject(Addr, DL);
+    if (isa<AllocaInst>(Obj) &&
         !PointerMayBeCaptured(Addr, true, true) &&
-        !FunctionMightSpawn(*I->getFunction())) {
+        !MightHaveDetachedUse(cast<AllocaInst>(Obj))) {
       // The variable is addressable but not captured, so it cannot be
       // referenced from a different thread and participate in a data race
       // (see llvm/Analysis/CaptureTracking.h for details).
@@ -872,9 +902,10 @@ bool CilkSanitizerImpl::instrumentMemIntrinsic(Instruction *I,
     bool Instrumented = false;
 
     // First check if we need to instrument the store.
-    if (isa<AllocaInst>(GetUnderlyingObject(StoreAddr, DL)) &&
+    Value *SObj = GetUnderlyingObject(StoreAddr, DL);
+    if (isa<AllocaInst>(SObj) &&
         !PointerMayBeCaptured(StoreAddr, true, true) &&
-        !FunctionMightSpawn(*I->getFunction())) {
+        !MightHaveDetachedUse(cast<AllocaInst>(SObj))) {
       // The variable is addressable but not captured, so it cannot be
       // referenced from a different thread and participate in a data race
       // (see llvm/Analysis/CaptureTracking.h for details).
@@ -894,9 +925,10 @@ bool CilkSanitizerImpl::instrumentMemIntrinsic(Instruction *I,
       IRB.SetInstDebugLocation(WriteCall);
       Instrumented = true;
     }
-    if (isa<AllocaInst>(GetUnderlyingObject(LoadAddr, DL)) &&
+    Value *LObj = GetUnderlyingObject(LoadAddr, DL);
+    if (isa<AllocaInst>(LObj) &&
         !PointerMayBeCaptured(LoadAddr, true, true) &&
-        !FunctionMightSpawn(*I->getFunction())) {
+        !MightHaveDetachedUse(cast<AllocaInst>(LObj))) {
       // The variable is addressable but not captured, so it cannot be
       // referenced from a different thread and participate in a data race
       // (see llvm/Analysis/CaptureTracking.h for details).
