@@ -47,6 +47,7 @@ using namespace llvm;
 
 STATISTIC(NumInstrumentedReads, "Number of instrumented reads");
 STATISTIC(NumInstrumentedWrites, "Number of instrumented writes");
+STATISTIC(NumAccessesWithBadSize, "Number of accesses with bad size");
 STATISTIC(NumOmittedReadsBeforeWrite,
           "Number of reads ignored due to following writes");
 STATISTIC(NumOmittedReadsFromConstants,
@@ -788,6 +789,13 @@ bool CilkSanitizerImpl::instrumentLoadOrStore(Instruction *I,
   if (Addr->isSwiftError())
     return false;
 
+  int NumBytesAccessed = getNumBytesAccessed(Addr, DL);
+  if (-1 == NumBytesAccessed) {
+    // Ignore accesses with bad sizes.
+    NumAccessesWithBadSize++;
+    return false;
+  }
+
   const unsigned Alignment = IsWrite
       ? cast<StoreInst>(I)->getAlignment()
       : cast<LoadInst>(I)->getAlignment();
@@ -801,7 +809,7 @@ bool CilkSanitizerImpl::instrumentLoadOrStore(Instruction *I,
     Value *CsiId = StoreFED.localToGlobalId(LocalId, IRB);
     Value *Args[] = {CsiId,
                      IRB.CreatePointerCast(Addr, IRB.getInt8PtrTy()),
-                     IRB.getInt32(getNumBytesAccessed(Addr, DL)),
+                     IRB.getInt32(NumBytesAccessed),
                      Prop.getValue(IRB)};
     Instruction *Call = IRB.CreateCall(CsanWrite, Args);
     IRB.SetInstDebugLocation(Call);
@@ -814,7 +822,7 @@ bool CilkSanitizerImpl::instrumentLoadOrStore(Instruction *I,
     Value *CsiId = LoadFED.localToGlobalId(LocalId, IRB);
     Value *Args[] = {CsiId,
                      IRB.CreatePointerCast(Addr, IRB.getInt8PtrTy()),
-                     IRB.getInt32(getNumBytesAccessed(Addr, DL)),
+                     IRB.getInt32(NumBytesAccessed),
                      Prop.getValue(IRB)};
     Instruction *Call = IRB.CreateCall(CsanRead, Args);
     IRB.SetInstDebugLocation(Call);
@@ -846,6 +854,13 @@ bool CilkSanitizerImpl::instrumentAtomic(Instruction *I, const DataLayout &DL) {
     return false;
   }
 
+  int NumBytesAccessed = getNumBytesAccessed(Addr, DL);
+  if (-1 == NumBytesAccessed) {
+    // Ignore accesses with bad sizes.
+    NumAccessesWithBadSize++;
+    return false;
+  }
+
   uint64_t LocalId = StoreFED.add(*I);
   uint64_t StoreObjId = StoreObj.add(*I, Addr, DL);
   assert(LocalId == StoreObjId &&
@@ -853,7 +868,7 @@ bool CilkSanitizerImpl::instrumentAtomic(Instruction *I, const DataLayout &DL) {
   Value *CsiId = StoreFED.localToGlobalId(LocalId, IRB);
   Value *Args[] = {CsiId,
                    IRB.CreatePointerCast(Addr, IRB.getInt8PtrTy()),
-                   IRB.getInt32(getNumBytesAccessed(Addr, DL)),
+                   IRB.getInt32(NumBytesAccessed),
                    Prop.getValue(IRB)};
   Instruction *Call = IRB.CreateCall(CsanWrite, Args);
   IRB.SetInstDebugLocation(Call);
