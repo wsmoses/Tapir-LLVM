@@ -329,11 +329,13 @@ Constant *ObjectTable::insertIntoModule(Module &M) const {
       if (!E.Directory.empty())
         Filename = E.Directory.str() + "/" + Filename;
       Constant *FileStrConstant = ConstantDataArray::getString(C, Filename);
-      GlobalVariable *GV = M.getGlobalVariable("__csi_unit_filename", true);
+      GlobalVariable *GV =
+        M.getGlobalVariable("__csi_unit_filename_" + Filename, true);
       if (GV == NULL) {
         GV = new GlobalVariable(M, FileStrConstant->getType(),
                                 true, GlobalValue::PrivateLinkage,
-                                FileStrConstant, "__csi_unit_filename",
+                                FileStrConstant,
+                                "__csi_unit_filename_" + Filename,
                                 nullptr,
                                 GlobalVariable::NotThreadLocal, 0);
         GV->setUnnamedAddr(GlobalValue::UnnamedAddr::Global);
