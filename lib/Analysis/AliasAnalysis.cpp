@@ -137,36 +137,34 @@ ModRefInfo AAResults::getModRefInfo(Instruction *I, ImmutableCallSite Call) {
     ModRefInfo Result = MRI_NoModRef;
     SmallPtrSet<BasicBlock *, 32> Visited;
     SmallVector<BasicBlock *, 32> WorkList;
-    WorkList.push_back(D->getSuccessor(0));
+    WorkList.push_back(D->getDetached());
     while (!WorkList.empty()) {
       BasicBlock *BB = WorkList.pop_back_val();
       if (!Visited.insert(BB).second)
         continue;
 
-      for (BasicBlock::iterator I = BB->begin(), E = BB->end(); I != E; ++I) {
+      // for (BasicBlock::iterator I = BB->begin(), E = BB->end(); I != E; ++I) {
+      for (Instruction &DI : *BB) {
         // Fail fast if we encounter an invalid CFG.
-        assert(!(D == &*I) &&
-               "Invalid CFG found: Detached CFG reaches its own Detach instruction.");
+        assert(!(D == &DI) &&
+               "Detached CFG reaches its own Detach instruction.");
 
         // Ignore sync instructions in this analysis
-        if (isa<SyncInst>(&*I) || isa<DetachInst>(&*I))
+        if (isa<SyncInst>(DI) || isa<DetachInst>(DI))
           continue;
 
-        if (isa<LoadInst>(&*I) ||
-            isa<StoreInst>(&*I) ||
-            isa<AtomicCmpXchgInst>(&*I) ||
-            isa<AtomicRMWInst>(&*I) ||
-            (&*I)->isFenceLike() ||
-            ImmutableCallSite(&*I))
-          Result = ModRefInfo(Result | getModRefInfo((Instruction*) &*I, Call));
-        if (&*I == (&(Instruction&)Call))
+        if (isa<LoadInst>(DI) || isa<StoreInst>(DI) ||
+            isa<AtomicCmpXchgInst>(DI) || isa<AtomicRMWInst>(DI) ||
+            DI.isFenceLike() || ImmutableCallSite(&DI))
+          Result = ModRefInfo(Result | getModRefInfo(&DI, Call));
+        if (&DI == Call.getInstruction())
           return MRI_NoModRef;
       }
 
       // Add successors
       const TerminatorInst *T = BB->getTerminator();
       if (!isa<ReattachInst>(T) ||
-          T->getSuccessor(0) != D->getSuccessor(1))
+          T->getSuccessor(0) != D->getContinue())
         for (unsigned idx = 0, max = T->getNumSuccessors(); idx < max; ++idx)
           WorkList.push_back(T->getSuccessor(idx));
     }
