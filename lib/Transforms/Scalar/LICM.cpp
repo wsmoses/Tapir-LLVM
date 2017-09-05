@@ -171,7 +171,8 @@ private:
 
 struct LegacyLICMPass : public LoopPass {
   static char ID; // Pass identification, replacement for typeid
-  LegacyLICMPass() : LoopPass(ID) {
+  bool Rhino;
+  LegacyLICMPass(bool rhino=false) : LoopPass(ID), Rhino(rhino) {
     initializeLegacyLICMPassPass(*PassRegistry::getPassRegistry());
   }
 
@@ -276,7 +277,7 @@ INITIALIZE_PASS_DEPENDENCY(MemorySSAWrapperPass)
 INITIALIZE_PASS_END(LegacyLICMPass, "licm", "Loop Invariant Code Motion", false,
                     false)
 
-Pass *llvm::createLICMPass() { return new LegacyLICMPass(); }
+Pass *llvm::createLICMPass(bool Rhino) { return new LegacyLICMPass(Rhino); }
 
 /// Hoist expressions out of the specified loop. Note, alias info for inner
 /// loop is not preserved so it is not a good idea to run LICM multiple
@@ -1997,6 +1998,33 @@ bool llvm::promoteLoopAccessesToScalars(
     eraseInstruction(*PreheaderLoad, *SafetyInfo, CurAST, nullptr);
 
   return true;
+}
+
+std::unique_ptr<AliasSetTracker>
+collectAliasInfoForLoopAtPoint(Loop *L, LoopInfo *LI,
+                                                 AliasAnalysis *AA, Instruction* I) {
+  AliasSetTracker *CurAST = nullptr;
+  SmallVector<Loop *, 4> RecomputeLoops;
+  for (Loop *InnerL : L->getSubLoops()) {
+      RecomputeLoops.push_back(InnerL);
+  }
+  if (CurAST == nullptr)
+    CurAST = new AliasSetTracker(*AA);
+
+  auto mergeLoop = [&](Loop *L) {
+    // Loop over the body of this loop, looking for calls, invokes, and stores.
+    for (BasicBlock *BB : L->blocks())
+        CurAST->add(*BB);          // Incorporate the specified basic block
+  };
+
+  // Add everything from the sub loops that are no longer directly available.
+  for (Loop *InnerL : RecomputeLoops)
+    mergeLoop(InnerL);
+
+  // And merge in this loop.
+  mergeLoop(L);
+
+  return CurAST;
 }
 
 /// Returns an owning pointer to an alias set which incorporates aliasing info
