@@ -144,7 +144,7 @@ FunctionPass *createInstructionCombiningPass(bool ExpensiveCombines = true);
 //
 // LICM - This pass is a loop invariant code motion and memory promotion pass.
 //
-Pass *createLICMPass();
+Pass *createLICMPass(bool Rhino=false);
 
 //===----------------------------------------------------------------------===//
 //
@@ -347,7 +347,7 @@ extern char &LCSSAID;
 // EarlyCSE - This pass performs a simple and fast CSE pass over the dominator
 // tree.
 //
-FunctionPass *createEarlyCSEPass(bool UseMemorySSA = false);
+FunctionPass *createEarlyCSEPass(bool UseMemorySSA = false, bool Rhino=false);
 
 //===----------------------------------------------------------------------===//
 //
