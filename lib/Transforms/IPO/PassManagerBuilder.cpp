@@ -267,7 +267,7 @@ void PassManagerBuilder::populateFunctionPassManager(
 
   FPM.add(createCFGSimplificationPass());
   FPM.add(createSROAPass());
-  FPM.add(createEarlyCSEPass());
+  FPM.add(createEarlyCSEPass(false, Rhino));
   FPM.add(createLowerExpectIntrinsicPass());
 }
 
@@ -291,7 +291,7 @@ void PassManagerBuilder::addPGOInstrPasses(legacy::PassManagerBase &MPM) {
 
     MPM.add(createFunctionInliningPass(IP));
     MPM.add(createSROAPass());
-    MPM.add(createEarlyCSEPass());             // Catch trivial redundancies
+    MPM.add(createEarlyCSEPass(false, Rhino)); // Catch trivial redundancies
     MPM.add(createCFGSimplificationPass());    // Merge & remove BBs
     MPM.add(createInstructionCombiningPass()); // Combine silly seq's
     addExtensionsToPM(EP_Peephole, MPM);
@@ -320,7 +320,7 @@ void PassManagerBuilder::addFunctionSimplificationPasses(
   // Start of function pass.
   // Break up aggregate allocas, using SSAUpdater.
   MPM.add(createSROAPass());
-  MPM.add(createEarlyCSEPass(EnableEarlyCSEMemSSA)); // Catch trivial redundancies
+  MPM.add(createEarlyCSEPass(EnableEarlyCSEMemSSA, Rhino)); // Catch trivial redundancies
   if (EnableGVNHoist)
     MPM.add(createGVNHoistPass());
   if (EnableGVNSink) {
@@ -359,7 +359,7 @@ void PassManagerBuilder::addFunctionSimplificationPasses(
   }
   // Rotate Loop - disable header duplication at -Oz
   MPM.add(createLoopRotatePass(SizeLevel == 2 ? 0 : -1));
-  MPM.add(createLICMPass());                  // Hoist loop invariants
+  MPM.add(createLICMPass(Rhino));                  // Hoist loop invariants
   if (EnableSimpleLoopUnswitch)
     MPM.add(createSimpleLoopUnswitchLegacyPass());
   else
@@ -676,7 +676,7 @@ void PassManagerBuilder::populateModulePassManager(
     // common computations, hoist loop-invariant aspects out of any outer loop,
     // and unswitch the runtime checks if possible. Once hoisted, we may have
     // dead (or speculatable) control flows or more combining opportunities.
-    MPM.add(createEarlyCSEPass());
+    MPM.add(createEarlyCSEPass(false, Rhino));
     MPM.add(createCorrelatedValuePropagationPass());
     addInstructionCombiningPass(MPM);
     MPM.add(createLICMPass());
@@ -695,7 +695,7 @@ void PassManagerBuilder::populateModulePassManager(
   if (RunSLPAfterLoopVectorization && SLPVectorize) {
     MPM.add(createSLPVectorizerPass()); // Vectorize parallel scalar chains.
     if (OptLevel > 1 && ExtraVectorizerPasses) {
-      MPM.add(createEarlyCSEPass());
+      MPM.add(createEarlyCSEPass(false, Rhino));
     }
   }
 
