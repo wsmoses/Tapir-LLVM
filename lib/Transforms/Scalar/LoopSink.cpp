@@ -298,6 +298,8 @@ static bool sinkLoopInvariantInstructions(Loop &L, AAResults &AA, LoopInfo &LI,
     // No need to check for instruction's operands are loop invariant.
     assert(L.hasLoopInvariantOperands(I) &&
            "Insts in a loop's preheader should have loop invariant operands!");
+    // TODO!
+    //auto CurAST2 = collectAliasInfoForLoopAtPoint(L, LI, AA, I, /*collectBefore*/false);
     if (!canSinkOrHoistInst(*I, &AA, &DT, &L, &CurAST, nullptr))
       continue;
     if (sinkInstruction(L, *I, ColdLoopBBs, LoopBlockNumber, LI, DT, BFI))
