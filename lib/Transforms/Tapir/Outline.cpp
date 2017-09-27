@@ -58,7 +58,7 @@ void llvm::findInputsOutputs(const SmallPtrSetImpl<BasicBlock *> &Blocks,
         // The PHI nodes in each exit block will be updated after the exit block
         // is cloned.  Hence, we don't want to count their uses of values
         // defined outside the region.
-        if (ExitBlocks->count(BB))
+        if (ExitBlocks && ExitBlocks->count(BB))
           if (PHINode *PN = dyn_cast<PHINode>(&II))
             if (!Blocks.count(PN->getIncomingBlock(*OI)))
               continue;
@@ -92,9 +92,10 @@ void llvm::CloneIntoFunction(Function *NewFunc, const Function *OldFunc,
                              ValueMaterializer *Materializer) {
   // Get the predecessors of the exit blocks
   SmallPtrSet<const BasicBlock *, 4> ExitBlockPreds, ClonedEBPreds;
-  for (BasicBlock *EB : *ExitBlocks)
-    for (BasicBlock *Pred : predecessors(EB))
-      ExitBlockPreds.insert(Pred);
+  if (ExitBlocks)
+    for (BasicBlock *EB : *ExitBlocks)
+      for (BasicBlock *Pred : predecessors(EB))
+        ExitBlockPreds.insert(Pred);
 
   // When we remap instructions, we want to avoid duplicating inlined
   // DISubprograms, so record all subprograms we find as we duplicate
