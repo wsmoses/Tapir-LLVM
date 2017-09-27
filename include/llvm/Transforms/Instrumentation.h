@@ -197,6 +197,7 @@ struct CSIOptions {
   bool InstrumentCalls = true;
   bool InstrumentAtomics = true;
   bool InstrumentMemIntrinsics = true;
+  bool InstrumentTapir = true;
 
   CSIOptions() = default;
 };
