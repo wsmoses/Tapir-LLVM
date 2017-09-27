@@ -1,6 +1,10 @@
 // REQUIRES: x86_64-linux
 // RUN: %host_cc -O0 -g %s -o %t 2>&1
 // RUN: %t 2>&1 | llvm-symbolizer -print-source-context-lines=5 -obj=%t | FileCheck %s
+//
+// This test appears to fail on Debian, perhaps related to this bug:
+// https://bugs.llvm.org/show_bug.cgi?id=31870
+// UNSUPPORTED: linux
 
 #include <stdio.h>
 
