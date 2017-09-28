@@ -60,8 +60,8 @@ FunctionPass *createSpawnUnswitchPass();
 //
 // PromoteDetachToCilk
 //
-ModulePass *createLowerTapirToCilkPass(bool DisablePostOpts = false,
-                                       bool Instrument = false);
+ModulePass *createLowerTapirToTargetPass(bool DisablePostOpts = false,
+                                         bool Instrument = false);
 
 } // End llvm namespace
 

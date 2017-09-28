@@ -27,7 +27,7 @@ using namespace llvm;
 /// TapirOpts library.
 void llvm::initializeTapirOpts(PassRegistry &Registry) {
   initializeLoopSpawningPass(Registry);
-  initializeLowerTapirToCilkPass(Registry);
+  initializeLowerTapirToTargetPass(Registry);
 }
 
 void LLVMInitializeTapirOpts(LLVMPassRegistryRef R) {
@@ -38,6 +38,6 @@ void LLVMAddLoopSpawningPass(LLVMPassManagerRef PM) {
   unwrap(PM)->add(createLoopSpawningPass());
 }
 
-void LLVMAddLowerTapirToCilkPass(LLVMPassManagerRef PM) {
-  unwrap(PM)->add(createLowerTapirToCilkPass());
+void LLVMAddLowerTapirToTargetPass(LLVMPassManagerRef PM) {
+  unwrap(PM)->add(createLowerTapirToTargetPass());
 }

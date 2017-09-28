@@ -624,7 +624,7 @@ Value* DACLoopSpawning::computeGrainsize(Value *Limit) {
   IRBuilder<> Builder(Preheader->getTerminator());
 
   // Get 8 * workers
-  Value *Workers8 = Builder.CreateIntCast(cilk::GetOrCreateWorker8(*Preheader->getParent()),
+  Value *Workers8 = Builder.CreateIntCast(llvm::tapir::CilkABI().GetOrCreateWorker8(*Preheader->getParent()),
                                           Limit->getType(), false);
   // Compute ceil(limit / 8 * workers) = (limit + 8 * workers - 1) / (8 * workers)
   Value *SmallLoopVal =

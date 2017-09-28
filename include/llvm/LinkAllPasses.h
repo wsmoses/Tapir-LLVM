@@ -133,7 +133,7 @@ namespace {
       (void) llvm::createLowerExpectIntrinsicPass();
       (void) llvm::createLowerInvokePass();
       (void) llvm::createLowerSwitchPass();
-      (void) llvm::createLowerTapirToCilkPass(false,false);
+      (void) llvm::createLowerTapirToTargetPass(false,false);
       (void) llvm::createNaryReassociatePass();
       (void) llvm::createObjCARCAAWrapperPass();
       (void) llvm::createObjCARCAPElimPass();

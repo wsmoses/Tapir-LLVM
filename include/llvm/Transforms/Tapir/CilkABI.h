@@ -35,6 +35,7 @@
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include "llvm/Transforms/Utils/Cloning.h"
 #include "llvm/Transforms/Utils/ValueMapper.h"
+#include "llvm/Transforms/Tapir/TapirUtils.h"
 #include <deque>
 
 extern llvm::cl::opt<bool> fastCilk;
@@ -338,29 +339,22 @@ public:
 ////////////////////////////////////////////////////////////////////////////////
 
 namespace llvm {
-namespace cilk {
+namespace tapir {
 
-Value *GetOrCreateWorker8(Function &F);
-void createSync(SyncInst &inst, ValueToValueMapTy &DetachCtxToStackFrame,
-                bool instrument = false);
-
-bool verifyDetachedCFG(const DetachInst &Detach, DominatorTree &DT,
-                       bool error = true);
-
-bool populateDetachedCFG(const DetachInst &Detach, DominatorTree &DT,
-                         SmallPtrSetImpl<BasicBlock *> &functionPieces,
-                         SmallVectorImpl<BasicBlock *> &reattachB,
-                         SmallPtrSetImpl<BasicBlock *> &ExitBlocks,
-                         bool replace, bool error = true);
-
-Function *extractDetachBodyToFunction(DetachInst &Detach,
-                                      DominatorTree &DT, AssumptionCache &AC,
-                                      CallInst **call = nullptr);
+class CilkABI : public TapirTarget {
+bool Instrument;
+public:
+CilkABI(bool instrument=false);
+Value *GetOrCreateWorker8(Function &F) override final;
+void createSync(SyncInst &inst, ValueToValueMapTy &DetachCtxToStackFrame) override final;
 
 Function *createDetach(DetachInst &Detach,
                        ValueToValueMapTy &DetachCtxToStackFrame,
-                       DominatorTree &DT, AssumptionCache &AC,
-                       bool instrument = false);
+                       DominatorTree &DT, AssumptionCache &AC) override final;
+void preProcessFunction(Function &F) override final;
+void postProcessFunction(Function &F) override final;
+void postProcessHelper(Function &F) override final;
+};
 
 }  // end of cilk namespace
 }  // end of llvm namespace

@@ -432,7 +432,7 @@ void PassManagerBuilder::populateModulePassManager(
     if (ParallelLevel > 0) {
       MPM.add(createInferFunctionAttrsLegacyPass());
       // MPM.add(createUnifyFunctionExitNodesPass());
-      MPM.add(createLowerTapirToCilkPass(ParallelLevel == 2, InstrumentCilk));
+      MPM.add(createLowerTapirToTargetPass(ParallelLevel == 2, InstrumentCilk));
       // The lowering pass may leave cruft around.  Clean it up.
       MPM.add(createCFGSimplificationPass());
       MPM.add(createInferFunctionAttrsLegacyPass());
@@ -486,8 +486,9 @@ void PassManagerBuilder::populateModulePassManager(
 
   bool RerunAfterTapirLowering = false;
   bool TapirHasBeenLowered = (ParallelLevel == 0);
+
   if (ParallelLevel == 3) // -fdetach
-    MPM.add(createLowerTapirToCilkPass(false, InstrumentCilk));
+    MPM.add(createLowerTapirToTargetPass(false, InstrumentCilk));
 
   do {
     RerunAfterTapirLowering =
@@ -730,14 +731,14 @@ void PassManagerBuilder::populateModulePassManager(
     addInstructionCombiningPass(MPM);
     addExtensionsToPM(EP_Peephole, MPM);
 
-    // Now lower Tapir to Cilk runtime calls.
+    // Now lower Tapir to Target runtime calls.
     //
     // TODO: Make this sequence of passes check the library info for the Cilk
     // RTS.
 
     MPM.add(createInferFunctionAttrsLegacyPass());
     // MPM.add(createUnifyFunctionExitNodesPass());
-    MPM.add(createLowerTapirToCilkPass(ParallelLevel == 2, InstrumentCilk));
+    MPM.add(createLowerTapirToTargetPass(ParallelLevel == 2, InstrumentCilk));
     // The lowering pass may leave cruft around.  Clean it up.
     MPM.add(createCFGSimplificationPass());
     MPM.add(createInferFunctionAttrsLegacyPass());
