@@ -911,10 +911,7 @@ bool makeFunctionDetachable(Function &extracted,
 
 //##############################################################################
 
-static cl::opt<bool> ClInstrumentCilk("instrument-cilk", cl::init(false),
-                                      cl::Hidden,
-                                      cl::desc("Instrument Cilk events"));
-llvm::tapir::CilkABI::CilkABI(bool instrument) : Instrument(instrument) {}
+llvm::tapir::CilkABI::CilkABI() {}
 
 /// \brief Get/Create the worker count for the spawning function.
 Value* llvm::tapir::CilkABI::GetOrCreateWorker8(Function &F) {
@@ -931,10 +928,10 @@ void llvm::tapir::CilkABI::createSync(SyncInst &SI, ValueToValueMapTy &DetachCtx
   Module &M = *(Fn.getParent());
 
   Value *SF = GetOrInitCilkStackFrame(Fn, DetachCtxToStackFrame,
-                                      /*isFast*/false, Instrument);
+                                      /*isFast*/false, false);
   Value *args[] = { SF };
   assert( args[0] && "sync used in function without frame!" );
-  CallInst *CI = CallInst::Create(GetCilkSyncFn(M, Instrument), args, "",
+  CallInst *CI = CallInst::Create(GetCilkSyncFn(M, false), args, "",
                                   /*insert before*/&SI);
   CI->setDebugLoc(SI.getDebugLoc());
   BasicBlock *Succ = SI.getSuccessor(0);
@@ -955,7 +952,7 @@ Function *llvm::tapir::CilkABI::createDetach(DetachInst &detach,
   //replace with branch to succesor
   //entry / cilk.spawn.savestate
   Value *SF = GetOrInitCilkStackFrame(F, DetachCtxToStackFrame,
-                                      /*isFast=*/false, Instrument);
+                                      /*isFast=*/false, false);
   // assert(SF && "null stack frame unexpected");
 
   // dbgs() << *detB << *Spawned << *Continue;
@@ -991,14 +988,14 @@ Function *llvm::tapir::CilkABI::createDetach(DetachInst &detach,
   {
     IRBuilder<> B(cal);
 
-    if (Instrument)
+    if (false)
       // cilk_spawn_prepare
       B.CreateCall(CILK_CSI_FUNC(spawn_prepare, *M), SF);
 
     // Need to save state before spawning
     SetJmpRes = EmitCilkSetJmp(B, SF, *M);
 
-    if (Instrument)
+    if (false)
       // cilk_spawn_or_continue
       B.CreateCall(CILK_CSI_FUNC(spawn_or_continue, *M), SetJmpRes);
   }
@@ -1016,7 +1013,7 @@ Function *llvm::tapir::CilkABI::createDetach(DetachInst &detach,
     detB->getTerminator()->eraseFromParent();
   }
 
-  makeFunctionDetachable(*extracted, DetachCtxToStackFrame, Instrument);
+  makeFunctionDetachable(*extracted, DetachCtxToStackFrame, false);
 
   return extracted;
 }
@@ -1065,4 +1062,3 @@ void llvm::tapir::CilkABI::postProcessFunction(Function &F) {
 void llvm::tapir::CilkABI::postProcessHelper(Function &F) {
     inlineCilkFunctions(F);
 }
-

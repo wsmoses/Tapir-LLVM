@@ -34,10 +34,10 @@ extern "C" {
  */
 
 /** See llvm::createLoopSpawningPass function. */
-void LLVMAddLoopSpawningPass(LLVMPassManagerRef PM);
+//void LLVMAddLoopSpawningPass(LLVMPassManagerRef PM, TapirTargetType tapirTarget);
 
 /** See llvm::createLowerTapirToTargetPass function. */
-void LLVMAddLowerTapirToTargetPass(LLVMPassManagerRef PM);
+//void LLVMAddLowerTapirToTargetPass(LLVMPassManagerRef PM, TapirTargetType tapirTarget);
 
 /**
  * @}

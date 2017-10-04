@@ -342,9 +342,8 @@ namespace llvm {
 namespace tapir {
 
 class CilkABI : public TapirTarget {
-bool Instrument;
 public:
-CilkABI(bool instrument=false);
+CilkABI();
 Value *GetOrCreateWorker8(Function &F) override final;
 void createSync(SyncInst &inst, ValueToValueMapTy &DetachCtxToStackFrame) override final;
 

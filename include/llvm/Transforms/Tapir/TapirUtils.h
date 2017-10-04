@@ -17,8 +17,11 @@
 
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/Analysis/AssumptionCache.h"
 #include "llvm/IR/Dominators.h"
 #include "llvm/IR/Instructions.h"
+#include "llvm/Transforms/Tapir/TapirTypes.h"
+#include "llvm/Transforms/Utils/ValueMapper.h"
 
 namespace llvm {
 namespace tapir {
