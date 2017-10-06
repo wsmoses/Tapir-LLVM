@@ -953,14 +953,7 @@ Function *llvm::tapir::CilkABI::createDetach(DetachInst &detach,
   //entry / cilk.spawn.savestate
   Value *SF = GetOrInitCilkStackFrame(F, DetachCtxToStackFrame,
                                       /*isFast=*/false, false);
-  // assert(SF && "null stack frame unexpected");
-
-  // dbgs() << *detB << *Spawned << *Continue;
-
-  // if (!Spawned->getUniquePredecessor())
-  //   SplitEdge(detB, Spawned, &DT, nullptr);
-
-  // dbgs() << *detB << *(detach.getDetached());
+  assert(SF && "null stack frame unexpected");
 
   CallInst *cal = nullptr;
   Function *extracted = extractDetachBodyToFunction(detach, DT, AC, &cal);
@@ -968,17 +961,15 @@ Function *llvm::tapir::CilkABI::createDetach(DetachInst &detach,
 
   // Unlink the detached CFG in the original function.  The heavy lifting of
   // removing the outlined detached-CFG is left to subsequent DCE.
-  BranchInst *ContinueBr;
-  {
-    // Replace the detach with a branch to the continuation.
-    ContinueBr = BranchInst::Create(Continue);
-    ReplaceInstWithInst(&detach, ContinueBr);
 
-    // Rewrite phis in the detached block.
+  // Replace the detach with a branch to the continuation.
+  BranchInst *ContinueBr = BranchInst::Create(Continue);
+  ReplaceInstWithInst(&detach, ContinueBr);
+
+  // Rewrite phis in the detached block.
+  {
     BasicBlock::iterator BI = Spawned->begin();
     while (PHINode *P = dyn_cast<PHINode>(BI)) {
-      // int j = P->getBasicBlockIndex(detB);
-      // assert(j >= 0 && "Can't find exiting block in exit block's phi node!");
       P->removeIncomingValue(detB);
       ++BI;
     }
@@ -986,18 +977,8 @@ Function *llvm::tapir::CilkABI::createDetach(DetachInst &detach,
 
   Value *SetJmpRes;
   {
-    IRBuilder<> B(cal);
-
-    if (false)
-      // cilk_spawn_prepare
-      B.CreateCall(CILK_CSI_FUNC(spawn_prepare, *M), SF);
-
-    // Need to save state before spawning
-    SetJmpRes = EmitCilkSetJmp(B, SF, *M);
-
-    if (false)
-      // cilk_spawn_or_continue
-      B.CreateCall(CILK_CSI_FUNC(spawn_or_continue, *M), SetJmpRes);
+    IRBuilder<> b(cal);
+    SetJmpRes = EmitCilkSetJmp(b, SF, *M);
   }
 
   // Conditionally call the new helper function based on the result of the

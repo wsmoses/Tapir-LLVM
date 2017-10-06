@@ -57,7 +57,7 @@ Value *emitTaskInit(Function *Caller,
 
 void emitBranch(BasicBlock *Target, IRBuilder<> &IRBuilder);
 
-void emitKmpRoutineEntryT(Module *M);
+PointerType *emitKmpRoutineEntryT(Module *M);
 
 Type *createKmpTaskTTy(Module *M, PointerType *KmpRoutineEntryPtrTy);
 
@@ -94,325 +94,6 @@ FunctionType *getOrCreateKmpc_MicroTy(LLVMContext &Context) {
 PointerType *getKmpc_MicroPointerTy(LLVMContext &Context) {
   return PointerType::getUnqual(getOrCreateKmpc_MicroTy(Context));
 }
-
-/*
-/// Extracts the region and tasks contained in \p PR and starts code OMP
-/// generation.
-void startRegionEmission(const ParallelRegion &PR,
-                                          LoopInfo &LI, DominatorTree &DT,
-                                          ScalarEvolution &SE) {
-  // A utility function used to find calls that replace extracted parallel
-  // region function.
-  auto FindCallToExtractedFn = [](Function *SpawningFn,
-                                  Function *ExtractedFn) {
-    // Find the call instruction to the extracted region function: RegionFn.
-    CallInst *ExtractedFnCI = nullptr;
-    for (auto &BB : *SpawningFn) {
-      if (CallInst *CI = dyn_cast<CallInst>(BB.begin())) {
-        // NOTE: I use pointer equality here, is that fine?
-        if (ExtractedFn == CI->getCalledFunction()) {
-          ExtractedFnCI = CI;
-          break;
-        }
-      }
-    }
-
-    assert(ExtractedFnCI != nullptr &&
-           "Couldn't find the call to the extracted region function!");
-
-    return ExtractedFnCI;
-  };
-
-  // Check if \p PR is a parallel loop
-  Loop *L = LI.getLoopFor(PR.getFork().getParent());
-  bool IsParallelLoop = (L && PR.isParallelLoopRegion(*L, DT));
-
-  auto &ForkInst = PR.getFork();
-  Function *SpawningFn = ForkInst.getParent()->getParent();
-
-  if (IsParallelLoop) {
-    auto *CIV = L->getCanonicalInductionVariable();
-    assert(CIV && "Non-canonical loop");
-
-    auto *PreHeader = L->getLoopPreheader();
-    auto *LoopLatch = L->getLoopLatch();
-    assert(LoopLatch &&
-           "Only parallel loops with a single latch are supported.");
-
-    auto &ForkedTask = PR.getForkedTask();
-    auto &ContTask = PR.getContinuationTask();
-
-    std::vector<BasicBlock *> RegionBBs;
-    // Include the preheader which is required for private and firstprivate
-    // support.
-    RegionBBs.push_back(PreHeader);
-
-    for (auto *BB : L->blocks()) {
-      RegionBBs.push_back(BB);
-    }
-
-    assert(ContTask.getHaltsOrJoints().size() == 1 &&
-           "Only 1 join per loop is currently supported\n");
-
-    // Include the join and post join blocks which are required for lastprivate
-    // support.
-    auto *JoinBB = ContTask.getHaltsOrJoints()[0]->getParent();
-    auto *PostJoinBB = JoinBB->getSingleSuccessor();
-    RegionBBs.push_back(JoinBB);
-    RegionBBs.push_back(PostJoinBB);
-
-    // If a value is:
-    //   1. Used inside the loop.
-    //   2. Defined outside the loop
-    // then, demote that value to memory so that it can be shared across
-    // the serial/parallel region.
-    // TODO this should be done for non-loop regions as well.
-    // NOTE We don't need to do this for the preheader. For example, in case
-    // of a firstprivate clause, we need to share the variable intentionally
-    // by value.
-    std::vector<AllocaInst *> DemotedAllocas;
-    for (auto *BB : L->blocks()) {
-      for (auto &I : *BB) {
-        for (auto &U : I.operands()) {
-          if (auto *I2 = dyn_cast<Instruction>(&*U)) {
-            if (!L->contains(I2) &&
-                I2->getParent() !=
-                    PreHeader ) {
-              // No need to demote what hasn't been promoted in the first place.
-              if (dyn_cast<AllocaInst>(I2) &&
-                  !PR.getPRI().isSafeToPromote(*dyn_cast<AllocaInst>(I2), DT)) {
-                continue;
-              }
-
-              // Don't demote what has been already demoted.
-              if (std::count(DemotedAllocas.begin(), DemotedAllocas.end(), I2)) {
-                continue;
-              }
-
-              DemotedAllocas.push_back(DemoteRegToStack(*I2));
-            }
-          }
-        }
-      }
-    }
-
-    removePIRInstructions(ForkInst, ForkedTask, ContTask);
-
-    CodeExtractor LoopExtractor(RegionBBs, &DT);
-    Function *LoopFn = LoopExtractor.extractCodeRegion();
-    bool MergeRes =
-        MergeBlockIntoPredecessor(LoopFn->getEntryBlock().getSingleSuccessor());
-    assert(MergeRes && "Couldn't merge the preheader");
-
-    // assert(verifyExtractedFn(LoopFn));
-
-    // Create the outlined function that contains the OpenMP calls required for
-    // outermost regions. This corresponds to the "if (omp_get_num_threads() ==
-    // 1)" part as indicated by the example in the header file.
-    ValueToValueMapTy VMap;
-    auto *OMPLoopFn = declareOMPRegionFn(LoopFn, false, VMap);
-    // Create the outlined function that contains the OpenMP calls required for
-    // nested regions. This corresponds to the "else" part as indicated by the
-    // example in the header file.
-    ValueToValueMapTy NestedVMap;
-    auto *OMPNestedLoopFn = declareOMPRegionFn(LoopFn, true, NestedVMap);
-
-    auto *ExtractedFnCI = FindCallToExtractedFn(SpawningFn, LoopFn);
-
-    auto ArgIt = ExtractedFnCI->arg_begin();
-    auto &LoopFnEntryBB = LoopFn->getEntryBlock();
-
-    IRBuilder<> IRBuilder(&LoopFnEntryBB,
-                          LoopFnEntryBB.getTerminator()->getIterator());
-
-    while (ArgIt != ExtractedFnCI->arg_end()) {
-      if (std::find(DemotedAllocas.begin(), DemotedAllocas.end(), *ArgIt) !=
-          DemotedAllocas.end()) {
-        auto ParamIt =
-            std::next(LoopFn->arg_begin(),
-                      std::distance(ExtractedFnCI->arg_begin(), ArgIt));
-
-        auto *ParamVal = IRBuilder.CreateLoad(&*ParamIt);
-        auto *ParamType = (PointerType*)ParamIt->getType();
-
-        for (auto &U : ParamIt->uses()) {
-          if (auto *UI = dyn_cast<Instruction>(U.getUser())) {
-            if (UI != ParamVal) {
-              UI->replaceAllUsesWith(ParamVal);
-              UI->eraseFromParent();
-            }
-          }
-        }
-
-      }
-
-      ++ArgIt;
-    }
-
-
-    // Replace ExtractedFnCI with an if-else region that calls the outermost and
-    // nested functions.
-    replaceExtractedRegionFnCall(ExtractedFnCI, OMPLoopFn, OMPNestedLoopFn);
-
-    emitOMPRegionFn(OMPLoopFn, LoopFn, VMap, false);
-
-    emitOMPRegionFn(OMPNestedLoopFn, LoopFn, NestedVMap, true);
-  } else {
-    // errs() << "Parallel Region:\n";
-    // Split the fork instruction parent into 2 BBs to satisfy the assumption
-    // of CodeExtractor (i.e. single-entry region and the head BB is the entry).
-    auto *OldForkInstBB = ForkInst.getParent();
-    auto *NewForkInstBB = SplitBlock(OldForkInstBB, &ForkInst);
-
-    auto &ForkedTask = PR.getForkedTask();
-    auto &ContTask = PR.getContinuationTask();
-
-    // Collect all the BBs of forked and continuation tasks for extraction.
-    std::vector<BasicBlock *> RegionBBs;
-    // Keep track of which blocks belong to forked and continuation tasks
-    // because we are about to replace fork-join instructions by regular
-    // branches.
-    std::vector<BasicBlock *> ForkedBBs;
-    std::vector<BasicBlock *> ContBBs;
-    RegionBBs.push_back(NewForkInstBB);
-
-    ParallelTask::VisitorTy ForkedVisitor = [&RegionBBs, &ForkedBBs](
-        BasicBlock &BB, const ParallelTask &PT) -> bool {
-      RegionBBs.push_back(&BB);
-      ForkedBBs.push_back(&BB);
-
-      return true;
-    };
-
-    ParallelTask::VisitorTy ContVisitor =
-        [&RegionBBs, &ContBBs](BasicBlock &BB, const ParallelTask &PT) -> bool {
-      RegionBBs.push_back(&BB);
-      ContBBs.push_back(&BB);
-
-      return true;
-    };
-
-    // Collect all the BBs of the forked task.
-    ForkedTask.visit(ForkedVisitor, true);
-    // Collect all the BBs of the continuation task.
-    ContTask.visit(ContVisitor, true);
-
-    removePIRInstructions(ForkInst, ForkedTask, ContTask);
-
-    CodeExtractor RegionExtractor(RegionBBs);
-    Function *RegionFn = RegionExtractor.extractCodeRegion();
-    assert(verifyExtractedFn(RegionFn));
-
-    CodeExtractor ForkedExtractor(ForkedBBs);
-    Function *ForkedFn = ForkedExtractor.extractCodeRegion();
-    // The sub-set of RegionFn args that is passed to ForkedFn.
-    std::vector<Argument *> ForkedFnArgs;
-    std::vector<Argument *> ForkedFnNestedArgs;
-
-    CodeExtractor ContExtractor(ContBBs);
-    Function *ContFn = ContExtractor.extractCodeRegion();
-    // The sub-set of RegionFn args that is passed to ContFn
-    std::vector<Argument *> ContFnArgs;
-    std::vector<Argument *> ContFnNestedArgs;
-
-    // Create the outlined function that contains the OpenMP calls required for
-    // outermost regions. This corresponds to the "if (omp_get_num_threads() ==
-    // 1)" part as indicated by the example in the header file.
-    ValueToValueMapTy VMap;
-    auto *OMPRegionFn = declareOMPRegionFn(RegionFn, false, VMap);
-    // Create the outlined function that contains the OpenMP calls required for
-    // nested regions. This corresponds to the "else" part as indicated by the
-    // example in the header file.
-    ValueToValueMapTy NestedVMap;
-    auto *OMPNestedRegionFn = declareOMPRegionFn(RegionFn, true, NestedVMap);
-
-    auto *ExtractedFnCI = FindCallToExtractedFn(SpawningFn, RegionFn);
-
-    // Replace ExtractedFnCI with an if-else region that calls the outermost and
-    // nested functions.
-    replaceExtractedRegionFnCall(ExtractedFnCI, OMPRegionFn, OMPNestedRegionFn);
-
-    // Calculates the sub-list of \p VMap's values that should be passed to \p
-    // TaskFn.
-    auto filterCalledFnArgs = [](Function *ExtractedRegionFn, Function *TaskFn,
-                                 ValueToValueMapTy &VMap) {
-      std::vector<Argument *> FilteredArgs;
-
-      // Locate the CallInst to TaskFn
-      for (auto &BB : *ExtractedRegionFn) {
-        if (CallInst *CI = dyn_cast<CallInst>(BB.begin())) {
-          if (TaskFn == CI->getCalledFunction()) {
-            auto ChildArgIt = CI->arg_begin();
-
-            while (ChildArgIt != CI->arg_end()) {
-              for (auto &Arg : ExtractedRegionFn->args()) {
-                if (ChildArgIt->get() == &Arg) {
-                  FilteredArgs.push_back(dyn_cast<Argument>(VMap[&Arg]));
-                  break;
-                }
-              }
-
-              ++ChildArgIt;
-            }
-
-            break;
-          }
-        }
-      }
-
-      return FilteredArgs;
-    };
-
-    ForkedFnArgs = filterCalledFnArgs(RegionFn, ForkedFn, VMap);
-    ForkedFnNestedArgs = filterCalledFnArgs(RegionFn, ForkedFn, NestedVMap);
-    ContFnArgs = filterCalledFnArgs(RegionFn, ContFn, VMap);
-    ContFnNestedArgs = filterCalledFnArgs(RegionFn, ContFn, NestedVMap);
-
-    // Emit the function containing outermost logic.
-    emitOMPRegionFn(OMPRegionFn, ForkedFn, ContFn, ForkedFnArgs, ContFnArgs,
-                    false);
-
-    // Emit the function containing nested logic.
-    emitOMPRegionFn(OMPNestedRegionFn, ForkedFn, ContFn, ForkedFnNestedArgs,
-                    ContFnNestedArgs, true);
-  }
-}
-*/
-
-/*
-void removePIRInstructions(ForkInst &ForkInst,
-                                            const ParallelTask &ForkedTask,
-                                            const ParallelTask &ContTask) {
-  // Replace fork, halt, and join instructions with br, otherwise, we will end
-  // up in an infinite loop since the region's extracted function will contain
-  // a "new" parallel region.
-
-  // Replace fork with branch
-  BranchInst::Create(&ForkedTask.getEntry(), &ForkInst);
-  ForkInst.eraseFromParent();
-
-  // Replace halts with branches
-  for (auto *I : ForkedTask.getHaltsOrJoints()) {
-    if (HaltInst *HI = dyn_cast<HaltInst>(I)) {
-      BranchInst::Create(HI->getContinuationBB(), HI);
-      HI->eraseFromParent();
-    } else {
-      assert(false && "A forked task is terminated by a join instruction");
-    }
-  }
-
-  // Replace joins with branches
-  for (auto *I : ContTask.getHaltsOrJoints()) {
-    if (JoinInst *JI = dyn_cast<JoinInst>(I)) {
-      BranchInst::Create(JI->getSuccessor(0), JI);
-      JI->eraseFromParent();
-    } else {
-      assert(false &&
-             "A continuation task is terminated by a halt instruction");
-    }
-  }
-}
-*/
 
 /// Creates the declaration for a function that will contain OpenMP runtime
 /// code.
@@ -599,8 +280,7 @@ Constant *createRuntimeFunction(OpenMPRuntimeFunction Function,
   return RTLFn;
 }
 
-CallInst *emitRuntimeCall(Value *Callee,
-                                           ArrayRef<Value *> Args,
+CallInst *emitRuntimeCall(Value *Callee, ArrayRef<Value *> Args,
                                            const Twine &Name,
                                            BasicBlock *Parent) {
   IRBuilder<> Builder(Parent);
@@ -608,8 +288,7 @@ CallInst *emitRuntimeCall(Value *Callee,
   return call;
 }
 
-CallInst *emitRuntimeCall(Value *Callee,
-                                           ArrayRef<Value *> Args,
+CallInst *emitRuntimeCall(Value *Callee, ArrayRef<Value *> Args,
                                            const Twine &Name,
                                            IRBuilder<> &IRBuilder) {
   CallInst *call = IRBuilder.CreateCall(Callee, Args, None, Name);
@@ -1085,7 +764,7 @@ StructType *createSharedsTy(Function *F) {
   auto FnParams = F->getFunctionType()->params();
 
   if (FnParams.size() == 0) {
-    return StructType::create("anon", Type::getInt8Ty(C), (llvm::Type*)nullptr);
+    return StructType::create(SmallVector<llvm::Type*,1>(1,Type::getInt8Ty(C)), "anon");
   }
 
   return StructType::create(FnParams, "anon");
@@ -1103,46 +782,16 @@ StructType *createSharedsTy(Function *F) {
 /// \param LoadedCapturedArgs the values to be passed to the spawned task.
 ///
 /// \returns the allocated OMP task object.
+
+
 Value *emitTaskInit(Function *Caller,
                                      IRBuilder<> &CallerIRBuilder,
                                      IRBuilder<> &CallerAllocaIRBuilder,
                                      Function *ForkedFn,
                                      ArrayRef<Value *> LoadedCapturedArgs) {
+  /*
   auto *M = Caller->getParent();
-  DataLayout DL(M);
-  LLVMContext &C = M->getContext();
-  auto *SharedsTy = createSharedsTy(ForkedFn);
-  auto *SharedsPtrTy = PointerType::getUnqual(SharedsTy);
-  auto *SharedsTySize =
-      CallerIRBuilder.getInt64(DL.getTypeAllocSize(SharedsTy));
-  emitKmpRoutineEntryT(M);
-  auto *KmpTaskTTy = createKmpTaskTTy(M, KmpRoutineEntryPtrTy);
-  auto *KmpTaskTWithPrivatesTy = createKmpTaskTWithPrivatesTy(KmpTaskTTy);
-  auto *KmpTaskTWithPrivatesPtrTy =
-      PointerType::getUnqual(KmpTaskTWithPrivatesTy);
-  auto *KmpTaskTWithPrivatesTySize =
-      CallerIRBuilder.getInt64(DL.getTypeAllocSize(KmpTaskTWithPrivatesTy));
-  auto OutlinedFn = emitTaskOutlinedFunction(M, SharedsPtrTy, ForkedFn);
-  auto *TaskPrivatesMapTy = std::next(OutlinedFn->arg_begin(), 3)->getType();
-  auto *TaskPrivatesMap =
-      ConstantPointerNull::get(cast<PointerType>(TaskPrivatesMapTy));
-
-  auto *TaskEntry = emitProxyTaskFunction(
-      KmpTaskTWithPrivatesPtrTy, SharedsPtrTy, OutlinedFn, TaskPrivatesMap);
-
-  // Allocate space to store the captured environment
-  auto *AggCaptured =
-      CallerAllocaIRBuilder.CreateAlloca(SharedsTy, nullptr, "agg.captured");
-
-  // Store captured arguments into agg.captured
-  for (unsigned i = 0; i < LoadedCapturedArgs.size(); ++i) {
-    auto *AggCapturedElemPtr = CallerIRBuilder.CreateInBoundsGEP(
-        SharedsTy, AggCaptured,
-        {CallerIRBuilder.getInt32(0), CallerIRBuilder.getInt32(i)});
-    CallerIRBuilder.CreateAlignedStore(
-        LoadedCapturedArgs[i], AggCapturedElemPtr,
-        DL.getTypeAllocSize(LoadedCapturedArgs[i]->getType()));
-  }
+  //TODO rip from here
 
   // We only need tied tasks for now and that's what the 1 value is for.
   auto *TaskFlags = CallerIRBuilder.getInt32(1);
@@ -1176,6 +825,7 @@ Value *emitTaskInit(Function *Caller,
       CallerIRBuilder.getInt64(DL.getTypeAllocSize(SharedsTy)), 8);
 
   return NewTask;
+  */
 }
 
 /// Emits some boilerplate code to kick off the task work and then calls the
@@ -1257,9 +907,8 @@ Function *emitProxyTaskFunction(
   return TaskEntry;
 }
 
-Function *emitTaskOutlinedFunction(Module *M,
-                                                    Type *SharedsPtrTy,
-                                                    Function *ForkedFn) {
+Function *emitTaskOutlinedFunction(Module *M, Type *SharedsPtrTy,
+                                              Function *ForkedFn) {
   auto ExtractedToOutlinedIt = ExtractedToOutlinedMap.find(ForkedFn);
 
   if (ExtractedToOutlinedIt != ExtractedToOutlinedMap.end()) {
@@ -1375,34 +1024,39 @@ Type *getOrCreateIdentTy(Module *M) {
   if (M->getTypeByName("ident_t") == nullptr) {
     auto *Int32Ty = Type::getInt32Ty(M->getContext());
     auto *Int8PtrTy = Type::getInt8PtrTy(M->getContext());
-    IdentTy = StructType::create("ident_t", Int32Ty /* reserved_1 */,
+    IdentTy = StructType::create(ArrayRef<llvm::Type*>({Int32Ty /* reserved_1 */,
                                  Int32Ty /* flags */, Int32Ty /* reserved_2 */,
                                  Int32Ty /* reserved_3 */,
-                                 Int8PtrTy /* psource */, (llvm::Type*)nullptr);
+                                 Int8PtrTy /* psource */}), "ident_t");
+  } else if ((IdentTy = dyn_cast<StructType>(M->getTypeByName("ident_t")))->isOpaque()) {
+      auto *Int32Ty = Type::getInt32Ty(M->getContext());
+      auto *Int8PtrTy = Type::getInt8PtrTy(M->getContext());
+      IdentTy->setBody(ArrayRef<llvm::Type*>({Int32Ty /* reserved_1 */,
+                                   Int32Ty /* flags */, Int32Ty /* reserved_2 */,
+                                   Int32Ty /* reserved_3 */,
+                                   Int8PtrTy /* psource */}), "ident_t");
   }
-
   return IdentTy;
 }
 
-Type *createKmpTaskTTy(Module *M,
-                                        PointerType *KmpRoutineEntryPtrTy) {
+Type *createKmpTaskTTy(Module *M, PointerType *KmpRoutineEntryPtrTy) {
   auto &C = M->getContext();
   auto *KmpCmplrdataTy =
-      StructType::create("kmp_cmplrdata_t", KmpRoutineEntryPtrTy, (llvm::Type*)nullptr);
-  auto *KmpTaskTTy = StructType::create(
-      "kmp_task_t", Type::getInt8PtrTy(C), KmpRoutineEntryPtrTy,
-      Type::getInt32Ty(C), KmpCmplrdataTy, KmpCmplrdataTy, (llvm::Type*)nullptr);
+      StructType::create(SmallVector<llvm::Type*,1>(1,KmpRoutineEntryPtrTy),"kmp_cmplrdata_t");
+  auto *KmpTaskTTy = StructType::create(ArrayRef<llvm::Type*>({
+      Type::getInt8PtrTy(C), KmpRoutineEntryPtrTy,
+      Type::getInt32Ty(C), KmpCmplrdataTy, KmpCmplrdataTy}), "kmp_task_t");
 
   return KmpTaskTTy;
 }
 
 Type *createKmpTaskTWithPrivatesTy(Type *KmpTaskTTy) {
   auto *KmpTaskTWithPrivatesTy =
-      StructType::create("kmp_task_t_with_privates", KmpTaskTTy, (llvm::Type*)nullptr);
+      StructType::create(SmallVector<llvm::Type*,1>(1,KmpTaskTTy),"kmp_task_t_with_privates");
   return KmpTaskTWithPrivatesTy;
 }
 
-void emitKmpRoutineEntryT(Module *M) {
+PointerType *emitKmpRoutineEntryT(Module *M) {
   if (!KmpRoutineEntryPtrTy) {
     // Build typedef kmp_int32 (* kmp_routine_entry_t)(kmp_int32, void *); type.
     auto &C = M->getContext();
@@ -1411,6 +1065,7 @@ void emitKmpRoutineEntryT(Module *M) {
     KmpRoutineEntryPtrTy = PointerType::getUnqual(
         FunctionType::get(Int32Ty, KmpRoutineEntryTyArgs, false));
   }
+  return KmpRoutineEntryPtrTy;
 }
 
 DenseMap<Argument *, Value *> startFunction(Function *Fn) {
@@ -1488,6 +1143,7 @@ Value *getOrCreateDefaultLocation(Module *M) {
         ConstantInt::get(Int32Ty, 0, true), ConstantInt::get(Int32Ty, 0, true),
         DefaultOpenMPPSource};
     Constant *C = ConstantStruct::get(IdentTy, Members);
+    M->dump();
     auto *GV =
         new GlobalVariable(*M, C->getType(), true, GlobalValue::PrivateLinkage,
                            C, "", nullptr, GlobalValue::NotThreadLocal);
@@ -1555,11 +1211,160 @@ Value* llvm::tapir::OpenMPABI::GetOrCreateWorker8(Function &F) {
   Value *P8 = B.CreateMul(P0, ConstantInt::get(P0->getType(), 8), worker8_name);
   return P8;
   */
+  assert(0 && "OpenMP for loop / worker count not supported");
   return nullptr;
 }
 
 void llvm::tapir::OpenMPABI::createSync(SyncInst &SI, ValueToValueMapTy &DetachCtxToStackFrame) {
-  //TODO
+  IRBuilder<> builder(&SI);
+  std::vector<Value *> Args = {DefaultOpenMPLocation,
+                            getThreadID(SI.getParent()->getParent(), builder)};
+  emitRuntimeCall(
+      createRuntimeFunction(OpenMPRuntimeFunction::OMPRTL__kmpc_omp_taskwait,
+                            SI.getParent()->getParent()->getParent()),
+    Args, "", builder);
+
+  // Replace the detach with a branch to the continuation.
+  BranchInst *PostSync = BranchInst::Create(SI.getSuccessor(0));
+  ReplaceInstWithInst(&SI, PostSync);
+}
+
+Function* formatFunctionToTask(Function* extracted, CallInst* cal) {
+  std::vector<Value*> LoadedCapturedArgs;
+  for(auto& a:cal->arg_operands()) {
+    LoadedCapturedArgs.push_back(a);
+  }
+
+  Module* M = extracted->getParent();
+  LLVMContext &C = M->getContext();
+  DataLayout DL(M);
+  auto *SharedsTy = createSharedsTy(extracted);
+  auto *SharedsPtrTy = PointerType::getUnqual(SharedsTy);
+  IRBuilder<> CallerIRBuilder(cal);
+  auto *SharedsTySize =
+      CallerIRBuilder.getInt64(DL.getTypeAllocSize(SharedsTy));
+  auto *KmpTaskTTy = createKmpTaskTTy(M, emitKmpRoutineEntryT(M));
+  auto *KmpTaskTWithPrivatesTy = createKmpTaskTWithPrivatesTy(KmpTaskTTy);
+  auto *KmpTaskTWithPrivatesPtrTy =
+      PointerType::getUnqual(KmpTaskTWithPrivatesTy);
+  auto *KmpTaskTWithPrivatesTySize =
+      CallerIRBuilder.getInt64(DL.getTypeAllocSize(KmpTaskTWithPrivatesTy));
+
+  //TODO move this alloca up as necessary
+  auto *AggCaptured =
+      CallerIRBuilder.CreateAlloca(SharedsTy, nullptr, "agg.captured");
+
+  // Store captured arguments into agg.captured
+  for (unsigned i = 0; i < LoadedCapturedArgs.size(); ++i) {
+    auto *AggCapturedElemPtr = CallerIRBuilder.CreateInBoundsGEP(
+        SharedsTy, AggCaptured,
+        {CallerIRBuilder.getInt32(0), CallerIRBuilder.getInt32(i)});
+    CallerIRBuilder.CreateAlignedStore(
+        LoadedCapturedArgs[i], AggCapturedElemPtr,
+        DL.getTypeAllocSize(LoadedCapturedArgs[i]->getType()));
+  }
+
+  auto *VoidTy = Type::getVoidTy(C);
+  auto *Int8PtrTy = Type::getInt8PtrTy(C);
+  auto *Int32Ty = Type::getInt32Ty(C);
+  auto *Int32PtrTy = Type::getInt32PtrTy(C);
+
+  auto *CopyFnTy = FunctionType::get(VoidTy, {Int8PtrTy}, true);
+  auto *CopyFnPtrTy = PointerType::getUnqual(CopyFnTy);
+
+  auto *OutlinedFnTy = FunctionType::get(
+      VoidTy,
+      {Int32Ty, Int32PtrTy, Int8PtrTy, CopyFnPtrTy, Int8PtrTy, SharedsPtrTy},
+      false);
+  auto *OutlinedFn = Function::Create(
+      OutlinedFnTy, GlobalValue::InternalLinkage, ".omp_outlined.", M);
+  StringRef ArgNames[] = {".global_tid.", ".part_id.", ".privates.",
+                          ".copy_fn.",    ".task_t.",  "__context"};
+
+  std::vector<Value*> out_args;
+  for (auto &Arg : OutlinedFn->args()) {
+    Arg.setName(ArgNames[out_args.size()]);
+    out_args.push_back(&Arg);
+  }
+
+  OutlinedFn->setLinkage(GlobalValue::InternalLinkage);
+  OutlinedFn->addFnAttr(Attribute::AlwaysInline);
+  OutlinedFn->addFnAttr(Attribute::NoUnwind);
+  OutlinedFn->addFnAttr(Attribute::UWTable);
+
+  auto *EntryBB = BasicBlock::Create(C, "entry", OutlinedFn, nullptr);
+  IRBuilder<> IRBuilder(EntryBB);
+
+  //auto ParamToAllocaMap =
+  //auto *ContextArg = &*std::prev(OutlinedFn->args().end());
+  //auto It = ParamToAllocaMap.find(ContextArg);
+  //assert(It != ParamToAllocaMap.end() && "Argument entry wasn't found");
+  //auto *ContextAddr = It->second;
+
+  // Load the context struct so that we can access the task's accessed data
+  auto *Context = out_args.back();
+  //IRBuilder.CreateAlignedLoad(
+  //    ContextAddr,
+  //    DL.getTypeAllocSize(ContextAddr->getType()->getPointerElementType()));
+
+  std::vector<Value *> ForkedFnArgs;
+
+
+  	ValueToValueMapTy valmap;
+
+    unsigned int argc = 0;
+    for (auto& arg : extracted->args()) {
+      auto *DataAddrEP = IRBuilder.CreateInBoundsGEP(
+          Context, {IRBuilder.getInt32(0), IRBuilder.getInt32(argc)});
+      auto *DataAddr = IRBuilder.CreateAlignedLoad(
+          DataAddrEP,
+          DL.getTypeAllocSize(DataAddrEP->getType()->getPointerElementType()));
+      valmap.insert(std::pair<Value*,Value*>(&arg,DataAddr));
+      argc++;
+    }
+
+    IRBuilder.CreateRetVoid();
+
+  	SmallVector< ReturnInst *,5> retinsts;
+    OutlinedFn->dump();
+    CloneFunctionInto(OutlinedFn, extracted, valmap, false, retinsts);
+    OutlinedFn->dump();
+
+  // We only need tied tasks for now and that's what the 1 value is for.
+  auto *TaskFlags = CallerIRBuilder.getInt32(1);
+  std::vector<Value *> AllocArgs = {
+      DefaultOpenMPLocation,
+      getThreadID(cal->getParent()->getParent(), CallerIRBuilder),
+      TaskFlags,
+      KmpTaskTWithPrivatesTySize,
+      SharedsTySize,
+      CallerIRBuilder.CreatePointerBitCastOrAddrSpaceCast(
+          OutlinedFn, KmpRoutineEntryPtrTy)};
+  auto *NewTask = emitRuntimeCall(
+      createRuntimeFunction(OpenMPRuntimeFunction::OMPRTL__kmpc_omp_task_alloc,
+                            M),
+      AllocArgs, "", CallerIRBuilder);
+  auto *NewTaskNewTaskTTy = CallerIRBuilder.CreatePointerBitCastOrAddrSpaceCast(
+      NewTask, KmpTaskTWithPrivatesPtrTy);
+  auto *KmpTaskTPtr = CallerIRBuilder.CreateInBoundsGEP(
+      KmpTaskTWithPrivatesTy, NewTaskNewTaskTTy,
+      {CallerIRBuilder.getInt32(0), CallerIRBuilder.getInt32(0)});
+  auto *KmpTaskDataPtr = CallerIRBuilder.CreateInBoundsGEP(
+      KmpTaskTTy, KmpTaskTPtr,
+      {CallerIRBuilder.getInt32(0), CallerIRBuilder.getInt32(0)});
+  auto *KmpTaskData = CallerIRBuilder.CreateAlignedLoad(
+      KmpTaskDataPtr,
+      DL.getTypeAllocSize(KmpTaskDataPtr->getType()->getPointerElementType()));
+  auto *AggCapturedToI8 = CallerIRBuilder.CreatePointerBitCastOrAddrSpaceCast(
+      AggCaptured, Type::getInt8PtrTy(C));
+  CallerIRBuilder.CreateMemCpy(
+      KmpTaskData, AggCapturedToI8,
+      CallerIRBuilder.getInt64(DL.getTypeAllocSize(SharedsTy)), 8);
+
+  cal->eraseFromParent();
+  extracted->eraseFromParent();
+  OutlinedFn->dump();
+  return OutlinedFn;
 }
 
 Function *llvm::tapir::OpenMPABI::createDetach(DetachInst &detach,
@@ -1575,84 +1380,29 @@ Function *llvm::tapir::OpenMPABI::createDetach(DetachInst &detach,
 
   CallInst *cal = nullptr;
   Function *extracted = extractDetachBodyToFunction(detach, DT, AC, &cal);
+  extracted = formatFunctionToTask(extracted, cal);
 
-    // Collect all the BBs of forked and continuation tasks for extraction.
-    std::vector<BasicBlock *> RegionBBs;
-    // Keep track of which blocks belong to forked and continuation tasks
-    // because we are about to replace fork-join instructions by regular
-    // branches.
-    //std::vector<BasicBlock *> ForkedBBs;
-    //std::vector<BasicBlock *> ContBBs;
-    //RegionBBs.push_back(NewForkInstBB);
+  // Replace the detach with a branch to the continuation.
+  BranchInst *ContinueBr = BranchInst::Create(Continue);
+  ReplaceInstWithInst(&detach, ContinueBr);
 
-    // Create the outlined function that contains the OpenMP calls required for
-    // outermost regions. This corresponds to the "if (omp_get_num_threads() ==
-    // 1)" part as indicated by the example in the header file.
-    ValueToValueMapTy VMap;
-    auto *OMPRegionFn = declareOMPRegionFn(&F, false, VMap);
-    // Create the outlined function that contains the OpenMP calls required for
-    // nested regions. This corresponds to the "else" part as indicated by the
-    // example in the header file.
-    ValueToValueMapTy NestedVMap;
-    auto *OMPNestedRegionFn = declareOMPRegionFn(&F, true, NestedVMap);
-
-    // Replace ExtractedFnCI with an if-else region that calls the outermost and
-    // nested functions.
-    replaceExtractedRegionFnCall(cal, OMPRegionFn, OMPNestedRegionFn);
-
-    // Calculates the sub-list of \p VMap's values that should be passed to \p
-    // TaskFn.
-    auto filterCalledFnArgs = [](Function *ExtractedRegionFn, Function *TaskFn,
-                                 ValueToValueMapTy &VMap) {
-      std::vector<Argument *> FilteredArgs;
-
-      // Locate the CallInst to TaskFn
-      for (auto &BB : *ExtractedRegionFn) {
-        if (CallInst *CI = dyn_cast<CallInst>(BB.begin())) {
-          if (TaskFn == CI->getCalledFunction()) {
-            auto ChildArgIt = CI->arg_begin();
-
-            while (ChildArgIt != CI->arg_end()) {
-              for (auto &Arg : ExtractedRegionFn->args()) {
-                if (ChildArgIt->get() == &Arg) {
-                  FilteredArgs.push_back(dyn_cast<Argument>(VMap[&Arg]));
-                  break;
-                }
-              }
-
-              ++ChildArgIt;
-            }
-
-            break;
-          }
-        }
-      }
-
-      return FilteredArgs;
-    };
-
-    auto ForkedFnArgs = filterCalledFnArgs(&F, extracted, VMap);
-    auto ForkedFnNestedArgs = filterCalledFnArgs(&F, extracted, NestedVMap);
-    //auto ContFnArgs = filterCalledFnArgs(RegionFn, ContFn, VMap);
-    //auto ContFnNestedArgs = filterCalledFnArgs(RegionFn, ContFn, NestedVMap);
-
-    auto ContFn = nullptr;
-    auto ContFnArgs = nullptr;
-    auto ContFnNestedArgs = nullptr;
-
-    // Emit the function containing outermost logic.
-    emitOMPRegionFn(OMPRegionFn, extracted, ContFn, ForkedFnArgs, ContFnArgs,
-                    false);
-
-    // Emit the function containing nested logic.
-    emitOMPRegionFn(OMPNestedRegionFn, extracted, ContFn, ForkedFnNestedArgs,
-                    ContFnNestedArgs, true);
-
+  // Rewrite phis in the detached block.
+  {
+    BasicBlock::iterator BI = Spawned->begin();
+    while (PHINode *P = dyn_cast<PHINode>(BI)) {
+      P->removeIncomingValue(detB);
+      ++BI;
+    }
+  }
+  extracted->getParent()->dump();
+  extracted->dump();
+  return extracted;
 }
 
 void llvm::tapir::OpenMPABI::preProcessFunction(Function &F) {
   auto M = (Module *)F.getParent();
   getOrCreateIdentTy(M);
+  M->dump();
   getOrCreateDefaultLocation(M);
 }
 

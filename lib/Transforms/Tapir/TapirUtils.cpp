@@ -214,37 +214,14 @@ Function *llvm::tapir::extractDetachBodyToFunction(DetachInst &detach,
   SmallVector<BasicBlock *, 32> reattachB;
   SmallPtrSet<BasicBlock *, 4> ExitBlocks;
 
-  // if (!Spawned->getUniquePredecessor())
-  //   dbgs() << *Spawned;
   assert(Spawned->getUniquePredecessor() &&
          "Entry block of detached CFG has multiple predecessors.");
   assert(Spawned->getUniquePredecessor() == Detacher &&
          "Broken CFG.");
 
-  // if (getNumPred(Spawned) > 1) {
-  //   dbgs() << "Found multiple predecessors to a detached-CFG entry block "
-  //          << Spawned->getName() << ".\n";
-  //   BasicBlock* ts = BasicBlock::Create(Spawned->getContext(), Spawned->getName()+".fx", &F, Detacher);
-  //   IRBuilder<> b(ts);
-  //   b.CreateBr(Spawned);
-  //   detach.setSuccessor(0,ts);
-  //   llvm::BasicBlock::iterator i = Spawned->begin();
-  //   while (auto phi = llvm::dyn_cast<llvm::PHINode>(i)) {
-  //     int idx = phi->getBasicBlockIndex(detach.getParent());
-  //     phi->setIncomingBlock(idx, ts);
-  //     ++i;
-  //   }
-  //   Spawned = ts;
-  // }
-
   if (!populateDetachedCFG(detach, DT, functionPieces, reattachB,
                            ExitBlocks, true))
     return nullptr;
-
-  // functionPieces.erase(Spawned);
-  // std::vector<BasicBlock *> blocks(functionPieces.begin(), functionPieces.end());
-  // blocks.insert(blocks.begin(), Spawned);
-  // functionPieces.insert(Spawned);
 
   // Check the spawned block's predecessors.
   for (BasicBlock *BB : functionPieces) {
@@ -265,7 +242,6 @@ Function *llvm::tapir::extractDetachBodyToFunction(DetachInst &detach,
   // Get the inputs and outputs for the detached CFG.
   SetVector<Value *> Inputs, Outputs;
   findInputsOutputs(functionPieces, Inputs, Outputs, &ExitBlocks);
-  // extractor.findInputsOutputs(Inputs, Outputs);
   assert(Outputs.empty() &&
          "All results from detached CFG should be passed by memory already.");
 
@@ -286,8 +262,6 @@ Function *llvm::tapir::extractDetachBodyToFunction(DetachInst &detach,
 
     // Use a fast calling convention for the helper.
     extracted->setCallingConv(CallingConv::Fast);
-    // extracted->setCallingConv(F.getCallingConv());
-
     extracted->addFnAttr(Attribute::NoInline);
   }
 
@@ -303,7 +277,6 @@ Function *llvm::tapir::extractDetachBodyToFunction(DetachInst &detach,
     TopCall = Builder.CreateCall(extracted, Inputs.getArrayRef());
     // Use a fast calling convention for the helper.
     TopCall->setCallingConv(CallingConv::Fast);
-    // TopCall->setCallingConv(extracted->getCallingConv());
     TopCall->setDebugLoc(detach.getDebugLoc());
   }
   if (call)
