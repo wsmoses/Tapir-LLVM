@@ -31,7 +31,7 @@ struct Lowerer : coro::LowererBase {
 
 static void simplifyCFG(Function &F) {
   llvm::legacy::FunctionPassManager FPM(F.getParent());
-  FPM.add(createCFGSimplificationPass());
+  FPM.add(createCFGSimplificationPass(nullptr));
 
   FPM.doInitialization();
   FPM.run(F);

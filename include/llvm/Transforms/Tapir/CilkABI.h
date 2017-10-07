@@ -353,6 +353,8 @@ Function *createDetach(DetachInst &Detach,
 void preProcessFunction(Function &F) override final;
 void postProcessFunction(Function &F) override final;
 void postProcessHelper(Function &F) override final;
+bool requiresAllTasksInDetaches() const override final;
+
 };
 
 }  // end of cilk namespace

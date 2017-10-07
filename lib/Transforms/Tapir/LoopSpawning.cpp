@@ -862,6 +862,10 @@ static void getEHExits(Loop *L, const BasicBlock *DesignatedExitBlock,
 /// Top-level call to convert loop to spawn its iterations in a
 /// divide-and-conquer fashion.
 bool DACLoopSpawning::processLoop() {
+  if (!tapirTarget) {
+    return false;
+  }
+
   Loop *L = OrigLoop;
 
   BasicBlock *Header = L->getHeader();
@@ -2364,8 +2368,14 @@ INITIALIZE_PASS_DEPENDENCY(TargetTransformInfoWrapperPass)
 INITIALIZE_PASS_DEPENDENCY(OptimizationRemarkEmitterWrapperPass)
 INITIALIZE_PASS_END(LoopSpawning, LS_NAME, ls_name, false, false)
 
+cl::opt<bool> cilkTarget("cilk-target", cl::init(false), cl::Hidden,
+                       cl::desc("For allowing loop spawning to be cilk abi if none given"));
+
 namespace llvm {
 Pass *createLoopSpawningPass(TapirTarget* target) {
+  if (!target && cilkTarget) {
+    target = new tapir::CilkABI();
+  }
   return new LoopSpawning(target);
 }
 }

@@ -96,7 +96,7 @@ bool llvm::tapir::populateDetachedCFG(
     SmallPtrSetImpl<BasicBlock *> &functionPieces,
     SmallVectorImpl<BasicBlock *> &reattachB,
     SmallPtrSetImpl<BasicBlock *> &ExitBlocks,
-    bool replace, bool error) {
+    int replaceOrDelete, bool error) {
   SmallVector<BasicBlock *, 32> Todo;
   SmallVector<BasicBlock *, 4> WorkListEH;
 
@@ -116,10 +116,17 @@ bool llvm::tapir::populateDetachedCFG(
     if (isa<ReattachInst>(Term)) {
       // only analyze reattaches going to the same continuation
       if (Term->getSuccessor(0) != Continue) continue;
-      if (replace) {
+      if (replaceOrDelete == 1) {
         BranchInst* toReplace = BranchInst::Create(Continue);
         ReplaceInstWithInst(Term, toReplace);
         reattachB.push_back(BB);
+      } else if (replaceOrDelete == 2) {
+          BasicBlock::iterator BI = Continue->begin();
+          while (PHINode *P = dyn_cast<PHINode>(BI)) {
+            P->removeIncomingValue(Term->getParent());
+            ++BI;
+          }
+          Term->eraseFromParent();
       }
       continue;
     } else if (isa<DetachInst>(Term)) {
@@ -220,7 +227,7 @@ Function *llvm::tapir::extractDetachBodyToFunction(DetachInst &detach,
          "Broken CFG.");
 
   if (!populateDetachedCFG(detach, DT, functionPieces, reattachB,
-                           ExitBlocks, true))
+                           ExitBlocks, /*change to branch reattach*/1))
     return nullptr;
 
   // Check the spawned block's predecessors.
@@ -305,5 +312,16 @@ Function *llvm::tapir::extractDetachBodyToFunction(DetachInst &detach,
     // automatically manage the stack.
   }
 
+  for(BasicBlock* BB : reattachB) {
+    auto term = BB->getTerminator();
+    BasicBlock::iterator BI = term->getSuccessor(0)->begin();
+    while (PHINode *P = dyn_cast<PHINode>(BI)) {
+      P->removeIncomingValue(BB);
+      ++BI;
+    }
+    IRBuilder<> b(term);
+    b.CreateUnreachable();
+    term->eraseFromParent();
+  }
   return extracted;
 }

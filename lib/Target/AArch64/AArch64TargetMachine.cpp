@@ -38,6 +38,7 @@
 #include "llvm/Target/TargetLoweringObjectFile.h"
 #include "llvm/Target/TargetOptions.h"
 #include "llvm/Transforms/Scalar.h"
+#include "llvm/Transforms/Tapir/TapirUtils.h"
 #include <memory>
 #include <string>
 
@@ -345,7 +346,7 @@ void AArch64PassConfig::addIRPasses() {
   // determine whether it succeeded. We can exploit existing control-flow in
   // ldrex/strex loops to simplify this, but it needs tidying up.
   if (TM->getOptLevel() != CodeGenOpt::None && EnableAtomicTidy)
-    addPass(createCFGSimplificationPass());
+    addPass(createCFGSimplificationPass(nullptr));
 
   // Run LoopDataPrefetch
   //

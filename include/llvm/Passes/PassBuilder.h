@@ -20,6 +20,7 @@
 #include "llvm/Analysis/CGSCCPassManager.h"
 #include "llvm/IR/PassManager.h"
 #include "llvm/Transforms/Scalar/LoopPassManager.h"
+#include "llvm/Transforms/Tapir/TapirTypes.h"
 #include <vector>
 
 namespace llvm {
@@ -59,6 +60,7 @@ public:
     std::vector<PipelineElement> InnerPipeline;
   };
 
+  tapir::TapirTarget* tapirTarget;
   /// \brief LLVM-provided high-level optimization levels.
   ///
   /// This enumerates the LLVM-provided high-level optimization levels. Each

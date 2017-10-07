@@ -121,11 +121,11 @@ void LLVMAddAlignmentFromAssumptionsPass(LLVMPassManagerRef PM) {
 }
 
 void LLVMAddCFGSimplificationPass(LLVMPassManagerRef PM) {
-  unwrap(PM)->add(createCFGSimplificationPass());
+  unwrap(PM)->add(createCFGSimplificationPass(nullptr));
 }
 
 void LLVMAddLateCFGSimplificationPass(LLVMPassManagerRef PM) {
-  unwrap(PM)->add(createLateCFGSimplificationPass());
+  unwrap(PM)->add(createLateCFGSimplificationPass(nullptr));
 }
 
 void LLVMAddDeadStoreEliminationPass(LLVMPassManagerRef PM) {
