@@ -4,3 +4,6 @@
 [submodule "tools/polly"]
 	path = tools/polly
 	url = https://github.com/wsmoses/Parallel-Polly
+[submodule "projects/openmp"]
+	path = projects/openmp
+	url = https://github.com/llvm-mirror/openmp
