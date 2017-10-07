@@ -42,10 +42,8 @@
 #include "llvm/Transforms/Scalar.h"
 #include "llvm/Transforms/Scalar/SimplifyCFG.h"
 #include "llvm/Transforms/Utils/Local.h"
-#include "llvm/Transforms/Tapir/TapirTypes.h"
 #include <utility>
 using namespace llvm;
-using namespace llvm::tapir;
 
 #define DEBUG_TYPE "simplifycfg"
 
@@ -200,8 +198,7 @@ static bool removeUselessSyncs(Function &F) {
 static bool iterativelySimplifyCFG(Function &F, const TargetTransformInfo &TTI,
                                    AssumptionCache *AC,
                                    unsigned BonusInstThreshold,
-                                   bool LateSimplifyCFG,
-                                   TapirTarget* tapirTarget) {
+                                   bool LateSimplifyCFG) {
   bool Changed = false;
   bool LocalChange = true;
 
@@ -216,7 +213,7 @@ static bool iterativelySimplifyCFG(Function &F, const TargetTransformInfo &TTI,
 
     // Loop over all of the basic blocks and remove them if they are unneeded.
     for (Function::iterator BBIt = F.begin(); BBIt != F.end(); ) {
-      if (SimplifyCFG(&*BBIt++, TTI, BonusInstThreshold, AC, &LoopHeaders, LateSimplifyCFG, tapirTarget)) {
+      if (SimplifyCFG(&*BBIt++, TTI, BonusInstThreshold, AC, &LoopHeaders, LateSimplifyCFG)) {
         LocalChange = true;
         ++NumSimpl;
       }
@@ -228,11 +225,11 @@ static bool iterativelySimplifyCFG(Function &F, const TargetTransformInfo &TTI,
 
 static bool simplifyFunctionCFG(Function &F, const TargetTransformInfo &TTI,
                                 AssumptionCache *AC, int BonusInstThreshold,
-                                bool LateSimplifyCFG, TapirTarget* tapirTarget) {
+                                bool LateSimplifyCFG) {
   bool EverChanged = removeUnreachableBlocks(F);
   EverChanged |= mergeEmptyReturnBlocks(F);
   EverChanged |= iterativelySimplifyCFG(F, TTI, AC, BonusInstThreshold,
-                                        LateSimplifyCFG, tapirTarget);
+                                        LateSimplifyCFG);
   EverChanged |= removeUselessSyncs(F);
 
   // If neither pass changed anything, we're done.
@@ -248,7 +245,7 @@ static bool simplifyFunctionCFG(Function &F, const TargetTransformInfo &TTI,
 
   do {
     EverChanged = iterativelySimplifyCFG(F, TTI, AC, BonusInstThreshold,
-                                         LateSimplifyCFG, tapirTarget);
+                                         LateSimplifyCFG);
     EverChanged |= removeUnreachableBlocks(F);
     EverChanged |= removeUselessSyncs(F);
   } while (EverChanged);
@@ -256,22 +253,20 @@ static bool simplifyFunctionCFG(Function &F, const TargetTransformInfo &TTI,
   return true;
 }
 
-SimplifyCFGPass::SimplifyCFGPass(TapirTarget* tapirTarget)
+SimplifyCFGPass::SimplifyCFGPass()
     : BonusInstThreshold(UserBonusInstThreshold),
-      LateSimplifyCFG(true),
-      tapirTarget(tapirTarget) {}
+      LateSimplifyCFG(true) {}
 
-SimplifyCFGPass::SimplifyCFGPass(int BonusInstThreshold, bool LateSimplifyCFG, TapirTarget* tapirTarget)
+SimplifyCFGPass::SimplifyCFGPass(int BonusInstThreshold, bool LateSimplifyCFG)
     : BonusInstThreshold(BonusInstThreshold),
-      LateSimplifyCFG(LateSimplifyCFG),
-      tapirTarget(tapirTarget) {}
+      LateSimplifyCFG(LateSimplifyCFG) {}
 
 PreservedAnalyses SimplifyCFGPass::run(Function &F,
                                        FunctionAnalysisManager &AM) {
   auto &TTI = AM.getResult<TargetIRAnalysis>(F);
   auto &AC = AM.getResult<AssumptionAnalysis>(F);
 
-  if (!simplifyFunctionCFG(F, TTI, &AC, BonusInstThreshold, LateSimplifyCFG, tapirTarget))
+  if (!simplifyFunctionCFG(F, TTI, &AC, BonusInstThreshold, LateSimplifyCFG))
     return PreservedAnalyses::all();
   PreservedAnalyses PA;
   PA.preserve<GlobalsAA>();
@@ -283,13 +278,12 @@ struct BaseCFGSimplifyPass : public FunctionPass {
   unsigned BonusInstThreshold;
   std::function<bool(const Function &)> PredicateFtor;
   bool LateSimplifyCFG;
-  tapir::TapirTarget* tapirTarget;
 
-  BaseCFGSimplifyPass(tapir::TapirTarget* tapirTarget, int T, bool LateSimplifyCFG,
+  BaseCFGSimplifyPass(int T, bool LateSimplifyCFG,
                       std::function<bool(const Function &)> Ftor,
                       char &ID)
       : FunctionPass(ID), PredicateFtor(std::move(Ftor)),
-        LateSimplifyCFG(LateSimplifyCFG), tapirTarget(tapirTarget) {
+        LateSimplifyCFG(LateSimplifyCFG) {
     BonusInstThreshold = (T == -1) ? UserBonusInstThreshold : unsigned(T);
   }
   bool runOnFunction(Function &F) override {
@@ -300,7 +294,7 @@ struct BaseCFGSimplifyPass : public FunctionPass {
         &getAnalysis<AssumptionCacheTracker>().getAssumptionCache(F);
     const TargetTransformInfo &TTI =
         getAnalysis<TargetTransformInfoWrapperPass>().getTTI(F);
-    return simplifyFunctionCFG(F, TTI, AC, BonusInstThreshold, LateSimplifyCFG, tapirTarget);
+    return simplifyFunctionCFG(F, TTI, AC, BonusInstThreshold, LateSimplifyCFG);
   }
 
   void getAnalysisUsage(AnalysisUsage &AU) const override {
@@ -313,9 +307,9 @@ struct BaseCFGSimplifyPass : public FunctionPass {
 struct CFGSimplifyPass : public BaseCFGSimplifyPass {
   static char ID; // Pass identification, replacement for typeid
 
-  CFGSimplifyPass(tapir::TapirTarget* tapirTarget=nullptr, int T = -1,
+  CFGSimplifyPass(int T = -1,
                   std::function<bool(const Function &)> Ftor = nullptr)
-                  : BaseCFGSimplifyPass(tapirTarget, T, false, Ftor, ID) {
+                  : BaseCFGSimplifyPass(T, false, Ftor, ID) {
     initializeCFGSimplifyPassPass(*PassRegistry::getPassRegistry());
   }
 };
@@ -323,9 +317,9 @@ struct CFGSimplifyPass : public BaseCFGSimplifyPass {
 struct LateCFGSimplifyPass : public BaseCFGSimplifyPass {
   static char ID; // Pass identification, replacement for typeid
 
-  LateCFGSimplifyPass(tapir::TapirTarget* tapirTarget=nullptr, int T = -1,
+  LateCFGSimplifyPass(int T = -1,
                       std::function<bool(const Function &)> Ftor = nullptr)
-                      : BaseCFGSimplifyPass(tapirTarget, T, true, Ftor, ID) {
+                      : BaseCFGSimplifyPass(T, true, Ftor, ID) {
     initializeLateCFGSimplifyPassPass(*PassRegistry::getPassRegistry());
   }
 };
@@ -349,14 +343,14 @@ INITIALIZE_PASS_END(LateCFGSimplifyPass, "latesimplifycfg",
 
 // Public interface to the CFGSimplification pass
 FunctionPass *
-llvm::createCFGSimplificationPass(TapirTarget* tapirTarget, int Threshold,
+llvm::createCFGSimplificationPass(int Threshold,
     std::function<bool(const Function &)> Ftor) {
-  return new CFGSimplifyPass(tapirTarget, Threshold, std::move(Ftor));
+  return new CFGSimplifyPass(Threshold, std::move(Ftor));
 }
 
 // Public interface to the LateCFGSimplification pass
 FunctionPass *
-llvm::createLateCFGSimplificationPass(TapirTarget* tapirTarget, int Threshold,
+llvm::createLateCFGSimplificationPass(int Threshold,
                                   std::function<bool(const Function &)> Ftor) {
-  return new LateCFGSimplifyPass(tapirTarget, Threshold, std::move(Ftor));
+  return new LateCFGSimplifyPass(Threshold, std::move(Ftor));
 }

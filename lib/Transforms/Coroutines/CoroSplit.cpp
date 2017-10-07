@@ -391,9 +391,9 @@ static void postSplitCleanup(Function &F) {
 
   FPM.add(createVerifierPass());
   FPM.add(createSCCPPass());
-  FPM.add(createCFGSimplificationPass(nullptr));
+  FPM.add(createCFGSimplificationPass());
   FPM.add(createEarlyCSEPass());
-  FPM.add(createCFGSimplificationPass(nullptr));
+  FPM.add(createCFGSimplificationPass());
 
   FPM.doInitialization();
   FPM.run(F);

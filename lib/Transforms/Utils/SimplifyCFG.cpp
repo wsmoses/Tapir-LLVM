@@ -175,7 +175,6 @@ class SimplifyCFGOpt {
   SmallPtrSetImpl<BasicBlock *> *LoopHeaders;
   // See comments in SimplifyCFGOpt::SimplifySwitch.
   bool LateSimplifyCFG;
-  TapirTarget* tapirTarget;
   Value *isValueEqualityComparison(TerminatorInst *TI);
   BasicBlock *GetValueEqualityComparisonCases(
       TerminatorInst *TI, std::vector<ValueEqualityComparisonCase> &Cases);
@@ -200,9 +199,9 @@ public:
   SimplifyCFGOpt(const TargetTransformInfo &TTI, const DataLayout &DL,
                  unsigned BonusInstThreshold, AssumptionCache *AC,
                  SmallPtrSetImpl<BasicBlock *> *LoopHeaders,
-                 bool LateSimplifyCFG, TapirTarget* tapirTarget)
+                 bool LateSimplifyCFG)
       : TTI(TTI), DL(DL), BonusInstThreshold(BonusInstThreshold), AC(AC),
-        LoopHeaders(LoopHeaders), LateSimplifyCFG(LateSimplifyCFG), tapirTarget(tapirTarget) {}
+        LoopHeaders(LoopHeaders), LateSimplifyCFG(LateSimplifyCFG) {}
 
   bool run(BasicBlock *BB);
 };
@@ -6081,9 +6080,7 @@ bool SimplifyCFGOpt::run(BasicBlock *BB) {
 
   // Check for and remove trivial detached blocks.
   Changed |= serializeTrivialDetachedBlock(BB);
-  if (tapirTarget && !tapirTarget->requiresAllTasksInDetaches()) {
-    Changed |= serializeDetachToImmediateSync(BB);
-  }
+  Changed |= serializeDetachToImmediateSync(BB);
   Changed |= serializeDetachOfUnreachable(BB);
 
   // Check for and remove sync instructions in empty sync regions.
@@ -6147,8 +6144,8 @@ bool SimplifyCFGOpt::run(BasicBlock *BB) {
 bool llvm::SimplifyCFG(BasicBlock *BB, const TargetTransformInfo &TTI,
                        unsigned BonusInstThreshold, AssumptionCache *AC,
                        SmallPtrSetImpl<BasicBlock *> *LoopHeaders,
-                       bool LateSimplifyCFG, TapirTarget* tapirTarget) {
+                       bool LateSimplifyCFG) {
   return SimplifyCFGOpt(TTI, BB->getModule()->getDataLayout(),
-                        BonusInstThreshold, AC, LoopHeaders, LateSimplifyCFG, tapirTarget)
+                        BonusInstThreshold, AC, LoopHeaders, LateSimplifyCFG)
       .run(BB);
 }

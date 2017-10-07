@@ -16,7 +16,6 @@
 #define LLVM_TRANSFORMS_SCALAR_H
 
 #include <functional>
-#include "llvm/Transforms/Tapir/TapirTypes.h"
 
 namespace llvm {
 
@@ -259,7 +258,6 @@ FunctionPass *createJumpThreadingPass(int Threshold = -1);
 // simplify terminator instructions, etc...
 //
 FunctionPass *createCFGSimplificationPass(
-    tapir::TapirTarget* tapirTarget=nullptr,
     int Threshold = -1, std::function<bool(const Function &)> Ftor = nullptr);
 
 //===----------------------------------------------------------------------===//
@@ -268,7 +266,6 @@ FunctionPass *createCFGSimplificationPass(
 // convert switches to lookup tables.
 //
 FunctionPass *createLateCFGSimplificationPass(
-    tapir::TapirTarget* tapirTarget=nullptr,
     int Threshold = -1, std::function<bool(const Function &)> Ftor = nullptr);
 
 //===----------------------------------------------------------------------===//

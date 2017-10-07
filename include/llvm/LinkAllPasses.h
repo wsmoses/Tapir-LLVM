@@ -75,7 +75,7 @@ namespace {
       (void) llvm::createBreakCriticalEdgesPass();
       (void) llvm::createCallGraphDOTPrinterPass();
       (void) llvm::createCallGraphViewerPass();
-      (void) llvm::createCFGSimplificationPass(nullptr);
+      (void) llvm::createCFGSimplificationPass();
       (void) llvm::createLateCFGSimplificationPass();
       (void) llvm::createCFLAndersAAWrapperPass();
       (void) llvm::createCFLSteensAAWrapperPass();

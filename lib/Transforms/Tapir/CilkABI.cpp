@@ -1036,10 +1036,6 @@ void llvm::tapir::CilkABI::preProcessFunction(Function &F) {
   }
 }
 
-bool llvm::tapir::CilkABI::requiresAllTasksInDetaches() const {
-  return false;
-}
-
 void llvm::tapir::CilkABI::postProcessFunction(Function &F) {
     inlineCilkFunctions(F);
 }

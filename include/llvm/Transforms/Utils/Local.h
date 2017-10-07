@@ -22,7 +22,6 @@
 #include "llvm/IR/GetElementPtrTypeIterator.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/Operator.h"
-#include "llvm/Transforms/Tapir/TapirTypes.h"
 
 namespace llvm {
 
@@ -144,7 +143,7 @@ bool EliminateDuplicatePHINodes(BasicBlock *BB);
 bool SimplifyCFG(BasicBlock *BB, const TargetTransformInfo &TTI,
                  unsigned BonusInstThreshold, AssumptionCache *AC = nullptr,
                  SmallPtrSetImpl<BasicBlock *> *LoopHeaders = nullptr,
-                 bool LateSimplifyCFG = false, tapir::TapirTarget* tapirTarget=nullptr);
+                 bool LateSimplifyCFG = false);
 
 /// This function is used to flatten a CFG. For example, it uses parallel-and
 /// and parallel-or mode to collapse if-conditions and merge if-regions with

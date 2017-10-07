@@ -345,7 +345,7 @@ PassBuilder::buildFunctionSimplificationPipeline(OptimizationLevel Level,
   // Global value numbering based sinking.
   if (EnableGVNSink) {
     FPM.addPass(GVNSinkPass());
-    FPM.addPass(SimplifyCFGPass(tapirTarget));
+    FPM.addPass(SimplifyCFGPass());
   }
 
   // Speculative execution if the target has divergent branches; otherwise nop.
@@ -354,7 +354,7 @@ PassBuilder::buildFunctionSimplificationPipeline(OptimizationLevel Level,
   // Optimize based on known information about branches, and cleanup afterward.
   FPM.addPass(JumpThreadingPass());
   FPM.addPass(CorrelatedValuePropagationPass());
-  FPM.addPass(SimplifyCFGPass(tapirTarget));
+  FPM.addPass(SimplifyCFGPass());
   FPM.addPass(InstCombinePass());
 
   if (!isOptimizingForSize(Level))
@@ -363,7 +363,7 @@ PassBuilder::buildFunctionSimplificationPipeline(OptimizationLevel Level,
   invokePeepholeEPCallbacks(FPM, Level);
 
   FPM.addPass(TailCallElimPass());
-  FPM.addPass(SimplifyCFGPass(tapirTarget));
+  FPM.addPass(SimplifyCFGPass());
 
   // Form canonically associated expression trees, and simplify the trees using
   // basic mathematical properties. For example, this will form (nearly)
@@ -403,7 +403,7 @@ PassBuilder::buildFunctionSimplificationPipeline(OptimizationLevel Level,
   // this once as it is immutable.
   FPM.addPass(RequireAnalysisPass<OptimizationRemarkEmitterAnalysis, Function>());
   FPM.addPass(createFunctionToLoopPassAdaptor(std::move(LPM1)));
-  FPM.addPass(SimplifyCFGPass(tapirTarget));
+  FPM.addPass(SimplifyCFGPass());
   FPM.addPass(InstCombinePass());
   FPM.addPass(createFunctionToLoopPassAdaptor(std::move(LPM2)));
 
@@ -448,7 +448,7 @@ PassBuilder::buildFunctionSimplificationPipeline(OptimizationLevel Level,
   // Finally, do an expensive DCE pass to catch all the dead code exposed by
   // the simplifications and basic cleanup after all the simplifications.
   FPM.addPass(ADCEPass());
-  FPM.addPass(SimplifyCFGPass(tapirTarget));
+  FPM.addPass(SimplifyCFGPass());
   FPM.addPass(InstCombinePass());
   invokePeepholeEPCallbacks(FPM, Level);
 
@@ -482,7 +482,7 @@ void PassBuilder::addPGOInstrPasses(ModulePassManager &MPM, bool DebugLogging,
     FunctionPassManager FPM;
     FPM.addPass(SROA());
     FPM.addPass(EarlyCSEPass());    // Catch trivial redundancies.
-    FPM.addPass(SimplifyCFGPass(tapirTarget)); // Merge & remove basic blocks.
+    FPM.addPass(SimplifyCFGPass()); // Merge & remove basic blocks.
     FPM.addPass(InstCombinePass()); // Combine silly sequences.
     invokePeepholeEPCallbacks(FPM, Level);
 
@@ -536,7 +536,7 @@ PassBuilder::buildModuleSimplificationPipeline(OptimizationLevel Level,
   // Create an early function pass manager to cleanup the output of the
   // frontend.
   FunctionPassManager EarlyFPM(DebugLogging);
-  EarlyFPM.addPass(SimplifyCFGPass(tapirTarget));
+  EarlyFPM.addPass(SimplifyCFGPass());
   EarlyFPM.addPass(SROA());
   EarlyFPM.addPass(EarlyCSEPass());
   EarlyFPM.addPass(LowerExpectIntrinsicPass());
@@ -568,7 +568,7 @@ PassBuilder::buildModuleSimplificationPipeline(OptimizationLevel Level,
   GlobalCleanupPM.addPass(InstCombinePass());
   invokePeepholeEPCallbacks(GlobalCleanupPM, Level);
 
-  GlobalCleanupPM.addPass(SimplifyCFGPass(tapirTarget));
+  GlobalCleanupPM.addPass(SimplifyCFGPass());
   MPM.addPass(createModuleToFunctionPassAdaptor(std::move(GlobalCleanupPM)));
 
   // Add all the requested passes for PGO, if requested.
@@ -724,7 +724,7 @@ PassBuilder::buildModuleOptimizationPipeline(OptimizationLevel Level,
   OptimizePM.addPass(SLPVectorizerPass());
 
   // Cleanup after all of the vectorizers.
-  OptimizePM.addPass(SimplifyCFGPass(tapirTarget));
+  OptimizePM.addPass(SimplifyCFGPass());
   OptimizePM.addPass(InstCombinePass());
 
   // Unroll small loops to hide loop backedge latency and saturate any parallel
@@ -753,7 +753,7 @@ PassBuilder::buildModuleOptimizationPipeline(OptimizationLevel Level,
 
   // LoopSink (and other loop passes since the last simplifyCFG) might have
   // resulted in single-entry-single-exit or empty blocks. Clean up the CFG.
-  OptimizePM.addPass(SimplifyCFGPass(tapirTarget));
+  OptimizePM.addPass(SimplifyCFGPass());
 
   // Add the core optimizing pipeline.
   MPM.addPass(createModuleToFunctionPassAdaptor(std::move(OptimizePM)));
@@ -984,7 +984,7 @@ ModulePassManager PassBuilder::buildLTODefaultPipeline(OptimizationLevel Level,
   // are sorted out.
 
   MainFPM.addPass(InstCombinePass());
-  MainFPM.addPass(SimplifyCFGPass(tapirTarget));
+  MainFPM.addPass(SimplifyCFGPass());
   MainFPM.addPass(SCCPPass());
   MainFPM.addPass(InstCombinePass());
   MainFPM.addPass(BDCEPass());
@@ -1021,7 +1021,7 @@ ModulePassManager PassBuilder::buildLTODefaultPipeline(OptimizationLevel Level,
 
   // Add late LTO optimization passes.
   // Delete basic blocks, which optimization passes may have killed.
-  MPM.addPass(createModuleToFunctionPassAdaptor(SimplifyCFGPass(tapirTarget)));
+  MPM.addPass(createModuleToFunctionPassAdaptor(SimplifyCFGPass()));
 
   // Drop bodies of available eternally objects to improve GlobalDCE.
   MPM.addPass(EliminateAvailableExternallyPass());

@@ -613,10 +613,6 @@ void llvm::tapir::OpenMPABI::preProcessFunction(Function &F) {
   getOrCreateDefaultLocation(M);
 }
 
-bool llvm::tapir::OpenMPABI::requiresAllTasksInDetaches() const {
-  return false;
-}
-
 void llvm::tapir::OpenMPABI::postProcessFunction(Function &F) {
   auto& Context = F.getContext();
   DataLayout DL(F.getParent());
@@ -719,7 +715,7 @@ void llvm::tapir::OpenMPABI::postProcessFunction(Function &F) {
     auto Name = RegionFn->getName() + ".OMP";
     Function *OMPRegionFn = dyn_cast<Function>(
         F.getParent()->getOrInsertFunction(Name.str(), OMPRegionFnTy));
-        
+
     // If this is an outermost region, skip the first 2 arguments (global_tid and
     // bound_tid) ...
     auto OMPArgIt = OMPRegionFn->arg_begin();

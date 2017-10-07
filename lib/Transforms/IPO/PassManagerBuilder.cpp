@@ -270,7 +270,7 @@ void PassManagerBuilder::populateFunctionPassManager(
 
   addInitialAliasAnalysisPasses(FPM);
 
-  FPM.add(createCFGSimplificationPass(tapirTarget));
+  FPM.add(createCFGSimplificationPass());
   FPM.add(createSROAPass());
   FPM.add(createEarlyCSEPass(false, Rhino));
   FPM.add(createLowerExpectIntrinsicPass());
@@ -297,7 +297,7 @@ void PassManagerBuilder::addPGOInstrPasses(legacy::PassManagerBase &MPM) {
     MPM.add(createFunctionInliningPass(IP));
     MPM.add(createSROAPass());
     MPM.add(createEarlyCSEPass(false, Rhino)); // Catch trivial redundancies
-    MPM.add(createCFGSimplificationPass(tapirTarget));    // Merge & remove BBs
+    MPM.add(createCFGSimplificationPass());    // Merge & remove BBs
     MPM.add(createInstructionCombiningPass()); // Combine silly seq's
     addExtensionsToPM(EP_Peephole, MPM);
   }
@@ -330,14 +330,14 @@ void PassManagerBuilder::addFunctionSimplificationPasses(
     MPM.add(createGVNHoistPass());
   if (EnableGVNSink) {
     MPM.add(createGVNSinkPass());
-    MPM.add(createCFGSimplificationPass(tapirTarget));
+    MPM.add(createCFGSimplificationPass());
   }
 
   // Speculative execution if the target has divergent branches; otherwise nop.
   MPM.add(createSpeculativeExecutionIfHasBranchDivergencePass());
   MPM.add(createJumpThreadingPass());         // Thread jumps.
   MPM.add(createCorrelatedValuePropagationPass()); // Propagate conditionals
-  MPM.add(createCFGSimplificationPass(tapirTarget));     // Merge & remove BBs
+  MPM.add(createCFGSimplificationPass());     // Merge & remove BBs
   // Combine silly seq's
   addInstructionCombiningPass(MPM);
   if (SizeLevel == 0 && !DisableLibCallsShrinkWrap)
@@ -349,7 +349,7 @@ void PassManagerBuilder::addFunctionSimplificationPasses(
     MPM.add(createPGOMemOPSizeOptLegacyPass());
 
   MPM.add(createTailCallEliminationPass()); // Eliminate tail calls
-  MPM.add(createCFGSimplificationPass(tapirTarget));     // Merge & remove BBs
+  MPM.add(createCFGSimplificationPass());     // Merge & remove BBs
   MPM.add(createReassociatePass());           // Reassociate expressions
   // Rotate Loop - disable header duplication at -Oz
   MPM.add(createLoopRotatePass(SizeLevel == 2 ? 0 : -1));
@@ -358,7 +358,7 @@ void PassManagerBuilder::addFunctionSimplificationPasses(
     MPM.add(createSimpleLoopUnswitchLegacyPass());
   else
     MPM.add(createLoopUnswitchPass(SizeLevel || OptLevel < 3, DivergentTarget));
-  MPM.add(createCFGSimplificationPass(tapirTarget));
+  MPM.add(createCFGSimplificationPass());
   addInstructionCombiningPass(MPM);
   MPM.add(createIndVarSimplifyPass());        // Canonicalize indvars
   MPM.add(createLoopIdiomPass());             // Recognize idioms like memset.
@@ -367,7 +367,7 @@ void PassManagerBuilder::addFunctionSimplificationPasses(
 
   if (EnableLoopInterchange) {
     MPM.add(createLoopInterchangePass()); // Interchange loops
-    MPM.add(createCFGSimplificationPass(tapirTarget));
+    MPM.add(createCFGSimplificationPass());
   }
   if (!DisableUnrollLoops)
     MPM.add(createSimpleLoopUnrollPass(OptLevel));    // Unroll small loops
@@ -403,7 +403,7 @@ void PassManagerBuilder::addFunctionSimplificationPasses(
     MPM.add(createSLPVectorizerPass()); // Vectorize parallel scalar chains.
 
   MPM.add(createAggressiveDCEPass());         // Delete dead instructions
-  MPM.add(createCFGSimplificationPass(tapirTarget)); // Merge & remove BBs
+  MPM.add(createCFGSimplificationPass()); // Merge & remove BBs
   // Clean up after everything.
   addInstructionCombiningPass(MPM);
   addExtensionsToPM(EP_Peephole, MPM);
@@ -434,7 +434,7 @@ void PassManagerBuilder::populateModulePassManager(
       // MPM.add(createUnifyFunctionExitNodesPass());
       MPM.add(createLowerTapirToTargetPass(tapirTarget));
       // The lowering pass may leave cruft around.  Clean it up.
-      MPM.add(createCFGSimplificationPass(tapirTarget));
+      MPM.add(createCFGSimplificationPass());
       MPM.add(createInferFunctionAttrsLegacyPass());
     }
 
@@ -511,7 +511,7 @@ void PassManagerBuilder::populateModulePassManager(
 
     addInstructionCombiningPass(MPM); // Clean up after IPCP & DAE
     addExtensionsToPM(EP_Peephole, MPM);
-    MPM.add(createCFGSimplificationPass(tapirTarget)); // Clean up after IPCP & DAE
+    MPM.add(createCFGSimplificationPass()); // Clean up after IPCP & DAE
   }
 
   // For SamplePGO in ThinLTO compile phase, we do not want to do indirect
@@ -653,7 +653,7 @@ void PassManagerBuilder::populateModulePassManager(
     addInstructionCombiningPass(MPM);
     MPM.add(createLICMPass());
     MPM.add(createLoopUnswitchPass(SizeLevel || OptLevel < 3, DivergentTarget));
-    MPM.add(createCFGSimplificationPass(tapirTarget));
+    MPM.add(createCFGSimplificationPass());
     addInstructionCombiningPass(MPM);
   }
 
@@ -665,7 +665,7 @@ void PassManagerBuilder::populateModulePassManager(
   }
 
   addExtensionsToPM(EP_Peephole, MPM);
-  MPM.add(createLateCFGSimplificationPass(tapirTarget)); // Switches to lookup tables
+  MPM.add(createLateCFGSimplificationPass()); // Switches to lookup tables
   addInstructionCombiningPass(MPM);
 
   if (!DisableUnrollLoops) {
@@ -710,7 +710,7 @@ void PassManagerBuilder::populateModulePassManager(
 
   // LoopSink (and other loop passes since the last simplifyCFG) might have
   // resulted in single-entry-single-exit or empty blocks. Clean up the CFG.
-  MPM.add(createCFGSimplificationPass(tapirTarget));
+  MPM.add(createCFGSimplificationPass());
 
   if (RerunAfterTapirLowering || (tapirTarget == nullptr))
     // Add passes to run just before Tapir lowering.
@@ -729,7 +729,7 @@ void PassManagerBuilder::populateModulePassManager(
 
     // The LoopSpawning pass may leave cruft around.  Clean it up.
     MPM.add(createLoopDeletionPass());
-    MPM.add(createCFGSimplificationPass(tapirTarget));
+    MPM.add(createCFGSimplificationPass());
     addInstructionCombiningPass(MPM);
     addExtensionsToPM(EP_Peephole, MPM);
 
@@ -742,7 +742,7 @@ void PassManagerBuilder::populateModulePassManager(
     // MPM.add(createUnifyFunctionExitNodesPass());
     MPM.add(createLowerTapirToTargetPass(tapirTarget));
     // The lowering pass may leave cruft around.  Clean it up.
-    MPM.add(createCFGSimplificationPass(tapirTarget));
+    MPM.add(createCFGSimplificationPass());
     MPM.add(createInferFunctionAttrsLegacyPass());
     MPM.add(createMergeFunctionsPass());
     MPM.add(createBarrierNoopPass());
@@ -874,7 +874,7 @@ void PassManagerBuilder::addLTOOptimizationPasses(legacy::PassManagerBase &PM) {
   // we may have exposed more scalar opportunities. Run parts of the scalar
   // optimizer again at this point.
   addInstructionCombiningPass(PM); // Initial cleanup
-  PM.add(createCFGSimplificationPass(tapirTarget)); // if-convert
+  PM.add(createCFGSimplificationPass()); // if-convert
   PM.add(createSCCPPass()); // Propagate exposed constants
   addInstructionCombiningPass(PM); // Clean up again
   PM.add(createBitTrackingDCEPass());
@@ -898,7 +898,7 @@ void PassManagerBuilder::addLTOOptimizationPasses(legacy::PassManagerBase &PM) {
 void PassManagerBuilder::addLateLTOOptimizationPasses(
     legacy::PassManagerBase &PM) {
   // Delete basic blocks, which optimization passes may have killed.
-  PM.add(createCFGSimplificationPass(tapirTarget));
+  PM.add(createCFGSimplificationPass());
 
   // Drop bodies of available externally objects to improve GlobalDCE.
   PM.add(createEliminateAvailableExternallyPass());

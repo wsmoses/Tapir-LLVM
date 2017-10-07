@@ -17,7 +17,6 @@
 
 #include "llvm/IR/Function.h"
 #include "llvm/IR/PassManager.h"
-#include "llvm/Transforms/Tapir/TapirTypes.h"
 
 namespace llvm {
 
@@ -29,16 +28,15 @@ namespace llvm {
 class SimplifyCFGPass : public PassInfoMixin<SimplifyCFGPass> {
   int BonusInstThreshold;
   bool LateSimplifyCFG;
-  tapir::TapirTarget* tapirTarget;
 
 public:
   /// \brief Construct a pass with the default thresholds
   /// and switch optimizations.
-  SimplifyCFGPass(tapir::TapirTarget* tapirTarget=nullptr);
+  SimplifyCFGPass();
 
   /// \brief Construct a pass with a specific bonus threshold
   /// and optional switch optimizations.
-  SimplifyCFGPass(int BonusInstThreshold, bool LateSimplifyCFG, tapir::TapirTarget* tapirTarget);
+  SimplifyCFGPass(int BonusInstThreshold, bool LateSimplifyCFG);
 
   /// \brief Run the pass over the function.
   PreservedAnalyses run(Function &F, FunctionAnalysisManager &AM);
