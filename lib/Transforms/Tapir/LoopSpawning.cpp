@@ -70,6 +70,9 @@ STATISTIC(LoopsConvertedToDAC,
 STATISTIC(LoopsConvertedToCilkABI,
           "Number of Tapir loops converted to use the Cilk ABI for loops");
 
+cl::opt<bool> cilkTarget("cilk-target", cl::init(false), cl::Hidden,
+                       cl::desc("For allowing loop spawning to be cilk abi if none given"));
+
 namespace {
 // Forward declarations.
 class LoopSpawningHints;
@@ -2303,7 +2306,10 @@ struct LoopSpawning : public FunctionPass {
   TapirTarget* tapirTarget;
   explicit LoopSpawning(TapirTarget* tapirTarget = nullptr) : FunctionPass(ID),
     tapirTarget(tapirTarget) {
-      assert(tapirTarget);
+      if (!this->tapirTarget && cilkTarget) {
+        this->tapirTarget = new tapir::CilkABI();
+      }
+      assert(this->tapirTarget);
       initializeLoopSpawningPass(*PassRegistry::getPassRegistry());
   }
 
@@ -2331,6 +2337,7 @@ struct LoopSpawning : public FunctionPass {
     auto &ORE =
       getAnalysis<OptimizationRemarkEmitterWrapperPass>().getORE();
     // OptimizationRemarkEmitter ORE(F);
+
     return LoopSpawningImpl(F, LI, SE, DT, AC, ORE, tapirTarget).run();
   }
 
@@ -2368,14 +2375,8 @@ INITIALIZE_PASS_DEPENDENCY(TargetTransformInfoWrapperPass)
 INITIALIZE_PASS_DEPENDENCY(OptimizationRemarkEmitterWrapperPass)
 INITIALIZE_PASS_END(LoopSpawning, LS_NAME, ls_name, false, false)
 
-cl::opt<bool> cilkTarget("cilk-target", cl::init(false), cl::Hidden,
-                       cl::desc("For allowing loop spawning to be cilk abi if none given"));
-
 namespace llvm {
 Pass *createLoopSpawningPass(TapirTarget* target) {
-  if (!target && cilkTarget) {
-    target = new tapir::CilkABI();
-  }
   return new LoopSpawning(target);
 }
 }

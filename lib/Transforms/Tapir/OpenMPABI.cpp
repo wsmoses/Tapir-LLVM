@@ -613,7 +613,12 @@ void llvm::tapir::OpenMPABI::preProcessFunction(Function &F) {
   getOrCreateDefaultLocation(M);
 }
 
+
+cl::opt<bool> fastOpenMP("fast-openmp", cl::init(false), cl::Hidden,
+                       cl::desc("Attempt faster OpenMP implementation, assuming parallel outside set"));
 void llvm::tapir::OpenMPABI::postProcessFunction(Function &F) {
+  if (fastOpenMP) return;
+
   auto& Context = F.getContext();
   DataLayout DL(F.getParent());
 
