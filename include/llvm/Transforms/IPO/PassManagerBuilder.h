@@ -19,6 +19,7 @@
 #include <memory>
 #include <string>
 #include <vector>
+#include "llvm/Transforms/Tapir/TapirTypes.h"
 
 namespace llvm {
 class ModuleSummaryIndex;
@@ -119,8 +120,6 @@ public:
     EP_TapirLate,
   };
 
-  /// Whether the Cilk Calls should be instrumented
-  bool InstrumentCilk;
 
   /// The Optimization Level - Specify the basic optimization level.
   ///    0 = -O0, 1 = -O1, 2 = -O2, 3 = -O3
@@ -130,10 +129,13 @@ public:
   ///    0 = none, 1 = -Os, 2 = -Oz
   unsigned SizeLevel;
 
-  /// The Pre-lowering to parallel runtime calls optimization level
-  ///    0 = -P0 = leave with detach instructions, 1 = no optimizations before conversion, 2 = optimize before conversion
-  unsigned ParallelLevel;
+  /// What runtime tapir instructions should be lowered to (nullptr if no lowering)
+  tapir::TapirTarget* tapirTarget;
 
+  /// Whether to disable opts before lowering tapir to target
+  bool DisableTapirOpts;
+
+  /// Whether to enable rhino opts
   bool Rhino;
 
   /// LibraryInfo - Specifies information about the runtime library for the
