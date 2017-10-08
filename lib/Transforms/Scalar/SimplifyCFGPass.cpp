@@ -350,7 +350,7 @@ llvm::createCFGSimplificationPass(int Threshold,
 
 // Public interface to the LateCFGSimplification pass
 FunctionPass *
-llvm::createLateCFGSimplificationPass(int Threshold, 
+llvm::createLateCFGSimplificationPass(int Threshold,
                                   std::function<bool(const Function &)> Ftor) {
   return new LateCFGSimplifyPass(Threshold, std::move(Ftor));
 }
