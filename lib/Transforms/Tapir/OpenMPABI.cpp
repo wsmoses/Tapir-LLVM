@@ -12,7 +12,7 @@
 // runtime system.  This interface does the low-level dirty work of passes
 // such as LowerToCilk.
 //
-//===----------------------------------------------------------------------===//
+//===--------------------------------------------------------
 
 #include "llvm/Transforms/Tapir/OpenMPABI.h"
 #include "llvm/IR/DebugInfoMetadata.h"
@@ -202,7 +202,7 @@ CallInst *emitRuntimeCall(Value *Callee, ArrayRef<Value *> Args,
   return call;
 }
 
-Value *getThreadID(Function *F, IRBuilder<> &IRBuilder) {
+Value *getThreadID(Function *F, IRBuilder<> &IRBuilder0) {
   Value *ThreadID = nullptr;
   auto I = OpenMPThreadIDLoadMap.find(F);
   if (I != OpenMPThreadIDLoadMap.end()) {
@@ -216,9 +216,9 @@ Value *getThreadID(Function *F, IRBuilder<> &IRBuilder) {
   if (I2 != OpenMPThreadIDAllocaMap.end()) {
     DataLayout DL(F->getParent());
     auto Alloca = I2->second;
-    auto ThreadIDAddrs = IRBuilder.CreateLoad(Alloca);
+    auto ThreadIDAddrs = IRBuilder0.CreateLoad(Alloca);
     ThreadIDAddrs->setAlignment(DL.getTypeAllocSize(ThreadIDAddrs->getType()));
-    ThreadID = IRBuilder.CreateLoad(ThreadIDAddrs);
+    ThreadID = IRBuilder0.CreateLoad(ThreadIDAddrs);
     ((LoadInst *)ThreadID)
         ->setAlignment(DL.getTypeAllocSize(ThreadID->getType()));
     auto &Elem = OpenMPThreadIDLoadMap.FindAndConstruct(F);
@@ -228,7 +228,8 @@ Value *getThreadID(Function *F, IRBuilder<> &IRBuilder) {
 
   auto GTIDFn = createRuntimeFunction(
       OpenMPRuntimeFunction::OMPRTL__kmpc_global_thread_num, F->getParent());
-  ThreadID = emitRuntimeCall(GTIDFn, {DefaultOpenMPLocation}, "", IRBuilder);
+      IRBuilder<> b(F->getEntryBlock().getFirstNonPHIOrDbgOrLifetime());
+  ThreadID = emitRuntimeCall(GTIDFn, {DefaultOpenMPLocation}, "", b);
   auto &Elem = OpenMPThreadIDLoadMap.FindAndConstruct(F);
   Elem.second = ThreadID;
 

@@ -268,6 +268,10 @@ void PassManagerBuilder::populateFunctionPassManager(
 
   if (OptLevel == 0) return;
 
+  if (tapirTarget && DisableTapirOpts) {// -fdetach
+    FPM.add(createLowerTapirToTargetPass(tapirTarget));
+  }
+
   addInitialAliasAnalysisPasses(FPM);
 
   FPM.add(createCFGSimplificationPass());
@@ -322,6 +326,11 @@ void PassManagerBuilder::addPGOInstrPasses(legacy::PassManagerBase &MPM) {
 }
 void PassManagerBuilder::addFunctionSimplificationPasses(
     legacy::PassManagerBase &MPM) {
+
+      if (tapirTarget && DisableTapirOpts) {// -fdetach
+        MPM.add(createLowerTapirToTargetPass(tapirTarget));
+      }
+
   // Start of function pass.
   // Break up aggregate allocas, using SSAUpdater.
   MPM.add(createSROAPass());
@@ -412,6 +421,14 @@ void PassManagerBuilder::addFunctionSimplificationPasses(
 // void PassManagerBuilder::prepopulateModulePassManager(
 void PassManagerBuilder::populateModulePassManager(
     legacy::PassManagerBase &MPM) {
+
+      bool TapirHasBeenLowered = (tapirTarget == nullptr);
+
+      if (tapirTarget && DisableTapirOpts) {// -fdetach
+        MPM.add(createLowerTapirToTargetPass(tapirTarget));
+        TapirHasBeenLowered = true;
+      }
+
   if (!PGOSampleUse.empty()) {
     MPM.add(createPruneEHPass());
     MPM.add(createSampleProfileLoaderPass(PGOSampleUse));
@@ -485,12 +502,6 @@ void PassManagerBuilder::populateModulePassManager(
     DisableUnrollLoops = true;
 
   bool RerunAfterTapirLowering = false;
-  bool TapirHasBeenLowered = (tapirTarget == nullptr);
-
-  if (tapirTarget && DisableTapirOpts) {// -fdetach
-    MPM.add(createLowerTapirToTargetPass(tapirTarget));
-    TapirHasBeenLowered = true;
-  }
 
   do {
     RerunAfterTapirLowering =
