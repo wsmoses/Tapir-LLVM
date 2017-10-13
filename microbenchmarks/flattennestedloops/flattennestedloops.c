@@ -7,8 +7,8 @@ const int SIZE_J = 1000;
 const int SIZE = SIZE_I * SIZE_J;
 
 int main() {
-  int *A = (int*) malloc(SIZE * sizeof(int));
-  int *B = (int*) malloc(SIZE * sizeof(int));
+  unsigned int *A = (unsigned int*) malloc(SIZE * sizeof(unsigned int));
+  unsigned int *B = (unsigned int*) malloc(SIZE * sizeof(unsigned int));
 
   profile_start();
 
@@ -28,7 +28,7 @@ int main() {
 
   profile_end();
 
-  return 0;
+  return A[A[0] % SIZE];
 }
 
 
