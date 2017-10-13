@@ -6,8 +6,6 @@ const int SIZE_I = 1000;
 const int SIZE_J = 1000;
 const int SIZE = SIZE_I * SIZE_J;
 
-#define FLAT
-
 int main() {
   int *A = (int*) malloc(SIZE * sizeof(int));
   int *B = (int*) malloc(SIZE * sizeof(int));
