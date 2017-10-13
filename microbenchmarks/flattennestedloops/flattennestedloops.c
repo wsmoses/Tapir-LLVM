@@ -1,5 +1,5 @@
 #include <cilk/cilk.h>
-#include <stdlib.h>
+#include "../common.h"
 
 const int NUM_REPEATS = 10000;
 const int SIZE_I = 1000;
@@ -10,8 +10,10 @@ int main() {
   int *A = (int*) malloc(SIZE * sizeof(int));
   int *B = (int*) malloc(SIZE * sizeof(int));
 
+  profile_start();
+
   for (int k = 0; k < NUM_REPEATS; k++) {
-#ifdef FLAT
+#ifdef OPT
     cilk_for (int i = 0; i < SIZE; i++) {
     A[i] += B[i];
   }
@@ -23,6 +25,9 @@ int main() {
     }
 #endif
   }
+
+  profile_end();
+
   return 0;
 }
 
