@@ -8,7 +8,7 @@ shift
 echo "============================================================================="
 
 echo "Compiling non-opt version"
-../build/bin/clang -fcilkplus -O3 $BENCH/$BENCH.c -o "/tmp/$BENCH"
+../build/bin/clang $@ -fcilkplus -O3 $BENCH/$BENCH.c -o "/tmp/$BENCH"
 echo "Compiling opt version"
 ../build/bin/clang -DOPT $@ -fcilkplus -O3 $BENCH/$BENCH.c -o "/tmp/$BENCH""_opt"
 

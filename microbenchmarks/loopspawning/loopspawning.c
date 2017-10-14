@@ -15,13 +15,17 @@ int sum(int *arr, int size) {
   }
 
 #ifdef OPT
-  int a = cilk_spawn sum(arr + 0 * (size / 4), size / 4);
-  int b = cilk_spawn sum(arr + 1 * (size / 4), size / 4);
-  int c = cilk_spawn sum(arr + 2 * (size / 4), size / 4);
-  int d =            sum(arr + 3 * (size / 4), size / 4);
+  int a = cilk_spawn sum(arr + 0 * (size / 8), size / 8);
+  int b = cilk_spawn sum(arr + 1 * (size / 8), size / 8);
+  int c = cilk_spawn sum(arr + 2 * (size / 8), size / 8);
+  int d = cilk_spawn sum(arr + 3 * (size / 8), size / 8);
+  int e = cilk_spawn sum(arr + 4 * (size / 8), size / 8);
+  int f = cilk_spawn sum(arr + 5 * (size / 8), size / 8);
+  int g = cilk_spawn sum(arr + 6 * (size / 8), size / 8);
+  int h =            sum(arr + 7 * (size / 8), size / 8);
 
   cilk_sync;
-  return a + b + c + d;
+  return a + b + c + d + e + f + g + h;
 #else
   int a = cilk_spawn sum(arr + 0 * (size / 2), size / 2);
   int b =            sum(arr + 1 * (size / 2), size / 2);
@@ -42,7 +46,3 @@ int main() {
   profile_end();
   return a;
 }
-
-
-
-
