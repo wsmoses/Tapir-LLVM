@@ -3546,8 +3546,38 @@ void InnerLoopVectorizer::createVectorizedLoopSkeleton() {
   ReplaceInstWithInst(MiddleBlock->getTerminator(),
                       BranchInst::Create(ExitBlock, ScalarPH, CmpN));
 
-  // Get ready to start creating new instructions into the vectorized body.
-  Builder.SetInsertPoint(&*VecBody->getFirstInsertionPt());
+  if (!OrigLoop->isCanonicalParallelLoop()) {
+    // Get ready to start creating new instructions into the vectorized body.
+    Builder.SetInsertPoint(&*VecBody->getFirstInsertionPt());
+  } else {
+    // Recreate the detach-reattach canonical parallel loop structure
+    // in the vector loop.
+    BasicBlock *VecBodyInc = VecBody->splitBasicBlock(VecBody->getTerminator(), "vec.inc");
+    Lp->addBasicBlockToLoop(VecBodyInc, *LI);
+
+    // Creates the detached actual body block.
+    BasicBlock *VecBodyDetached = BasicBlock::Create(VecBody->getContext(),
+      "vec.detached", VecBody->getParent(), VecBodyInc);
+    Lp->addBasicBlockToLoop(VecBodyDetached, *LI);
+
+    // Creates the "detach" instruction.
+    DetachInst *OrigBodyDetach = dyn_cast<DetachInst>(OldBasicBlock->getTerminator());
+    assert(OrigBodyDetach != nullptr && "Cannot find original detach instruction");
+    Value *SyncRegion = OrigBodyDetach->getSyncRegion();
+    DetachInst *VecBodyDetach = DetachInst::Create(VecBodyDetached, VecBodyInc, SyncRegion);
+    ReplaceInstWithInst(VecBody->getTerminator(), VecBodyDetach);
+
+    // Creates the "reattach instruction".
+    ReattachInst::Create(VecBodyInc, SyncRegion, VecBodyDetached);
+
+    // Fixes DT analysis
+    DT->addNewBlock(VecBody, Lp->getLoopPreheader());
+    DT->addNewBlock(VecBodyDetached, VecBody);
+    DT->addNewBlock(VecBodyInc, VecBody);
+
+    // Get ready to start creating new instructions into the vectorized body.
+    Builder.SetInsertPoint(&*VecBodyDetached->getFirstInsertionPt());
+  }
 
   // Save the state.
   LoopVectorPreHeader = Lp->getLoopPreheader();
@@ -4560,8 +4590,15 @@ InnerLoopVectorizer::createBlockInMask(BasicBlock *BB) {
 
   VectorParts BlockMask(UF);
 
+  BasicBlock *EntryBlock;
+  if (OrigLoop->isCanonicalParallelLoop()) {
+    EntryBlock = OrigLoop->getParallelEntryBlock();
+  } else {
+    EntryBlock = OrigLoop->getHeader();
+  }
+
   // Loop incoming mask is all-one.
-  if (OrigLoop->getHeader() == BB) {
+  if (EntryBlock == BB) {
     Value *C = ConstantInt::get(IntegerType::getInt1Ty(BB->getContext()), 1);
     for (unsigned Part = 0; Part < UF; ++Part)
       BlockMask[Part] = getOrCreateVectorValue(C, Part);
@@ -5023,8 +5060,16 @@ void InnerLoopVectorizer::updateAnalysis() {
   assert(DT->properlyDominates(LoopBypassBlocks.front(), LoopExitBlock) &&
          "Entry does not dominate exit.");
 
-  DT->addNewBlock(LI->getLoopFor(LoopVectorBody)->getHeader(),
-                  LoopVectorPreHeader);
+  // TODO (jiahao): Fix this. Reason that this needs to be skipped for parallel
+  // loops is that the block was already added earlier in
+  // createVectorizedLoopSkeleton.
+  //
+  // Very not elegant...
+  if (!OrigLoop->isCanonicalParallelLoop()) {
+    DT->addNewBlock(LI->getLoopFor(LoopVectorBody)->getHeader(),
+                    LoopVectorPreHeader);
+  }
+
   DT->addNewBlock(LoopMiddleBlock,
                   LI->getLoopFor(LoopVectorBody)->getLoopLatch());
   DT->addNewBlock(LoopScalarPreHeader, LoopBypassBlocks[0]);
@@ -5166,7 +5211,7 @@ bool LoopVectorizationLegality::canVectorize() {
                << '\n');
 
   // Check if we can if-convert non-single-bb loops.
-  unsigned NumBlocks = TheLoop->getNumBlocks();
+  unsigned NumBlocks = TheLoop->getBodyBlocks().size();
   if (NumBlocks != 1 && !canVectorizeWithIfConvert()) {
     DEBUG(dbgs() << "LV: Can't if-convert the loop.\n");
     if (ORE->allowExtraAnalysis())
@@ -5566,7 +5611,7 @@ void LoopVectorizationCostModel::collectLoopScalars(unsigned VF) {
   // stores will be scalar as long as the memory accesses is not a gather or
   // scatter operation. The value operand of a store will remain scalar if the
   // store is scalarized.
-  for (auto *BB : TheLoop->blocks())
+  for (auto *BB : TheLoop->getBodyBlocks())
     for (auto &I : *BB) {
       if (auto *Load = dyn_cast<LoadInst>(&I)) {
         evaluatePtrUse(Load, Load->getPointerOperand());
@@ -5775,7 +5820,7 @@ void LoopVectorizationCostModel::collectLoopUniforms(unsigned VF) {
   // memory instructions. For example, if a loop loads and stores from the same
   // location, but the store is conditional, the store will be scalarized, and
   // the getelementptr won't remain uniform.
-  for (auto *BB : TheLoop->blocks())
+  for (auto *BB : TheLoop->getBodyBlocks())
     for (auto &I : *BB) {
 
       // If there's no pointer operand, there's nothing to do.
@@ -6444,7 +6489,7 @@ LoopVectorizationCostModel::getSmallestAndWidestTypes() {
   const DataLayout &DL = TheFunction->getParent()->getDataLayout();
 
   // For each block.
-  for (BasicBlock *BB : TheLoop->blocks()) {
+  for (BasicBlock *BB : TheLoop->getBodyBlocks()) {
     // For each instruction in the loop.
     for (Instruction &I : *BB) {
       Type *T = I.getType();
@@ -6822,7 +6867,7 @@ void LoopVectorizationCostModel::collectInstsToScalarize(unsigned VF) {
   // Find all the instructions that are scalar with predication in the loop and
   // determine if it would be better to not if-convert the blocks they are in.
   // If so, we also record the instructions to scalarize.
-  for (BasicBlock *BB : TheLoop->blocks()) {
+  for (BasicBlock *BB : TheLoop->getBodyBlocks()) {
     if (!Legal->blockNeedsPredication(BB))
       continue;
     for (Instruction &I : *BB)
@@ -6966,7 +7011,7 @@ LoopVectorizationCostModel::expectedCost(unsigned VF) {
   collectInstsToScalarize(VF);
 
   // For each block.
-  for (BasicBlock *BB : TheLoop->blocks()) {
+  for (BasicBlock *BB : TheLoop->getBodyBlocks()) {
     VectorizationCostTy BlockCost;
 
     // For each instruction in the old loop.
@@ -7196,7 +7241,7 @@ LoopVectorizationCostModel::getInstructionCost(Instruction *I, unsigned VF) {
 void LoopVectorizationCostModel::setCostBasedWideningDecision(unsigned VF) {
   if (VF == 1)
     return;
-  for (BasicBlock *BB : TheLoop->blocks()) {
+  for (BasicBlock *BB : TheLoop->getBodyBlocks()) {
     // For each instruction in the old loop.
     for (Instruction &I : *BB) {
       Value *Ptr = getPointerOperand(&I);
@@ -7275,7 +7320,7 @@ void LoopVectorizationCostModel::setCostBasedWideningDecision(unsigned VF) {
 
   // Start with all scalar pointer uses.
   SmallPtrSet<Instruction *, 8> AddrDefs;
-  for (BasicBlock *BB : TheLoop->blocks())
+  for (BasicBlock *BB : TheLoop->getBodyBlocks())
     for (Instruction &I : *BB) {
       Instruction *PtrDef =
         dyn_cast_or_null<Instruction>(getPointerOperand(&I));
@@ -7553,6 +7598,11 @@ unsigned LoopVectorizationCostModel::getInstructionCost(Instruction *I,
       return std::min(CallCost, getVectorIntrinsicCost(CI, VF, TTI, TLI));
     return CallCost;
   }
+  case Instruction::Detach:
+  case Instruction::Reattach: {
+    // TODO (jiahao): Revisit the cost model here
+    return 0;
+  }
   default:
     // The cost of executing VF copies of the scalar instruction. This opcode
     // is unknown. Assume that it is the same as 'mul'.
@@ -7675,10 +7725,28 @@ void LoopVectorizationPlanner::executePlan(InnerLoopVectorizer &ILV) {
 
   // Vectorize all instructions in the original loop that will not become
   // trivially dead when vectorized.
-  for (BasicBlock *BB : make_range(DFS.beginRPO(), DFS.endRPO()))
-    for (Instruction &I : *BB)
-      if (!DeadInstructions.count(&I))
+  for (BasicBlock *BB : make_range(DFS.beginRPO(), DFS.endRPO())) {
+    Instruction *Skip1 = nullptr;
+    Instruction *Skip2 = nullptr;
+
+    if (OrigLoop->isCanonicalParallelLoop()) {
+      // We need to skip the detach/reattach instructions.
+      Skip1 = OrigLoop->getHeader()->getTerminator();
+      assert(isa<DetachInst>(Skip1) && "Unexpected canonical parallel loop form. ");
+      Skip2 = OrigLoop->getLoopLatch()->getSingleReattachPredecessor()->getTerminator();
+      assert(isa<ReattachInst>(Skip2) && "Unexpected canonical parallel loop form. ");
+    }
+
+    for (Instruction &I : *BB) {
+      if (&I == Skip1 || &I == Skip2) {
+        continue;
+      }
+
+      if (!DeadInstructions.count(&I)) {
         ILV.vectorizeInstruction(I);
+      }
+    }
+  }
 
   // 3. Fix the vectorized code: take care of header phi's, live-outs,
   //    predication, updating analyses.

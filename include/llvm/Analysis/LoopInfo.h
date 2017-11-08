@@ -29,7 +29,7 @@
 // in the CFG.  There can be strongly connected components in the CFG which
 // this analysis will not recognize and that will not be represented by a Loop
 // instance.  In particular, a Loop might be inside such a non-loop SCC, or a
-// non-loop SCC might contain a sub-SCC which is a Loop. 
+// non-loop SCC might contain a sub-SCC which is a Loop.
 //
 //===----------------------------------------------------------------------===//
 
@@ -433,6 +433,14 @@ public:
 
   /// Return true if the loop body is safe to clone in practice.
   bool isSafeToClone() const;
+
+  BasicBlock *getParallelEntryBlock() const;
+
+  /// Return true if the loop body consists of a canonical
+  /// detach-reattach-continue structure.
+  bool isCanonicalParallelLoop() const;
+
+  SmallVector<BasicBlock *, 8> getBodyBlocks() const;
 
   /// Returns true if the loop is annotated parallel.
   ///

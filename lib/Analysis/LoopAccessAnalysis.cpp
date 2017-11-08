@@ -176,8 +176,8 @@ const SCEV *llvm::replaceSymbolicStrideSCEV(PredicatedScalarEvolution &PSE,
 
 /// Calculate Start and End points of memory access.
 /// Let's assume A is the first access and B is a memory access on N-th loop
-/// iteration. Then B is calculated as:  
-///   B = A + Step*N . 
+/// iteration. Then B is calculated as:
+///   B = A + Step*N .
 /// Step value may be positive or negative.
 /// N is a calculated back-edge taken count:
 ///     N = (TripCount > 0) ? RoundDown(TripCount -1 , VF) : 0
@@ -1185,7 +1185,7 @@ bool MemoryDepChecker::couldPreventStoreLoadForward(uint64_t Distance,
   return false;
 }
 
-/// Given a non-constant (unknown) dependence-distance \p Dist between two 
+/// Given a non-constant (unknown) dependence-distance \p Dist between two
 /// memory accesses, that have the same stride whose absolute value is given
 /// in \p Stride, and that have the same type size \p TypeByteSize,
 /// in a loop whose takenCount is \p BackedgeTakenCount, check if it is
@@ -1204,19 +1204,19 @@ static bool isSafeDependenceDistance(const DataLayout &DL, ScalarEvolution &SE,
 
   // If we can prove that
   //      (**) |Dist| > BackedgeTakenCount * Step
-  // where Step is the absolute stride of the memory accesses in bytes, 
+  // where Step is the absolute stride of the memory accesses in bytes,
   // then there is no dependence.
   //
-  // Ratioanle: 
-  // We basically want to check if the absolute distance (|Dist/Step|) 
-  // is >= the loop iteration count (or > BackedgeTakenCount). 
-  // This is equivalent to the Strong SIV Test (Practical Dependence Testing, 
-  // Section 4.2.1); Note, that for vectorization it is sufficient to prove 
+  // Ratioanle:
+  // We basically want to check if the absolute distance (|Dist/Step|)
+  // is >= the loop iteration count (or > BackedgeTakenCount).
+  // This is equivalent to the Strong SIV Test (Practical Dependence Testing,
+  // Section 4.2.1); Note, that for vectorization it is sufficient to prove
   // that the dependence distance is >= VF; This is checked elsewhere.
-  // But in some cases we can prune unknown dependence distances early, and 
-  // even before selecting the VF, and without a runtime test, by comparing 
-  // the distance against the loop iteration count. Since the vectorized code 
-  // will be executed only if LoopCount >= VF, proving distance >= LoopCount 
+  // But in some cases we can prune unknown dependence distances early, and
+  // even before selecting the VF, and without a runtime test, by comparing
+  // the distance against the loop iteration count. Since the vectorized code
+  // will be executed only if LoopCount >= VF, proving distance >= LoopCount
   // also guarantees that distance >= VF.
   //
   const uint64_t ByteStride = Stride * TypeByteSize;
@@ -1228,8 +1228,8 @@ static bool isSafeDependenceDistance(const DataLayout &DL, ScalarEvolution &SE,
   uint64_t DistTypeSize = DL.getTypeAllocSize(Dist.getType());
   uint64_t ProductTypeSize = DL.getTypeAllocSize(Product->getType());
 
-  // The dependence distance can be positive/negative, so we sign extend Dist; 
-  // The multiplication of the absolute stride in bytes and the 
+  // The dependence distance can be positive/negative, so we sign extend Dist;
+  // The multiplication of the absolute stride in bytes and the
   // backdgeTakenCount is non-negative, so we zero extend Product.
   if (DistTypeSize > ProductTypeSize)
     CastedProduct = SE.getZeroExtendExpr(Product, Dist.getType());
@@ -1857,7 +1857,12 @@ bool LoopAccessInfo::blockNeedsPredication(BasicBlock *BB, Loop *TheLoop,
 
   // Blocks that do not dominate the latch need predication.
   BasicBlock* Latch = TheLoop->getLoopLatch();
-  return !DT->dominates(BB, Latch);
+
+  if (!TheLoop->isCanonicalParallelLoop()) {
+    return !DT->dominates(BB, Latch);
+  } else {
+    return !DT->dominates(BB, Latch->getSingleReattachPredecessor());
+  }
 }
 
 OptimizationRemarkAnalysis &LoopAccessInfo::recordAnalysis(StringRef RemarkName,
