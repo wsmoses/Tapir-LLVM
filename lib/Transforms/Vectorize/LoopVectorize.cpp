@@ -5120,9 +5120,10 @@ bool LoopVectorizationLegality::canVectorizeWithIfConvert() {
 
   // Collect the blocks that need predication.
   BasicBlock *Header = TheLoop->getHeader();
-  for (BasicBlock *BB : TheLoop->blocks()) {
+  for (BasicBlock *BB : TheLoop->getBodyBlocks()) {
     // We don't support switch statements inside loops.
-    if (!isa<BranchInst>(BB->getTerminator())) {
+    if (!isa<BranchInst>(BB->getTerminator()) &&
+        !isa<ReattachInst>(BB->getTerminator())) {
       ORE->emit(createMissedAnalysis("LoopContainsSwitch", BB->getTerminator())
                 << "loop contains a switch statement");
       return false;
@@ -7011,7 +7012,7 @@ LoopVectorizationCostModel::expectedCost(unsigned VF) {
   collectInstsToScalarize(VF);
 
   // For each block.
-  for (BasicBlock *BB : TheLoop->getBodyBlocks()) {
+  for (BasicBlock *BB : TheLoop->blocks()) {
     VectorizationCostTy BlockCost;
 
     // For each instruction in the old loop.
