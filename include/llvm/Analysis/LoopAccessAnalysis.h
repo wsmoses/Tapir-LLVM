@@ -658,7 +658,7 @@ int64_t getPtrStride(PredicatedScalarEvolution &PSE, Value *Ptr, const Loop *Lp,
                      bool Assume = false, bool ShouldCheckWrap = true);
 
 /// \brief Returns true if the memory operations \p A and \p B are consecutive.
-/// This is a simple API that does not depend on the analysis pass. 
+/// This is a simple API that does not depend on the analysis pass.
 bool isConsecutiveAccess(Value *A, Value *B, const DataLayout &DL,
                          ScalarEvolution &SE, bool CheckType = true);
 
@@ -710,7 +710,7 @@ private:
 /// accesses of a loop.
 ///
 /// It runs the analysis for a loop on demand.  This can be initiated by
-/// querying the loop access info via AM.getResult<LoopAccessAnalysis>. 
+/// querying the loop access info via AM.getResult<LoopAccessAnalysis>.
 /// getResult return a LoopAccessInfo object.  See this class for the
 /// specifics of what information is provided.
 class LoopAccessAnalysis
