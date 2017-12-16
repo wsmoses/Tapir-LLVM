@@ -37,15 +37,16 @@ bool populateDetachedCFG(const DetachInst &Detach, DominatorTree &DT,
                          int replaceOrDelete, bool error = true);
 
 Function *extractDetachBodyToFunction(DetachInst &Detach,
-                                     DominatorTree &DT, AssumptionCache &AC,
-                                     CallInst **call = nullptr);
+                                      DominatorTree &DT, AssumptionCache &AC,
+                                      CallInst **call = nullptr);
 
 class TapirTarget {
 
 public:
   //! For use in loopspawning grainsize calculation
   virtual Value *GetOrCreateWorker8(Function &F) = 0;
-  virtual void createSync(SyncInst &inst, ValueToValueMapTy &DetachCtxToStackFrame) = 0;
+  virtual void createSync(SyncInst &inst,
+                          ValueToValueMapTy &DetachCtxToStackFrame) = 0;
 
   virtual Function *createDetach(DetachInst &Detach,
                          ValueToValueMapTy &DetachCtxToStackFrame,
