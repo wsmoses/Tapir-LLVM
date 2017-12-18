@@ -38,6 +38,7 @@
 #include "llvm/Transforms/Utils/LoopSimplify.h"
 #include "llvm/Transforms/Utils/LoopUtils.h"
 #include "llvm/Transforms/Utils/SimplifyIndVar.h"
+#include "llvm/Transforms/Utils/TapirUtils.h"
 #include "llvm/Transforms/Utils/UnrollLoop.h"
 using namespace llvm;
 
@@ -152,15 +153,6 @@ foldBlockIntoPredecessor(BasicBlock *BB, LoopInfo *LI, ScalarEvolution *SE,
   BB->eraseFromParent();
 
   return OnlyPred;
-}
-
-//! Identify if a loop could be a cilk for loop and thus diasble unrolling
-bool isCilkFor(Loop* L) {
-  //TODO use a more precise detection of cilk for loops
-  for (BasicBlock* BB : L->blocks())
-    if (dyn_cast<DetachInst>(BB->getTerminator()))
-      return true;
-  return false;
 }
 
 /// Check if unrolling created a situation where we need to insert phi nodes to
@@ -294,7 +286,7 @@ static bool isEpilogProfitable(Loop *L) {
 /// runtime-unroll the loop if computing RuntimeTripCount will be expensive and
 /// AllowExpensiveTripCount is false.
 ///
-/// If we want to perform PGO-based loop peeling, PeelCount is set to the 
+/// If we want to perform PGO-based loop peeling, PeelCount is set to the
 /// number of iterations we want to peel off.
 ///
 /// The LoopInfo Analysis that is passed will be kept consistent.
@@ -380,7 +372,7 @@ bool llvm::UnrollLoop(Loop *L, unsigned Count, unsigned TripCount, bool Force,
 
   // Are we eliminating the loop control altogether?
   bool CompletelyUnroll = Count == TripCount;
-  if (isCilkFor(L) && !CompletelyUnroll) return false;
+  if (tapir::isDACFor(L) && !CompletelyUnroll) return false;
   SmallVector<BasicBlock *, 4> ExitBlocks;
   L->getExitBlocks(ExitBlocks);
   std::vector<BasicBlock*> OriginalLoopBlocks = L->getBlocks();

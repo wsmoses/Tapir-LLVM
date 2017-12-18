@@ -43,6 +43,7 @@ pfor.inc:                                         ; preds = %pfor.body, %pfor.de
 ; Function Attrs: argmemonly nounwind
 declare token @llvm.syncregion.start() #1
 
+; CHECK: !{!"tapir.loop.spawn.strategy", i32 1}
 !0 = !{i32 1, !"wchar_size", i32 4}
 !1 = !{!"clang version 5.0.0 (https://github.com/wsmoses/Cilk-Clang.git eaf246ef85cae33736dc7b015af97267045a6230) (git@github.com:wsmoses/Parallel-IR.git ca578abf2ded623076a35ebe6dd37816c0c41ede)"}
 !2 = !{!3, !3, i64 0}
