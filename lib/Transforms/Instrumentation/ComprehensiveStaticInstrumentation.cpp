@@ -733,7 +733,7 @@ void CSIImpl::instrumentDetach(DetachInst *DI, DominatorTree *DT) {
 
   // Instrument the continuation of the detach.
   {
-    if (isCriticalContinueEdge(DI, 1))
+    if (tapir::isCriticalContinueEdge(DI, 1))
       ContinueBlock = SplitCriticalEdge(
           DI, 1,
           CriticalEdgeSplittingOptions(DT).setSplitDetachContinue());

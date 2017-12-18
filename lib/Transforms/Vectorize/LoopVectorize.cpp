@@ -525,7 +525,7 @@ protected:
 
   /// Create a new induction variable inside L.
   PHINode *createInductionVariable(Loop *L, Value *Start, Value *End,
-                                   Value *Step, Instruction *DL);
+                                   Value *Step, Instruction *DL, bool nuw, bool nsw);
 
   /// Handle all cross-iteration phis in the header.
   void fixCrossIterationPHIs();
@@ -3360,7 +3360,7 @@ void InnerLoopVectorizer::scalarizeInstruction(Instruction *Instr,
 
 PHINode *InnerLoopVectorizer::createInductionVariable(Loop *L, Value *Start,
                                                       Value *End, Value *Step,
-                                                      Instruction *DL) {
+                                                      Instruction *DL, bool nuw, bool nsw) {
   BasicBlock *Header = L->getHeader();
   BasicBlock *Latch = L->getLoopLatch();
   // As we're just creating this loop, it's possible no latch exists
@@ -3377,7 +3377,7 @@ PHINode *InnerLoopVectorizer::createInductionVariable(Loop *L, Value *Start,
   setDebugLocFromInst(Builder, OldInst);
 
   // Create i+1 and fill the PHINode.
-  Value *Next = Builder.CreateAdd(Induction, Step, "index.next");
+  Value *Next = Builder.CreateAdd(Induction, Step, "index.next", nuw, nsw);
   Induction->addIncoming(Start, L->getLoopPreheader());
   Induction->addIncoming(Next, Latch);
   // Create the compare.
@@ -3699,11 +3699,32 @@ BasicBlock *InnerLoopVectorizer::createVectorizedLoopSkeleton() {
   // Generate the induction variable.
   // The loop step is equal to the vectorization factor (num of SIMD elements)
   // times the unroll factor (num of SIMD instructions).
+  bool nuw = false, nsw = false;
+
+  if (OldInduction) {
+    for(Use& val : OldInduction->incoming_values()) {
+      if (BinaryOperator* binop = dyn_cast<BinaryOperator>(val)) {
+        bool recur = false;
+        for(auto& op : binop->operands()) {
+          if (op == OldInduction) {
+            recur = true;
+            break;
+          }
+        }
+        if (recur) {
+          nuw = binop->hasNoUnsignedWrap();
+          nsw = binop->hasNoUnsignedWrap();
+          break;
+        }
+      }
+    }
+  }
+
   Value *CountRoundDown = getOrCreateVectorTripCount(Lp);
   Constant *Step = ConstantInt::get(IdxTy, VF * UF);
   Induction =
       createInductionVariable(Lp, StartIdx, CountRoundDown, Step,
-                              getDebugLocFromInstOrOperands(OldInduction));
+                              getDebugLocFromInstOrOperands(OldInduction), nuw, nsw);
 
   // We are going to resume the execution of the scalar loop.
   // Go over all of the induction variables that we found and fix the

@@ -187,7 +187,7 @@ collectAliasInfoForLoopAtPoint(Loop *L, LoopInfo *LI,
       }
     }
   }
-  
+
   while (!todo.empty()) {
     auto p = todo.back();
     todo.pop_back();
@@ -208,7 +208,7 @@ collectAliasInfoForLoopAtPoint(Loop *L, LoopInfo *LI,
                 todo.push_back(make_pair(B2,syncs));
             }
         }
-    } else { 
+    } else {
         for (BasicBlock *B2 : predecessors(BB)) {
             if (Blocks.count(B2) && !done.count(B2)) {
                 //TODO THIS NEEDS TO ALLOW pfor loops to not alias when inst sinking
@@ -372,7 +372,7 @@ INITIALIZE_PASS_DEPENDENCY(TargetLibraryInfoWrapperPass)
 INITIALIZE_PASS_END(LegacyLICMRhinoPass, "licm-rhino", "Loop Invariant Code Motion w/ Rhino", false,
                     false)
 
-Pass *llvm::createLICMPass(bool Rhino) { 
+Pass *llvm::createLICMPass(bool Rhino) {
   if (Rhino) {
     return new LegacyLICMRhinoPass();
   } else {
@@ -1506,7 +1506,7 @@ bool llvm::promoteLoopAccessesToScalars(
 	// TODO: The call to GetDetachedCtx can potentially be
 	// expensive.  Optimize this analysis in the future.
 	if (DetachWithinLoop &&
-	    CurLoop->contains(GetDetachedCtx(Store->getParent())))
+	    CurLoop->contains(tapir::GetDetachedCtx(Store->getParent())))
 	  return false;
 
         // Note that we only check GuaranteedToExecute inside the store case

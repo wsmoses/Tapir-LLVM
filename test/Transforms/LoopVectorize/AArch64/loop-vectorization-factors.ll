@@ -265,7 +265,7 @@ for.body:                                         ; preds = %entry, %for.body
 ; Function Attrs: nounwind
 ; When we vectorize this loop, we generate correct code
 ; even when %len exactly divides VF (since we extract from the second last index
-; and pass this to the for.cond.cleanup block). Vectorized loop returns 
+; and pass this to the for.cond.cleanup block). Vectorized loop returns
 ; the correct value a_phi = p[len -2]
 define i8 @add_phifail2(i8* noalias nocapture readonly %p, i8* noalias nocapture %q, i32 %len) #0 {
 ; CHECK-LABEL: @add_phifail2(
@@ -274,7 +274,7 @@ define i8 @add_phifail2(i8* noalias nocapture readonly %p, i8* noalias nocapture
 ; CHECK:   %[[L1:.+]] = zext <16 x i8> %wide.load to <16 x i32>
 ; CHECK:   add nuw nsw <16 x i32>
 ; CHECK:   store <16 x i8>
-; CHECK:   add i64 %index, 16
+; CHECK:   add nuw nsw i64 %index, 16
 ; CHECK:   icmp eq i64 %index.next, %n.vec
 ; CHECK: middle.block:
 ; CHECK:   %vector.recur.extract = extractelement <16 x i32> %[[L1]], i32 15
