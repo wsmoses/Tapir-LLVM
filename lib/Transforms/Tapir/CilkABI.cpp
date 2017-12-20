@@ -186,7 +186,7 @@ typedef std::map<LLVMContext*, StructType*> TypeBuilderCache;
 ///   __cilkrts_worker,
 ///   __cilkrts_stack_frame
 template <bool X>
-class llvm::TypeBuilder<__cilkrts_pedigree, X> {
+class TypeBuilder<__cilkrts_pedigree, X> {
 public:
   static StructType *get(LLVMContext &C) {
     static TypeBuilderCache cache;
@@ -214,7 +214,7 @@ public:
 };
 
 template <bool X>
-class llvm::TypeBuilder<__cilkrts_worker, X> {
+class TypeBuilder<__cilkrts_worker, X> {
 public:
   static StructType *get(LLVMContext &C) {
     static TypeBuilderCache cache;
@@ -274,7 +274,7 @@ public:
 };
 
 template <bool X>
-class llvm::TypeBuilder<__cilkrts_stack_frame, X> {
+class TypeBuilder<__cilkrts_stack_frame, X> {
 public:
   static StructType *get(LLVMContext &C) {
     static TypeBuilderCache cache;
