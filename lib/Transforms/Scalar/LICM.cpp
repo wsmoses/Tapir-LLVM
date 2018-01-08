@@ -1506,7 +1506,7 @@ bool llvm::promoteLoopAccessesToScalars(
 	// TODO: The call to GetDetachedCtx can potentially be
 	// expensive.  Optimize this analysis in the future.
 	if (DetachWithinLoop &&
-	    CurLoop->contains(tapir::GetDetachedCtx(Store->getParent())))
+	    CurLoop->contains(GetDetachedCtx(Store->getParent())))
 	  return false;
 
         // Note that we only check GuaranteedToExecute inside the store case

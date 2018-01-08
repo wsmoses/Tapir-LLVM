@@ -21,7 +21,6 @@
 #define DEBUG_TYPE "tapir2target"
 
 using namespace llvm;
-using namespace llvm::tapir;
 
 static cl::opt<TapirTargetType> ClTapirTarget(
     "tapir-target", cl::desc("Target runtime for Tapir"),

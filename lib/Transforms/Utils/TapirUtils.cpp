@@ -12,15 +12,13 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/Transforms/Utils/TapirUtils.h"
-
 #include "llvm/Analysis/LoopInfo.h"
 #include "llvm/IR/DIBuilder.h"
-#include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/IntrinsicInst.h"
+#include "llvm/IR/IRBuilder.h"
 #include "llvm/Transforms/Utils/Local.h"
 
 using namespace llvm;
-using namespace llvm::tapir;
 
 #define DEBUG_TYPE "tapirutils"
 
@@ -69,7 +67,7 @@ static bool hasLifetimeMarkers(AllocaInst *AI) {
 // Move static allocas in a cloned block into the entry block of helper.  Leave
 // lifetime markers behind for those static allocas.  Returns true if the cloned
 // block still contains dynamic allocas, which cannot be moved.
-bool llvm::tapir::MoveStaticAllocasInBlock(
+bool llvm::MoveStaticAllocasInBlock(
     BasicBlock *Entry,
     BasicBlock *Block,
     SmallVectorImpl<Instruction *> &ExitPoints) {
@@ -177,7 +175,7 @@ bool llvm::tapir::MoveStaticAllocasInBlock(
 /// specified detach instruction.  Removes the detach instruction and
 /// returns a pointer to the branch instruction that replaces it.
 ///
-BranchInst *llvm::tapir::SerializeDetachedCFG(DetachInst *DI, DominatorTree *DT) {
+BranchInst *llvm::SerializeDetachedCFG(DetachInst *DI, DominatorTree *DT) {
   // Get the parent of the detach instruction.
   BasicBlock *Detacher = DI->getParent();
   // Get the detached block and continuation of this detach.
@@ -245,12 +243,12 @@ BranchInst *llvm::tapir::SerializeDetachedCFG(DetachInst *DI, DominatorTree *DT)
 /// GetDetachedCtx - Get the entry basic block to the detached context
 /// that contains the specified block.
 ///
-BasicBlock *llvm::tapir::GetDetachedCtx(BasicBlock *BB) {
+BasicBlock *llvm::GetDetachedCtx(BasicBlock *BB) {
   return const_cast<BasicBlock *>(
       GetDetachedCtx(const_cast<const BasicBlock *>(BB)));
 }
 
-const BasicBlock *llvm::tapir::GetDetachedCtx(const BasicBlock *BB) {
+const BasicBlock *llvm::GetDetachedCtx(const BasicBlock *BB) {
   // Traverse the CFG backwards until we either reach the entry block
   // of the function or we find a detach instruction that detaches the
   // current block.
@@ -297,7 +295,7 @@ const BasicBlock *llvm::tapir::GetDetachedCtx(const BasicBlock *BB) {
 /// detach-continue edge.  Critical detach-continue edges are critical edges -
 /// from a block with multiple successors to a block with multiple predecessors
 /// - even after ignoring all reattach edges.
-bool llvm::tapir::isCriticalContinueEdge(const TerminatorInst *TI, unsigned SuccNum) {
+bool llvm::isCriticalContinueEdge(const TerminatorInst *TI, unsigned SuccNum) {
   assert(SuccNum < TI->getNumSuccessors() && "Illegal edge specification!");
   if (TI->getNumSuccessors() == 1) return false;
 
@@ -321,7 +319,7 @@ bool llvm::tapir::isCriticalContinueEdge(const TerminatorInst *TI, unsigned Succ
 }
 
 
-llvm::tapir::LoopSpawningHints::LoopSpawningHints(const Loop *L)
+llvm::LoopSpawningHints::LoopSpawningHints(const Loop *L)
     : Strategy("spawn.strategy", ST_SEQ, HK_STRATEGY),
       Grainsize("grainsize", 0, HK_GRAINSIZE),
       TheLoop(L) {
@@ -329,15 +327,16 @@ llvm::tapir::LoopSpawningHints::LoopSpawningHints(const Loop *L)
   getHintsFromMetadata();
 }
 
-llvm::tapir::LoopSpawningHints::SpawningStrategy llvm::tapir::LoopSpawningHints::getStrategy() const {
+LoopSpawningHints::SpawningStrategy
+llvm::LoopSpawningHints::getStrategy() const {
   return (SpawningStrategy)Strategy.Value;
 }
 
-unsigned llvm::tapir::LoopSpawningHints::getGrainsize() const {
+unsigned llvm::LoopSpawningHints::getGrainsize() const {
   return Grainsize.Value;
 }
 
-void llvm::tapir::LoopSpawningHints::getHintsFromMetadata() {
+void llvm::LoopSpawningHints::getHintsFromMetadata() {
   MDNode *LoopID = TheLoop->getLoopID();
   if (!LoopID)
     return;
@@ -374,7 +373,7 @@ void llvm::tapir::LoopSpawningHints::getHintsFromMetadata() {
 }
 
 /// Checks string hint with one operand and set value if valid.
-void llvm::tapir::LoopSpawningHints::setHint(StringRef Name, Metadata *Arg) {
+void llvm::LoopSpawningHints::setHint(StringRef Name, Metadata *Arg) {
   if (!Name.startswith(Prefix()))
     return;
   Name = Name.substr(Prefix().size(), StringRef::npos);
@@ -398,7 +397,8 @@ void llvm::tapir::LoopSpawningHints::setHint(StringRef Name, Metadata *Arg) {
 }
 
 /// Create a new hint from name / value pair.
-MDNode *llvm::tapir::LoopSpawningHints::createHintMetadata(StringRef Name, unsigned V) const {
+MDNode *llvm::LoopSpawningHints::createHintMetadata(StringRef Name,
+                                                    unsigned V) const {
   LLVMContext &Context = TheLoop->getHeader()->getContext();
   Metadata *MDs[] = {MDString::get(Context, Name),
                      ConstantAsMetadata::get(
@@ -407,7 +407,8 @@ MDNode *llvm::tapir::LoopSpawningHints::createHintMetadata(StringRef Name, unsig
 }
 
 /// Matches metadata with hint name.
-bool llvm::tapir::LoopSpawningHints::matchesHintMetadataName(MDNode *Node, ArrayRef<Hint> HintTypes) {
+bool llvm::LoopSpawningHints::matchesHintMetadataName(
+    MDNode *Node, ArrayRef<Hint> HintTypes) {
   MDString *Name = dyn_cast<MDString>(Node->getOperand(0));
   if (!Name)
     return false;
@@ -419,7 +420,7 @@ bool llvm::tapir::LoopSpawningHints::matchesHintMetadataName(MDNode *Node, Array
 }
 
 /// Sets current hints into loop metadata, keeping other values intact.
-void llvm::tapir::LoopSpawningHints::writeHintsToMetadata(ArrayRef<Hint> HintTypes) {
+void llvm::LoopSpawningHints::writeHintsToMetadata(ArrayRef<Hint> HintTypes) {
   if (HintTypes.size() == 0)
     return;
 
@@ -449,7 +450,7 @@ void llvm::tapir::LoopSpawningHints::writeHintsToMetadata(ArrayRef<Hint> HintTyp
   TheLoop->setLoopID(NewLoopID);
 }
 
-bool llvm::tapir::LoopSpawningHints::Hint::validate(unsigned Val) {
+bool llvm::LoopSpawningHints::Hint::validate(unsigned Val) {
   switch (Kind) {
   case HK_STRATEGY:
     return (Val < ST_END);
@@ -466,14 +467,15 @@ bool llvm::tapir::LoopSpawningHints::Hint::validate(unsigned Val) {
 /// 3) The body reattaches to the latch (which is necessary for a valid
 ///    detached CFG).
 /// 4) The loop only branches to the exit block from the header or the latch.
-bool llvm::tapir::isCanonicalTapirLoop(const Loop *L, bool print) {
+bool llvm::isCanonicalTapirLoop(const Loop *L, bool print) {
   const BasicBlock *Header = L->getHeader();
   const BasicBlock *Latch = L->getLoopLatch();
 
   // Header must be terminated by a detach.
   if (!isa<DetachInst>(Header->getTerminator())) {
     if (print) {
-      DEBUG(dbgs() << "LS loop header is not terminated by a detach: " << *L << "\n");
+      DEBUG(dbgs() << "Loop header is not terminated by a detach: " << *L
+            << "\n");
     }
     return false;
   }
@@ -481,7 +483,7 @@ bool llvm::tapir::isCanonicalTapirLoop(const Loop *L, bool print) {
   // Loop must have a unique latch.
   if (nullptr == Latch) {
     if (print) {
-      DEBUG(dbgs() << "LS loop does not have a unique latch: " << *L << "\n");
+      DEBUG(dbgs() << "Loop does not have a unique latch: " << *L << "\n");
     }
     return false;
   }
@@ -491,7 +493,7 @@ bool llvm::tapir::isCanonicalTapirLoop(const Loop *L, bool print) {
   const BasicBlock *Continuation = HeaderDetach->getContinue();
   if (Continuation != Latch) {
     if (print) {
-      DEBUG(dbgs() << "LS continuation of detach in header is not the latch: "
+      DEBUG(dbgs() << "Continuation of detach in header is not the latch: "
                  << *L << "\n");
     }
     return false;
@@ -503,7 +505,7 @@ bool llvm::tapir::isCanonicalTapirLoop(const Loop *L, bool print) {
     if (Header == Pred) continue;
     if (!isa<ReattachInst>(Pred->getTerminator())) {
       if (print) {
-        DEBUG(dbgs() << "LS Latch has a predecessor that is not terminated "
+        DEBUG(dbgs() << "Latch has a predecessor that is not terminated "
                      << "by a reattach: " << *L << "\n");
       }
       return false;
@@ -522,7 +524,7 @@ bool llvm::tapir::isCanonicalTapirLoop(const Loop *L, bool print) {
       continue;
     if (Header != Pred && Latch != Pred) {
       if (print) {
-        DEBUG(dbgs() << "LS Loop branches to exit block from a block "
+        DEBUG(dbgs() << "Loop branches to exit block from a block "
                      << "other than the header or latch" << *L << "\n");
       }
       return false;
@@ -532,13 +534,10 @@ bool llvm::tapir::isCanonicalTapirLoop(const Loop *L, bool print) {
   return true;
 }
 
-
-bool llvm::tapir::isDACFor(Loop* L) {
-  //TODO use a more precise detection of cilk for loops
-  for (BasicBlock* BB : L->blocks()) {
-    if (dyn_cast<DetachInst>(BB->getTerminator())) {
-      return llvm::tapir::LoopSpawningHints(L).getStrategy() == llvm::tapir::LoopSpawningHints::ST_DAC;
-    }
-  }
+bool llvm::isDACFor(Loop* L) {
+  // TODO: Use a more precise detection of cilk_for loops.
+  for (BasicBlock* BB : L->blocks())
+    if (isa<DetachInst>(BB->getTerminator()))
+      return LoopSpawningHints(L).getStrategy() == LoopSpawningHints::ST_DAC;
   return false;
 }

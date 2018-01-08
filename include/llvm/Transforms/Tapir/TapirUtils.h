@@ -25,7 +25,6 @@
 #include "llvm/Transforms/Utils/ValueMapper.h"
 
 namespace llvm {
-namespace tapir {
 
 bool verifyDetachedCFG(const DetachInst &Detach, DominatorTree &DT,
                        bool error = true);
@@ -58,7 +57,6 @@ public:
 
 TapirTarget *getTapirTargetFromType(TapirTargetType Type);
 
-}  // end namespace tapir
 }  // end namepsace llvm
 
 #endif
