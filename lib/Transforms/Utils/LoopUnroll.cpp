@@ -372,7 +372,7 @@ bool llvm::UnrollLoop(Loop *L, unsigned Count, unsigned TripCount, bool Force,
 
   // Are we eliminating the loop control altogether?
   bool CompletelyUnroll = Count == TripCount;
-  if (tapir::isDACFor(L) && !CompletelyUnroll) return false;
+  if (isDACFor(L) && !CompletelyUnroll) return false;
   SmallVector<BasicBlock *, 4> ExitBlocks;
   L->getExitBlocks(ExitBlocks);
   std::vector<BasicBlock*> OriginalLoopBlocks = L->getBlocks();

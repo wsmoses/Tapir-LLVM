@@ -595,7 +595,7 @@ static bool shouldInstrumentReadWriteFromAddress(const Module *M, Value *Addr) {
 
 // Examine the uses of a given AllocaInst to determine if some use is detached.
 static bool MightHaveDetachedUse(const AllocaInst *AI) {
-  const BasicBlock *AllocaCtx = tapir::GetDetachedCtx(AI->getParent());
+  const BasicBlock *AllocaCtx = GetDetachedCtx(AI->getParent());
   SmallVector<const Use *, 20> Worklist;
   SmallSet<const Use *, 20> Visited;
 
@@ -607,7 +607,7 @@ static bool MightHaveDetachedUse(const AllocaInst *AI) {
   while (!Worklist.empty()) {
     const Use *U = Worklist.pop_back_val();
     Instruction *I = cast<Instruction>(U->getUser());
-    if (AllocaCtx != tapir::GetDetachedCtx(I->getParent()))
+    if (AllocaCtx != GetDetachedCtx(I->getParent()))
       return true;
 
     switch (I->getOpcode()) {
@@ -1110,7 +1110,7 @@ bool CilkSanitizerImpl::instrumentDetach(DetachInst *DI,
 
   // Instrument the continuation of the detach.
   {
-    if (tapir::isCriticalContinueEdge(DI, 1))
+    if (isCriticalContinueEdge(DI, 1))
       ContinueBlock = SplitCriticalEdge(
           DI, 1,
           CriticalEdgeSplittingOptions(DT).setSplitDetachContinue());
