@@ -26,8 +26,6 @@ class DominatorTree;
 class TerminatorInst;
 class Loop;
 
-namespace tapir {
-
 /// Move static allocas in a block into the specified entry block.  Leave
 /// lifetime markers behind for those static allocas.  Returns true if the
 /// cloned block still contains dynamic allocas, which cannot be moved.
@@ -148,7 +146,6 @@ bool isCanonicalTapirLoop(const Loop *L, bool print=false);
 //! Identify if a loop could be a DAC loop
 bool isDACFor(Loop* L);
 
-} // End tapir namespace
-} // End llvm namespace
+}  // end llvm namespace
 
 #endif

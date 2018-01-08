@@ -23,6 +23,7 @@
 namespace llvm {
 class ModuleSummaryIndex;
 class Pass;
+class TapirTarget;
 class TargetLibraryInfoImpl;
 class TargetMachine;
 
@@ -30,10 +31,6 @@ class TargetMachine;
 namespace legacy {
 class FunctionPassManager;
 class PassManagerBase;
-}
-
-namespace tapir {
-class TapirTarget;
 }
 
 /// PassManagerBuilder - This class is used to set up a standard optimization
@@ -133,7 +130,7 @@ public:
   unsigned SizeLevel;
 
   /// What runtime tapir instructions should be lowered to (nullptr if no lowering)
-  tapir::TapirTarget* tapirTarget;
+  TapirTarget* tapirTarget;
 
   /// Whether to disable opts before lowering tapir to target
   bool DisableTapirOpts;
