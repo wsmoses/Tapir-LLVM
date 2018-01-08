@@ -320,10 +320,6 @@ void Loop::setLoopID(MDNode *LoopID) const {
 bool Loop::isAnnotatedParallel() const {
   MDNode *DesiredLoopIdMetadata = getLoopID();
 
-  if (this->isCanonicalParallelLoop()) {
-      return true;
-  }
-
   if (!DesiredLoopIdMetadata)
       return false;
 
