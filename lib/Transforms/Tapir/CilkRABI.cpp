@@ -28,9 +28,15 @@ using namespace llvm;
 
 typedef void *__CILK_JUMP_BUFFER[5];
 
+struct CilkRABI__cilkrts_stack_frame {};
+struct CilkRABI__cilkrts_worker {};
+
 // typedef CilkRABI::__cilkrts_pedigree __cilkrts_pedigree;
-typedef CilkRABI::__cilkrts_stack_frame __cilkrts_stack_frame;
-typedef CilkRABI::__cilkrts_worker __cilkrts_worker;
+// typedef CilkRABI::__cilkrts_stack_frame __cilkrts_stack_frame;
+// typedef CilkRABI::__cilkrts_worker __cilkrts_worker;
+typedef CilkRABI__cilkrts_stack_frame __cilkrts_stack_frame;
+typedef CilkRABI__cilkrts_worker __cilkrts_worker;
+
 
 enum {
   __CILKRTS_ABI_VERSION = 1
