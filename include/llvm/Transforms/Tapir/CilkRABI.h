@@ -52,9 +52,9 @@ public:
   void postProcessFunction(Function &F) override final;
   void postProcessHelper(Function &F) override final;
 
-  // // struct __cilkrts_pedigree {};
-  // struct __cilkrts_stack_frame {};
-  // struct __cilkrts_worker {};
+  // struct __cilkrts_pedigree {};
+  struct __cilkrts_stack_frame {};
+  struct __cilkrts_worker {};
 };
 
 }  // end of llvm namespace

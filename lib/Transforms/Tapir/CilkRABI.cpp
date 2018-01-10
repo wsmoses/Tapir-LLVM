@@ -28,15 +28,9 @@ using namespace llvm;
 
 typedef void *__CILK_JUMP_BUFFER[5];
 
-struct CilkRABI__cilkrts_stack_frame {};
-struct CilkRABI__cilkrts_worker {};
-
 // typedef CilkRABI::__cilkrts_pedigree __cilkrts_pedigree;
-// typedef CilkRABI::__cilkrts_stack_frame __cilkrts_stack_frame;
-// typedef CilkRABI::__cilkrts_worker __cilkrts_worker;
-typedef CilkRABI__cilkrts_stack_frame __cilkrts_stack_frame;
-typedef CilkRABI__cilkrts_worker __cilkrts_worker;
-
+typedef CilkRABI::__cilkrts_stack_frame __cilkrts_stack_frame;
+typedef CilkRABI::__cilkrts_worker __cilkrts_worker;
 
 enum {
   __CILKRTS_ABI_VERSION = 1
@@ -125,6 +119,7 @@ DEFAULT_GET_CILKRTS_FUNC(get_tls_worker)
 
 typedef std::map<LLVMContext*, StructType*> TypeBuilderCache;
 
+namespace llvm {
 /// Specializations of TypeBuilder for:
 ///   __cilkrts_pedigree,
 ///   __cilkrts_worker,
@@ -266,6 +261,7 @@ public:
     magic,
   };
 };
+} // end namespace llvm
 
 /// Helper typedefs for cilk struct TypeBuilders.
 typedef TypeBuilder<__cilkrts_stack_frame, false> StackFrameBuilder;

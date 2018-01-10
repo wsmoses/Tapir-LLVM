@@ -34,16 +34,9 @@ extern cl::opt<bool> fastCilk;
 
 typedef void *__CILK_JUMP_BUFFER[5];
 
-struct CilkABI__cilkrts_pedigree {};
-struct CilkABI__cilkrts_stack_frame {};
-struct CilkABI__cilkrts_worker {};
-
-// typedef CilkABI::__cilkrts_pedigree __cilkrts_pedigree;
-// typedef CilkABI::__cilkrts_stack_frame __cilkrts_stack_frame;
-// typedef CilkABI::__cilkrts_worker __cilkrts_worker;
-typedef CilkABI__cilkrts_pedigree __cilkrts_pedigree;
-typedef CilkABI__cilkrts_stack_frame __cilkrts_stack_frame;
-typedef CilkABI__cilkrts_worker __cilkrts_worker;
+typedef CilkABI::__cilkrts_pedigree __cilkrts_pedigree;
+typedef CilkABI::__cilkrts_stack_frame __cilkrts_stack_frame;
+typedef CilkABI::__cilkrts_worker __cilkrts_worker;
 
 enum {
   __CILKRTS_ABI_VERSION = 1
@@ -188,6 +181,7 @@ DEFAULT_GET_CILKRTS_FUNC(cilk_for_64)
 
 typedef std::map<LLVMContext*, StructType*> TypeBuilderCache;
 
+namespace llvm {
 /// Specializations of TypeBuilder for:
 ///   __cilkrts_pedigree,
 ///   __cilkrts_worker,
@@ -327,6 +321,7 @@ public:
     parent_pedigree
   };
 };
+} // end namespace llvm
 
 /// Helper typedefs for cilk struct TypeBuilders.
 typedef TypeBuilder<__cilkrts_stack_frame, false> StackFrameBuilder;
