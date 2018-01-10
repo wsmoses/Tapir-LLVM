@@ -77,4 +77,13 @@
 /* LLVM version string */
 #define LLVM_VERSION_STRING "${PACKAGE_VERSION}"
 
+/* Major version of the Tapir API */
+#define TAPIR_VERSION_MAJOR ${TAPIR_VERSION_MAJOR}
+
+/* Minor version of the Tapir API */
+#define TAPIR_VERSION_MINOR ${TAPIR_VERSION_MINOR}
+
+/* Patch version of the Tapir API */
+#define TAPIR_VERSION_PATCH ${TAPIR_VERSION_PATCH}
+
 #endif
