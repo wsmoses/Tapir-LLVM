@@ -1,6 +1,6 @@
 [submodule "tools/clang"]
 	path = tools/clang
-	url = https://github.com/wsmoses/Cilk-Clang
+	url = https://github.com/wsmoses/Tapir-Clang
 [submodule "tools/polly"]
 	path = tools/polly
 	url = https://github.com/wsmoses/Parallel-Polly
