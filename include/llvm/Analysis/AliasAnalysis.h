@@ -395,6 +395,12 @@ public:
   /// Return the behavior when calling the given function.
   FunctionModRefBehavior getModRefBehavior(const Function *F);
 
+  /// Return the behavior for the task detached from a given detach instruction.
+  FunctionModRefBehavior getModRefBehavior(const DetachInst *D);
+
+  /// Return the behavior for a sync instruction.
+  FunctionModRefBehavior getModRefBehavior(const SyncInst *S);
+
   /// Checks if the specified call is known to never read or write memory.
   ///
   /// Note that if the call only reads from known-constant memory, it is also
@@ -647,6 +653,12 @@ public:
     if (OptLoc == None) {
       if (auto CS = ImmutableCallSite(I)) {
         return createModRefInfo(getModRefBehavior(CS));
+      }
+      if (auto *D = dyn_cast<DetachInst>(I)) {
+        return createModRefInfo(getModRefBehavior(D));
+      }
+      if (auto *S = dyn_cast<SyncInst>(I)) {
+        return createModRefInfo(getModRefBehavior(S));
       }
     }
 
