@@ -597,7 +597,7 @@ bool llvm::hoistRegion(DomTreeNode *N, AliasAnalysis *AA, LoopInfo *LI,
     BasicBlock *BB = DTN->getBlock();
     // Only need to process the contents of this block if it is not part of a
     // subloop (which would already have been processed).
-    if (!inSubLoop(BB, CurLoop, LI))
+    if (!inSubLoop(BB, CurLoop, LI)) {
       if (Rhino)
         CurAST = collectAliasInfoForLoopAtPoint(CurLoop, LI, AA, &*BB->begin(),
                                                 /*collectBefore*/true,
@@ -656,6 +656,7 @@ bool llvm::hoistRegion(DomTreeNode *N, AliasAnalysis *AA, LoopInfo *LI,
                 CurLoop->getLoopPreheader()->getTerminator()))
           Changed |= hoist(I, DT, CurLoop, SafetyInfo, ORE);
       }
+    }
   }
 
   return Changed;
