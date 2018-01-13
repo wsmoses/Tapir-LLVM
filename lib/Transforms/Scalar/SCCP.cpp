@@ -742,9 +742,7 @@ void SCCPSolver::getFeasibleSuccessors(Instruction &TI,
     return;
   }
 
-  if (isa<DetachInst>(&TI) ||
-      isa<ReattachInst>(&TI) ||
-      isa<SyncInst>(&TI)) {
+  if (isa<DetachInst>(&TI) || isa<ReattachInst>(&TI) || isa<SyncInst>(&TI)) {
     // All destinations are executable.
     Succs.assign(TI.getNumSuccessors(), true);
     return;
