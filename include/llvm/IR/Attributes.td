@@ -184,6 +184,9 @@ def SanitizeHWAddress : EnumAttr<"sanitize_hwaddress">;
 /// this attribute will always be lowered with hardening enabled.
 def SpeculativeLoadHardening : EnumAttr<"speculative_load_hardening">;
 
+/// CilkSanitizer is on.
+def SanitizeCilk : EnumAttr<"sanitize_cilk">;
+
 /// Argument is swift error.
 def SwiftError : EnumAttr<"swifterror">;
 
