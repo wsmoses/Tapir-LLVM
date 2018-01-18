@@ -1466,6 +1466,7 @@ static bool isFuncOnlyAttr(Attribute::AttrKind Kind) {
   case Attribute::NonLazyBind:
   case Attribute::ReturnsTwice:
   case Attribute::SanitizeAddress:
+  case Attribute::SanitizeCilk:
   case Attribute::SanitizeHWAddress:
   case Attribute::SanitizeThread:
   case Attribute::SanitizeMemory:

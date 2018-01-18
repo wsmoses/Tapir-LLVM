@@ -176,6 +176,9 @@ def SanitizeMemory : EnumAttr<"sanitize_memory">;
 /// HWAddressSanitizer is on.
 def SanitizeHWAddress : EnumAttr<"sanitize_hwaddress">;
 
+/// CilkSanitizer is on.
+def SanitizeCilk : EnumAttr<"sanitize_cilk">;
+
 /// Argument is swift error.
 def SwiftError : EnumAttr<"swifterror">;
 
