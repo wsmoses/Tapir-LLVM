@@ -1,5 +1,19 @@
+//===- TapirUtils.cpp - Utility functions for handling Tapir --------------===//
+//
+//                     The LLVM Compiler Infrastructure
+//
+// This file is distributed under the University of Illinois Open Source
+// License. See LICENSE.TXT for details.
+//
+//===----------------------------------------------------------------------===//
+//
+// This file implements several utility functions for operating with Tapir.
+//
+//===----------------------------------------------------------------------===//
+
 #include "llvm/IR/DebugInfoMetadata.h"
 #include "llvm/Transforms/Tapir/CilkABI.h"
+#include "llvm/Transforms/Tapir/OpenMPABI.h"
 #include "llvm/Transforms/Tapir/Outline.h"
 #include "llvm/Transforms/Utils/EscapeEnumerator.h"
 #include "llvm/Transforms/Utils/Local.h"
@@ -9,8 +23,21 @@ using namespace llvm;
 
 #define DEBUG_TYPE "tapir"
 
+tapir::TapirTarget *llvm::tapir::getTapirTargetFromType(TapirTargetType Type) {
+  switch(Type) {
+  case TapirTargetType::Cilk:
+    return new CilkABI();
+  case TapirTargetType::OpenMP:
+    return new OpenMPABI();
+  case TapirTargetType::None:
+  case TapirTargetType::Serial:
+  default:
+    return nullptr;
+  }
+}
+
 bool llvm::tapir::verifyDetachedCFG(const DetachInst &Detach, DominatorTree &DT,
-                                   bool error) {
+                                    bool error) {
   BasicBlock *Spawned  = Detach.getDetached();
   BasicBlock *Continue = Detach.getContinue();
   BasicBlockEdge DetachEdge(Detach.getParent(), Spawned);

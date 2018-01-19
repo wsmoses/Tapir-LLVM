@@ -36,7 +36,6 @@
 #include "llvm/IR/Type.h"
 #include "llvm/IR/ValueMap.h"
 #include "llvm/IR/Verifier.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
@@ -47,9 +46,8 @@
 #include "llvm/Transforms/Scalar/LoopDeletion.h"
 #include "llvm/Transforms/Tapir.h"
 #include "llvm/Transforms/Tapir/CilkABI.h"
-#include "llvm/Transforms/Tapir/OpenMPABI.h"
-#include "llvm/Transforms/Tapir/TapirUtils.h"
 #include "llvm/Transforms/Tapir/Outline.h"
+#include "llvm/Transforms/Tapir/TapirUtils.h"
 #include "llvm/Transforms/Utils/PromoteMemToReg.h"
 #include "llvm/Transforms/Utils/LoopUtils.h"
 #include "llvm/Transforms/Utils/TapirUtils.h"
@@ -70,8 +68,17 @@ STATISTIC(LoopsConvertedToDAC,
 STATISTIC(LoopsConvertedToCilkABI,
           "Number of Tapir loops converted to use the Cilk ABI for loops");
 
-cl::opt<bool> cilkTarget("cilk-target", cl::init(false), cl::Hidden,
-                       cl::desc("For allowing loop spawning to be cilk abi if none given"));
+static cl::opt<TapirTargetType> ClTapirTarget(
+    "ls-tapir-target", cl::desc("Target runtime for Tapir"),
+    cl::init(TapirTargetType::Cilk),
+    cl::values(clEnumValN(TapirTargetType::None,
+                          "none", "None"),
+               clEnumValN(TapirTargetType::Serial,
+                          "serial", "Serial code"),
+               clEnumValN(TapirTargetType::Cilk,
+                          "cilk", "Cilk Plus"),
+               clEnumValN(TapirTargetType::OpenMP,
+                          "openmp", "OpenMP")));
 
 namespace {
 // /// \brief This modifies LoopAccessReport to initialize message with
@@ -2078,13 +2085,13 @@ struct LoopSpawning : public FunctionPass {
   /// Pass identification, replacement for typeid
   static char ID;
   TapirTarget* tapirTarget;
-  explicit LoopSpawning(TapirTarget* tapirTarget = nullptr) : FunctionPass(ID),
-    tapirTarget(tapirTarget) {
-      if (!this->tapirTarget && cilkTarget) {
-        this->tapirTarget = new tapir::CilkABI();
-      }
-      assert(this->tapirTarget);
-      initializeLoopSpawningPass(*PassRegistry::getPassRegistry());
+  explicit LoopSpawning(TapirTarget* tapirTarget = nullptr)
+      : FunctionPass(ID), tapirTarget(tapirTarget) {
+    if (!this->tapirTarget)
+      this->tapirTarget = tapir::getTapirTargetFromType(ClTapirTarget);
+
+    assert(this->tapirTarget);
+    initializeLoopSpawningPass(*PassRegistry::getPassRegistry());
   }
 
   bool runOnFunction(Function &F) override {

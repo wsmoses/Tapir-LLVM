@@ -19,7 +19,6 @@
 #include <memory>
 #include <string>
 #include <vector>
-#include "llvm/Transforms/Tapir/TapirTypes.h"
 
 namespace llvm {
 class ModuleSummaryIndex;
@@ -31,6 +30,10 @@ class TargetMachine;
 namespace legacy {
 class FunctionPassManager;
 class PassManagerBase;
+}
+
+namespace tapir {
+class TapirTarget;
 }
 
 /// PassManagerBuilder - This class is used to set up a standard optimization

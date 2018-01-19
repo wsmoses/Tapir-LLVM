@@ -12,8 +12,6 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "llvm/Transforms/Tapir/CilkABI.h"
-#include "llvm/Transforms/Tapir/OpenMPABI.h"
 #include "llvm/Analysis/AssumptionCache.h"
 #include "llvm/IR/Verifier.h"
 #include "llvm/Transforms/Utils/Cloning.h"
@@ -25,6 +23,18 @@
 using namespace llvm;
 using namespace llvm::tapir;
 
+static cl::opt<TapirTargetType> ClTapirTarget(
+    "tapir-target", cl::desc("Target runtime for Tapir"),
+    cl::init(TapirTargetType::Cilk),
+    cl::values(clEnumValN(TapirTargetType::None,
+                          "none", "None"),
+               clEnumValN(TapirTargetType::Serial,
+                          "serial", "Serial code"),
+               clEnumValN(TapirTargetType::Cilk,
+                          "cilk", "Cilk Plus"),
+               clEnumValN(TapirTargetType::OpenMP,
+                          "openmp", "OpenMP")));
+
 namespace {
 
 struct LowerTapirToTarget : public ModulePass {
@@ -32,7 +42,9 @@ struct LowerTapirToTarget : public ModulePass {
   TapirTarget* tapirTarget;
   explicit LowerTapirToTarget(TapirTarget* tapirTarget = nullptr)
       : ModulePass(ID), tapirTarget(tapirTarget) {
-    assert(tapirTarget);
+    if (!this->tapirTarget)
+      this->tapirTarget = getTapirTargetFromType(ClTapirTarget);
+    assert(this->tapirTarget);
     initializeLowerTapirToTargetPass(*PassRegistry::getPassRegistry());
   }
 
