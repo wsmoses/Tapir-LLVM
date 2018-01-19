@@ -17,14 +17,14 @@
 
 namespace llvm {
 namespace tapir {
-class TapirTarget;
-enum class TapirTargetType : int {
+
+enum class TapirTargetType {
   None = 0,
   Serial = 1,
   Cilk = 2,
   OpenMP = 3
 };
-}
-}
+} // end namespace tapir
+} // end namespace llvm
 
 #endif
