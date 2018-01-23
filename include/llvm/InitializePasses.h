@@ -230,6 +230,7 @@ void initializeLoopStrengthReducePass(PassRegistry&);
 void initializeLoopUnrollPass(PassRegistry&);
 void initializeLoopUnswitchPass(PassRegistry&);
 void initializeLoopVectorizePass(PassRegistry&);
+void initializeLoopVectorizeRhinoPass(PassRegistry&);
 void initializeLoopVersioningLICMPass(PassRegistry&);
 void initializeLoopVersioningPassPass(PassRegistry&);
 void initializeLowerAtomicLegacyPassPass(PassRegistry&);

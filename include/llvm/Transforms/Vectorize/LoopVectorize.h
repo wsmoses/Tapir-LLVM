@@ -77,6 +77,8 @@ struct LoopVectorizePass : public PassInfoMixin<LoopVectorizePass> {
   /// considered.
   bool AlwaysVectorize = true;
 
+  bool Rhino = false;
+
   ScalarEvolution *SE;
   LoopInfo *LI;
   TargetTransformInfo *TTI;

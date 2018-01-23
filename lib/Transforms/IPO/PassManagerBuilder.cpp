@@ -636,7 +636,7 @@ void PassManagerBuilder::populateModulePassManager(
   if (EnableLoopFuse)
     MPM.add(createLoopFusePass());
 
-  MPM.add(createLoopVectorizePass(DisableUnrollLoops, LoopVectorize));
+  MPM.add(createLoopVectorizePass(DisableUnrollLoops, LoopVectorize, Rhino));
 
   // Eliminate loads by forwarding stores from the previous iteration to loads
   // of the current iteration.
@@ -888,7 +888,7 @@ void PassManagerBuilder::addLTOOptimizationPasses(legacy::PassManagerBase &PM) {
 
   if (!DisableUnrollLoops)
     PM.add(createSimpleLoopUnrollPass(OptLevel));   // Unroll small loops
-  PM.add(createLoopVectorizePass(true, LoopVectorize));
+  PM.add(createLoopVectorizePass(true, LoopVectorize, Rhino));
   // The vectorizer may have significantly shortened a loop body; unroll again.
   if (!DisableUnrollLoops)
     PM.add(createLoopUnrollPass(OptLevel));

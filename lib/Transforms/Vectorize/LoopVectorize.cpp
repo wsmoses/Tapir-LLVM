@@ -140,6 +140,7 @@
 using namespace llvm;
 
 #define LV_NAME "loop-vectorize"
+#define LV_RHINO_NAME "loop-vectorize-rhino"
 #define DEBUG_TYPE LV_NAME
 
 STATISTIC(LoopsVectorized, "Number of loops vectorized");
@@ -1542,8 +1543,8 @@ public:
       const TargetTransformInfo *TTI,
       std::function<const LoopAccessInfo &(Loop &)> *GetLAA, LoopInfo *LI,
       OptimizationRemarkEmitter *ORE, LoopVectorizationRequirements *R,
-      LoopVectorizeHints *H)
-      : TheLoop(L), PSE(PSE), TLI(TLI), TTI(TTI), DT(DT), GetLAA(GetLAA),
+      LoopVectorizeHints *H, bool Rhino)
+      : Rhino(Rhino), TheLoop(L), PSE(PSE), TLI(TLI), TTI(TTI), DT(DT), GetLAA(GetLAA),
         ORE(ORE), InterleaveInfo(PSE, L, DT, LI), Requirements(R), Hints(H) {}
 
   /// ReductionList contains the reduction descriptors for all
@@ -1557,6 +1558,9 @@ public:
   /// RecurrenceSet contains the phi nodes that are recurrences other than
   /// inductions and reductions.
   using RecurrenceSet = SmallPtrSet<const PHINode *, 8>;
+
+  /// Whether to allow Rhino optimizations.
+  bool Rhino;
 
   /// Returns true if it is legal to vectorize this loop.
   /// This does not mean that it is profitable to vectorize this
@@ -2499,17 +2503,24 @@ static void addAcyclicInnerLoop(Loop &L, SmallVectorImpl<Loop *> &V) {
 namespace {
 
 /// The LoopVectorize Pass.
-struct LoopVectorize : public FunctionPass {
+template <bool Rhino>
+struct LoopVectorizeCommonPass : public FunctionPass {
   /// Pass identification, replacement for typeid
   static char ID;
 
   LoopVectorizePass Impl;
 
-  explicit LoopVectorize(bool NoUnrolling = false, bool AlwaysVectorize = true)
+  explicit LoopVectorizeCommonPass(bool NoUnrolling = false, bool AlwaysVectorize = true)
       : FunctionPass(ID) {
     Impl.DisableUnrolling = NoUnrolling;
     Impl.AlwaysVectorize = AlwaysVectorize;
-    initializeLoopVectorizePass(*PassRegistry::getPassRegistry());
+    Impl.Rhino = Rhino;
+
+    if (Rhino) {
+        initializeLoopVectorizeRhinoPass(*PassRegistry::getPassRegistry());
+    } else {
+        initializeLoopVectorizePass(*PassRegistry::getPassRegistry());
+    }
   }
 
   bool runOnFunction(Function &F) override {
@@ -5123,6 +5134,14 @@ bool LoopVectorizationLegality::canVectorize() {
   DEBUG(dbgs() << "LV: Found a loop: " << TheLoop->getHeader()->getName()
                << '\n');
 
+  if (TheLoop->isCanonicalParallelLoop() && !Rhino) {
+    DEBUG(dbgs() << "LV: Tapir loop not vectorized since Rhino is not enabled.\n");
+    if (ORE->allowExtraAnalysis())
+      Result = false;
+    else
+      return false;
+  }
+
   // Check if we can if-convert non-single-bb loops.
   unsigned NumBlocks = TheLoop->getNumBlocks();
   if (NumBlocks != 1 && !canVectorizeWithIfConvert()) {
@@ -7552,6 +7571,9 @@ unsigned LoopVectorizationCostModel::getInstructionCost(Instruction *I,
   } // end of switch.
 }
 
+using LoopVectorize = LoopVectorizeCommonPass<false>;
+
+template<>
 char LoopVectorize::ID = 0;
 
 static const char lv_name[] = "Loop Vectorization";
@@ -7571,10 +7593,34 @@ INITIALIZE_PASS_DEPENDENCY(DemandedBitsWrapperPass)
 INITIALIZE_PASS_DEPENDENCY(OptimizationRemarkEmitterWrapperPass)
 INITIALIZE_PASS_END(LoopVectorize, LV_NAME, lv_name, false, false)
 
+using LoopVectorizeRhino = LoopVectorizeCommonPass<true>;
+
+template<>
+char LoopVectorizeRhino::ID = 0;
+static const char lv_rhino_name[] = "Loop Vectorization with Rhino";
+INITIALIZE_PASS_BEGIN(LoopVectorizeRhino, LV_RHINO_NAME, lv_rhino_name, false, false)
+INITIALIZE_PASS_DEPENDENCY(TargetTransformInfoWrapperPass)
+INITIALIZE_PASS_DEPENDENCY(BasicAAWrapperPass)
+INITIALIZE_PASS_DEPENDENCY(AAResultsWrapperPass)
+INITIALIZE_PASS_DEPENDENCY(GlobalsAAWrapperPass)
+INITIALIZE_PASS_DEPENDENCY(AssumptionCacheTracker)
+INITIALIZE_PASS_DEPENDENCY(BlockFrequencyInfoWrapperPass)
+INITIALIZE_PASS_DEPENDENCY(DominatorTreeWrapperPass)
+INITIALIZE_PASS_DEPENDENCY(ScalarEvolutionWrapperPass)
+INITIALIZE_PASS_DEPENDENCY(LoopInfoWrapperPass)
+INITIALIZE_PASS_DEPENDENCY(LoopAccessLegacyAnalysis)
+INITIALIZE_PASS_DEPENDENCY(DemandedBitsWrapperPass)
+INITIALIZE_PASS_DEPENDENCY(OptimizationRemarkEmitterWrapperPass)
+INITIALIZE_PASS_END(LoopVectorizeRhino, LV_RHINO_NAME, lv_rhino_name, false, false)
+
 namespace llvm {
 
-Pass *createLoopVectorizePass(bool NoUnrolling, bool AlwaysVectorize) {
-  return new LoopVectorize(NoUnrolling, AlwaysVectorize);
+Pass *createLoopVectorizePass(bool NoUnrolling, bool AlwaysVectorize, bool Rhino) {
+  if (Rhino) {
+    return new LoopVectorizeRhino(NoUnrolling, AlwaysVectorize);
+  } else {
+    return new LoopVectorize(NoUnrolling, AlwaysVectorize);
+  }
 }
 
 } // end namespace llvm
@@ -8540,7 +8586,7 @@ bool LoopVectorizePass::processLoop(Loop *L) {
   // Check if it is legal to vectorize the loop.
   LoopVectorizationRequirements Requirements(*ORE);
   LoopVectorizationLegality LVL(L, PSE, DT, TLI, AA, F, TTI, GetLAA, LI, ORE,
-                                &Requirements, &Hints);
+                                &Requirements, &Hints, Rhino);
   if (!LVL.canVectorize()) {
     DEBUG(dbgs() << "LV: Not vectorizing: Cannot prove legality.\n");
     emitMissedWarning(F, L, Hints, ORE);
