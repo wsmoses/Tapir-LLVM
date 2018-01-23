@@ -1,4 +1,4 @@
-; RUN: opt < %s  -loop-vectorize -force-vector-width=4 -S | FileCheck %s
+; RUN: opt < %s  -loop-vectorize-rhino -force-vector-width=4 -S | FileCheck %s
 
 target datalayout = "e-m:e-i64:64-f80:128-n8:16:32:64-S128"
 
@@ -12,6 +12,7 @@ target datalayout = "e-m:e-i64:64-f80:128-n8:16:32:64-S128"
 ; }
 
 ; CHECK-LABEL: @f(
+; CHECK: vec.detached
 ; CHECK-NOT: memcheck
 ; Function Attrs: nounwind uwtable
 define void @f(i32* nocapture %A, i32* nocapture readonly %B, i32 %n) local_unnamed_addr #0 {

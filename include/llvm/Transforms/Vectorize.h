@@ -111,7 +111,8 @@ struct VectorizeConfig {
 // LoopVectorize - Create a loop vectorization pass.
 //
 Pass *createLoopVectorizePass(bool NoUnrolling = false,
-                              bool AlwaysVectorize = true);
+                              bool AlwaysVectorize = true,
+                              bool Rhino = false);
 
 //===----------------------------------------------------------------------===//
 //
