@@ -1258,6 +1258,13 @@ static bool HoistThenElseCodeToIf(BranchInst *BI,
     if (isa<TerminatorInst>(I1))
       goto HoistTerminator;
 
+    // Disallow hoisting of setjmp.  Although hoisting the setjmp technically
+    // produces valid IR, it seems hard to generate appropariate machine code
+    // from this IR, e.g., for X86.
+    if (IntrinsicInst *II = dyn_cast<IntrinsicInst>(I1))
+      if (Intrinsic::eh_sjlj_setjmp == II->getIntrinsicID())
+        return Changed;
+
     if (!TTI.isProfitableToHoist(I1) || !TTI.isProfitableToHoist(I2))
       return Changed;
 
