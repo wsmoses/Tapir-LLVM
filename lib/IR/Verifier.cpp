@@ -1384,6 +1384,7 @@ static bool isFuncOnlyAttr(Attribute::AttrKind Kind) {
   case Attribute::InaccessibleMemOrArgMemOnly:
   case Attribute::AllocSize:
   case Attribute::Speculatable:
+  case Attribute::Stealable:
     return true;
   default:
     break;

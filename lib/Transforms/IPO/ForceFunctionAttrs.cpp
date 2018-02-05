@@ -57,6 +57,7 @@ static Attribute::AttrKind parseAttrKind(StringRef Kind) {
       .Case("ssp", Attribute::StackProtect)
       .Case("sspreq", Attribute::StackProtectReq)
       .Case("sspstrong", Attribute::StackProtectStrong)
+      .Case("stealable", Attribute::Stealable)
       .Case("uwtable", Attribute::UWTable)
       .Default(Attribute::None);
 }

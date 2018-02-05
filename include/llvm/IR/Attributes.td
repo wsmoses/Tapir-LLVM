@@ -161,6 +161,9 @@ def SanitizeThread : EnumAttr<"sanitize_thread">;
 /// MemorySanitizer is on.
 def SanitizeMemory : EnumAttr<"sanitize_memory">;
 
+/// CilkSanitizer is on.
+def Stealable : EnumAttr<"stealable">;
+
 /// Argument is swift error.
 def SwiftError : EnumAttr<"swifterror">;
 

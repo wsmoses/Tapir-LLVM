@@ -958,6 +958,8 @@ void CilkRABI::createSync(SyncInst &SI, ValueToValueMapTy &DetachCtxToStackFrame
   BasicBlock *Succ = SI.getSuccessor(0);
   SI.eraseFromParent();
   BranchInst::Create(Succ, CI->getParent());
+  // Mark this function as stealable.
+  Fn.addFnAttr(Attribute::Stealable);
 }
 
 Function *CilkRABI::createDetach(DetachInst &detach,
@@ -1016,6 +1018,8 @@ Function *CilkRABI::createDetach(DetachInst &detach,
   }
 
   makeFunctionDetachable(*extracted, DetachCtxToStackFrame);
+  // Mark this function as stealable.
+  F.addFnAttr(Attribute::Stealable);
 
   return extracted;
 }
