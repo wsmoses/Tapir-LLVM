@@ -596,6 +596,7 @@ enum AttributeKindCodes {
   ATTR_KIND_OPT_FOR_FUZZING = 57,
   ATTR_KIND_SHADOWCALLSTACK = 58,
   ATTR_KIND_SANITIZE_CILK = 59,
+  ATTR_KIND_STEALABLE = 60,
 };
 
 enum ComdatSelectionKindCodes {
