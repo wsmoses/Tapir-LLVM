@@ -27,11 +27,11 @@ using namespace llvm::tapir;
 
 namespace {
 
-struct LowerTapirToTarget : public ModulePass {
+struct LowerTapirToTarget : public FunctionPass {
   static char ID; // Pass identification, replacement for typeid
   TapirTarget* tapirTarget;
   explicit LowerTapirToTarget(TapirTarget* tapirTarget = nullptr)
-      : ModulePass(ID), tapirTarget(tapirTarget) {
+      : FunctionPass(ID), tapirTarget(tapirTarget) {
     assert(tapirTarget);
     initializeLowerTapirToTargetPass(*PassRegistry::getPassRegistry());
   }
@@ -40,7 +40,7 @@ struct LowerTapirToTarget : public ModulePass {
     return "Simple Lowering of Tapir to Target ABI";
   }
 
-  bool runOnModule(Module &M) override;
+  bool runOnFunction(Function &F) override;
 
   void getAnalysisUsage(AnalysisUsage &AU) const override {
     AU.addRequired<AssumptionCacheTracker>();
@@ -130,6 +130,7 @@ SmallVectorImpl<Function *>
   if (!changed) return NewHelpers;
 
   if (verifyFunction(F, &errs())) {
+    F.getParent()->dump();
     DEBUG(F.dump());
     assert(0);
   }
@@ -142,46 +143,34 @@ SmallVectorImpl<Function *>
   return NewHelpers;
 }
 
-bool LowerTapirToTarget::runOnModule(Module &M) {
-  if (skipModule(M))
+bool LowerTapirToTarget::runOnFunction(Function &F) {
+  if (skipFunction(F))
     return false;
+  bool shouldGo = false;
 
-  // Add functions that detach to the work list.
-  SmallVector<Function *, 4> WorkList;
-  for (Function &F : M)
-    for (BasicBlock &BB : F)
-      if (isa<DetachInst>(BB.getTerminator())) {
-        WorkList.push_back(&F);
-        break;
-      }
 
-  if (WorkList.empty())
-    return false;
-
-  bool Changed = false;
-  std::unique_ptr<SmallVectorImpl<Function *>> NewHelpers;
-  while (!WorkList.empty()) {
-    // Process the next function.
-    Function *F = WorkList.back();
-    WorkList.pop_back();
-    DominatorTree &DT = getAnalysis<DominatorTreeWrapperPass>(*F).getDomTree();
-    AssumptionCacheTracker &ACT = getAnalysis<AssumptionCacheTracker>();
-    NewHelpers.reset(processFunction(*F, DT, ACT.getAssumptionCache(*F)));
-    Changed |= !NewHelpers->empty();
-    // Check the generated helper functions to see if any need to be processed,
-    // that is, to see if any of them themselves detach a subtask.
-    for (Function *Helper : *NewHelpers)
-      for (BasicBlock &BB : *Helper)
-        if (isa<DetachInst>(BB.getTerminator()))
-          WorkList.push_back(Helper);
+  for (Function::iterator I = F.begin(), E = F.end(); I != E; ++I) {
+    if (DetachInst* DI = dyn_cast_or_null<DetachInst>(I->getTerminator())) {
+      shouldGo = true;
+    } else if (SyncInst* SI = dyn_cast_or_null<SyncInst>(I->getTerminator())) {
+      shouldGo = true;
+    }
   }
+  if (shouldGo == false) {
+    return false;
+  }
+
+    DominatorTree &DT = getAnalysis<DominatorTreeWrapperPass>().getDomTree();
+    AssumptionCacheTracker &ACT = getAnalysis<AssumptionCacheTracker>();
+    bool Changed = processFunction(F, DT, ACT.getAssumptionCache(F))->size() > 0;
+
   return Changed;
 }
 
 // createLowerTapirToTargetPass - Provide an entry point to create this pass.
 //
 namespace llvm {
-ModulePass *createLowerTapirToTargetPass(TapirTarget* tapirTarget) {
+FunctionPass *createLowerTapirToTargetPass(TapirTarget* tapirTarget) {
   return new LowerTapirToTarget(tapirTarget);
 }
 }

@@ -62,7 +62,7 @@ FunctionPass *createSpawnUnswitchPass();
 //
 // PromoteDetachToCilk
 //
-ModulePass *createLowerTapirToTargetPass(tapir::TapirTarget*);
+FunctionPass *createLowerTapirToTargetPass(tapir::TapirTarget*);
 
 } // End llvm namespace
 
