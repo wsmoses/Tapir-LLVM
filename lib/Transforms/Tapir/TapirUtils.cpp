@@ -249,6 +249,12 @@ Function *llvm::tapir::extractDetachBodyToFunction(DetachInst &detach,
   // Get the inputs and outputs for the detached CFG.
   SetVector<Value *> Inputs, Outputs;
   findInputsOutputs(functionPieces, Inputs, Outputs, &ExitBlocks);
+  if (!Outputs.empty()) {
+    F.getParent()->dump();
+    detach.dump();
+    for(auto a: Outputs)
+        a->dump();
+  }
   assert(Outputs.empty() &&
          "All results from detached CFG should be passed by memory already.");
 
@@ -319,9 +325,11 @@ Function *llvm::tapir::extractDetachBodyToFunction(DetachInst &detach,
       P->removeIncomingValue(BB);
       ++BI;
     }
-    IRBuilder<> b(term);
+    while (BB->size()) {
+      (&*--BB->end())->eraseFromParent();
+    }
+    IRBuilder<> b(BB);
     b.CreateUnreachable();
-    term->eraseFromParent();
   }
   return extracted;
 }
