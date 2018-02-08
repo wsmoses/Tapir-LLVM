@@ -30,6 +30,16 @@ jobs:
             cd build
             ls lib
             make check-all -j2
+      - run:
+          name: cilkrts-build-test
+          command: |
+            git clone https://github.com/CilkHub/cilkrts.git
+            cd cilkrts
+            git checkout tags/v0.1
+            mkdir build
+            cd build
+            cmake -DCMAKE_C_COMPILER=$HOME/project/build/bin/clang -DCMAKE_CXX_COMPILER=$HOME/project/build/bin/clang++ ..
+            make -j2
   
   "build-1604":
     resource_class: xlarge
@@ -61,6 +71,16 @@ jobs:
             cd build
             ls lib
             make check-all -j2
+      - run:
+          name: cilkrts-build-test
+          command: |
+            git clone https://github.com/CilkHub/cilkrts.git
+            cd cilkrts
+            git checkout tags/v0.1
+            mkdir build
+            cd build
+            cmake -DCMAKE_C_COMPILER=$HOME/project/build/bin/clang -DCMAKE_CXX_COMPILER=$HOME/project/build/bin/clang++ ..
+            make -j2
 workflows:
   version: 2
   build:
