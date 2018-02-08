@@ -26,6 +26,10 @@ using namespace llvm;
 
 #define DEBUG_TYPE "cilkabi"
 
+static cl::opt<bool> DebugABICalls(
+    "debug-abi-calls", cl::init(false), cl::Hidden,
+    cl::desc("Insert ABI calls for debugging"));
+
 /// Helper typedefs for cilk struct TypeBuilders.
 typedef llvm::TypeBuilder<__cilkrts_stack_frame, false> StackFrameBuilder;
 typedef llvm::TypeBuilder<__cilkrts_worker, false> WorkerBuilder;
@@ -1037,9 +1041,11 @@ void llvm::tapir::CilkABI::preProcessFunction(Function &F) {
 }
 
 void llvm::tapir::CilkABI::postProcessFunction(Function &F) {
+  if (!DebugABICalls)
     inlineCilkFunctions(F);
 }
 
 void llvm::tapir::CilkABI::postProcessHelper(Function &F) {
+  if (!DebugABICalls)
     inlineCilkFunctions(F);
 }
