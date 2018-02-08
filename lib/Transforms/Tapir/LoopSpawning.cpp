@@ -576,24 +576,22 @@ void DACLoopSpawning::implementDACIterSpawnOnHelper(Function *Helper,
     IRBuilder<> Builder(&(RecurDet->front()));
     SetVector<Value*> RecurInputs;
     Function::arg_iterator AI = Helper->arg_begin();
+    // Handle an initial sret argument, if necessary.  Based on how
+    // the Helper function is created, any sret parameter will be the
+    // first parameter.
+    if (Helper->hasParamAttribute(0, Attribute::StructRet))
+      RecurInputs.insert(&*AI++);
     assert(cast<Argument>(CanonicalIVInput) == &*AI &&
-           "First argument does not match original input to canonical IV.");
+           "First non-sret argument does not match original input to canonical IV.");
     RecurInputs.insert(CanonicalIVStart);
     ++AI;
     assert(Limit == &*AI &&
-           "Second argument does not match original input to the loop limit.");
+           "Second non-sret argument does not match original input to the loop limit.");
     RecurInputs.insert(MidIter);
     ++AI;
     for (Function::arg_iterator AE = Helper->arg_end();
          AI != AE;  ++AI)
         RecurInputs.insert(&*AI);
-    // RecurInputs.insert(CanonicalIVStart);
-    // // for (PHINode *IV : IVs)
-    // //   RecurInputs.insert(DACStart[IV]);
-    // RecurInputs.insert(Limit);
-    // RecurInputs.insert(Grainsize);
-    // for (Value *V : BodyInputs)
-    //   RecurInputs.insert(VMap[V]);
     DEBUG({
         dbgs() << "RecurInputs: ";
         for (Value *Input : RecurInputs)
@@ -956,6 +954,7 @@ bool DACLoopSpawning::processLoop() {
   ValueToValueMapTy VMap, InputMap;
   std::vector<BasicBlock *> LoopBlocks;
   SmallPtrSet<BasicBlock *, 4> ExitsToSplit;
+  Value *SRetInput = nullptr;
 
   // Get the sync region containing this Tapir loop.
   const Instruction *InputSyncRegion;
@@ -1017,6 +1016,23 @@ bool DACLoopSpawning::processLoop() {
       for (BasicBlock *BB : LoopBlocks)
         Blocks.insert(BB);
       findInputsOutputs(Blocks, BodyInputs, BodyOutputs, &ExitsToSplit);
+    }
+
+    // Scan for any sret parameters in BodyInputs and add them first.
+    if (F->hasStructRetAttr()) {
+      Function::arg_iterator ArgIter = F->arg_begin();
+      if (F->hasParamAttribute(0, Attribute::StructRet))
+	if (BodyInputs.count(&*ArgIter))
+	  SRetInput = &*ArgIter;
+      if (F->hasParamAttribute(1, Attribute::StructRet)) {
+	++ArgIter;
+	if (BodyInputs.count(&*ArgIter))
+	  SRetInput = &*ArgIter;
+      }
+    }
+    if (SRetInput) {
+      DEBUG(dbgs() << "sret input " << *SRetInput << "\n");
+      Inputs.insert(SRetInput);
     }
 
     // Add argument for start of CanonicalIV.
@@ -1294,6 +1310,9 @@ bool DACLoopSpawning::processLoop() {
   {
     // Setup arguments for call.
     SmallVector<Value *, 4> TopCallArgs;
+    // Add sret input, if it exists.
+    if (SRetInput)
+      TopCallArgs.push_back(SRetInput);
     // Add start iteration 0.
     assert(CanonicalSCEV->getStart()->isZero() &&
            "Canonical IV does not start at zero.");

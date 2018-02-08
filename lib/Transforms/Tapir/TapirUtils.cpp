@@ -275,15 +275,39 @@ Function *llvm::tapir::extractDetachBodyToFunction(DetachInst &detach,
 
   // Get the inputs and outputs for the detached CFG.
   SetVector<Value *> Inputs, Outputs;
-  findInputsOutputs(functionPieces, Inputs, Outputs, &ExitBlocks);
+  SetVector<Value *> BodyInputs;
+  findInputsOutputs(functionPieces, BodyInputs, Outputs, &ExitBlocks);
   if (!Outputs.empty()) {
     F.getParent()->dump();
     detach.dump();
     for(auto a: Outputs)
-        a->dump();
+      a->dump();
   }
   assert(Outputs.empty() &&
          "All results from detached CFG should be passed by memory already.");
+  {
+    // Scan for any sret parameters in BodyInputs and add them first.
+    Value *SRetInput = nullptr;
+    if (F.hasStructRetAttr()) {
+      Function::arg_iterator ArgIter = F.arg_begin();
+      if (F.hasParamAttribute(0, Attribute::StructRet))
+	if (BodyInputs.count(&*ArgIter))
+	  SRetInput = &*ArgIter;
+      if (F.hasParamAttribute(1, Attribute::StructRet)) {
+	++ArgIter;
+	if (BodyInputs.count(&*ArgIter))
+	  SRetInput = &*ArgIter;
+      }
+    }
+    if (SRetInput) {
+      DEBUG(dbgs() << "sret input " << *SRetInput << "\n");
+      Inputs.insert(SRetInput);
+    }
+    // Add the remaining inputs.
+    for (Value *V : BodyInputs)
+      if (!Inputs.count(V))
+	Inputs.insert(V);
+  }
 
   // Clone the detached CFG into a helper function.
   ValueToValueMapTy VMap;
