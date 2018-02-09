@@ -318,7 +318,6 @@ bool llvm::isCriticalContinueEdge(const TerminatorInst *TI, unsigned SuccNum) {
   return false;
 }
 
-
 llvm::LoopSpawningHints::LoopSpawningHints(const Loop *L)
     : Strategy("spawn.strategy", ST_SEQ, HK_STRATEGY),
       Grainsize("grainsize", 0, HK_GRAINSIZE),
@@ -541,3 +540,13 @@ bool llvm::isDACFor(Loop* L) {
       return LoopSpawningHints(L).getStrategy() == LoopSpawningHints::ST_DAC;
   return false;
 }
+
+/// canDetach - Return true if the given function can perform a detach, false
+/// otherwise.
+bool llvm::canDetach(const Function *F) {
+  for (const BasicBlock &BB : *F)
+    if (isa<DetachInst>(BB.getTerminator()))
+      return true;
+  return false;
+}
+

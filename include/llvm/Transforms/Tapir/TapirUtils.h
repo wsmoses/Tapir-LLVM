@@ -40,7 +40,6 @@ Function *extractDetachBodyToFunction(DetachInst &Detach,
                                       CallInst **call = nullptr);
 
 class TapirTarget {
-
 public:
   //! For use in loopspawning grainsize calculation
   virtual Value *GetOrCreateWorker8(Function &F) = 0;
@@ -49,6 +48,7 @@ public:
   virtual Function *createDetach(DetachInst &Detach,
                                  ValueToValueMapTy &DetachCtxToStackFrame,
                                  DominatorTree &DT, AssumptionCache &AC) = 0;
+  virtual bool shouldProcessFunction(const Function &F);
   virtual void preProcessFunction(Function &F) = 0;
   virtual void postProcessFunction(Function &F) = 0;
   virtual void postProcessHelper(Function &F) = 0;
