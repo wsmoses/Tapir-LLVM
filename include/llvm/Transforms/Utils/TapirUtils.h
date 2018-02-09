@@ -49,7 +49,6 @@ BasicBlock *GetDetachedCtx(BasicBlock *BB);
 /// - even after ignoring all reattach edges.
 bool isCriticalContinueEdge(const TerminatorInst *TI, unsigned SuccNum);
 
-
 /// Utility class for getting and setting loop spawning hints in the form
 /// of loop metadata.
 /// This class keeps a number of loop annotations locally (as member variables)
@@ -145,6 +144,10 @@ bool isCanonicalTapirLoop(const Loop *L, bool print = false);
 
 //! Identify if a loop could be a DAC loop
 bool isDACFor(Loop* L);
+
+/// canDetach - Return true if the given function can perform a detach, false
+/// otherwise.
+bool canDetach(const Function *F);
 
 }  // end llvm namespace
 
