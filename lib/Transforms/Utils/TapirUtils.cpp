@@ -22,6 +22,16 @@ using namespace llvm;
 
 #define DEBUG_TYPE "tapirutils"
 
+/// Returns true if the given instruction performs a detached rethrow, false
+/// otherwise.
+bool llvm::isDetachedRethrow(const Instruction *I) {
+  if (const InvokeInst *II = dyn_cast<InvokeInst>(I))
+    if (const Function *Called = II->getCalledFunction())
+      if (Intrinsic::detached_rethrow == Called->getIntrinsicID())
+        return true;
+  return false;
+}
+
 /// Return the result of AI->isStaticAlloca() if AI were moved to the entry
 /// block. Allocas used in inalloca calls and allocas of dynamic array size
 /// cannot be static.
@@ -45,8 +55,8 @@ static bool isUsedByLifetimeMarker(Value *V) {
   return false;
 }
 
-// Check whether the given alloca already has
-// lifetime.start or lifetime.end intrinsics.
+// Check whether the given alloca already has lifetime.start or lifetime.end
+// intrinsics.
 static bool hasLifetimeMarkers(AllocaInst *AI) {
   Type *Ty = AI->getType();
   Type *Int8PtrTy = Type::getInt8PtrTy(Ty->getContext(),
@@ -87,17 +97,16 @@ bool llvm::MoveStaticAllocasInBlock(
 
     StaticAllocas.push_back(AI);
 
-    // Scan for the block of allocas that we can move over, and move them
-    // all at once.
+    // Scan for the block of allocas that we can move over, and move them all at
+    // once.
     while (isa<AllocaInst>(I) &&
            allocaWouldBeStaticInEntry(cast<AllocaInst>(I))) {
       StaticAllocas.push_back(cast<AllocaInst>(I));
       ++I;
     }
 
-    // Transfer all of the allocas over in a block.  Using splice means
-    // that the instructions aren't removed from the symbol table, then
-    // reinserted.
+    // Transfer all of the allocas over in a block.  Using splice means that the
+    // instructions aren't removed from the symbol table, then reinserted.
     Entry->getInstList().splice(
         InsertPoint, Block->getInstList(), AI->getIterator(), I);
   }
@@ -172,9 +181,9 @@ bool llvm::MoveStaticAllocasInBlock(
 }
 
 
-/// SerializeDetachedCFG - Serialize the sub-CFG detached by the
-/// specified detach instruction.  Removes the detach instruction and
-/// returns a pointer to the branch instruction that replaces it.
+/// SerializeDetachedCFG - Serialize the sub-CFG detached by the specified
+/// detach instruction.  Removes the detach instruction and returns a pointer to
+/// the branch instruction that replaces it.
 ///
 BranchInst *llvm::SerializeDetachedCFG(DetachInst *DI, DominatorTree *DT) {
   //TODO allow to work without dominatortree or code workaround
@@ -185,6 +194,9 @@ BranchInst *llvm::SerializeDetachedCFG(DetachInst *DI, DominatorTree *DT) {
   // Get the detached block and continuation of this detach.
   BasicBlock *Detached = DI->getDetached();
   BasicBlock *Continuation = DI->getContinue();
+  BasicBlock *Unwind = nullptr;
+  if (DI->hasUnwindDest())
+    Unwind = DI->getUnwindDest();
 
   assert(Detached->getSinglePredecessor() &&
          "Detached block has multiple predecessors.");
@@ -192,12 +204,11 @@ BranchInst *llvm::SerializeDetachedCFG(DetachInst *DI, DominatorTree *DT) {
   // Get the detach edge from DI.
   BasicBlockEdge DetachEdge(Detacher, Detached);
 
-  // Collect the reattaches into the continuation.  If DT is
-  // available, verify that all reattaches are dominated by the detach
-  // edge from DI.
+  // Collect the reattaches into the continuation.  If DT is available, verify
+  // that all reattaches are dominated by the detach edge from DI.
   SmallVector<ReattachInst *, 8> Reattaches;
-  // If we only find a single reattach into the continuation, capture
-  // it so we can later update the dominator tree.
+  // If we only find a single reattach into the continuation, capture it so we
+  // can later update the dominator tree.
   BasicBlock *SingleReattacher = nullptr;
   int ReattachesFound = 0;
   for (auto PI = pred_begin(Continuation), PE = pred_end(Continuation);
@@ -233,6 +244,9 @@ BranchInst *llvm::SerializeDetachedCFG(DetachInst *DI, DominatorTree *DT) {
   }
 
   // Replace the new detach with a branch to the detached CFG.
+  Continuation->removePredecessor(DI->getParent());
+  if (Unwind)
+    Unwind->removePredecessor(DI->getParent());
   BranchInst *ReplacementBr = BranchInst::Create(Detached, DI);
   ReplacementBr->setDebugLoc(DI->getDebugLoc());
   DI->eraseFromParent();
@@ -254,9 +268,8 @@ BasicBlock *llvm::GetDetachedCtx(BasicBlock *BB) {
 }
 
 const BasicBlock *llvm::GetDetachedCtx(const BasicBlock *BB) {
-  // Traverse the CFG backwards until we either reach the entry block
-  // of the function or we find a detach instruction that detaches the
-  // current block.
+  // Traverse the CFG backwards until we either reach the entry block of the
+  // function or we find a detach instruction that detaches the current block.
   SmallPtrSet<const BasicBlock *, 32> Visited;
   SmallVector<const BasicBlock *, 32> WorkList;
   WorkList.push_back(BB);
@@ -269,10 +282,14 @@ const BasicBlock *llvm::GetDetachedCtx(const BasicBlock *BB) {
          PI != PE; ++PI) {
       const BasicBlock *PredBB = *PI;
 
-      // Skip predecessors via reattach instructions.  The detacher
-      // block corresponding to this reattach is also a predecessor of
-      // the current basic block.
+      // Skip predecessors via reattach instructions.  The detacher block
+      // corresponding to this reattach is also a predecessor of the current
+      // basic block.
       if (isa<ReattachInst>(PredBB->getTerminator()))
+        continue;
+
+      // Skip predecessors via detach rethrows.
+      if (isDetachedRethrow(PredBB->getTerminator()))
         continue;
 
       // If the predecessor is terminated by a detach, check to see if
@@ -285,14 +302,13 @@ const BasicBlock *llvm::GetDetachedCtx(const BasicBlock *BB) {
           return CurrBB;
       }
 
-      // Otherwise, add the predecessor block to the work list to
-      // search.
+      // Otherwise, add the predecessor block to the work list to search.
       WorkList.push_back(PredBB);
     }
   }
 
-  // Our search didn't find anything, so return the entry of the
-  // function containing the given block.
+  // Our search didn't find anything, so return the entry of the function
+  // containing the given block.
   return &(BB->getParent()->getEntryBlock());
 }
 

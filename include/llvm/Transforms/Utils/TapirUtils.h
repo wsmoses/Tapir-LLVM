@@ -26,6 +26,10 @@ class DominatorTree;
 class TerminatorInst;
 class Loop;
 
+/// Returns true if the given instruction performs a detached rethrow, false
+/// otherwise.
+bool isDetachedRethrow(const Instruction *I);
+
 /// Move static allocas in a block into the specified entry block.  Leave
 /// lifetime markers behind for those static allocas.  Returns true if the
 /// cloned block still contains dynamic allocas, which cannot be moved.
@@ -36,7 +40,7 @@ bool MoveStaticAllocasInBlock(
 /// Serialize the sub-CFG detached by the specified detach
 /// instruction.  Removes the detach instruction and returns a pointer
 /// to the branch instruction that replaces it.
-BranchInst* SerializeDetachedCFG(DetachInst *DI, DominatorTree *DT = nullptr);
+BranchInst *SerializeDetachedCFG(DetachInst *DI, DominatorTree *DT = nullptr);
 
 /// Get the entry basic block to the detached context that contains
 /// the specified block.

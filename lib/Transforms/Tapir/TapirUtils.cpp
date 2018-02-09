@@ -36,9 +36,10 @@ TapirTarget *llvm::getTapirTargetFromType(TapirTargetType Type) {
     return new QthreadsABI();
   case TapirTargetType::None:
   case TapirTargetType::Serial:
-  default:
     return nullptr;
   }
+
+  llvm_unreachable("Invalid TapirTargetType");
 }
 
 bool llvm::verifyDetachedCFG(const DetachInst &Detach, DominatorTree &DT,
