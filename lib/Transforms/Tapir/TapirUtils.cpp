@@ -276,7 +276,7 @@ Function *llvm::extractDetachBodyToFunction(DetachInst &detach,
   // Get the inputs and outputs for the detached CFG.
   SetVector<Value *> Inputs, Outputs;
   SetVector<Value *> BodyInputs;
-  findInputsOutputs(functionPieces, BodyInputs, Outputs, &ExitBlocks);
+  findInputsOutputs(functionPieces, BodyInputs, Outputs, &ExitBlocks, &DT);
   if (!Outputs.empty()) {
     F.getParent()->dump();
     detach.dump();
@@ -364,9 +364,9 @@ Function *llvm::extractDetachBodyToFunction(DetachInst &detach,
     MoveStaticAllocasInBlock(&extracted->getEntryBlock(), ClonedDetachedBlock,
                              ReattachPoints);
 
-    // We should not need to add new llvm.stacksave/llvm.stackrestore
-    // intrinsics, because calling and returning from the helper will
-    // automatically manage the stack.
+    // We do not need to add new llvm.stacksave/llvm.stackrestore intrinsics,
+    // because calling and returning from the helper will automatically manage
+    // the stack appropriately.
   }
 
   for(BasicBlock* BB : reattachB) {
@@ -383,4 +383,10 @@ Function *llvm::extractDetachBodyToFunction(DetachInst &detach,
     b.CreateUnreachable();
   }
   return extracted;
+}
+
+bool TapirTarget::shouldProcessFunction(const Function &F) {
+  if (canDetach(&F))
+    return true;
+  return false;
 }
