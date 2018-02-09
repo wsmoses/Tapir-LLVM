@@ -31,10 +31,12 @@ static cl::opt<bool> DebugABICalls(
     "debug-abi-calls", cl::init(false), cl::Hidden,
     cl::desc("Insert ABI calls for debugging"));
 
+static cl::opt<bool> fastCilk(
+    "fast-cilk", cl::init(false), cl::Hidden,
+    cl::desc("Attempt faster cilk call implementation"));
+
 STATISTIC(LoopsConvertedToCilkABI,
           "Number of Tapir loops converted to use the Cilk ABI for loops");
-
-extern cl::opt<bool> fastCilk;
 
 typedef void *__CILK_JUMP_BUFFER[5];
 
@@ -1269,8 +1271,6 @@ static inline void inlineCilkFunctions(Function &F) {
   }
 }
 
-cl::opt<bool> fastCilk("fast-cilk", cl::init(false), cl::Hidden,
-                       cl::desc("Attempt faster cilk call implementation"));
 void CilkABI::preProcessFunction(Function &F) {
   if (fastCilk && F.getName()=="main") {
     IRBuilder<> start(F.getEntryBlock().getFirstNonPHIOrDbg());
