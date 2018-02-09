@@ -818,7 +818,8 @@ def int_coro_subfn_addr : Intrinsic<[llvm_ptr_ty], [llvm_ptr_ty, llvm_i8_ty],
 def int_syncregion_start : Intrinsic<[llvm_token_ty], [],
                                      [IntrArgMemOnly]>;
 
-def int_detached_rethrow : Intrinsic<[], [], [Throws]>;
+def int_detached_rethrow : Intrinsic<[], [llvm_any_ty],
+                                     [IntrArgMemOnly, Throws]>;
 
 ///===-------------------------- Other Intrinsics --------------------------===//
 //
