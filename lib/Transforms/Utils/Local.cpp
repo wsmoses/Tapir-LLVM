@@ -2168,6 +2168,16 @@ void llvm::removeUnwindEdge(BasicBlock *BB, DeferredDominance *DDT) {
   TerminatorInst *TI = BB->getTerminator();
 
   if (auto *II = dyn_cast<InvokeInst>(TI)) {
+    // If we're removing the unwind destination of a detached rethrow, simply
+    // remove the detached rethrow.
+    if (auto *Called = II->getCalledFunction()) {
+      if (Intrinsic::detached_rethrow == Called->getIntrinsicID()) {
+        BranchInst::Create(II->getNormalDest(), II);
+        II->getUnwindDest()->removePredecessor(BB);
+        II->eraseFromParent();
+        return;
+      }
+    }
     changeToCall(II, DDT);
     return;
   }
@@ -2187,6 +2197,10 @@ void llvm::removeUnwindEdge(BasicBlock *BB, DeferredDominance *DDT) {
 
     NewTI = NewCatchSwitch;
     UnwindDest = CatchSwitch->getUnwindDest();
+  } else if (auto *DI = dyn_cast<DetachInst>(TI)) {
+    NewTI = DetachInst::Create(DI->getDetached(), DI->getContinue(),
+                               DI->getSyncRegion(), DI);
+    UnwindDest = DI->getUnwindDest();
   } else {
     llvm_unreachable("Could not find unwind successor");
   }
