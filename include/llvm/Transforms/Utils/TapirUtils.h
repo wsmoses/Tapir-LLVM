@@ -11,7 +11,7 @@
 //
 //===----------------------------------------------------------------------===//
 
-#ifndef LLVM_TRANSFORMS_UTILS_TAPIRUITLS_H
+#ifndef LLVM_TRANSFORMS_UTILS_TAPIRUTILS_H
 #define LLVM_TRANSFORMS_UTILS_TAPIRUTILS_H
 
 #include "llvm/ADT/SmallVector.h"
@@ -141,7 +141,7 @@ private:
 /// 3) The body reattaches to the latch (which is necessary for a valid
 ///    detached CFG).
 /// 4) The loop only branches to the exit block from the header or the latch.
-bool isCanonicalTapirLoop(const Loop *L, bool print=false);
+bool isCanonicalTapirLoop(const Loop *L, bool print = false);
 
 //! Identify if a loop could be a DAC loop
 bool isDACFor(Loop* L);

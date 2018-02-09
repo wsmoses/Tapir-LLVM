@@ -45,7 +45,6 @@
 #include "llvm/Transforms/Scalar/SimplifyCFG.h"
 #include "llvm/Transforms/Scalar/LoopDeletion.h"
 #include "llvm/Transforms/Tapir.h"
-#include "llvm/Transforms/Tapir/CilkABI.h"
 #include "llvm/Transforms/Tapir/Outline.h"
 #include "llvm/Transforms/Tapir/TapirUtils.h"
 #include "llvm/Transforms/Utils/PromoteMemToReg.h"
