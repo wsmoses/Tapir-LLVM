@@ -159,9 +159,10 @@ bool LowerTapirToTarget::runOnModule(Module &M) {
 
   // Add functions that detach to the work list.
   SmallVector<Function *, 4> WorkList;
+  Function *MainFunc = nullptr;
   for (Function &F : M) {
     if (F.getName() == "main")
-      WorkList.push_back(&F);
+      MainFunc = &F;
 
     for (BasicBlock &BB : F)
       if (isa<DetachInst>(BB.getTerminator())) {
@@ -170,11 +171,13 @@ bool LowerTapirToTarget::runOnModule(Module &M) {
       }
   }
 
-  if (WorkList.empty())
+  if (WorkList.empty() && !MainFunc)
     return false;
 
   bool Changed = false;
   std::unique_ptr<SmallVectorImpl<Function *>> NewHelpers;
+  if (MainFunc)
+    Changed |= tapirTarget->processMain(*MainFunc);
   while (!WorkList.empty()) {
     // Process the next function.
     Function *F = WorkList.back();

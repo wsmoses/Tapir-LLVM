@@ -69,6 +69,7 @@ Function *createDetach(DetachInst &Detach,
 void preProcessFunction(Function &F) override final;
 void postProcessFunction(Function &F) override final;
 void postProcessHelper(Function &F) override final;
+bool processMain(Function &F) override final;
 };
 
 }  // end of llvm namespace
