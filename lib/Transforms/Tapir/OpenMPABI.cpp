@@ -788,5 +788,6 @@ void llvm::OpenMPABI::postProcessFunction(Function &F) {
   RegionFn->eraseFromParent();
 }
 
-void llvm::OpenMPABI::postProcessHelper(Function &F) {
-}
+void llvm::OpenMPABI::postProcessHelper(Function &F) {}
+
+bool llvm::OpenMPABI::processMain(Function &F) {}

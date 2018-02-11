@@ -1271,13 +1271,7 @@ static inline void inlineCilkFunctions(Function &F) {
   }
 }
 
-void CilkABI::preProcessFunction(Function &F) {
-  if (fastCilk && F.getName()=="main") {
-    IRBuilder<> start(F.getEntryBlock().getFirstNonPHIOrDbg());
-    auto m = start.CreateCall(CILKRTS_FUNC(init, *F.getParent()));
-    m->moveBefore(F.getEntryBlock().getTerminator());
-  }
-}
+void CilkABI::preProcessFunction(Function &F) {}
 
 void CilkABI::postProcessFunction(Function &F) {
   if (!DebugABICalls)
@@ -1287,6 +1281,16 @@ void CilkABI::postProcessFunction(Function &F) {
 void CilkABI::postProcessHelper(Function &F) {
   if (!DebugABICalls)
     inlineCilkFunctions(F);
+}
+
+bool CilkABI::processMain(Function &F) {
+  if (fastCilk) {
+    IRBuilder<> start(F.getEntryBlock().getFirstNonPHIOrDbg());
+    auto m = start.CreateCall(CILKRTS_FUNC(init, *F.getParent()));
+    m->moveBefore(F.getEntryBlock().getTerminator());
+    return true;
+  }
+  return false;
 }
 
 /// \brief Replace the latch of the loop to check that IV is always less than or
