@@ -46,13 +46,13 @@ public:
   virtual Value *GetOrCreateWorker8(Function &F) = 0;
   virtual void createSync(SyncInst &inst,
                           ValueToValueMapTy &DetachCtxToStackFrame) = 0;
-
   virtual Function *createDetach(DetachInst &Detach,
-                         ValueToValueMapTy &DetachCtxToStackFrame,
-                         DominatorTree &DT, AssumptionCache &AC) = 0;
+                                 ValueToValueMapTy &DetachCtxToStackFrame,
+                                 DominatorTree &DT, AssumptionCache &AC) = 0;
   virtual void preProcessFunction(Function &F) = 0;
   virtual void postProcessFunction(Function &F) = 0;
   virtual void postProcessHelper(Function &F) = 0;
+  virtual bool processMain(Function &F) = 0;
 };
 
 TapirTarget *getTapirTargetFromType(TapirTargetType Type);

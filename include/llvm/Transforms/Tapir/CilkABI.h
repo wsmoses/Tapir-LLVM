@@ -82,6 +82,7 @@ public:
   void preProcessFunction(Function &F) override final;
   void postProcessFunction(Function &F) override final;
   void postProcessHelper(Function &F) override final;
+  bool processMain(Function &F) override final;
 
   struct __cilkrts_pedigree {};
   struct __cilkrts_stack_frame {};
