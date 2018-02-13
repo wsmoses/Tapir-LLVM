@@ -25,7 +25,6 @@
 #include "llvm/Transforms/Utils/ValueMapper.h"
 
 namespace llvm {
-namespace tapir {
 
 bool verifyDetachedCFG(const DetachInst &Detach, DominatorTree &DT,
                        bool error = true);
@@ -37,25 +36,27 @@ bool populateDetachedCFG(const DetachInst &Detach, DominatorTree &DT,
                          int replaceOrDelete, bool error = true);
 
 Function *extractDetachBodyToFunction(DetachInst &Detach,
-                                     DominatorTree &DT, AssumptionCache &AC,
-                                     CallInst **call = nullptr);
+                                      DominatorTree &DT, AssumptionCache &AC,
+                                      CallInst **call = nullptr);
 
 class TapirTarget {
 
 public:
   //! For use in loopspawning grainsize calculation
   virtual Value *GetOrCreateWorker8(Function &F) = 0;
-  virtual void createSync(SyncInst &inst, ValueToValueMapTy &DetachCtxToStackFrame) = 0;
-
+  virtual void createSync(SyncInst &inst,
+                          ValueToValueMapTy &DetachCtxToStackFrame) = 0;
   virtual Function *createDetach(DetachInst &Detach,
-                         ValueToValueMapTy &DetachCtxToStackFrame,
-                         DominatorTree &DT, AssumptionCache &AC) = 0;
+                                 ValueToValueMapTy &DetachCtxToStackFrame,
+                                 DominatorTree &DT, AssumptionCache &AC) = 0;
   virtual void preProcessFunction(Function &F) = 0;
   virtual void postProcessFunction(Function &F) = 0;
   virtual void postProcessHelper(Function &F) = 0;
+  virtual bool processMain(Function &F) = 0;
 };
 
-} // ns: tapir
-} // ns: llvm
+TapirTarget *getTapirTargetFromType(TapirTargetType Type);
+
+}  // end namepsace llvm
 
 #endif

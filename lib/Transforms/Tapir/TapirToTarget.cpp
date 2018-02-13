@@ -12,8 +12,6 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "llvm/Transforms/Tapir/CilkABI.h"
-#include "llvm/Transforms/Tapir/OpenMPABI.h"
 #include "llvm/Analysis/AssumptionCache.h"
 #include "llvm/IR/Verifier.h"
 #include "llvm/Transforms/Utils/Cloning.h"
@@ -23,7 +21,18 @@
 #define DEBUG_TYPE "tapir2target"
 
 using namespace llvm;
-using namespace llvm::tapir;
+
+static cl::opt<TapirTargetType> ClTapirTarget(
+    "tapir-target", cl::desc("Target runtime for Tapir"),
+    cl::init(TapirTargetType::Cilk),
+    cl::values(clEnumValN(TapirTargetType::None,
+                          "none", "None"),
+               clEnumValN(TapirTargetType::Serial,
+                          "serial", "Serial code"),
+               clEnumValN(TapirTargetType::Cilk,
+                          "cilk", "Cilk Plus"),
+               clEnumValN(TapirTargetType::OpenMP,
+                          "openmp", "OpenMP")));
 
 namespace {
 
@@ -32,7 +41,9 @@ struct LowerTapirToTarget : public ModulePass {
   TapirTarget* tapirTarget;
   explicit LowerTapirToTarget(TapirTarget* tapirTarget = nullptr)
       : ModulePass(ID), tapirTarget(tapirTarget) {
-    assert(tapirTarget);
+    if (!this->tapirTarget)
+      this->tapirTarget = getTapirTargetFromType(ClTapirTarget);
+    assert(this->tapirTarget);
     initializeLowerTapirToTargetPass(*PassRegistry::getPassRegistry());
   }
 
@@ -103,7 +114,7 @@ bool LowerTapirToTarget::unifyReturns(Function &F) {
 
 SmallVectorImpl<Function *>
 *LowerTapirToTarget::processFunction(Function &F, DominatorTree &DT,
-                                   AssumptionCache &AC) {
+                                     AssumptionCache &AC) {
   if (unifyReturns(F))
     DT.recalculate(F);
 
@@ -148,18 +159,25 @@ bool LowerTapirToTarget::runOnModule(Module &M) {
 
   // Add functions that detach to the work list.
   SmallVector<Function *, 4> WorkList;
-  for (Function &F : M)
+  Function *MainFunc = nullptr;
+  for (Function &F : M) {
+    if (F.getName() == "main")
+      MainFunc = &F;
+
     for (BasicBlock &BB : F)
       if (isa<DetachInst>(BB.getTerminator())) {
         WorkList.push_back(&F);
         break;
       }
+  }
 
-  if (WorkList.empty())
+  if (WorkList.empty() && !MainFunc)
     return false;
 
   bool Changed = false;
   std::unique_ptr<SmallVectorImpl<Function *>> NewHelpers;
+  if (MainFunc)
+    Changed |= tapirTarget->processMain(*MainFunc);
   while (!WorkList.empty()) {
     // Process the next function.
     Function *F = WorkList.back();

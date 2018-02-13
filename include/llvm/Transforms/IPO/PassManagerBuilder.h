@@ -19,11 +19,11 @@
 #include <memory>
 #include <string>
 #include <vector>
-#include "llvm/Transforms/Tapir/TapirTypes.h"
 
 namespace llvm {
 class ModuleSummaryIndex;
 class Pass;
+class TapirTarget;
 class TargetLibraryInfoImpl;
 class TargetMachine;
 
@@ -130,7 +130,7 @@ public:
   unsigned SizeLevel;
 
   /// What runtime tapir instructions should be lowered to (nullptr if no lowering)
-  tapir::TapirTarget* tapirTarget;
+  TapirTarget* tapirTarget;
 
   /// Whether to disable opts before lowering tapir to target
   bool DisableTapirOpts;

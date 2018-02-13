@@ -1581,7 +1581,7 @@ bool llvm::InlineFunction(CallSite CS, InlineFunctionInfo &IFI,
   BasicBlock *DetachedCtxEntryBlock;
   {
     BasicBlock *CallingBlock = TheCall->getParent();
-    DetachedCtxEntryBlock = tapir::GetDetachedCtx(CallingBlock);
+    DetachedCtxEntryBlock = GetDetachedCtx(CallingBlock);
     assert(((&(CallingBlock->getParent()->getEntryBlock()) ==
              DetachedCtxEntryBlock) ||
             DetachedCtxEntryBlock->getSinglePredecessor()) &&

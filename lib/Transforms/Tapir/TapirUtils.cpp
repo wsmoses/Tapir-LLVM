@@ -1,5 +1,19 @@
+//===- TapirUtils.cpp - Utility functions for handling Tapir --------------===//
+//
+//                     The LLVM Compiler Infrastructure
+//
+// This file is distributed under the University of Illinois Open Source
+// License. See LICENSE.TXT for details.
+//
+//===----------------------------------------------------------------------===//
+//
+// This file implements several utility functions for operating with Tapir.
+//
+//===----------------------------------------------------------------------===//
+
 #include "llvm/IR/DebugInfoMetadata.h"
 #include "llvm/Transforms/Tapir/CilkABI.h"
+#include "llvm/Transforms/Tapir/OpenMPABI.h"
 #include "llvm/Transforms/Tapir/Outline.h"
 #include "llvm/Transforms/Utils/EscapeEnumerator.h"
 #include "llvm/Transforms/Utils/Local.h"
@@ -9,8 +23,21 @@ using namespace llvm;
 
 #define DEBUG_TYPE "tapir"
 
-bool llvm::tapir::verifyDetachedCFG(const DetachInst &Detach, DominatorTree &DT,
-                                   bool error) {
+TapirTarget *llvm::getTapirTargetFromType(TapirTargetType Type) {
+  switch(Type) {
+  case TapirTargetType::Cilk:
+    return new CilkABI();
+  case TapirTargetType::OpenMP:
+    return new OpenMPABI();
+  case TapirTargetType::None:
+  case TapirTargetType::Serial:
+  default:
+    return nullptr;
+  }
+}
+
+bool llvm::verifyDetachedCFG(const DetachInst &Detach, DominatorTree &DT,
+                             bool error) {
   BasicBlock *Spawned  = Detach.getDetached();
   BasicBlock *Continue = Detach.getContinue();
   BasicBlockEdge DetachEdge(Detach.getParent(), Spawned);
@@ -91,7 +118,7 @@ bool llvm::tapir::verifyDetachedCFG(const DetachInst &Detach, DominatorTree &DT,
   return true;
 }
 
-bool llvm::tapir::populateDetachedCFG(
+bool llvm::populateDetachedCFG(
     const DetachInst &Detach, DominatorTree &DT,
     SmallPtrSetImpl<BasicBlock *> &functionPieces,
     SmallVectorImpl<BasicBlock *> &reattachB,
@@ -207,10 +234,10 @@ bool llvm::tapir::populateDetachedCFG(
 }
 
 //Returns true if success
-Function *llvm::tapir::extractDetachBodyToFunction(DetachInst &detach,
-                                                  DominatorTree &DT,
-                                                  AssumptionCache &AC,
-                                                  CallInst **call) {
+Function *llvm::extractDetachBodyToFunction(DetachInst &detach,
+                                            DominatorTree &DT,
+                                            AssumptionCache &AC,
+                                            CallInst **call) {
   BasicBlock *Detacher = detach.getParent();
   Function &F = *(Detacher->getParent());
 
@@ -248,9 +275,39 @@ Function *llvm::tapir::extractDetachBodyToFunction(DetachInst &detach,
 
   // Get the inputs and outputs for the detached CFG.
   SetVector<Value *> Inputs, Outputs;
-  findInputsOutputs(functionPieces, Inputs, Outputs, &ExitBlocks);
+  SetVector<Value *> BodyInputs;
+  findInputsOutputs(functionPieces, BodyInputs, Outputs, &ExitBlocks);
+  if (!Outputs.empty()) {
+    F.getParent()->dump();
+    detach.dump();
+    for(auto a: Outputs)
+      a->dump();
+  }
   assert(Outputs.empty() &&
          "All results from detached CFG should be passed by memory already.");
+  {
+    // Scan for any sret parameters in BodyInputs and add them first.
+    Value *SRetInput = nullptr;
+    if (F.hasStructRetAttr()) {
+      Function::arg_iterator ArgIter = F.arg_begin();
+      if (F.hasParamAttribute(0, Attribute::StructRet))
+	if (BodyInputs.count(&*ArgIter))
+	  SRetInput = &*ArgIter;
+      if (F.hasParamAttribute(1, Attribute::StructRet)) {
+	++ArgIter;
+	if (BodyInputs.count(&*ArgIter))
+	  SRetInput = &*ArgIter;
+      }
+    }
+    if (SRetInput) {
+      DEBUG(dbgs() << "sret input " << *SRetInput << "\n");
+      Inputs.insert(SRetInput);
+    }
+    // Add the remaining inputs.
+    for (Value *V : BodyInputs)
+      if (!Inputs.count(V))
+	Inputs.insert(V);
+  }
 
   // Clone the detached CFG into a helper function.
   ValueToValueMapTy VMap;
@@ -319,9 +376,11 @@ Function *llvm::tapir::extractDetachBodyToFunction(DetachInst &detach,
       P->removeIncomingValue(BB);
       ++BI;
     }
-    IRBuilder<> b(term);
+    while (BB->size()) {
+      (&*--BB->end())->eraseFromParent();
+    }
+    IRBuilder<> b(BB);
     b.CreateUnreachable();
-    term->eraseFromParent();
   }
   return extracted;
 }

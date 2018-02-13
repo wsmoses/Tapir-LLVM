@@ -11,7 +11,7 @@
 //
 //===----------------------------------------------------------------------===//
 
-#ifndef LLVM_TRANSFORMS_UTILS_TAPIRUITLS_H
+#ifndef LLVM_TRANSFORMS_UTILS_TAPIRUTILS_H
 #define LLVM_TRANSFORMS_UTILS_TAPIRUTILS_H
 
 #include "llvm/ADT/SmallVector.h"
@@ -25,8 +25,6 @@ class DetachInst;
 class DominatorTree;
 class TerminatorInst;
 class Loop;
-
-namespace tapir {
 
 /// Move static allocas in a block into the specified entry block.  Leave
 /// lifetime markers behind for those static allocas.  Returns true if the
@@ -143,12 +141,11 @@ private:
 /// 3) The body reattaches to the latch (which is necessary for a valid
 ///    detached CFG).
 /// 4) The loop only branches to the exit block from the header or the latch.
-bool isCanonicalTapirLoop(const Loop *L, bool print=false);
+bool isCanonicalTapirLoop(const Loop *L, bool print = false);
 
 //! Identify if a loop could be a DAC loop
 bool isDACFor(Loop* L);
 
-} // End tapir namespace
-} // End llvm namespace
+}  // end llvm namespace
 
 #endif
