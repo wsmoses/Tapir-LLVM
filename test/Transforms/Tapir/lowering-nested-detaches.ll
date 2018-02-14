@@ -10,6 +10,8 @@ define void @kernel_anon0([2 x [15 x float]]* noalias nonnull readonly %A, [2 x 
 entry:
   %syncreg = call token @llvm.syncregion.start()
   br label %loop_header
+; CHECK: %[[CILKSF:.+]] = alloca %struct.__cilkrts_stack_frame
+; CHECK: call void @__cilkrts_enter_frame_1(%struct.__cilkrts_stack_frame* nonnull %[[CILKSF]])
 
 loop_header:                                      ; preds = %loop_latch, %entry
   %c0 = phi i64 [ 0, %entry ], [ %1, %loop_latch ]
@@ -104,6 +106,8 @@ define void @kernel_anon([24 x [21 x [33 x float]]]* noalias nocapture nonnull r
 entry:
   %syncreg = tail call token @llvm.syncregion.start()
   br label %loop_body
+; CHECK: %[[CILKSF:.+]] = alloca %struct.__cilkrts_stack_frame
+; CHECK: call void @__cilkrts_enter_frame_1(%struct.__cilkrts_stack_frame* nonnull %[[CILKSF]])
 
 loop_body:                                        ; preds = %loop_latch, %entry
   %c06 = phi i64 [ 0, %entry ], [ %0, %loop_latch ]
@@ -198,18 +202,24 @@ synced22:                                         ; preds = %loop_exit
 declare token @llvm.syncregion.start() #1
 
 ; CHECK-LABEL: define internal fastcc void @kernel_anon_det.achd.cilk(
+; CHECK: %[[CILKSF:.+]] = alloca %struct.__cilkrts_stack_frame
+; CHECK: call void @__cilkrts_enter_frame_fast_1(%struct.__cilkrts_stack_frame* nonnull %[[CILKSF]])
 ; CHECK: loop_body2.cilk.split:
 ; CHECK-NEXT: call fastcc void @kernel_anon_det.achd.cilk_block_exit.cilk.cilk([24 x float]* {{.*}}%O1.cilk, i64 {{.*}}%c06.cilk, i64 {{.*}}%c14.cilk, [24 x float]* {{.*}}%B.cilk, [24 x [21 x [33 x float]]]* {{.*}}%A.cilk)
 ; CHECK-NEXT: br label %loop_latch3.cilk
 
 
 ; CHECK-LABEL: define internal fastcc void @kernel_anon_det.achd.cilk_block_exit.cilk.cilk(
+; CHECK: %[[CILKSF:.+]] = alloca %struct.__cilkrts_stack_frame
+; CHECK: call void @__cilkrts_enter_frame_fast_1(%struct.__cilkrts_stack_frame* nonnull %[[CILKSF]])
 ; CHECK: loop_body8.cilk.cilk.split:
 ; CHECK-NEXT: call fastcc void @kernel_anon_det.achd.cilk_block_exit.cilk.cilk_det.achd12.cilk.cilk.cilk([24 x [21 x [33 x float]]]* {{.*}}%A.cilk.cilk, i64 {{.*}}%c06.cilk.cilk, i64 {{.*}}%c14.cilk.cilk, i64 {{.*}}%c22.cilk.cilk, float {{.*}}%2, float* {{.*}}%0)
 ; CHECK-NEXT: br label %loop_latch9.cilk.cilk
 
 
 ; CHECK-LABEL: define internal fastcc void @kernel_anon_det.achd.cilk_block_exit.cilk.cilk_det.achd12.cilk.cilk.cilk(
+; CHECK: %[[CILKSF:.+]] = alloca %struct.__cilkrts_stack_frame
+; CHECK: call void @__cilkrts_enter_frame_fast_1(%struct.__cilkrts_stack_frame* nonnull %[[CILKSF]])
 ; CHECK: loop_body14.cilk.cilk.cilk.split:
 ; CHECK-NEXT: call fastcc void @kernel_anon_det.achd.cilk_block_exit.cilk.cilk_det.achd12.cilk.cilk.cilk_det.achd18.cilk.cilk.cilk.cilk([24 x [21 x [33 x float]]]* %A.cilk.cilk.cilk, i64 %c06.cilk.cilk.cilk, i64 %c14.cilk.cilk.cilk, i64 %c22.cilk.cilk.cilk, i64 %c31.cilk.cilk.cilk, float %.cilk, float* %.cilk1)
 ; CHECK-NEXT: br label %loop_latch15.cilk.cilk.cilk
@@ -226,12 +236,16 @@ declare token @llvm.syncregion.start() #1
 
 
 ; CHECK-LABEL: define internal fastcc void @kernel_anon0_det.achd.cilk(
+; CHECK: %[[CILKSF:.+]] = alloca %struct.__cilkrts_stack_frame
+; CHECK: call void @__cilkrts_enter_frame_fast_1(%struct.__cilkrts_stack_frame* nonnull %[[CILKSF]])
 ; CHECK: loop_body2.cilk.split:
 ; CHECK-NEXT: call fastcc void @kernel_anon0_det.achd.cilk_det.achd6.cilk.cilk([2 x float]* {{.*}}%O1.cilk, i64 {{.*}}%c0.cilk, i64 {{.*}}%c1.cilk, [2 x float]* {{.*}}%B.cilk, [2 x [15 x float]]* {{.*}}%A.cilk)
 ; CHECK-NEXT: br label %loop_latch3.cilk
 
 
 ; CHECK-LABEL: define internal fastcc void @kernel_anon0_det.achd.cilk_det.achd6.cilk.cilk_det.achd12.cilk.cilk.cilk(
+; CHECK: %[[CILKSF:.+]] = alloca %struct.__cilkrts_stack_frame
+; CHECK: call void @__cilkrts_enter_frame_fast_1(%struct.__cilkrts_stack_frame* nonnull %[[CILKSF]])
 ; CHECK: getelementptr
 ; CHECK: getelementptr
 ; CHECK: load
