@@ -1103,10 +1103,7 @@ bool makeFunctionDetachable(Function &extracted,
   //   }
   // }
 
-  if (SimpleHelper)
-    IRB.CreateCall(CILKRTS_FUNC(enter_frame_fast_1, *M), args);
-  else
-    IRB.CreateCall(CILKRTS_FUNC(enter_frame_1, *M), args);
+  IRB.CreateCall(CILKRTS_FUNC(enter_frame_fast_1, *M), args);
 
   // if (instrument) {
   //   Value *end_args[2] = { SF, StackSave };
