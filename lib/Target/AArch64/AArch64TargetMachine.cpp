@@ -38,7 +38,6 @@
 #include "llvm/Support/TargetRegistry.h"
 #include "llvm/Target/TargetOptions.h"
 #include "llvm/Transforms/Scalar.h"
-#include "llvm/Transforms/Tapir/TapirUtils.h"
 #include <memory>
 #include <string>
 
