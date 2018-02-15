@@ -27,7 +27,7 @@
 
 namespace llvm {
 
-using ValueSet = SetVector<Value *>;
+typedef SetVector<Value *> ValueSet;
 
 /// Find the inputs and outputs for a function outlined from the gives set of
 /// basic blocks.
