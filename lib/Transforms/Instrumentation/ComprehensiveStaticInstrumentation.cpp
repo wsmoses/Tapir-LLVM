@@ -2,7 +2,9 @@
 //
 //                     The LLVM Compiler Infrastructure
 //
-// TODO: License
+// This file is distributed under the University of Illinois Open Source
+// License. See LICENSE.TXT for details.
+//
 //===----------------------------------------------------------------------===//
 //
 // This file is part of CSI, a framework that provides comprehensive static
@@ -498,11 +500,8 @@ int CSIImpl::getNumBytesAccessed(Value *Addr, const DataLayout &DL) {
   Type *OrigTy = cast<PointerType>(OrigPtrTy)->getElementType();
   assert(OrigTy->isSized());
   uint32_t TypeSize = DL.getTypeStoreSizeInBits(OrigTy);
-  if (TypeSize % 8 != 0) {
-  // if (TypeSize != 8 && TypeSize != 16 && TypeSize != 32 && TypeSize != 64 &&
-  //     TypeSize != 128 && TypeSize != 256 && TypeSize != 512) {
+  if (TypeSize % 8 != 0)
     return -1;
-  }
   return TypeSize / 8;
 }
 
@@ -515,8 +514,7 @@ void CSIImpl::addLoadStoreInstrumentation(
                             {CsiId, IRB.CreatePointerCast(Addr, AddrType),
                                 IRB.getInt32(NumBytes), PropVal});
 
-  BasicBlock::iterator Iter(I);
-  Iter++;
+  BasicBlock::iterator Iter = ++I->getIterator();
   IRB.SetInsertPoint(&*Iter);
   insertConditionalHookCall(&*Iter, AfterFn,
                             {CsiId, IRB.CreatePointerCast(Addr, AddrType),
@@ -623,10 +621,6 @@ void CSIImpl::instrumentCallsite(Instruction *I) {
     Called = II->getCalledFunction();
     IsInvoke = true;
   }
-
-  // if (Called && Called->getName().startswith("llvm.dbg")) {
-  //   return;
-  // }
 
   IRBuilder<> IRB(I);
   uint64_t LocalId = CallsiteFED.add(*I);
