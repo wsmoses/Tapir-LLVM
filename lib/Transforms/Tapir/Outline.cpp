@@ -146,7 +146,7 @@ void llvm::CloneIntoFunction(
   }
 
   // For each exit block, clean up its phi nodes to exclude predecessors that
-  // were not cloned.  Also remove detached_rethrow invokes with resumes.
+  // were not cloned.
   if (ExitBlocks) {
     for (BasicBlock *EB : *ExitBlocks) {
       // Get the predecessors of this exit block that were not cloned.
