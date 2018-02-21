@@ -16,8 +16,8 @@
 #define TAPIR_TYPES_H_
 
 namespace llvm {
-class TapirTarget;
-enum class TapirTargetType : int {
+
+enum class TapirTargetType {
   None = 0,
   Serial = 1,
   Cilk = 2,

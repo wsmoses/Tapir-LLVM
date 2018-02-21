@@ -66,8 +66,19 @@ STATISTIC(LoopsAnalyzed, "Number of Tapir loops analyzed");
 STATISTIC(LoopsConvertedToDAC,
           "Number of Tapir loops converted to divide-and-conquer iteration spawning");
 
-cl::opt<bool> cilkTarget("cilk-target", cl::init(false), cl::Hidden,
-                       cl::desc("For allowing loop spawning to be cilk abi if none given"));
+static cl::opt<TapirTargetType> ClTapirTarget(
+    "ls-tapir-target", cl::desc("Target runtime for Tapir"),
+    cl::init(TapirTargetType::Cilk),
+    cl::values(clEnumValN(TapirTargetType::None,
+                          "none", "None"),
+               clEnumValN(TapirTargetType::Serial,
+                          "serial", "Serial code"),
+               clEnumValN(TapirTargetType::Cilk,
+                          "cilk", "Cilk Plus"),
+               clEnumValN(TapirTargetType::OpenMP,
+                          "openmp", "OpenMP"),
+               clEnumValN(TapirTargetType::CilkR,
+                          "cilkr", "CilkR")));
 
 namespace {
 // Forward declarations.
@@ -1781,9 +1792,9 @@ struct LoopSpawning : public FunctionPass {
   TapirTarget* tapirTarget;
   explicit LoopSpawning(TapirTarget* tapirTarget = nullptr) : FunctionPass(ID),
     tapirTarget(tapirTarget) {
-      if (!this->tapirTarget && cilkTarget) {
-        this->tapirTarget = new CilkABI();
-      }
+      if (!this->tapirTarget)
+        this->tapirTarget = getTapirTargetFromType(ClTapirTarget);
+
       assert(this->tapirTarget);
       initializeLoopSpawningPass(*PassRegistry::getPassRegistry());
   }

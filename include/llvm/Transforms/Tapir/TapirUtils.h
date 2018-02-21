@@ -54,6 +54,8 @@ public:
   virtual void postProcessHelper(Function &F) = 0;
 };
 
+TapirTarget *getTapirTargetFromType(TapirTargetType Type);
+
 }  // end namepsace llvm
 
 #endif

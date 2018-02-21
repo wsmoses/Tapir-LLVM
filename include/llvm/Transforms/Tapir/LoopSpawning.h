@@ -25,11 +25,11 @@
 #include "llvm/Analysis/TargetTransformInfo.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/PassManager.h"
-#include "llvm/Transforms/Tapir/TapirTypes.h"
 
 #define LS_NAME "loop-spawning"
 
 namespace llvm {
+class TapirTarget;
 
 /// LoopOutline serves as a base class for different variants of LoopSpawning.
 /// LoopOutline implements common parts of LoopSpawning transformations, namely,

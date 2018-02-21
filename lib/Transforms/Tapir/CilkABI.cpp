@@ -30,7 +30,13 @@ using namespace llvm;
 STATISTIC(LoopsConvertedToCilkABI,
           "Number of Tapir loops converted to use the Cilk ABI for loops");
 
-extern cl::opt<bool> fastCilk;
+static cl::opt<bool> fastCilk(
+    "fast-cilk", cl::init(false), cl::Hidden,
+    cl::desc("Attempt faster Cilk call implementation"));
+
+static cl::opt<bool> DebugCilkABICalls(
+    "debug-cilk-abi-calls", cl::init(false), cl::Hidden,
+    cl::desc("Insert ABI calls for debugging"));
 
 typedef void *__CILK_JUMP_BUFFER[5];
 
@@ -1473,8 +1479,6 @@ static inline void inlineCilkFunctions(Function &F) {
   }
 }
 
-cl::opt<bool> fastCilk("fast-cilk", cl::init(false), cl::Hidden,
-                       cl::desc("Attempt faster cilk call implementation"));
 void CilkABI::preProcessFunction(Function &F) {
   if (fastCilk && F.getName()=="main") {
     IRBuilder<> start(F.getEntryBlock().getFirstNonPHIOrDbg());
@@ -1484,10 +1488,12 @@ void CilkABI::preProcessFunction(Function &F) {
 }
 
 void CilkABI::postProcessFunction(Function &F) {
+  if (!DebugCilkABICalls)
     inlineCilkFunctions(F);
 }
 
 void CilkABI::postProcessHelper(Function &F) {
+  if (!DebugCilkABICalls)
     inlineCilkFunctions(F);
 }
 

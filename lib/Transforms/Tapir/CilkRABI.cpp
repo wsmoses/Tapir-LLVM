@@ -26,6 +26,10 @@ using namespace llvm;
 
 #define DEBUG_TYPE "cilkrabi"
 
+static cl::opt<bool> DebugCilkRABICalls(
+    "debug-cilkr-abi-calls", cl::init(false), cl::Hidden,
+    cl::desc("Insert ABI calls for debugging"));
+
 typedef void *__CILK_JUMP_BUFFER[5];
 
 // typedef CilkRABI::__cilkrts_pedigree __cilkrts_pedigree;
@@ -1128,9 +1132,11 @@ void CilkRABI::preProcessFunction(Function &F) {
 }
 
 void CilkRABI::postProcessFunction(Function &F) {
-  inlineCilkFunctions(F);
+  if (!DebugCilkRABICalls)
+    inlineCilkFunctions(F);
 }
 
 void CilkRABI::postProcessHelper(Function &F) {
-  inlineCilkFunctions(F);
+  if (!DebugCilkRABICalls)
+    inlineCilkFunctions(F);
 }

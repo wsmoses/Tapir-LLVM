@@ -19,13 +19,13 @@
 #include <memory>
 #include <string>
 #include <vector>
-#include "llvm/Transforms/Tapir/TapirTypes.h"
 
 namespace llvm {
 class ModuleSummaryIndex;
 class Pass;
 class TargetLibraryInfoImpl;
 class TargetMachine;
+class TapirTarget;
 
 // The old pass manager infrastructure is hidden in a legacy namespace now.
 namespace legacy {
