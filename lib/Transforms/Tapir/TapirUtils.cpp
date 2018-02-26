@@ -82,8 +82,6 @@ bool llvm::verifyDetachedCFG(const DetachInst &Detach, DominatorTree &DT,
     } else if (isa<UnreachableInst>(Term) || isa<ResumeInst>(Term)) {
       continue;
     } else {
-      DEBUG(Term->dump());
-      DEBUG(Term->getParent()->getParent()->dump());
       assert(!error && "Detached block did not absolutely terminate in reattach");
       return false;
     }
@@ -184,8 +182,6 @@ bool llvm::populateDetachedCFG(
     } else if (isa<UnreachableInst>(Term) || isa<ResumeInst>(Term)) {
       continue;
     } else {
-      DEBUG(Term->dump());
-      DEBUG(Term->getParent()->getParent()->dump());
       assert(!error && "Detached block did not absolutely terminate in reattach");
       return false;
     }
@@ -277,12 +273,6 @@ Function *llvm::extractDetachBodyToFunction(DetachInst &detach,
   SetVector<Value *> Inputs, Outputs;
   SetVector<Value *> BodyInputs;
   findInputsOutputs(functionPieces, BodyInputs, Outputs, &ExitBlocks, &DT);
-  if (!Outputs.empty()) {
-    F.getParent()->dump();
-    detach.dump();
-    for(auto a: Outputs)
-      a->dump();
-  }
   assert(Outputs.empty() &&
          "All results from detached CFG should be passed by memory already.");
   {
