@@ -174,6 +174,7 @@ public:
     case Intrinsic::coro_suspend:
     case Intrinsic::coro_param:
     case Intrinsic::coro_subfn_addr:
+    case Intrinsic::syncregion_start:
       // These intrinsics don't actually represent code after lowering.
       return TTI::TCC_Free;
     }
@@ -801,6 +802,13 @@ public:
       return static_cast<T *>(this)->getCallCost(F, Arguments);
     }
 
+    if (isa<DetachInst>(U)) {
+      // Ideally, we'd determine the number of arguments of the detached task.
+      // But because that computation is expensive, we settle for 30x the basic
+      // cost of a function call.
+      return 30 * TTI::TCC_Basic;
+    }
+
     if (const CastInst *CI = dyn_cast<CastInst>(U)) {
       // Result of a cmp instruction is often extended (to be used by other
       // cmp instructions, logical or return instructions). These are usually
@@ -824,6 +832,10 @@ public:
 
     if (isa<LoadInst>(I))
       return 4;
+
+    // Mark a detach instruction to be 30x the cost of a function call.
+    if (isa<DetachInst>(I))
+      return 1200;
 
     Type *DstTy = I->getType();
 
