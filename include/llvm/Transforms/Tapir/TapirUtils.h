@@ -17,6 +17,7 @@
 
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/Analysis/AliasSetTracker.h"
 #include "llvm/Analysis/AssumptionCache.h"
 #include "llvm/Analysis/LoopInfo.h"
 #include "llvm/IR/Dominators.h"
@@ -57,6 +58,14 @@ public:
 
 TapirTarget *getTapirTargetFromType(TapirTargetType Type);
 
+bool doesDetachedInstructionAlias(AliasSetTracker &CurAST, const Instruction& I, bool FoundMod, bool FoundRef);
+// Any reads/writes done in must be done in CurAST
+// cannot have any writes/reads, in detached region, respectively
+bool doesDetachedRegionAlias(AliasSetTracker &CurAST, const SmallPtrSetImpl<BasicBlock*>& functionPieces);
+void moveDetachInstBefore(Instruction* moveBefore, DetachInst& det,
+                          const SmallVectorImpl<BasicBlock *>& reattachParents,
+                          DominatorTree* DT, Value* newSyncRegion=nullptr);
+bool attemptSyncRegionElimination(Instruction *SyncRegion);
 }  // end namepsace llvm
 
 #endif
