@@ -136,6 +136,7 @@ namespace {
       (void) llvm::createLowerSwitchPass();
       (void) llvm::createLowerTapirToTargetPass(nullptr);
       (void) llvm::createNaryReassociatePass();
+      (void) llvm::createNestedDetachMotionPass();
       (void) llvm::createObjCARCAAWrapperPass();
       (void) llvm::createObjCARCAPElimPass();
       (void) llvm::createObjCARCExpandPass();

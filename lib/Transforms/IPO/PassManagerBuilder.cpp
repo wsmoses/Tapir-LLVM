@@ -727,6 +727,10 @@ void PassManagerBuilder::populateModulePassManager(
   // LoopSink (and other loop passes since the last simplifyCFG) might have
   // resulted in single-entry-single-exit or empty blocks. Clean up the CFG.
   MPM.add(createCFGSimplificationPass());
+  if (Rhino) {
+    MPM.add(createNestedDetachMotionPass());
+    MPM.add(createCFGSimplificationPass());
+  }
 
   if (RerunAfterTapirLowering || (tapirTarget == nullptr))
     // Add passes to run just before Tapir lowering.

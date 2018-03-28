@@ -30,6 +30,12 @@ Pass *createLoopSpawningPass(TapirTarget*);
 
 //===----------------------------------------------------------------------===//
 //
+// NestedDetachMotion - Do NestedDetachMotion Pass
+//
+FunctionPass *createNestedDetachMotionPass();
+
+//===----------------------------------------------------------------------===//
+//
 // SmallBlock - Do SmallBlock Pass
 //
 FunctionPass *createSmallBlockPass();

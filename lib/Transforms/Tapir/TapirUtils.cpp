@@ -141,10 +141,11 @@ bool llvm::populateDetachedCFG(
     if (isa<ReattachInst>(Term)) {
       // only analyze reattaches going to the same continuation
       if (Term->getSuccessor(0) != Continue) continue;
+
+      reattachB.push_back(BB);
       if (replaceOrDelete == 1) {
         BranchInst* toReplace = BranchInst::Create(Continue);
         ReplaceInstWithInst(Term, toReplace);
-        reattachB.push_back(BB);
       } else if (replaceOrDelete == 2) {
           BasicBlock::iterator BI = Continue->begin();
           while (PHINode *P = dyn_cast<PHINode>(BI)) {
@@ -379,4 +380,236 @@ bool TapirTarget::shouldProcessFunction(const Function &F) {
   if (canDetach(&F))
     return true;
   return false;
+}
+
+
+/*
+spawn {
+  A()
+  spawn B();
+}
+
+A write | B write => can't move
+A write | B read => can't move
+
+A read | B read => can move
+A read | B write => can't move
+*/
+bool llvm::doesDetachedInstructionAlias(AliasSetTracker &CurAST, const Instruction& I, bool FoundMod, bool FoundRef) {
+  // Loads have extra constraints we have to verify before we can hoist them.
+  if (const auto *LI = dyn_cast<LoadInst>(&I)) {
+    if (!LI->isUnordered())
+      return true; // Don't touch volatile/atomic loads!
+
+    // Don't hoist loads which have may-aliased stores in predecessors.
+    uint64_t Size = 0;
+    if (LI->getType()->isSized())
+      Size = I.getModule()->getDataLayout().getTypeStoreSize(LI->getType());
+
+    AAMDNodes AAInfo;
+    LI->getAAMetadata(AAInfo);
+
+    auto ps = CurAST.getAliasSetForPointerIfExists(LI->getOperand(0), Size, AAInfo);
+    if (ps == nullptr) return false;
+    return ps->isMod();
+  } else if(const auto *LI = dyn_cast<IndirectBrInst>(&I)) {
+    // Don't hoist loads which have may-aliased stores in predecessors.
+    AAMDNodes AAInfo;
+    LI->getAAMetadata(AAInfo);
+    auto ps = CurAST.getAliasSetForPointerIfExists(LI->getOperand(0), 0, AAInfo);
+    if (ps == nullptr) return false;
+    return ps->isMod();
+  } else if (const auto *SI = dyn_cast<StoreInst>(&I)) {
+    if (!SI->isUnordered())
+      return true; // Don't touch volatile/atomic stores!
+
+    // Don't hoist stores which have may-aliased loads in predecessors.
+    uint64_t Size = 0;
+    if (SI->getType()->isSized())
+      Size = I.getModule()->getDataLayout().getTypeStoreSize(SI->getType());
+
+    AAMDNodes AAInfo;
+    SI->getAAMetadata(AAInfo);
+
+    auto ps = CurAST.getAliasSetForPointerIfExists(LI->getOperand(0), Size, AAInfo);
+    if (ps == nullptr) return false;
+    return ps->isMod() | ps->isRef();
+  } else if (const auto *CI = dyn_cast<CallInst>(&I)) {
+    // Dbg info always legal.
+    if (isa<DbgInfoIntrinsic>(I))
+      return false;
+
+    // Handle simple cases by querying alias analysis.
+    FunctionModRefBehavior Behavior = CurAST.getAliasAnalysis().getModRefBehavior(CI);
+    if (Behavior == FMRB_DoesNotAccessMemory)
+      return false;
+
+    if (AliasAnalysis::onlyReadsMemory(Behavior)) {
+      if (!FoundMod)
+        return false;
+      // A readonly argmemonly function only reads from memory pointed to by
+      // it's arguments with arbitrary offsets.  If we can prove there are no
+      // writes to this memory in the loop, we can hoist or sink.
+      if (AliasAnalysis::onlyAccessesArgPointees(Behavior)) {
+        for (Value *Op : CI->arg_operands())
+          if (Op->getType()->isPointerTy()) {
+            auto ps = CurAST.getAliasSetForPointerIfExists(Op, MemoryLocation::UnknownSize, AAMDNodes());
+            if (ps == nullptr) continue;
+            if (ps->isMod()) return true;
+          }
+        return false;
+      }
+    }
+  } else if (const auto *CI = dyn_cast<InvokeInst>(&I)) {
+    // Dbg info always legal.
+    if (isa<DbgInfoIntrinsic>(I))
+      return false;
+
+    // Handle simple cases by querying alias analysis.
+    FunctionModRefBehavior Behavior = CurAST.getAliasAnalysis().getModRefBehavior(CI);
+    if (Behavior == FMRB_DoesNotAccessMemory)
+      return false;
+
+    if (AliasAnalysis::onlyReadsMemory(Behavior)) {
+      if (!FoundMod)
+        return false;
+      // A readonly argmemonly function only reads from memory pointed to by
+      // it's arguments with arbitrary offsets.  If we can prove there are no
+      // writes to this memory in the loop, we can hoist or sink.
+      if (AliasAnalysis::onlyAccessesArgPointees(Behavior)) {
+        for (Value *Op : CI->arg_operands())
+          if (Op->getType()->isPointerTy() &&
+              CurAST.getAliasSetForPointer(Op, MemoryLocation::UnknownSize, AAMDNodes()).isMod())
+              return true;
+        return false;
+      }
+    }
+  }
+
+  // Only these instructions are hoistable/sinkable.
+  if (isa<BinaryOperator>(I) ||
+      isa<CmpInst>(I) ||
+      isa<ExtractElementInst>(I) ||
+      isa<CatchPadInst>(I) || isa<CleanupPadInst>(I) ||
+      isa<GetElementPtrInst>(I) ||
+      isa<InsertElementInst>(I) ||
+      isa<InsertValueInst>(I) ||
+      isa<LandingPadInst>(I) ||
+      isa<PHINode>(I) ||
+      isa<SelectInst>(I) ||
+      isa<ShuffleVectorInst>(I) ||
+      // Terminators
+        isa<BranchInst>(I) ||
+        isa<CatchReturnInst>(I) ||
+        isa<CatchSwitchInst>(I) ||
+        isa<CleanupReturnInst>(I) ||
+        isa<ResumeInst>(I) ||
+        isa<DetachInst>(I) ||
+        isa<ReattachInst>(I) ||
+        isa<SyncInst>(I) ||
+      // Unary
+        isa<AllocaInst>(I) ||
+        isa<CastInst>(I) ||
+        isa<ExtractValueInst>(I)
+      )
+    return false;
+
+  return true;
+}
+
+// Any reads/writes done in must be done in CurAST
+// cannot have any writes/reads, in detached region, respectively
+bool llvm::doesDetachedRegionAlias(AliasSetTracker &CurAST, const SmallPtrSetImpl<BasicBlock*>& functionPieces) {
+  // If this call only reads from memory and there are no writes to memory
+  // above, we can hoist or sink the call as appropriate.
+  bool FoundMod = false;
+  bool FoundRef = false;
+  for (const AliasSet &AS : CurAST) {
+    if (!AS.isForwardingAliasSet() && AS.isMod()) {
+      FoundMod = true;
+      break;
+    }
+    if (!AS.isForwardingAliasSet() && AS.isRef()) {
+      FoundRef = true;
+      break;
+    }
+  }
+  if (!FoundMod && !FoundRef)
+    return false;
+
+  for(const auto BB : functionPieces) {
+    for(const auto& I : *BB) {
+      if (doesDetachedInstructionAlias(CurAST, I, FoundMod, FoundRef))
+        return true;
+    }
+  }
+  return false;
+}
+
+void llvm::moveDetachInstBefore(Instruction* moveBefore, DetachInst& det,
+                          const SmallVectorImpl<BasicBlock *>& reattachParents,
+                          DominatorTree* DT, Value* newSyncRegion) {
+  if (newSyncRegion==nullptr) {
+    newSyncRegion = det.getSyncRegion();
+  }
+
+  auto oldSyncRegion = det.getSyncRegion();
+  det.setSyncRegion(newSyncRegion);
+
+  auto oldDetachingParent = det.getParent();
+  auto oldContinuation    = det.getContinue();
+
+  auto insertBB = moveBefore->getParent();
+  auto newContinuation = insertBB->splitBasicBlock(moveBefore);
+
+  for(auto reattachBlock : reattachParents) {
+    auto reattach = dyn_cast<ReattachInst>(reattachBlock->getTerminator());
+    assert(reattach->getSuccessor(0) == oldContinuation);
+    reattach->setSyncRegion(newSyncRegion);
+    reattach->setSuccessor(0, newContinuation);
+
+    //there should be no phi's after a reattach
+    // assert(oldContinuation->phis().size() == 0);
+  }
+
+  if (oldSyncRegion != newSyncRegion) {
+    attemptSyncRegionElimination(dyn_cast<Instruction>(oldSyncRegion));
+  }
+
+  det.removeFromParent();
+  {
+    IRBuilder<> b(oldDetachingParent);
+    b.CreateBr(oldContinuation);
+  }
+
+  auto term = insertBB->getTerminator();
+  det.insertAfter(term);
+  term->eraseFromParent();
+
+  if (DT) {
+    DT->recalculate(*det.getParent()->getParent());
+    DT->verify();
+  }
+}
+
+bool llvm::attemptSyncRegionElimination(Instruction *SyncRegion) {
+  assert(SyncRegion);
+  SmallVector<SyncInst*, 4> syncs;
+  for (User *U : SyncRegion->users()) {
+    if (Instruction *Inst = dyn_cast<Instruction>(U)) {
+      if (auto sync = dyn_cast<SyncInst>(Inst)) {
+        syncs.push_back(sync);
+      } else if (isa<DetachInst>(Inst) || isa<ReattachInst>(Inst)) {
+        return false;
+      } else {
+        llvm_unreachable("Attempting to use sync region elimination on non sync region");
+      }
+    }
+  }
+  for(auto sync : syncs) {
+    BranchInst* toReplace = BranchInst::Create(sync->getSuccessor(0));
+    ReplaceInstWithInst(sync, toReplace);
+  }
+  SyncRegion->eraseFromParent();
+  return true;
 }
