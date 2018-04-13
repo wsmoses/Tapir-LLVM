@@ -5979,6 +5979,31 @@ static bool removeUndefIntroducingPredecessor(BasicBlock *BB) {
   return false;
 }
 
+/// Push up reattaches when possible
+static bool pushUpReattaches(BasicBlock *BB) {
+  Instruction *I = BB->getTerminator();
+  if (BB->getSinglePredecessor() == nullptr && isa<ReattachInst>(I) && BB->size() == 1) {
+    auto reattach = dyn_cast<ReattachInst>(I);
+    for(auto p : predecessors(BB)) {
+      auto term = p->getTerminator();
+      auto cnt = term->getNumSuccessors();
+      if (cnt == 1 && isa<BranchInst>(term)) {
+        auto toReplace = reattach->clone();
+        ReplaceInstWithInst(term, toReplace);
+      } else {
+        auto *NewBB = BasicBlock::Create(BB->getContext(), BB->getName(), BB->getParent());
+        auto toReplace = reattach->clone();
+        NewBB->getInstList().push_back(toReplace);
+        for(unsigned idx = 0; idx < cnt; idx++) {
+          if (term->getSuccessor(idx) == BB) {
+            term->setSuccessor(idx, NewBB);
+          }
+        }
+      }
+    }
+  }
+}
+
 /// If BB immediately syncs and BB's predecessor detaches, serialize
 /// the sync and detach.  This will allow normal serial
 /// optimization passes to remove the blocks appropriately.  Return
@@ -6144,6 +6169,9 @@ bool SimplifyCFGOpt::run(BasicBlock *BB) {
 
   // Check for and remove sync instructions in empty sync regions.
   Changed |= removeEmptySyncs(BB);
+
+  // Move reattaches to first point possible
+  Changed |= pushUpReattaches(BB);
 
   // Merge basic blocks into their predecessor if there is only one distinct
   // pred, and if there is only one distinct successor of the predecessor, and

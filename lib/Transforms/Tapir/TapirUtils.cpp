@@ -119,16 +119,27 @@ bool llvm::verifyDetachedCFG(const DetachInst &Detach, DominatorTree &DT,
 bool llvm::populateDetachedCFG(
     const DetachInst &Detach, DominatorTree &DT,
     SmallPtrSetImpl<BasicBlock *> &functionPieces,
-    SmallVectorImpl<BasicBlock *> &reattachB,
+    SmallVectorImpl<ReattachInst*> &reattachB,
     SmallPtrSetImpl<BasicBlock *> &ExitBlocks,
-    int replaceOrDelete, bool error) {
+    bool error) {
+  return llvm::populateDetachedCFG(Detach.getDetached(),
+    Detach, DT, functionPieces, reattachB, ExitBlocks, error);
+}
+
+bool llvm::populateDetachedCFG(
+    BasicBlock* startSearch, const DetachInst& Detach,
+    DominatorTree &DT,
+    SmallPtrSetImpl<BasicBlock *> &functionPieces,
+    SmallVectorImpl<ReattachInst*> &reattachB,
+    SmallPtrSetImpl<BasicBlock *> &ExitBlocks,
+    bool error) {
   SmallVector<BasicBlock *, 32> Todo;
   SmallVector<BasicBlock *, 4> WorkListEH;
 
   BasicBlock *Spawned  = Detach.getDetached();
   BasicBlock *Continue = Detach.getContinue();
   BasicBlockEdge DetachEdge(Detach.getParent(), Spawned);
-  Todo.push_back(Spawned);
+  Todo.push_back(startSearch);
 
   while (!Todo.empty()) {
     BasicBlock *BB = Todo.pop_back_val();
@@ -138,22 +149,10 @@ bool llvm::populateDetachedCFG(
 
     TerminatorInst *Term = BB->getTerminator();
     if (Term == nullptr) return false;
-    if (isa<ReattachInst>(Term)) {
+    if (auto reattach = dyn_cast<ReattachInst>(Term)) {
       // only analyze reattaches going to the same continuation
       if (Term->getSuccessor(0) != Continue) continue;
-
-      reattachB.push_back(BB);
-      if (replaceOrDelete == 1) {
-        BranchInst* toReplace = BranchInst::Create(Continue);
-        ReplaceInstWithInst(Term, toReplace);
-      } else if (replaceOrDelete == 2) {
-          BasicBlock::iterator BI = Continue->begin();
-          while (PHINode *P = dyn_cast<PHINode>(BI)) {
-            P->removeIncomingValue(Term->getParent());
-            ++BI;
-          }
-          Term->eraseFromParent();
-      }
+      reattachB.push_back(reattach);
       continue;
     } else if (isa<DetachInst>(Term)) {
       assert(Term != &Detach && "Found recursive detach!");
@@ -242,7 +241,7 @@ Function *llvm::extractDetachBodyToFunction(DetachInst &detach,
   BasicBlock *Continue = detach.getContinue();
 
   SmallPtrSet<BasicBlock *, 32> functionPieces;
-  SmallVector<BasicBlock *, 32> reattachB;
+  SmallVector<BranchInst*, 32> branchB;
   SmallPtrSet<BasicBlock *, 4> ExitBlocks;
 
   assert(Spawned->getUniquePredecessor() &&
@@ -250,9 +249,19 @@ Function *llvm::extractDetachBodyToFunction(DetachInst &detach,
   assert(Spawned->getUniquePredecessor() == Detacher &&
          "Broken CFG.");
 
-  if (!populateDetachedCFG(detach, DT, functionPieces, reattachB,
-                           ExitBlocks, /*change to branch reattach*/1))
-    return nullptr;
+  {
+    SmallVector<ReattachInst*, 32> reattachB;
+    if (!populateDetachedCFG(detach, DT, functionPieces, reattachB,
+                             ExitBlocks))
+      return nullptr;
+
+    /*change reattach to branch*/
+    for(auto reattach: reattachB) {
+      BranchInst* toReplace = BranchInst::Create(reattach->getSuccessor(0));
+      ReplaceInstWithInst(reattach, toReplace);
+      branchB.push_back(toReplace);
+    }
+  }
 
   // Check the spawned block's predecessors.
   for (BasicBlock *BB : functionPieces) {
@@ -360,9 +369,9 @@ Function *llvm::extractDetachBodyToFunction(DetachInst &detach,
     // the stack appropriately.
   }
 
-  for(BasicBlock* BB : reattachB) {
-    auto term = BB->getTerminator();
-    BasicBlock::iterator BI = term->getSuccessor(0)->begin();
+  for(auto branch : branchB) {
+    auto BB = branch->getParent();
+    BasicBlock::iterator BI = branch->getSuccessor(0)->begin();
     while (PHINode *P = dyn_cast<PHINode>(BI)) {
       P->removeIncomingValue(BB);
       ++BI;
@@ -382,6 +391,29 @@ bool TapirTarget::shouldProcessFunction(const Function &F) {
   return false;
 }
 
+bool llvm::isConstantMemoryFreeOperation(Instruction* I, bool allowsyncregion) {
+  if (auto call = dyn_cast<CallInst>(I)) {
+    auto id = call->getCalledFunction()->getIntrinsicID();
+    return (id == Intrinsic::lifetime_start ||
+            id == Intrinsic::lifetime_end ||
+        allowsyncregion && (id == Intrinsic::syncregion_start));
+  }
+  return isa<BinaryOperator>(I) ||
+      isa<CmpInst>(I) ||
+      isa<ExtractElementInst>(I) ||
+      isa<CatchPadInst>(I) || isa<CleanupPadInst>(I) ||
+      isa<GetElementPtrInst>(I) ||
+      isa<InsertElementInst>(I) ||
+      isa<InsertValueInst>(I) ||
+      isa<LandingPadInst>(I) ||
+      isa<PHINode>(I) ||
+      isa<SelectInst>(I) ||
+      isa<ShuffleVectorInst>(I) ||
+      // Unary
+        isa<AllocaInst>(I) ||
+        isa<CastInst>(I) ||
+        isa<ExtractValueInst>(I);
+}
 
 /*
 spawn {
@@ -547,7 +579,7 @@ bool llvm::doesDetachedRegionAlias(AliasSetTracker &CurAST, const SmallPtrSetImp
 }
 
 void llvm::moveDetachInstBefore(Instruction* moveBefore, DetachInst& det,
-                          const SmallVectorImpl<BasicBlock *>& reattachParents,
+                          const SmallVectorImpl<ReattachInst*>& reattaches,
                           DominatorTree* DT, Value* newSyncRegion) {
   if (newSyncRegion==nullptr) {
     newSyncRegion = det.getSyncRegion();
@@ -562,8 +594,7 @@ void llvm::moveDetachInstBefore(Instruction* moveBefore, DetachInst& det,
   auto insertBB = moveBefore->getParent();
   auto newContinuation = insertBB->splitBasicBlock(moveBefore);
 
-  for(auto reattachBlock : reattachParents) {
-    auto reattach = dyn_cast<ReattachInst>(reattachBlock->getTerminator());
+  for(auto reattach : reattaches) {
     assert(reattach->getSuccessor(0) == oldContinuation);
     reattach->setSyncRegion(newSyncRegion);
     reattach->setSuccessor(0, newContinuation);
@@ -575,6 +606,8 @@ void llvm::moveDetachInstBefore(Instruction* moveBefore, DetachInst& det,
   if (oldSyncRegion != newSyncRegion) {
     attemptSyncRegionElimination(dyn_cast<Instruction>(oldSyncRegion));
   }
+
+  det.setSuccessor(1, newContinuation);
 
   det.removeFromParent();
   {

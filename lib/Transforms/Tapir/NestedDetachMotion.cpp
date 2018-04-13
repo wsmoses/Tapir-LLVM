@@ -35,9 +35,9 @@ struct NestedDetachMotion : public FunctionPass {
     start:
       if (auto det2 = dyn_cast<DetachInst>(det->getDetached()->getTerminator())) {
         SmallPtrSet<BasicBlock *, 4> functionPieces;
-        SmallVector<BasicBlock *, 4> reattachB;
+        SmallVector<ReattachInst*, 4> reattachB;
         SmallPtrSet<BasicBlock *, 4> ExitBlocks;
-        populateDetachedCFG(*det2, DT, functionPieces, reattachB, ExitBlocks, 0, false);
+        populateDetachedCFG(*det2, DT, functionPieces, reattachB, ExitBlocks, false);
         bool legal = true;
 
         AliasSetTracker CurAST(AA);
@@ -95,9 +95,13 @@ struct NestedDetachMotion : public FunctionPass {
     auto &DT = getAnalysis<DominatorTreeWrapperPass>().getDomTree();
 
     bool Changed = false;
+    tryMotion:
     for (BasicBlock &BB : F)
       if (auto det = dyn_cast<DetachInst>(BB.getTerminator())) {
-        Changed |= attemptDetachMotion(det, DT, AA);
+        bool b = attemptDetachMotion(det, DT, AA);
+        Changed |= b;
+        if (b) goto tryMotion;
+
       }
 
     return Changed;

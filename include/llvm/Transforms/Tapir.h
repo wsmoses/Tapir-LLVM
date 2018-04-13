@@ -60,13 +60,13 @@ FunctionPass *createSpawnRestructurePass();
 
 //===----------------------------------------------------------------------===//
 //
-// SpawnUnswitch - Do SpawnUnswitch Pass
+// DetachUnswitch - Do DetachUnswitch Pass
 //
-FunctionPass *createSpawnUnswitchPass();
+FunctionPass *createDetachUnswitchPass();
 
 //===----------------------------------------------------------------------===//
 //
-// PromoteDetachToCilk
+// LowerTapirToTarget
 //
 ModulePass *createLowerTapirToTargetPass(TapirTarget*);
 

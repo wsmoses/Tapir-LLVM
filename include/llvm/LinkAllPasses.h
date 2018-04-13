@@ -90,6 +90,7 @@ namespace {
       (void) llvm::createDeadInstEliminationPass();
       (void) llvm::createDeadStoreEliminationPass();
       (void) llvm::createDependenceAnalysisWrapperPass();
+      (void) llvm::createDetachUnswitchPass();
       (void) llvm::createDivergenceAnalysisPass();
       (void) llvm::createDomOnlyPrinterPass();
       (void) llvm::createDomPrinterPass();
@@ -218,7 +219,6 @@ namespace {
       (void) llvm::createRedundantSpawnPass();
       (void) llvm::createSpawnRestructurePass();
       (void) llvm::createSyncEliminationPass();
-      (void) llvm::createSpawnUnswitchPass();
 
       (void)new llvm::IntervalPartition();
       (void)new llvm::ScalarEvolutionWrapperPass();
