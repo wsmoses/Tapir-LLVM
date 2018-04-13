@@ -714,6 +714,8 @@ void PassManagerBuilder::populateModulePassManager(
   if (Rhino) {
     MPM.add(createNestedDetachMotionPass());
     MPM.add(createCFGSimplificationPass());
+    MPM.add(createDetachUnswitchPass());
+    MPM.add(createCFGSimplificationPass());
   }
 
   if (RerunAfterTapirLowering || (tapirTarget == nullptr))
