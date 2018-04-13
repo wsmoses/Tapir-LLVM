@@ -32,9 +32,16 @@ bool verifyDetachedCFG(const DetachInst &Detach, DominatorTree &DT,
 
 bool populateDetachedCFG(const DetachInst &Detach, DominatorTree &DT,
                          SmallPtrSetImpl<BasicBlock *> &functionPieces,
-                         SmallVectorImpl<BasicBlock *> &reattachB,
+                         SmallVectorImpl<ReattachInst*> &reattachB,
                          SmallPtrSetImpl<BasicBlock *> &ExitBlocks,
-                         int replaceOrDelete, bool error = true);
+                         bool error = true);
+
+bool populateDetachedCFG(BasicBlock* startSearch, const DetachInst& Detach,
+                         DominatorTree &DT,
+                         SmallPtrSetImpl<BasicBlock *> &functionPieces,
+                         SmallVectorImpl<ReattachInst*> &reattachB,
+                         SmallPtrSetImpl<BasicBlock *> &ExitBlocks,
+                         bool error = true);
 
 Function *extractDetachBodyToFunction(DetachInst &Detach,
                                       DominatorTree &DT, AssumptionCache &AC,
@@ -63,9 +70,10 @@ bool doesDetachedInstructionAlias(AliasSetTracker &CurAST, const Instruction& I,
 // cannot have any writes/reads, in detached region, respectively
 bool doesDetachedRegionAlias(AliasSetTracker &CurAST, const SmallPtrSetImpl<BasicBlock*>& functionPieces);
 void moveDetachInstBefore(Instruction* moveBefore, DetachInst& det,
-                          const SmallVectorImpl<BasicBlock *>& reattachParents,
+                          const SmallVectorImpl<ReattachInst*>& reattaches,
                           DominatorTree* DT, Value* newSyncRegion=nullptr);
 bool attemptSyncRegionElimination(Instruction *SyncRegion);
+bool isConstantMemoryFreeOperation(Instruction* inst, bool allowsyncregion=false);
 }  // end namepsace llvm
 
 #endif
