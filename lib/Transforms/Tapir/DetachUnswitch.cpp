@@ -9,6 +9,7 @@
 #include "llvm/IR/Function.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include "llvm/IR/CFG.h"
+#include <iostream>
 
 using namespace llvm;
 
@@ -54,13 +55,21 @@ struct DetachUnswitch : public FunctionPass {
     AU.addRequired<DominatorTreeWrapperPass>();
   }
 
+  bool hasOnlyAllocasAndNonMemInstructions(BasicBlock* BB) {
+    for (Instruction &I: *BB) {
+      if (!llvm::isConstantMemoryFreeOperation(&I, true) && &I != BB->getTerminator())
+        return false;
+    }
+    return true;
+  }
+
   bool attemptUnswitch(DetachInst* det, DominatorTree& DT, AliasAnalysis& AA) {
     bool changed = false;
-
+    std::cout << "test0";
     auto splitB = det->getDetached();
     auto term = splitB->getTerminator();
-    if (isa<BranchInst>(term) && term->getNumSuccessors() > 1 && splitB->size() == 1) {
-
+    if (isa<BranchInst>(term) && term->getNumSuccessors() > 1 && hasOnlyAllocasAndNonMemInstructions(splitB)) {
+      std::cout << "test1";
       auto blocks =     new SmallPtrSet<BasicBlock *, 4>[term->getNumSuccessors()];
       auto reattachB  = new SmallVector<ReattachInst*, 4>[term->getNumSuccessors()];
       auto ExitBlocks = new SmallPtrSet<BasicBlock *, 4>[term->getNumSuccessors()];
@@ -83,6 +92,7 @@ struct DetachUnswitch : public FunctionPass {
       delete[] ExitBlocks;
       if(!valid) {
         for(unsigned i=0; i<term->getNumSuccessors(); i++) {
+          std::cout << "test2";
           auto newDetacher = term->getSuccessor(i);
           auto newDetached = newDetacher->splitBasicBlock(newDetacher->getFirstInsertionPt());
           auto toReplace = DetachInst::Create(newDetached, det->getSuccessor(1), det->getSyncRegion());
@@ -97,6 +107,7 @@ struct DetachUnswitch : public FunctionPass {
   }
 
   bool runOnFunction(Function &F) override {
+
     if (skipFunction(F))
       return false;
 
