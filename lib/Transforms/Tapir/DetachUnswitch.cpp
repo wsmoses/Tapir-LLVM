@@ -9,6 +9,7 @@
 #include "llvm/IR/Function.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include "llvm/IR/CFG.h"
+#include "llvm/Transforms/Utils/Cloning.h"
 #include <iostream>
 
 using namespace llvm;
@@ -22,7 +23,13 @@ using namespace llvm;
 //    if (lic) B             else
 //    C                          spawn { A; C }
 //  }
+/*
+A
+if lic
+  spawn b
+spawn c
 
+*/
 /*
 spawn {
   if () {
@@ -65,11 +72,9 @@ struct DetachUnswitch : public FunctionPass {
 
   bool attemptUnswitch(DetachInst* det, DominatorTree& DT, AliasAnalysis& AA) {
     bool changed = false;
-    std::cout << "test0";
     auto splitB = det->getDetached();
     auto term = splitB->getTerminator();
     if (isa<BranchInst>(term) && term->getNumSuccessors() > 1 && hasOnlyAllocasAndNonMemInstructions(splitB)) {
-      std::cout << "test1";
       auto blocks =     new SmallPtrSet<BasicBlock *, 4>[term->getNumSuccessors()];
       auto reattachB  = new SmallVector<ReattachInst*, 4>[term->getNumSuccessors()];
       auto ExitBlocks = new SmallPtrSet<BasicBlock *, 4>[term->getNumSuccessors()];
@@ -91,11 +96,14 @@ struct DetachUnswitch : public FunctionPass {
       delete[] reattachB;
       delete[] ExitBlocks;
       if(!valid) {
+        auto split = splitB->splitBasicBlock(splitB->getFirstInsertionPt());
         for(unsigned i=0; i<term->getNumSuccessors(); i++) {
-          std::cout << "test2";
           auto newDetacher = term->getSuccessor(i);
+          auto copy = CloneBasicBlock(split, *(new ValueToValueMapTy()));
           auto newDetached = newDetacher->splitBasicBlock(newDetacher->getFirstInsertionPt());
-          auto toReplace = DetachInst::Create(newDetached, det->getSuccessor(1), det->getSyncRegion());
+          auto connect = BranchInst::Create(newDetached);
+          ReplaceInstWithInst(copy->getTerminator(), connect);
+          auto toReplace = DetachInst::Create(copy, det->getSuccessor(1), det->getSyncRegion());
           ReplaceInstWithInst(newDetacher->getTerminator(), toReplace);
         }
         auto toReplace = BranchInst::Create(det->getDetached());
@@ -123,7 +131,7 @@ struct DetachUnswitch : public FunctionPass {
     auto &AA = getAnalysis<AAResultsWrapperPass>().getAAResults();
     auto &DT = getAnalysis<DominatorTreeWrapperPass>().getDomTree();
 
-    //TODO motion non memory ops
+
     bool Changed = false;
     tryMotion:
     for (BasicBlock &BB : F)
