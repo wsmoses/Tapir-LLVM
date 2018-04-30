@@ -183,6 +183,13 @@ Constant *createRuntimeFunction(OpenMPRuntimeFunction Function,
     RTLFn = M->getOrInsertFunction("__kmpc_barrier", FnTy);
     break;
   }
+  case OMPRTL__kmpc_global_num_threads: {
+    Type *TypeParams[] = {IdentTyPtrTy};
+    FunctionType *FnTy =
+        FunctionType::get(Int32Ty, TypeParams, /*isVarArg=*/false);
+    RTLFn = M->getOrInsertFunction("__kmpc_global_num_threads", FnTy);
+    break;
+  }
   }
   return RTLFn;
 }
@@ -267,7 +274,7 @@ Type *getOrCreateIdentTy(Module *M) {
       IdentTy->setBody(ArrayRef<llvm::Type*>({Int32Ty /* reserved_1 */,
                                    Int32Ty /* flags */, Int32Ty /* reserved_2 */,
                                    Int32Ty /* reserved_3 */,
-                                   Int8PtrTy /* psource */}), "ident_t");
+                                   Int8PtrTy /* psource */}), false);
   }
   return IdentTy;
 }
@@ -345,18 +352,30 @@ Value *getOrCreateDefaultLocation(Module *M) {
 
 llvm::OpenMPABI::OpenMPABI() {}
 
+static const StringRef worker8_name = "__omp_wc8"; 
 /// \brief Get/Create the worker count for the spawning function.
 Value *llvm::OpenMPABI::GetOrCreateWorker8(Function &F) {
-  /*
-  // Value* W8 = F.getValueSymbolTable()->lookup(worker8_name);
-  // if (W8) return W8;
+  // TODO?: Figure out better place for these calls, but needed here due to
+  // this function being called before other initialization points
+  getOrCreateIdentTy(F.getParent());
+  getOrCreateDefaultLocation(F.getParent());
+
+  Value* W8 = F.getValueSymbolTable()->lookup(worker8_name);
+  if (W8) return W8;
   IRBuilder<> B(F.getEntryBlock().getFirstNonPHIOrDbgOrLifetime());
-  Value *P0 = B.CreateCall(CILKRTS_FUNC(get_nworkers, *F.getParent()));
-  Value *P8 = B.CreateMul(P0, ConstantInt::get(P0->getType(), 8), worker8_name);
-  return P8;
-  */
-  assert(0 && "OpenMP for loop / worker count not supported");
-  return nullptr;
+  auto NTFn = createRuntimeFunction(
+      OpenMPRuntimeFunction::OMPRTL__kmpc_global_num_threads, F.getParent());
+  Value *nworkers = emitRuntimeCall(NTFn, {DefaultOpenMPLocation}, "", B);
+
+  // num_threads returns 0 if not in parallel region, so need to add 1 to avoid
+  // dividing by zero later in the case of fast-openmp
+  // `nworkers += nworkers == 0`
+  Type *i32 = IntegerType::get(F.getContext(), 32); 
+  Value *eq = B.CreateICmpEQ(nworkers, ConstantInt::get(i32,0)); 
+  Value *eqi = B.CreateIntCast(eq, i32, false); 
+  Value *pnw = B.CreateAdd(nworkers, eqi, "nworkers");
+  Value *P8 = B.CreateMul(pnw, ConstantInt::get(i32, 8), worker8_name);
+  return P8; 
 }
 
 void llvm::OpenMPABI::createSync(SyncInst &SI, ValueToValueMapTy &DetachCtxToStackFrame) {
@@ -790,4 +809,6 @@ void llvm::OpenMPABI::postProcessFunction(Function &F) {
 
 void llvm::OpenMPABI::postProcessHelper(Function &F) {}
 
-bool llvm::OpenMPABI::processMain(Function &F) {}
+bool llvm::OpenMPABI::processMain(Function &F) { 
+  return false; 
+}
