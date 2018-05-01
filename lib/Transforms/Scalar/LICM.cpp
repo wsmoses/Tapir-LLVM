@@ -752,7 +752,7 @@ static bool isLoadInvariantInLoop(LoadInst *LI, DominatorTree *DT,
 }
 
 bool llvm::canSinkOrHoistInst(Instruction &I, AAResults *AA, DominatorTree *DT,
-                              Loop *CurLoop, AliasSetTracker* CurAST,
+                              Loop *CurLoop, AliasSetTracker *CurAST,
                               LoopSafetyInfo *SafetyInfo,
                               OptimizationRemarkEmitter *ORE) {
   // SafetyInfo is nullptr if we are checking for sinking from preheader to
