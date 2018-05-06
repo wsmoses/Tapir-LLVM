@@ -42,7 +42,6 @@
 #include "llvm/Transforms/Scalar/SimpleLoopUnswitch.h"
 #include "llvm/Transforms/Utils.h"
 #include "llvm/Transforms/Tapir.h"
-#include "llvm/Transforms/Utils/UnifyFunctionExitNodes.h"
 #include "llvm/Transforms/Vectorize.h"
 
 using namespace llvm;
@@ -776,7 +775,6 @@ void PassManagerBuilder::populateModulePassManager(
     // RTS.
 
     MPM.add(createInferFunctionAttrsLegacyPass());
-    // MPM.add(createUnifyFunctionExitNodesPass());
     MPM.add(createLowerTapirToTargetPass(tapirTarget));
     // The lowering pass may leave cruft around.  Clean it up.
     MPM.add(createCFGSimplificationPass());
