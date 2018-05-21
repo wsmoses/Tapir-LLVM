@@ -24,7 +24,6 @@
 #define TapirTarget_of(tt) ((TapirTarget*)tt)
 
 using namespace llvm;
-using namespace llvm::tapir;
 
 /// initializeTapirOpts - Initialize all passes linked into the
 /// TapirOpts library.
