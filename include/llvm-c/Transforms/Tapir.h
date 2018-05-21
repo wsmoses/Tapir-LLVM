@@ -32,12 +32,13 @@ extern "C" {
  *
  * @{
  */
-
-/** See llvm::createLoopSpawningPass function. */
-//void LLVMAddLoopSpawningPass(LLVMPassManagerRef PM, TapirTargetType tapirTarget);
+typedef void * TapirTargetRef;
 
 /** See llvm::createLowerTapirToTargetPass function. */
-//void LLVMAddLowerTapirToTargetPass(LLVMPassManagerRef PM, TapirTargetType tapirTarget);
+void LLVMAddLowerTapirToCilk(LLVMPassManagerRef PM, TapirTargetRef tt);
+
+/** See llvm::createLoopSpawningPass function. */
+void LLVMAddLoopSpawning(LLVMPassManagerRef PM, TapirTargetRef tt);
 
 /**
  * @}
