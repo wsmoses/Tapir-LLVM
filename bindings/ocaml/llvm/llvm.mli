@@ -2468,7 +2468,7 @@ val build_fcmp : Fcmp.t -> llvalue -> llvalue -> string ->
                       llbuilder -> llvalue
 
 
-(** {Parllel constructs} *)
+(** {Parallel constructs} *)
 
 (** [build_detach dbb cbb r b] creates a
     [detach within %r, %dbb, %cbb]
