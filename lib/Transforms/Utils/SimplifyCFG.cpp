@@ -6001,7 +6001,9 @@ static bool pushUpReattaches(BasicBlock *BB) {
         }
       }
     }
+    return true;
   }
+  return false; 
 }
 
 /// If BB immediately syncs and BB's predecessor detaches, serialize
