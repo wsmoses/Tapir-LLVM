@@ -1,4 +1,4 @@
-//===- QthreadsABI.cpp - Lower Tapir into Cilk runtime system calls -----------===//
+//===- QthreadsABI.cpp - Lower Tapir into Qthreads runtime system calls -----------===//
 //
 //                     The LLVM Compiler Infrastructure
 //
@@ -8,9 +8,8 @@
 //===----------------------------------------------------------------------===//
 //
 // This file implements the QthreadsABI interface, which is used to convert Tapir
-// instructions -- detach, reattach, and sync -- to calls into the Cilk
-// runtime system.  This interface does the low-level dirty work of passes
-// such as LowerToCilk.
+// instructions -- detach, reattach, and sync -- to calls into the Qthreads
+// runtime system.  
 //
 //===----------------------------------------------------------------------===//
 
@@ -30,10 +29,10 @@ using namespace llvm;
 
 typedef uint64_t aligned_t; 
 typedef aligned_t (*qthread_f)(void *arg); 
-typedef int (*qthread_fork_copyargs)(qthread_f f, const void *arg, size_t arg_size, aligned_t *ret); 
-typedef int (*qthread_readFF)(aligned_t *syncvar); 
-typedef int (*qthread_initialize)(); 
-typedef unsigned short (*qthread_num_workers)(); 
+typedef int (qthread_fork_copyargs)(qthread_f f, const void *arg, size_t arg_size, aligned_t *ret); 
+typedef int (qthread_readFF)(aligned_t *syncvar, aligned_t *result); 
+typedef int (qthread_initialize)(); 
+typedef unsigned short (qthread_num_workers)(); 
 
 #define QTHREAD_FUNC(name, CGF) get_qthread_##name(CGF)
 
@@ -64,29 +63,36 @@ Value *QthreadsABI::GetOrCreateWorker8(Function &F) {
   return P8;
 }
 
-//TODO: Make it work for multiple workers
+//TODO: Make it work for multiple
 void QthreadsABI::createSync(SyncInst &SI, ValueToValueMapTy &DetachCtxToStackFrame) {
   IRBuilder<> builder(&SI); 
   auto F = SI.getParent()->getParent(); 
   auto M = F->getParent();
   auto& C = M->getContext(); 
-  std::vector<Value *> Args = {Constant::getNullValue(Type::getInt64PtrTy(C))}; //TODO: get feb pointer here
-  builder.CreateCall(QTHREAD_FUNC(readFF, *F->getParent()), Args);
+  auto null = Constant::getNullValue(Type::getInt64PtrTy(C)); 
+  std::vector<Value *> args = {null, null}; //TODO: get feb pointer here
+  auto readff = QTHREAD_FUNC(readFF, *M); 
+  builder.CreateCall(readff, args);
+  BranchInst *PostSync = BranchInst::Create(SI.getSuccessor(0));
+  ReplaceInstWithInst(&SI, PostSync);
 }
 
+// Adds entry basic blocks to body of extracted, replacing extracted, and adds
+// necessary code to call, i.e. storing arguments in struct
 Function* formatFunctionToQthreadF(Function* extracted, CallInst* cal){
-  Module *M = extracted->getParent(); 
-  auto& C = M->getContext(); 
-  DataLayout DL(M);
-
-  auto FnParams = extracted->getFunctionType()->params();
-  StructType *ArgsTy = StructType::create(FnParams, "anon");
-  auto *ArgsPtrTy = PointerType::getUnqual(ArgsTy);
-
   std::vector<Value*> LoadedCapturedArgs;
   for(auto& a:cal->arg_operands()) {
     LoadedCapturedArgs.push_back(a);
   }
+
+  Module *M = extracted->getParent(); 
+  auto& C = M->getContext(); 
+  DataLayout DL(M);
+  IRBuilder<> CallerIRBuilder(cal);
+
+  auto FnParams = extracted->getFunctionType()->params();
+  StructType *ArgsTy = StructType::create(FnParams, "anon");
+  auto *ArgsPtrTy = PointerType::getUnqual(ArgsTy);
 
   auto *OutlinedFnTy = FunctionType::get(
       Type::getInt64Ty(C),
@@ -94,31 +100,27 @@ Function* formatFunctionToQthreadF(Function* extracted, CallInst* cal){
       false);
 
   auto *OutlinedFn = Function::Create(
-      OutlinedFnTy, GlobalValue::InternalLinkage, ".omp_outlined.", M);
+      OutlinedFnTy, GlobalValue::InternalLinkage, ".qthreads_outlined.", M);
+  OutlinedFn->addFnAttr(Attribute::AlwaysInline);
+  OutlinedFn->addFnAttr(Attribute::NoUnwind);
+  OutlinedFn->addFnAttr(Attribute::UWTable);
 
   StringRef ArgNames[] = {".args"};
-
   std::vector<Value*> out_args;
   for (auto &Arg : OutlinedFn->args()) {
     Arg.setName(ArgNames[out_args.size()]);
     out_args.push_back(&Arg);
   }
 
-  OutlinedFn->setLinkage(GlobalValue::InternalLinkage);
-  OutlinedFn->addFnAttr(Attribute::AlwaysInline);
-  OutlinedFn->addFnAttr(Attribute::NoUnwind);
-  OutlinedFn->addFnAttr(Attribute::UWTable);
-
-  auto *EntryBB = BasicBlock::Create(C, "qthread_entry", OutlinedFn, nullptr);
-  IRBuilder<> IRBuilder(EntryBB);
-
-  auto *Context = IRBuilder.CreateStructGEP(ArgsPtrTy, out_args[0], 0);//.back();
-
+  // Entry Code
+  auto *EntryBB = BasicBlock::Create(C, "entry", OutlinedFn, nullptr);
+  IRBuilder<> EntryBuilder(EntryBB);
+  auto argStructPtr = IRBuilder.CreateBitCast(out_args[0], ArgsPtrTy); 
   ValueToValueMapTy valmap;
 
   unsigned int argc = 0;
   for (auto& arg : extracted->args()) {
-    auto *DataAddrEP = IRBuilder.CreateStructGEP(ArgsPtrTy, out_args[0], argc); 
+    auto *DataAddrEP = IRBuilder.CreateStructGEP(ArgsTy, argStructPtr, argc); 
     auto *DataAddr = IRBuilder.CreateAlignedLoad(
         DataAddrEP,
         DL.getTypeAllocSize(DataAddrEP->getType()->getPointerElementType()));
@@ -129,6 +131,30 @@ Function* formatFunctionToQthreadF(Function* extracted, CallInst* cal){
   SmallVector< ReturnInst *,5> retinsts;
   CloneFunctionInto(OutlinedFn, extracted, valmap, true, retinsts);
   IRBuilder.CreateBr(OutlinedFn->getBasicBlockList().getNextNode(*EntryBB));
+
+  // Caller code
+  auto callerArgStruct = CallerIRBuilder.CreateAlloca(ArgsTy); 
+  unsigned int cArgc = 0;
+  for (auto& arg : LoadedCapturedArgs) {
+    auto *DataAddrEP = IRBuilder.CreateStructGEP(ArgsTy, callerArgStruct, cArgc); 
+    auto *DataAddr = IRBuilder.CreateAlignedStore(
+        LoadedCapturedArgs[cArgc], DataAddrEP,
+        DL.getTypeAllocSize(LoadedCapturedArgs[cArgc]->getType()));
+    cArgc++;
+  }
+
+  assert(argc == cArgc && "Wrong number of arguments passed to outlined function"); 
+
+  auto outlinedFnPtr = CallerIRBuilder.CreatePointerBitCastOrAddrSpaceCast(
+          OutlinedFn, TypeBuilder<qthread_f, false>::get(M->getContext())); 
+  auto argSize = ConstantInt::get(Type::getInt64Ty(C), DL.getTypeAllocSize(ArgsTy)); 
+  auto ret = CallerIRBuilder.CreateAlloca(Type::getInt64Ty(C)); 
+  auto argsStructVoidPtr = CallerIRBuilder.CreateBitCast(callerArgStruct, Type::getInt8PtrTy(C)); 
+  std::vector<Value *> callerArgs = { outlinedFnPtr, argsStructVoidPtr, argSize, ret}; 
+  CallerIRBuilder.CreateCall(QTHREAD_FUNC(fork_copyargs, *M), callerArgs); 
+  
+  cal->eraseFromParent();
+  extracted->eraseFromParent();
 
   return OutlinedFn; 
 }
