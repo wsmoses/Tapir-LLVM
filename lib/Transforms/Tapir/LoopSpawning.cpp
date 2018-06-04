@@ -73,7 +73,9 @@ static cl::opt<TapirTargetType> ClTapirTarget(
                clEnumValN(TapirTargetType::Cilk,
                           "cilk", "Cilk Plus"),
                clEnumValN(TapirTargetType::OpenMP,
-                          "openmp", "OpenMP")));
+                          "openmp", "OpenMP"),
+               clEnumValN(TapirTargetType::Qthreads,
+                          "qthreads", "Qthreads")));
 
 namespace {
 // /// \brief This modifies LoopAccessReport to initialize message with
