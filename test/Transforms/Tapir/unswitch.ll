@@ -10,13 +10,13 @@ entry:
 
 det.achd:                                         ; preds = %entry
   br i1 %tobool, label %if.else, label %if.then
-; CHECK: detach within %syncreg, label %0, label %det.cont
+; CHECK: detach within %syncreg, label %if.then, label %det.cont
 
 if.then:                                          ; preds = %det.achd
   tail call void (...) @a() #3
   reattach within %syncreg, label %det.cont
 
-; CHECK: detach within %syncreg, label %1, label %det.cont
+; CHECK: detach within %syncreg, label %if.else, label %det.cont
 if.else:                                          ; preds = %det.achd
   tail call void (...) @b() #3
   reattach within %syncreg, label %det.cont
