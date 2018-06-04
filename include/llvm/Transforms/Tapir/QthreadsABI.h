@@ -11,8 +11,8 @@
 // exposed by the Utils library.
 //
 //===----------------------------------------------------------------------===//
-#ifndef CILK_ABI_H_
-#define CILK_ABI_H_
+#ifndef QTHREADS_ABI_H_
+#define QTHREADS_ABI_H_
 
 #include "llvm/Transforms/Scalar.h"
 #include "llvm/ADT/SmallPtrSet.h"
@@ -40,34 +40,6 @@
 #include <deque>
 
 namespace llvm {
-
-/// QthreadsABILoopSpawning uses Qthreads to handle Tapir loops.
-class QthreadsABILoopSpawning : public LoopOutline {
-public:
-  QthreadsABILoopSpawning(Loop *OrigLoop, ScalarEvolution &SE,
-                      LoopInfo *LI, DominatorTree *DT,
-                      AssumptionCache *AC,
-                      OptimizationRemarkEmitter &ORE)
-      : LoopOutline(OrigLoop, SE, LI, DT, AC, ORE)
-  {}
-
-  bool processLoop();
-
-  virtual ~QthreadsABILoopSpawning() {}
-
-protected:
-  // PHINode* canonicalizeIVs(Type *Ty);
-  Value* canonicalizeLoopLatch(PHINode *IV, Value *Limit);
-
-// private:
-//   /// Report an analysis message to assist the user in diagnosing loops that are
-//   /// not transformed.  These are handled as LoopAccessReport rather than
-//   /// VectorizationReport because the << operator of LoopSpawningReport returns
-//   /// LoopAccessReport.
-//   void emitAnalysis(const LoopAccessReport &Message) const {
-//     emitAnalysisDiag(OrigLoop, *ORE, Message);
-//   }
-};
 
 class QthreadsABI : public TapirTarget {
 public:
