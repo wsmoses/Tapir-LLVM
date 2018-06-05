@@ -115,29 +115,35 @@ Function* formatFunctionToQthreadF(Function* extracted, CallInst* cal){
   // Entry Code
   auto *EntryBB = BasicBlock::Create(C, "entry", OutlinedFn, nullptr);
   IRBuilder<> EntryBuilder(EntryBB);
-  auto argStructPtr = IRBuilder.CreateBitCast(out_args[0], ArgsPtrTy); 
+  auto argStructPtr = EntryBuilder.CreateBitCast(out_args[0], ArgsPtrTy); 
   ValueToValueMapTy valmap;
 
   unsigned int argc = 0;
   for (auto& arg : extracted->args()) {
-    auto *DataAddrEP = IRBuilder.CreateStructGEP(ArgsTy, argStructPtr, argc); 
-    auto *DataAddr = IRBuilder.CreateAlignedLoad(
+    auto *DataAddrEP = EntryBuilder.CreateStructGEP(ArgsTy, argStructPtr, argc); 
+    auto *DataAddr = EntryBuilder.CreateAlignedLoad(
         DataAddrEP,
         DL.getTypeAllocSize(DataAddrEP->getType()->getPointerElementType()));
     valmap.insert(std::pair<Value*,Value*>(&arg,DataAddr));
     argc++;
   }
 
+  // Replace return values with return 0
   SmallVector< ReturnInst *,5> retinsts;
   CloneFunctionInto(OutlinedFn, extracted, valmap, true, retinsts);
-  IRBuilder.CreateBr(OutlinedFn->getBasicBlockList().getNextNode(*EntryBB));
+  EntryBuilder.CreateBr(OutlinedFn->getBasicBlockList().getNextNode(*EntryBB));
+
+  for (auto& ret : retinsts) {
+    auto retzero = ReturnInst::Create(C, ConstantInt::get(Type::getInt64Ty(C), 0)); 
+    ReplaceInstWithInst(ret, retzero);
+  }
 
   // Caller code
   auto callerArgStruct = CallerIRBuilder.CreateAlloca(ArgsTy); 
   unsigned int cArgc = 0;
   for (auto& arg : LoadedCapturedArgs) {
-    auto *DataAddrEP = IRBuilder.CreateStructGEP(ArgsTy, callerArgStruct, cArgc); 
-    auto *DataAddr = IRBuilder.CreateAlignedStore(
+    auto *DataAddrEP = CallerIRBuilder.CreateStructGEP(ArgsTy, callerArgStruct, cArgc); 
+    auto *DataAddr = CallerIRBuilder.CreateAlignedStore(
         LoadedCapturedArgs[cArgc], DataAddrEP,
         DL.getTypeAllocSize(LoadedCapturedArgs[cArgc]->getType()));
     cArgc++;
@@ -152,9 +158,11 @@ Function* formatFunctionToQthreadF(Function* extracted, CallInst* cal){
   auto argsStructVoidPtr = CallerIRBuilder.CreateBitCast(callerArgStruct, Type::getInt8PtrTy(C)); 
   std::vector<Value *> callerArgs = { outlinedFnPtr, argsStructVoidPtr, argSize, ret}; 
   CallerIRBuilder.CreateCall(QTHREAD_FUNC(fork_copyargs, *M), callerArgs); 
-  
+
   cal->eraseFromParent();
   extracted->eraseFromParent();
+
+  DEBUG(OutlinedFn->dump()); 
 
   return OutlinedFn; 
 }
