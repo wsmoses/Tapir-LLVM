@@ -28,9 +28,12 @@ using namespace llvm;
 #define DEBUG_TYPE "qthreadsabi"
 
 typedef uint64_t aligned_t; 
+typedef (void*) sync_t_ptr; 
 typedef aligned_t (*qthread_f)(void *arg); 
 typedef int (qthread_fork_copyargs)(qthread_f f, const void *arg, size_t arg_size, aligned_t *ret); 
-typedef int (qthread_readFF)(aligned_t *syncvar, aligned_t *result); 
+typedef int (qthread_sinc_create)(size_t size, (void*) initval, (void*) op, size_t expect);  
+typedef int (qthread_sinc_expect)(sync_t_tr s, size_t incr); 
+typedef int (qthread_sinc_wait)(sync_ptr_t, (void*) target); 
 typedef int (qthread_initialize)(); 
 typedef unsigned short (qthread_num_workers)(); 
 
@@ -48,7 +51,9 @@ typedef unsigned short (qthread_num_workers)();
 DEFAULT_GET_QTHREAD_FUNC(num_workers)
 DEFAULT_GET_QTHREAD_FUNC(fork_copyargs)
 DEFAULT_GET_QTHREAD_FUNC(initialize)
-DEFAULT_GET_QTHREAD_FUNC(readFF)
+DEFAULT_GET_QTHREAD_FUNC(sinc_create)
+DEFAULT_GET_QTHREAD_FUNC(sinc_expect)
+DEFAULT_GET_QTHREAD_FUNC(sinc_wait)
 
 QthreadsABI::QthreadsABI() { }
 QthreadsABI::~QthreadsABI() { }
@@ -71,8 +76,8 @@ void QthreadsABI::createSync(SyncInst &SI, ValueToValueMapTy &DetachCtxToStackFr
   auto& C = M->getContext(); 
   auto null = Constant::getNullValue(Type::getInt64PtrTy(C)); 
   std::vector<Value *> args = {null, null}; //TODO: get feb pointer here
-  auto readff = QTHREAD_FUNC(readFF, *M); 
-  builder.CreateCall(readff, args);
+  auto sincwait = QTHREAD_FUNC(sinc_wait, *M); 
+  builder.CreateCall(sincwait, args);
   BranchInst *PostSync = BranchInst::Create(SI.getSuccessor(0));
   ReplaceInstWithInst(&SI, PostSync);
 }
@@ -154,9 +159,9 @@ Function* formatFunctionToQthreadF(Function* extracted, CallInst* cal){
   auto outlinedFnPtr = CallerIRBuilder.CreatePointerBitCastOrAddrSpaceCast(
           OutlinedFn, TypeBuilder<qthread_f, false>::get(M->getContext())); 
   auto argSize = ConstantInt::get(Type::getInt64Ty(C), DL.getTypeAllocSize(ArgsTy)); 
-  auto ret = CallerIRBuilder.CreateAlloca(Type::getInt64Ty(C)); 
+  auto null = Constant::getNullValue(Type::getInt64PtrTy(C)); 
   auto argsStructVoidPtr = CallerIRBuilder.CreateBitCast(callerArgStruct, Type::getInt8PtrTy(C)); 
-  std::vector<Value *> callerArgs = { outlinedFnPtr, argsStructVoidPtr, argSize, ret}; 
+  std::vector<Value *> callerArgs = { outlinedFnPtr, argsStructVoidPtr, argSize, null}; 
   CallerIRBuilder.CreateCall(QTHREAD_FUNC(fork_copyargs, *M), callerArgs); 
 
   cal->eraseFromParent();
