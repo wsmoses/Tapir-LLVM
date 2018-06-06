@@ -31,6 +31,8 @@ static cl::opt<TapirTargetType> ClTapirTarget(
                           "serial", "Serial code"),
                clEnumValN(TapirTargetType::Cilk,
                           "cilk", "Cilk Plus"),
+               clEnumValN(TapirTargetType::Qthreads,
+                          "qthreads", "Qthreads"),
                clEnumValN(TapirTargetType::OpenMP,
                           "openmp", "OpenMP")));
 
