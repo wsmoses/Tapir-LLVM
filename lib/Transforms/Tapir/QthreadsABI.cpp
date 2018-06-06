@@ -37,6 +37,7 @@ typedef sync_t* (qt_sinc_create_t)(size_t size, void* initval, void* op, size_t 
 typedef void (qt_sinc_expect_t)(sync_t* s, size_t incr); 
 typedef void (qt_sinc_submit_t)(sync_t* s, void* val); 
 typedef void (qt_sinc_wait_t)(sync_t* s, void* target); 
+typedef void (qt_sinc_destroy_t)(sync_t* s);  
 
 #define QTHREAD_FUNC(name, CGF) get_##name(CGF)
 
@@ -56,6 +57,7 @@ DEFAULT_GET_QTHREAD_FUNC(qt_sinc_create)
 DEFAULT_GET_QTHREAD_FUNC(qt_sinc_expect)
 DEFAULT_GET_QTHREAD_FUNC(qt_sinc_submit)
 DEFAULT_GET_QTHREAD_FUNC(qt_sinc_wait)
+DEFAULT_GET_QTHREAD_FUNC(qt_sinc_destroy)
 
 QthreadsABI::QthreadsABI() { }
 QthreadsABI::~QthreadsABI() { }
@@ -74,17 +76,25 @@ Value *QthreadsABI::GetOrCreateWorker8(Function &F) {
 Value* getOrCreateSinc(ValueToValueMapTy &valmap, Value* SyncRegion, Function *F){
   Module *M = F->getParent(); 
   LLVMContext& C = M->getContext(); 
-  Value* v; 
-  if((v = valmap[SyncRegion]))
-    return v;
+  Value* sinc; 
+  if((sinc = valmap[SyncRegion]))
+    return sinc;
   else {
     Value* zero = ConstantInt::get(Type::getInt64Ty(C), 0); 
     Value* null = Constant::getNullValue(Type::getInt8PtrTy(C)); 
     std::vector<Value*> createArgs = {zero, null, null, zero}; 
-    v = CallInst::Create(QTHREAD_FUNC(qt_sinc_create, *M), createArgs, "",  
+    sinc = CallInst::Create(QTHREAD_FUNC(qt_sinc_create, *M), createArgs, "",  
                          F->getEntryBlock().getTerminator()); 
-    valmap[SyncRegion] = v;
-    return v; 
+    valmap[SyncRegion] = sinc;
+
+    // Make sure we destroy the sinc at all exit points to prevent memory leaks
+    for(BasicBlock &BB : *F){
+      if(isa<ReturnInst>(BB.getTerminator())){
+        CallInst::Create(QTHREAD_FUNC(qt_sinc_destroy, *M), {sinc}, "", BB.getTerminator()); 
+      }
+    }
+
+    return sinc; 
   }
 }
 
@@ -246,7 +256,9 @@ Function *QthreadsABI::createDetach(DetachInst &detach,
 
 void QthreadsABI::preProcessFunction(Function &F) {}
 
-void QthreadsABI::postProcessFunction(Function &F) {}
+void QthreadsABI::postProcessFunction(Function &F) {
+  
+}
 
 void QthreadsABI::postProcessHelper(Function &F) {}
 
