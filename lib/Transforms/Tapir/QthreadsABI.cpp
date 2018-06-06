@@ -62,11 +62,12 @@ QthreadsABI::~QthreadsABI() { }
 
 static const StringRef worker8_name = "qthread_nworker8";
 
-/// \brief Get/Create the worker count for the spawning function.
+/// \brief Get/Create the worker count for the spawning function. We stick it
+// at the end of the entry block to ensure that if we are in main it occurs
+// after initialization
 Value *QthreadsABI::GetOrCreateWorker8(Function &F) {
-  IRBuilder<> B(F.getEntryBlock().getFirstNonPHIOrDbgOrLifetime());
-  Value *P0 = B.CreateCall(QTHREAD_FUNC(qthread_num_workers, *F.getParent()));
-  Value *P8 = B.CreateMul(P0, ConstantInt::get(P0->getType(), 8), worker8_name);
+  Value *P0 = CallInst::Create(QTHREAD_FUNC(qthread_num_workers, *F.getParent()), "", F.getEntryBlock().getTerminator());
+  Value *P8 = BinaryOperator::Create(Instruction::Mul, P0, ConstantInt::get(P0->getType(), 8), worker8_name, F.getEntryBlock().getTerminator());
   return P8;
 }
 
@@ -250,9 +251,7 @@ void QthreadsABI::postProcessFunction(Function &F) {}
 void QthreadsABI::postProcessHelper(Function &F) {}
 
 bool QthreadsABI::processMain(Function &F) {
-  IRBuilder<> start(F.getEntryBlock().getFirstNonPHIOrDbg());
-  auto m = start.CreateCall(QTHREAD_FUNC(qthread_initialize, *F.getParent()));
-  m->moveBefore(F.getEntryBlock().getTerminator());
+  CallInst::Create(QTHREAD_FUNC(qthread_initialize, *F.getParent()), "", F.getEntryBlock().getFirstNonPHIOrDbg());
   return true;
 }
 
