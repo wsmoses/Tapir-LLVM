@@ -28,32 +28,34 @@ using namespace llvm;
 #define DEBUG_TYPE "qthreadsabi"
 
 typedef uint64_t aligned_t; 
-typedef (void*) sync_t_ptr; 
-typedef aligned_t (*qthread_f)(void *arg); 
-typedef int (qthread_fork_copyargs)(qthread_f f, const void *arg, size_t arg_size, aligned_t *ret); 
-typedef int (qthread_sinc_create)(size_t size, (void*) initval, (void*) op, size_t expect);  
-typedef int (qthread_sinc_expect)(sync_t_tr s, size_t incr); 
-typedef int (qthread_sinc_wait)(sync_ptr_t, (void*) target); 
-typedef int (qthread_initialize)(); 
-typedef unsigned short (qthread_num_workers)(); 
+typedef uint8_t sync_t; 
+typedef aligned_t (*qthread_f)(void* arg); 
+typedef int (qthread_initialize_t)(); 
+typedef unsigned short (qthread_num_workers_t)(); 
+typedef int (qthread_fork_copyargs_t)(qthread_f f, const void *arg, size_t arg_size, aligned_t *ret); 
+typedef sync_t* (qt_sinc_create_t)(size_t size, void* initval, void* op, size_t expect);  
+typedef void (qt_sinc_expect_t)(sync_t* s, size_t incr); 
+typedef void (qt_sinc_submit_t)(sync_t* s, void* val); 
+typedef void (qt_sinc_wait_t)(sync_t* s, void* target); 
 
-#define QTHREAD_FUNC(name, CGF) get_qthread_##name(CGF)
+#define QTHREAD_FUNC(name, CGF) get_##name(CGF)
 
 #define DEFAULT_GET_QTHREAD_FUNC(name)                                  \
-  static Function *get_qthread_##name(Module& M) {         \
+  static Function *get_##name(Module& M) {         \
     return cast<Function>(M.getOrInsertFunction(            \
-                                          "qthread_"#name,            \
-                                          TypeBuilder<qthread_##name, false>::get(M.getContext()) \
+                                          #name,            \
+                                          TypeBuilder< name ## _t , false >::get(M.getContext()) \
 							)); \
   }
 
 // TODO: replace macros with something better
-DEFAULT_GET_QTHREAD_FUNC(num_workers)
-DEFAULT_GET_QTHREAD_FUNC(fork_copyargs)
-DEFAULT_GET_QTHREAD_FUNC(initialize)
-DEFAULT_GET_QTHREAD_FUNC(sinc_create)
-DEFAULT_GET_QTHREAD_FUNC(sinc_expect)
-DEFAULT_GET_QTHREAD_FUNC(sinc_wait)
+DEFAULT_GET_QTHREAD_FUNC(qthread_num_workers)
+DEFAULT_GET_QTHREAD_FUNC(qthread_fork_copyargs)
+DEFAULT_GET_QTHREAD_FUNC(qthread_initialize)
+DEFAULT_GET_QTHREAD_FUNC(qt_sinc_create)
+DEFAULT_GET_QTHREAD_FUNC(qt_sinc_expect)
+DEFAULT_GET_QTHREAD_FUNC(qt_sinc_submit)
+DEFAULT_GET_QTHREAD_FUNC(qt_sinc_wait)
 
 QthreadsABI::QthreadsABI() { }
 QthreadsABI::~QthreadsABI() { }
@@ -63,20 +65,38 @@ static const StringRef worker8_name = "qthread_nworker8";
 /// \brief Get/Create the worker count for the spawning function.
 Value *QthreadsABI::GetOrCreateWorker8(Function &F) {
   IRBuilder<> B(F.getEntryBlock().getFirstNonPHIOrDbgOrLifetime());
-  Value *P0 = B.CreateCall(QTHREAD_FUNC(num_workers, *F.getParent()));
+  Value *P0 = B.CreateCall(QTHREAD_FUNC(qthread_num_workers, *F.getParent()));
   Value *P8 = B.CreateMul(P0, ConstantInt::get(P0->getType(), 8), worker8_name);
   return P8;
 }
 
-//TODO: Make it work for multiple
+Value* getOrCreateSinc(ValueToValueMapTy &valmap, Value* SyncRegion, Function *F){
+  Module *M = F->getParent(); 
+  LLVMContext& C = M->getContext(); 
+  Value* v; 
+  if((v = valmap[SyncRegion]))
+    return v;
+  else {
+    Value* zero = ConstantInt::get(Type::getInt64Ty(C), 0); 
+    Value* null = Constant::getNullValue(Type::getInt8PtrTy(C)); 
+    std::vector<Value*> createArgs = {zero, null, null, zero}; 
+    v = CallInst::Create(QTHREAD_FUNC(qt_sinc_create, *M), createArgs, "",  
+                         F->getEntryBlock().getTerminator()); 
+    valmap[SyncRegion] = v;
+    return v; 
+  }
+}
+
 void QthreadsABI::createSync(SyncInst &SI, ValueToValueMapTy &DetachCtxToStackFrame) {
   IRBuilder<> builder(&SI); 
   auto F = SI.getParent()->getParent(); 
   auto M = F->getParent();
   auto& C = M->getContext(); 
-  auto null = Constant::getNullValue(Type::getInt64PtrTy(C)); 
-  std::vector<Value *> args = {null, null}; //TODO: get feb pointer here
-  auto sincwait = QTHREAD_FUNC(sinc_wait, *M); 
+  auto null = Constant::getNullValue(Type::getInt8PtrTy(C)); 
+  Value* SR = SI.getSyncRegion(); 
+  auto sinc = getOrCreateSinc(DetachCtxToStackFrame, SR, F); 
+  std::vector<Value *> args = {sinc, null}; 
+  auto sincwait = QTHREAD_FUNC(qt_sinc_wait, *M); 
   builder.CreateCall(sincwait, args);
   BranchInst *PostSync = BranchInst::Create(SI.getSuccessor(0));
   ReplaceInstWithInst(&SI, PostSync);
@@ -148,9 +168,9 @@ Function* formatFunctionToQthreadF(Function* extracted, CallInst* cal){
   unsigned int cArgc = 0;
   for (auto& arg : LoadedCapturedArgs) {
     auto *DataAddrEP = CallerIRBuilder.CreateStructGEP(ArgsTy, callerArgStruct, cArgc); 
-    auto *DataAddr = CallerIRBuilder.CreateAlignedStore(
+    CallerIRBuilder.CreateAlignedStore(
         LoadedCapturedArgs[cArgc], DataAddrEP,
-        DL.getTypeAllocSize(LoadedCapturedArgs[cArgc]->getType()));
+        DL.getTypeAllocSize(arg->getType()));
     cArgc++;
   }
 
@@ -162,7 +182,7 @@ Function* formatFunctionToQthreadF(Function* extracted, CallInst* cal){
   auto null = Constant::getNullValue(Type::getInt64PtrTy(C)); 
   auto argsStructVoidPtr = CallerIRBuilder.CreateBitCast(callerArgStruct, Type::getInt8PtrTy(C)); 
   std::vector<Value *> callerArgs = { outlinedFnPtr, argsStructVoidPtr, argSize, null}; 
-  CallerIRBuilder.CreateCall(QTHREAD_FUNC(fork_copyargs, *M), callerArgs); 
+  CallerIRBuilder.CreateCall(QTHREAD_FUNC(qthread_fork_copyargs, *M), callerArgs); 
 
   cal->eraseFromParent();
   extracted->eraseFromParent();
@@ -177,15 +197,33 @@ Function *QthreadsABI::createDetach(DetachInst &detach,
 				    DominatorTree &DT, AssumptionCache &AC) {
   BasicBlock *detB = detach.getParent();
   Function &F = *(detB->getParent());
-
   BasicBlock *Spawned  = detach.getDetached();
   BasicBlock *Continue = detach.getContinue();
 
   Module *M = F.getParent();
+  LLVMContext &C = M->getContext(); 
+
+  // Get qthreads sinc value
+  Value* SR = detach.getSyncRegion(); 
+  Value* sinc = getOrCreateSinc(DetachCtxToStackFrame, SR, &F);
+  
+  // Add an expect increment before spawning
+  IRBuilder<> preSpawnB(detB); 
+  Value* one = ConstantInt::get(Type::getInt64Ty(C), 1); 
+  std::vector<Value*> expectArgs = {sinc, one}; 
+  CallInst::Create(QTHREAD_FUNC(qt_sinc_expect, *M), expectArgs, "", &detach); 
+
+  // Add a submit to end of task body
+  IRBuilder<> footerB(Spawned->getTerminator()); 
+  Value* null = Constant::getNullValue(Type::getInt8PtrTy(C)); 
+  std::vector<Value*> submitArgs = {sinc, null}; 
+  footerB.CreateCall(QTHREAD_FUNC(qt_sinc_submit, *M), submitArgs); 
 
   CallInst *cal = nullptr;
   Function *extracted = extractDetachBodyToFunction(detach, DT, AC, &cal);
   extracted = formatFunctionToQthreadF(extracted, cal); 
+  
+  //DetachCtxToStackFrame.insert(std::pair<Value*, Value*>(SR, );  
 
   // Replace the detach with a branch to the continuation.
   BranchInst *ContinueBr = BranchInst::Create(Continue);
@@ -200,6 +238,8 @@ Function *QthreadsABI::createDetach(DetachInst &detach,
     }
   }
 
+  DEBUG(F.dump()); 
+
   return extracted;
 }
 
@@ -211,7 +251,7 @@ void QthreadsABI::postProcessHelper(Function &F) {}
 
 bool QthreadsABI::processMain(Function &F) {
   IRBuilder<> start(F.getEntryBlock().getFirstNonPHIOrDbg());
-  auto m = start.CreateCall(QTHREAD_FUNC(initialize, *F.getParent()));
+  auto m = start.CreateCall(QTHREAD_FUNC(qthread_initialize, *F.getParent()));
   m->moveBefore(F.getEntryBlock().getTerminator());
   return true;
 }
