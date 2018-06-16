@@ -8,6 +8,7 @@
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/Function.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
+#include "llvm/Transforms/Tapir/TapirUtils.h"
 #include "llvm/IR/CFG.h"
 
 using namespace llvm;
@@ -59,39 +60,117 @@ struct DetachUnswitch : public FunctionPass {
 
     auto splitB = det->getDetached();
     auto term = splitB->getTerminator();
-    if (isa<BranchInst>(term) && term->getNumSuccessors() > 1 && splitB->size() == 1) {
+    if (!isa<BranchInst>(term)) return changed;
+    if (term->getNumSuccessors() == 1) return changed;
 
-      auto blocks =     new SmallPtrSet<BasicBlock *, 4>[term->getNumSuccessors()];
-      auto reattachB  = new SmallVector<ReattachInst*, 4>[term->getNumSuccessors()];
-      auto ExitBlocks = new SmallPtrSet<BasicBlock *, 4>[term->getNumSuccessors()];
-      bool valid = false;
-      for(unsigned i=0; i<term->getNumSuccessors(); i++) {
-        populateDetachedCFG(term->getSuccessor(i), *det, DT, blocks[i], reattachB[i], ExitBlocks[i], false);
-        for(unsigned j=0; j<i; j++) {
-          for(auto b : blocks[i]) {
-            if (blocks[j].count(b)) {
-              valid = false;
-              goto endpopulate;
+    SmallVector<AllocaInst*, 4> allocas;
+    SmallVector<CallInst*, 4> syncregions;
+
+    for(Instruction& I : *splitB) {
+        if (&I == term) continue;
+        if (auto alloc = dyn_cast<AllocaInst>(&I)) {
+            allocas.push_back(alloc);
+            continue;
+        }
+        if (auto call = dyn_cast<CallInst>(&I)) {
+            auto id = call->getCalledFunction()->getIntrinsicID();
+            if (id == Intrinsic::syncregion_start) {
+                syncregions.push_back(call);
+                continue;
             }
+        }
+        if (!llvm::isConstantMemoryFreeOperation(&I, /*allowsyncregion=*/false))
+            return changed;
+    }
+
+    //TODO move alloca initialization down if doesn't affect condition
+    // currently we abort
+    for(auto a : allocas) {
+        auto UI = a->use_begin(), E = a->use_end();
+        for (; UI != E;) {
+         Use &U = *UI;
+         ++UI;
+         auto *Usr = dyn_cast<Instruction>(U.getUser());
+         if (Usr->getParent() == splitB) {
+             return changed;
+         }
+        }
+    }
+
+    size_t ns = term->getNumSuccessors();
+    auto blocks =     new SmallPtrSet<BasicBlock *, 4>[ns];
+    auto reattachB  = new SmallVector<ReattachInst*, 4>[ns];
+    auto ExitBlocks = new SmallPtrSet<BasicBlock *, 4>[ns];
+    bool valid = true;
+    for(unsigned i=0; i<ns; i++) {
+      populateDetachedCFG(term->getSuccessor(i), *det, DT, blocks[i], reattachB[i], ExitBlocks[i], false);
+      for(unsigned j=0; j<i; j++) {
+        for(auto b : blocks[i]) {
+          if (blocks[j].count(b)) {
+            valid = false;
+            goto endpopulate;
           }
         }
       }
-
-      endpopulate:
-      delete[] blocks;
-      delete[] reattachB;
-      delete[] ExitBlocks;
-      if(!valid) {
-        for(unsigned i=0; i<term->getNumSuccessors(); i++) {
-          auto newDetacher = term->getSuccessor(i);
-          auto newDetached = newDetacher->splitBasicBlock(newDetacher->getFirstInsertionPt());
-          auto toReplace = DetachInst::Create(newDetached, det->getSuccessor(1), det->getSyncRegion());
-          ReplaceInstWithInst(newDetacher->getTerminator(), toReplace);
+    }
+  
+    endpopulate:
+    if(valid) {
+        assert(term->getNumSuccessors() == ns);
+        for(unsigned i=0; i<ns; i++) {
+            assert(term->getNumSuccessors() == ns);
+            auto newDetacher = term->getSuccessor(i);
+            auto newDetached = newDetacher->splitBasicBlock(newDetacher->getFirstInsertionPt());
+            changed = true;
+            auto toReplace = DetachInst::Create(newDetached, det->getSuccessor(1), det->getSyncRegion());
+            ReplaceInstWithInst(newDetacher->getTerminator(), toReplace);
+            //TODO don't copy if no uses
+            for(auto a : allocas) {
+                auto newinst = a->clone();
+                newinst->insertBefore(newDetached->getFirstNonPHIOrDbgOrLifetime());
+                auto UI = a->use_begin(), E = a->use_end();
+                bool used = false;
+                for (; UI != E;) {
+                    Use &U = *UI;
+                    ++UI;
+                    auto *Usr = dyn_cast<Instruction>(U.getUser());
+                    if (Usr && ( blocks[i].count(Usr->getParent()) || Usr->getParent() == newDetached) ) {
+                        U.set(newinst);
+                        used = true;
+                    }
+                }
+                if (!used) newinst->eraseFromParent();
+            }
+            for(auto a : syncregions) {
+                auto newinst = a->clone();
+                newinst->insertBefore(newDetached->getFirstNonPHIOrDbgOrLifetime());
+                auto UI = a->use_begin(), E = a->use_end();
+                bool used = false;
+                for (; UI != E;) {
+                    Use &U = *UI;
+                    ++UI;
+                    auto *Usr = dyn_cast<Instruction>(U.getUser());
+                    if (Usr && ( blocks[i].count(Usr->getParent()) || Usr->getParent() == newDetached) ) {
+                        U.set(newinst);
+                        used = true;
+                    }
+                }
+                if (!used) newinst->eraseFromParent();
+            }
+        }
+        changed = true;
+        for(auto a : allocas) {
+            a->eraseFromParent();
+        }
+        for(auto a : syncregions) {
+            a->eraseFromParent();
         }
         auto toReplace = BranchInst::Create(det->getDetached());
         ReplaceInstWithInst(det, toReplace);
-      }
     }
+    delete[] blocks;
+    delete[] reattachB;
+    delete[] ExitBlocks;
 
     return changed;
   }
