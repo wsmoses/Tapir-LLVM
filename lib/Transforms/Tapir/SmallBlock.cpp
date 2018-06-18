@@ -22,9 +22,10 @@ struct SmallBlock : public FunctionPass {
   }
 
   void getAnalysisUsage(AnalysisUsage &AU) const override {
+    AU.addRequired<DominatorTreeWrapperPass>();
   }
 
-  bool attemptSmallBlock(DetachInst* det) {
+  bool attemptSmallBlock(DetachInst* det, DominatorTree& DT) {
     //TODO generalize to handle if/etc (generally things without loops)
     //TODO cost model
     BasicBlock* current = det->getDetached();
@@ -50,7 +51,7 @@ struct SmallBlock : public FunctionPass {
     if (cost > 20) {
         return false;
     }
-    SerializeDetachedCFG(det);
+    SerializeDetachedCFG(det, &DT);
     return true;
   }
 
@@ -66,12 +67,14 @@ struct SmallBlock : public FunctionPass {
     if (!DetachingFunction)
       return false;
 
+    auto &DT = getAnalysis<DominatorTreeWrapperPass>().getDomTree();
+
     //TODO motion non memory ops
     bool Changed = false;
     tryMotion:
     for (BasicBlock &BB : F)
       if (auto det = dyn_cast<DetachInst>(BB.getTerminator())) {
-        bool b = attemptSmallBlock(det);
+        bool b = attemptSmallBlock(det, DT);
         Changed |= b;
         if (b) goto tryMotion;
       }
@@ -87,6 +90,7 @@ char SmallBlock::ID = 0;
 static const char LS_NAME[] = "smallblock";
 static const char ls_name[] = "Small Block Elimination";
 INITIALIZE_PASS_BEGIN(SmallBlock, LS_NAME, ls_name, false, false)
+INITIALIZE_PASS_DEPENDENCY(DominatorTreeWrapperPass)
 INITIALIZE_PASS_END(SmallBlock, LS_NAME, ls_name, false, false)
 
 namespace llvm {
