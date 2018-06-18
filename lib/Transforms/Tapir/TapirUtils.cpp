@@ -415,6 +415,37 @@ bool llvm::isConstantMemoryFreeOperation(Instruction* I, bool allowsyncregion) {
         isa<ExtractValueInst>(I);
 }
 
+bool llvm::isConstantOperation(Instruction* I, bool allowsyncregion) {
+  if (auto call = dyn_cast<CallInst>(I)) {
+    auto id = call->getCalledFunction()->getIntrinsicID();
+    return (id == Intrinsic::lifetime_start ||
+            id == Intrinsic::lifetime_end ||
+        allowsyncregion && (id == Intrinsic::syncregion_start));
+  }
+  return
+      isa<AtomicCmpXchgInst>(I) ||
+      isa<AtomicRMWInst>(I) ||
+      isa<BinaryOperator>(I) ||
+      isa<CmpInst>(I) ||
+      isa<ExtractElementInst>(I) ||
+      isa<CatchPadInst>(I) || isa<CleanupPadInst>(I) ||
+      isa<GetElementPtrInst>(I) ||
+      isa<InsertElementInst>(I) ||
+      isa<InsertValueInst>(I) ||
+      isa<LandingPadInst>(I) ||
+      isa<PHINode>(I) ||
+      isa<SelectInst>(I) ||
+      isa<ShuffleVectorInst>(I) ||
+      isa<StoreInst>(I) ||
+      // Unary
+        isa<AllocaInst>(I) ||
+        isa<CastInst>(I) ||
+        isa<ExtractValueInst>(I) ||
+        isa<LoadInst>(I) ||
+        isa<VAArgInst>(I)
+        ;
+}
+
 /*
 spawn {
   A()

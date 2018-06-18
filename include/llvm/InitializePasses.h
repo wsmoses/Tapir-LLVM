@@ -361,6 +361,7 @@ void initializeSingleLoopExtractorPass(PassRegistry&);
 void initializeSinkingLegacyPassPass(PassRegistry&);
 void initializeSjLjEHPreparePass(PassRegistry&);
 void initializeSlotIndexesPass(PassRegistry&);
+void initializeSmallBlockPass(PassRegistry&);
 void initializeSpeculativeExecutionLegacyPassPass(PassRegistry&);
 void initializeSpillPlacementPass(PassRegistry&);
 void initializeStackColoringPass(PassRegistry&);

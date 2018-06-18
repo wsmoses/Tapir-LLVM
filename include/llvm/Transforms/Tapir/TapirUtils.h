@@ -74,6 +74,7 @@ void moveDetachInstBefore(Instruction* moveBefore, DetachInst& det,
                           DominatorTree* DT, Value* newSyncRegion=nullptr);
 bool attemptSyncRegionElimination(Instruction *SyncRegion);
 bool isConstantMemoryFreeOperation(Instruction* inst, bool allowsyncregion=false);
+bool isConstantOperation(Instruction* inst, bool allowsyncregion=false);
 }  // end namepsace llvm
 
 #endif

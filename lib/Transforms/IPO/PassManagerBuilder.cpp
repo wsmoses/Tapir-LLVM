@@ -732,6 +732,8 @@ void PassManagerBuilder::populateModulePassManager(
     MPM.add(createCFGSimplificationPass());
     MPM.add(createDetachUnswitchPass());
     MPM.add(createCFGSimplificationPass());
+    MPM.add(createSmallBlockPass());
+    MPM.add(createCFGSimplificationPass());
   }
 
   if (RerunAfterTapirLowering || (tapirTarget == nullptr))

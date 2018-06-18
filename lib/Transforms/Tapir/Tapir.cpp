@@ -31,6 +31,7 @@ void llvm::initializeTapirOpts(PassRegistry &Registry) {
   initializeLoopSpawningPass(Registry);
   initializeDetachUnswitchPass(Registry);
   initializeNestedDetachMotionPass(Registry);
+  initializeSmallBlockPass(Registry);
   initializeLowerTapirToTargetPass(Registry);
 }
 
