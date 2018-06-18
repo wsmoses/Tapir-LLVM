@@ -8,6 +8,8 @@
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/Function.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
+#include "llvm/Transforms/Tapir/TapirUtils.h"
+#include "llvm/Transforms/Utils/TapirUtils.h"
 
 using namespace llvm;
 
@@ -16,53 +18,79 @@ struct SmallBlock : public FunctionPass {
   static const int threshold = 10;
   static char ID; // Pass identification, replacement for typeid
   SmallBlock() : FunctionPass(ID) {
-    //initializeSmallBlockPass(*PassRegistry::getPassRegistry());
+    initializeSmallBlockPass(*PassRegistry::getPassRegistry());
   }
 
   void getAnalysisUsage(AnalysisUsage &AU) const override {
-    //AU.addRequired<TargetTransformInfoWrapperPass>();
-    //AU.addPreserved<GlobalsAAWrapperPass>();
+  }
+
+  bool attemptSmallBlock(DetachInst* det) {
+    //TODO generalize to handle if/etc (generally things without loops)
+    //TODO cost model
+    BasicBlock* current = det->getDetached();
+    size_t cost = 0;
+    while(current) {
+        for(Instruction& I : *current) {
+            if (isa<TerminatorInst>(&I)) break;
+            if (!isConstantOperation(&I, /*bool allowsyncregion=*/true))
+                return false;
+            cost += 1;
+        }
+        auto term = current->getTerminator();
+        if (term->getNumSuccessors() != 1) return false;
+        if (isa<BranchInst>(term)) {
+            current = det->getSuccessor(0);
+            cost += 1;
+        } else if (isa<ReattachInst>(term)) {
+            break;
+        } else {
+            return false;
+        }
+    }
+    if (cost > 20) {
+        return false;
+    }
+    SerializeDetachedCFG(det);
+    return true;
   }
 
   bool runOnFunction(Function &F) override {
     if (skipFunction(F))
       return false;
 
-    F.setName("SmallBlock_"+F.getName());
+    bool DetachingFunction = false;
+    for (BasicBlock &BB : F)
+      if (isa<DetachInst>(BB.getTerminator()))
+        DetachingFunction = true;
 
-    BasicBlock* b = nullptr;
-    BasicBlock* prior = nullptr;
-    bool effective;
-    int count = 0;
-    do {
-      effective = false;
-      for (BasicBlock &BB: F) {
-        count += BB.size();
-        if (isa<DetachInst>(BB.getTerminator())) {
-          b = &BB;
-          count = 0;
-        }
-        if (isa<ReattachInst>(BB.getTerminator()) && count < threshold && prior != b) {
-          // b ensured to be the corresponding reattach
-          effective = true;
-          prior = b;
-          BranchInst* replaceReattach = BranchInst::Create(BB.getSingleSuccessor());
-          BranchInst* replaceDetach = BranchInst::Create(b->getTerminator()->getSuccessor(0));
-          ReplaceInstWithInst(BB.getTerminator(), replaceReattach);
-          ReplaceInstWithInst(b->getTerminator(), replaceDetach);
-        }
+    if (!DetachingFunction)
+      return false;
+
+    //TODO motion non memory ops
+    bool Changed = false;
+    tryMotion:
+    for (BasicBlock &BB : F)
+      if (auto det = dyn_cast<DetachInst>(BB.getTerminator())) {
+        bool b = attemptSmallBlock(det);
+        Changed |= b;
+        if (b) goto tryMotion;
       }
-    } while (effective);
 
-    return true;
+    return Changed;
   }
 };
 }
 
-char SmallBlock::ID = 0;
-static RegisterPass<SmallBlock> X("smallblock", "Do SmallBlock pass", false, false);
 
-// Public interface to the SmallBlock pass
-FunctionPass *llvm::createSmallBlockPass() {
+
+char SmallBlock::ID = 0;
+static const char LS_NAME[] = "smallblock";
+static const char ls_name[] = "Small Block Elimination";
+INITIALIZE_PASS_BEGIN(SmallBlock, LS_NAME, ls_name, false, false)
+INITIALIZE_PASS_END(SmallBlock, LS_NAME, ls_name, false, false)
+
+namespace llvm {
+FunctionPass *createSmallBlockPass() {
   return new SmallBlock();
+}
 }
