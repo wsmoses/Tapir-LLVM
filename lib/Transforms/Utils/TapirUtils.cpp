@@ -176,6 +176,7 @@ bool llvm::MoveStaticAllocasInBlock(
 /// returns a pointer to the branch instruction that replaces it.
 ///
 BranchInst *llvm::SerializeDetachedCFG(DetachInst *DI, DominatorTree *DT) {
+  assert(DT && "Requires DominatorTree (could remove by fixing later TODO)");
   // Get the parent of the detach instruction.
   BasicBlock *Detacher = DI->getParent();
   // Get the detached block and continuation of this detach.
@@ -202,16 +203,15 @@ BranchInst *llvm::SerializeDetachedCFG(DetachInst *DI, DominatorTree *DT) {
     // Skip the detacher.
     if (Detacher == Pred) continue;
     // Record the reattaches found.
+    //TODO ensure that these reattaches come from the right detach
     if (isa<ReattachInst>(Pred->getTerminator())) {
+      if (DT && !DT->dominates(DetachEdge, Pred)) continue;
       ReattachesFound++;
       if (!SingleReattacher)
         SingleReattacher = Pred;
-      if (DT) {
-        assert(DT->dominates(DetachEdge, Pred) &&
-               "Detach edge does not dominate a reattach into its continuation.");
-      }
       Reattaches.push_back(cast<ReattachInst>(Pred->getTerminator()));
     }
+
   }
   // TODO: It's possible to detach a CFG that does not terminate with a
   // reattach.  For example, optimizations can create detached CFG's that are
