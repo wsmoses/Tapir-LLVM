@@ -40,7 +40,7 @@ struct SmallBlock : public FunctionPass {
         auto term = current->getTerminator();
         if (term->getNumSuccessors() != 1) return false;
         if (isa<BranchInst>(term)) {
-            current = det->getSuccessor(0);
+            current = term->getSuccessor(0);
             cost += 1;
         } else if (isa<ReattachInst>(term)) {
             break;
