@@ -111,6 +111,7 @@ enum Kind {
   kw_alias,
   kw_ifunc,
   kw_module,
+  kw_rkqc,
   kw_asm,
   kw_sideeffect,
   kw_alignstack,
