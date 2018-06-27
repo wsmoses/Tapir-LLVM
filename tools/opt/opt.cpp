@@ -384,6 +384,7 @@ int main(int argc, char **argv) {
   initializeObjCARCOpts(Registry);
   initializeVectorization(Registry);
   initializeTapirOpts(Registry);
+  initializeScaffold(Registry);
   initializeIPO(Registry);
   initializeAnalysis(Registry);
   initializeTransformUtils(Registry);

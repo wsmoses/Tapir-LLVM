@@ -6,25 +6,25 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include <sstream>
-#include <algorithm>
-#include <string>
-#include "llvm/Argument.h"
-#include "llvm/Pass.h"
-#include "llvm/Module.h"
-#include "llvm/Function.h"
-#include "llvm/BasicBlock.h"
-#include "llvm/Instruction.h"
-#include "llvm/Instructions.h"
-#include "llvm/Analysis/CallGraph.h"
-#include "llvm/Support/InstIterator.h"
-#include "llvm/Support/CFG.h"
-#include "llvm/Support/raw_ostream.h"
 #include "llvm/ADT/SCCIterator.h"
 #include "llvm/ADT/ilist.h"
-#include "llvm/Constants.h"
-#include "llvm/Analysis/DebugInfo.h"
-#include "llvm/IntrinsicInst.h"
+#include "llvm/Analysis/CallGraph.h"
+#include "llvm/IR/DebugInfo.h"
+#include "llvm/IR/Argument.h"
+#include "llvm/IR/BasicBlock.h"
+#include "llvm/IR/Constants.h"
+#include "llvm/IR/Function.h"
+#include "llvm/IR/Instruction.h"
+#include "llvm/IR/Instructions.h"
+#include "llvm/IR/IntrinsicInst.h"
+#include "llvm/IR/Module.h"
+#include "llvm/Pass.h"
+#include "llvm/IR/CFG.h"
+#include "llvm/IR/InstIterator.h"
+#include "llvm/Support/raw_ostream.h"
+#include <algorithm>
+#include <sstream>
+#include <string>
 
 using namespace llvm;
 using namespace std;
@@ -53,14 +53,14 @@ namespace {
     //Note: valOrIndex is of type integer. Assumes that quantities will be int in the program.
     qGateArg(): argPtr(NULL), argNum(-1), isQbit(false), isAbit(false), isCbit(false), isParam(false), isUndef(false), isPtr(false), isDouble(false), numDim(0), valOrIndex(-1), val(0.0){ }
   };
-  
+
   struct FnCall{ //datapath sequence
     Function* func;
     Value* instPtr;
     std::vector<qGateArg> qArgs;
-  };    
+  };
 
-  struct GenQASM : public ModulePass {
+  struct GenOpenQASM : public ModulePass {
     static char ID;  // Pass identification, replacement for typeid
     std::vector<Value*> vectQbit;
 
@@ -83,7 +83,9 @@ namespace {
     int btCount; //backtrace count
 
 
-    GenQASM() : ModulePass(ID) {  }
+    GenOpenQASM() : ModulePass(ID) {
+        initializeGenOpenQASMPass(*PassRegistry::getPassRegistry());
+    }
 
     bool getQbitArrDim(Type* instType, qGateArg* qa);
     bool backtraceOperand(Value* opd, int opOrIndex);
@@ -112,19 +114,19 @@ namespace {
       }
       else{
 	unsigned pos1 = sName.rfind(".");
-	
+
 	if(pos1 == sName.length()-1){
 	  std::string s1 = sName.substr(0,pos1);
 	  return s1;
 	}
 	else{
 	  pos = sName.find(".addr");
-	  std::string s1 = sName.substr(0,pos);     
+	  std::string s1 = sName.substr(0,pos);
 	  return s1;
 	}
       }
     }
-    
+
 
     void print_qgateArg(qGateArg qg)
     {
@@ -174,29 +176,25 @@ namespace {
     void genQASM(Function* F);
     void getFunctionArguments(Function* F);
     bool DetermineQFunc(Function* F);
-    
-    void print(raw_ostream &O, const Module* = 0) const { 
+
+    void print(raw_ostream &O, const Module* = 0) const {
       errs() << "Qbits found: ";
       for(unsigned int vb=0; vb<vectQbit.size(); vb++){
 	errs() << vectQbit[vb]->getName() <<" ";
       }
-      errs()<<"\n";      
+      errs()<<"\n";
     }
-  
+
 
     // getAnalysisUsage - This pass requires the CallGraph.
     virtual void getAnalysisUsage(AnalysisUsage &AU) const {
-      AU.setPreservesAll();
-      AU.addRequired<CallGraph>();
+        AU.setPreservesAll();
+        AU.addRequired<CallGraphWrapperPass>();
     }
   };
 }
 
-char GenQASM::ID = 0;
-static RegisterPass<GenQASM>
-X("gen-openqasm", "Generate OpenQASM output code"); //spatil: should be Z or X??
-
-bool GenQASM::backtraceOperand(Value* opd, int opOrIndex)
+bool GenOpenQASM::backtraceOperand(Value* opd, int opOrIndex)
 {
 
   if(opOrIndex == 0) //backtrace for operand
@@ -231,18 +229,18 @@ bool GenQASM::backtraceOperand(Value* opd, int opOrIndex)
 	    if(debugGenOpenQASM)
 	      errs() << " Has constant index. Num Operands: " << numOps << ": ";
 
-	    
+
 	    bool foundOne = backtraceOperand(pInst->getOperand(0),0);
 
 	    if(numOps>2){ //set the dimensionality of the qbit
 	      tmpDepQbit[0].numDim = numOps-2;
-	    
+
 	    for(unsigned arrIter=2; arrIter < numOps; arrIter++)
 	      {
 		ConstantInt *CI = dyn_cast<ConstantInt>(pInst->getOperand(arrIter));
 		//errs() << "Arr[ "<<arrIter<<" ] = "<<CI->getZExtValue()<<"\n";
 		if(tmpDepQbit.size()==1){
-		  tmpDepQbit[0].dimSize[arrIter-2] = CI->getZExtValue();  
+		  tmpDepQbit[0].dimSize[arrIter-2] = CI->getZExtValue();
 		}
 	      }
 	    }
@@ -256,7 +254,7 @@ bool GenQASM::backtraceOperand(Value* opd, int opOrIndex)
 	      }
 	    }
 
-	    //NOTE: getelemptr instruction can have multiple indices. Currently considering last operand as desired index for qubit. Check this reasoning. 
+	    //NOTE: getelemptr instruction can have multiple indices. Currently considering last operand as desired index for qubit. Check this reasoning.
 	    ConstantInt *CI = dyn_cast<ConstantInt>(pInst->getOperand(numOps-1));
 	    if(tmpDepQbit.size()==1){
 	      tmpDepQbit[0].valOrIndex = CI->getZExtValue();
@@ -265,27 +263,27 @@ bool GenQASM::backtraceOperand(Value* opd, int opOrIndex)
 	    }
 	    return foundOne;
 	  }
-	  
+
 	  else if(GEPI->hasIndices()){ //NOTE: Edit this function for multiple indices, some of which are constant, others are not.
-	  
+
 	    errs() << "Oh no! I don't know how to handle this case..ABORT ABORT..\n";
 	    Instruction* pInst = dyn_cast<Instruction>(opd);
 	    unsigned numOps = pInst->getNumOperands();
 	    if(debugGenOpenQASM)
-	      errs() << " Has non-constant index. Num Operands: " << numOps << ": ";		
+	      errs() << " Has non-constant index. Num Operands: " << numOps << ": ";
 	    bool foundOne = backtraceOperand(pInst->getOperand(0),0);
 
-	    if(tmpDepQbit[0].isQbit && !(tmpDepQbit[0].isPtr)){     
+	    if(tmpDepQbit[0].isQbit && !(tmpDepQbit[0].isPtr)){
 	      //NOTE: getelemptr instruction can have multiple indices. consider last operand as desired index for qubit. Check if this is true for all.
 	      backtraceOperand(pInst->getOperand(numOps-1),1);
-	      
+
 	    }
 		else if(tmpDepQbit[0].isAbit && !(tmpDepQbit[0].isPtr)){
 			backtraceOperand(pInst->getOperand(numOps-1),1);
 		}
 	    return foundOne;
-	  }	  
-	  else{	    
+	  }
+	  else{
 	    Instruction* pInst = dyn_cast<Instruction>(opd);
 	    unsigned numOps = pInst->getNumOperands();
 	    bool foundOne = false;
@@ -295,7 +293,7 @@ bool GenQASM::backtraceOperand(Value* opd, int opOrIndex)
 	    return foundOne;
 	  }
 	}
-      
+
       if(isa<LoadInst>(opd)){
 	if(tmpDepQbit[0].isQbit && !tmpDepQbit[0].isPtr){
 	  tmpDepQbit[0].numDim = 1;
@@ -326,7 +324,7 @@ bool GenQASM::backtraceOperand(Value* opd, int opOrIndex)
 	return false;
       }
     }
-  else if(opOrIndex == 0){ //opOrIndex == 1; i.e. Backtracing for Index    
+  else if(opOrIndex == 0){ //opOrIndex == 1; i.e. Backtracing for Index
     if(btCount>MAX_BT_COUNT) //prevent infinite backtracing
       return true;
 
@@ -336,7 +334,7 @@ bool GenQASM::backtraceOperand(Value* opd, int opOrIndex)
 	errs()<<" Found constant index = "<<CI->getValue()<<"\n";
 
       return true;
-    }      
+    }
 
     if(Instruction* pInst = dyn_cast<Instruction>(opd)){
       unsigned numOps = pInst->getNumOperands();
@@ -390,7 +388,7 @@ bool GenQASM::backtraceOperand(Value* opd, int opOrIndex)
   return false;
 }
 
-bool GenQASM::getQbitArrDim(Type *instType, qGateArg* qa)
+bool GenOpenQASM::getQbitArrDim(Type *instType, qGateArg* qa)
 {
   bool myRet = false;
 
@@ -425,12 +423,12 @@ bool GenQASM::getQbitArrDim(Type *instType, qGateArg* qa)
 
 }
 
-void GenQASM::analyzeAllocInstShort(Function* F, Instruction* pInst){
+void GenOpenQASM::analyzeAllocInstShort(Function* F, Instruction* pInst){
 
   if (AllocaInst *AI = dyn_cast<AllocaInst>(pInst)) {
     Type *allocatedType = AI->getAllocatedType();
-    
-    if(ArrayType *arrayType = dyn_cast<ArrayType>(allocatedType)) {      
+
+    if(ArrayType *arrayType = dyn_cast<ArrayType>(allocatedType)) {
       qGateArg tmpQArg;
 
       Type *elementType = arrayType->getElementType();
@@ -439,7 +437,7 @@ void GenQASM::analyzeAllocInstShort(Function* F, Instruction* pInst){
 	  errs() << "New QBit Allocation Found: " << AI->getName() <<"\n";
 	qbitsInFuncShort.push_back(tmpQArg);
       }
-      
+
       else if (elementType->isIntegerTy(1)){
 	if(debugGenOpenQASM)
 	  errs() << "New CBit Allocation Found: " << AI->getName() <<"\n";
@@ -468,13 +466,13 @@ void GenQASM::analyzeAllocInstShort(Function* F, Instruction* pInst){
 }
 
 
-void GenQASM::analyzeAllocInst(Function* F, Instruction* pInst){
+void GenOpenQASM::analyzeAllocInst(Function* F, Instruction* pInst){
   if (AllocaInst *AI = dyn_cast<AllocaInst>(pInst)) {
     Type *allocatedType = AI->getAllocatedType();
-    
-    if(ArrayType *arrayType = dyn_cast<ArrayType>(allocatedType)) {      
+
+    if(ArrayType *arrayType = dyn_cast<ArrayType>(allocatedType)) {
       qGateArg tmpQArg;
-	  
+
 	  Type *elementType = arrayType->getElementType();
       uint64_t arraySize = arrayType->getNumElements();
       if (elementType->isIntegerTy(16)){
@@ -488,10 +486,10 @@ void GenQASM::analyzeAllocInst(Function* F, Instruction* pInst){
 	tmpQArg.valOrIndex = arraySize;
 	//(qbitsInFunc.find(F))->second.push_back(tmpQArg);
 	qbitsInFunc.push_back(tmpQArg);
-	//(qbitsInitInFunc.find(F))->second.push_back(tmpQArg);	
-	qbitsInitInFunc.push_back(tmpQArg);	
+	//(qbitsInitInFunc.find(F))->second.push_back(tmpQArg);
+	qbitsInitInFunc.push_back(tmpQArg);
       }
-      
+
       else if (elementType->isIntegerTy(1)){
 	if(debugGenOpenQASM)
 	  errs() << "New CBit Allocation Found: " << AI->getName() <<"\n";
@@ -503,8 +501,8 @@ void GenQASM::analyzeAllocInst(Function* F, Instruction* pInst){
 	tmpQArg.valOrIndex = arraySize;
 	//(qbitsInFunc.find(F))->second.push_back(tmpQArg);
 	qbitsInFunc.push_back(tmpQArg);
-	//(qbitsInitInFunc.find(F))->second.push_back(tmpQArg);	
-	qbitsInitInFunc.push_back(tmpQArg);	
+	//(qbitsInitInFunc.find(F))->second.push_back(tmpQArg);
+	qbitsInitInFunc.push_back(tmpQArg);
       }
 
 	  else if (elementType->isIntegerTy(8)){
@@ -517,8 +515,8 @@ void GenQASM::analyzeAllocInst(Function* F, Instruction* pInst){
 		tmpQArg.valOrIndex = arraySize;
 		//(qbitsInFunc.find(F))->second.push_back(tmpQArg);
 		qbitsInFunc.push_back(tmpQArg);
-		//(qbitsInitInFunc.find(F))->second.push_back(tmpQArg);	
-		qbitsInitInFunc.push_back(tmpQArg);	
+		//(qbitsInitInFunc.find(F))->second.push_back(tmpQArg);
+		qbitsInitInFunc.push_back(tmpQArg);
 	  }
 
       else if(elementType->isArrayTy()){
@@ -541,7 +539,7 @@ void GenQASM::analyzeAllocInst(Function* F, Instruction* pInst){
 
 	    if(debugGenOpenQASM)
 	      print_qgateArg_debug(tmpQArg);
-	  }	  
+	  }
       }
 
     }
@@ -560,7 +558,7 @@ void GenQASM::analyzeAllocInst(Function* F, Instruction* pInst){
     }
 
     else if(allocatedType->isPointerTy()){
-      
+
       /*Note: this is necessary if -mem2reg is not run on LLVM IR before.
 	Eg without -mem2reg
 	module(i8* %q){
@@ -570,19 +568,19 @@ void GenQASM::analyzeAllocInst(Function* F, Instruction* pInst){
 	qbit q.addr must be mapped to argument q. Hence the following code.
 	If it is known that -O1 will be run, then this can be removed.
       */
-      
+
       Type *elementType = allocatedType->getPointerElementType();
       if (elementType->isIntegerTy(16)){
 	vectQbit.push_back(AI);
-	
+
 	qGateArg tmpQArg;
 	tmpQArg.isPtr = true;
 	tmpQArg.isQbit = true;
 	tmpQArg.argPtr = AI;
-	
+
 	//(qbitsInFunc.find(F))->second.push_back(tmpQArg);
 	qbitsInFunc.push_back(tmpQArg);
-	
+
 	std::string argName = AI->getName();
 	unsigned pos = argName.find(".addr");
 	std::string argName2 = argName.substr(0,pos);
@@ -592,11 +590,11 @@ void GenQASM::analyzeAllocInst(Function* F, Instruction* pInst){
 	//if(mIter != funcArgList.end()){
 	  bool foundit = false;
 	  for(vector<qGateArg>::iterator vParamIter = funcArgList.begin();(vParamIter!=funcArgList.end() && !foundit);++vParamIter){
-	    if((*vParamIter).argPtr->getName() == argName2){ 
+	    if((*vParamIter).argPtr->getName() == argName2){
 	      foundit = true;
 	    }
 	  }
-	  if(!foundit) //do not add duplicate declaration	    
+	  if(!foundit) //do not add duplicate declaration
 	    qbitsInitInFunc.push_back(tmpQArg);
 	  //}
       }
@@ -624,7 +622,7 @@ void GenQASM::analyzeAllocInst(Function* F, Instruction* pInst){
 
 }
 
-void GenQASM::analyzeCallInst(Function* F, Instruction* pInst){
+void GenOpenQASM::analyzeCallInst(Function* F, Instruction* pInst){
   if(CallInst *CI = dyn_cast<CallInst>(pInst))
     {
       if(debugGenOpenQASM)
@@ -641,7 +639,7 @@ void GenQASM::analyzeCallInst(Function* F, Instruction* pInst){
 	qGateArg tmpQGateArg2;
 	tmpQGateArg2.isCbit = true;
 	tmpQGateArg2.isPtr = true;
-	tmpDepQbit.push_back(tmpQGateArg2);	
+	tmpDepQbit.push_back(tmpQGateArg2);
 	backtraceOperand(CI->getArgOperand(1),0); //pointer Operand
 
 	//insert info in map here
@@ -650,28 +648,28 @@ void GenQASM::analyzeCallInst(Function* F, Instruction* pInst){
 	tmpDepQbit.clear();
 	return;
       }
-      
+
       bool tracked_all_operands = true;
-      
+
       for(unsigned iop=0;iop<CI->getNumArgOperands();iop++){
 	tmpDepQbit.clear();
-	
+
 	qGateArg tmpQGateArg;
 	btCount=0;
-	
+
 	if(debugGenOpenQASM)
 	  errs() << "Call inst operand num: " << iop << "\n";
-	
+
 	tmpQGateArg.argNum = iop;
-	
-	
+
+
 	if(isa<UndefValue>(CI->getArgOperand(iop))){
 	  //errs() << "WARNING: LLVM IR code has UNDEF values. \n";
-	  tmpQGateArg.isUndef = true;	
+	  tmpQGateArg.isUndef = true;
 	  //exit(1);
 	  //assert(0 && "LLVM IR code has UNDEF values. Aborting...");
 	}
-	
+
 	Type* argType = CI->getArgOperand(iop)->getType();
 	if(argType->isPointerTy()){
 	  tmpQGateArg.isPtr = true;
@@ -685,8 +683,8 @@ void GenQASM::analyzeCallInst(Function* F, Instruction* pInst){
 	}
 	else if(argType->isIntegerTy(16)){
 	  tmpQGateArg.isQbit = true;
-	  tmpQGateArg.valOrIndex = 0;	 
-	}	  	
+	  tmpQGateArg.valOrIndex = 0;
+	}
 	else if(argType->isIntegerTy(32)){
 	  if(ConstantInt *CInt = dyn_cast<ConstantInt>(CI->getArgOperand(iop))){
 	  	tmpQGateArg.isParam = true;
@@ -699,19 +697,19 @@ void GenQASM::analyzeCallInst(Function* F, Instruction* pInst){
 	}
 	else if(argType->isIntegerTy(1)){
 	  tmpQGateArg.isCbit = true;
-	  tmpQGateArg.valOrIndex = 0;	 
-	}	  	
-	
-	//check if argument is constant int	
+	  tmpQGateArg.valOrIndex = 0;
+	}
+
+	//check if argument is constant int
 	if(ConstantInt *CInt = dyn_cast<ConstantInt>(CI->getArgOperand(iop))){
 	  tmpQGateArg.valOrIndex = CInt->getZExtValue();
 	  if(debugGenOpenQASM){
 	    errs()<<" Found constant argument = "<<CInt->getValue()<<"\n";
 	  }
 	}
-	
 
-	//check if argument is constant float	
+
+	//check if argument is constant float
 	if(ConstantFP *CFP = dyn_cast<ConstantFP>(CI->getArgOperand(iop))){
 	  tmpQGateArg.val = CFP->getValueAPF().convertToDouble();
 	  tmpQGateArg.isDouble = true;
@@ -723,30 +721,30 @@ void GenQASM::analyzeCallInst(Function* F, Instruction* pInst){
 
 
 	tmpDepQbit.push_back(tmpQGateArg);
-	
+
 	tracked_all_operands &= backtraceOperand(CI->getArgOperand(iop),0);
-	
+
 	if(tmpDepQbit.size()>0){
 	  if(debugGenOpenQASM)
 	    print_qgateArg_debug(tmpDepQbit[0]);
-	  
+
 	  allDepQbit.push_back(tmpDepQbit[0]);
 	  assert(tmpDepQbit.size() == 1 && "tmpDepQbit SIZE GT 1");
 	  tmpDepQbit.clear();
 	}
-	
+
       }
-                  
+
       //form info packet
       FnCall qInfo;
       qInfo.func = CI->getCalledFunction();
       qInfo.instPtr = CI;
-      
+
       if(allDepQbit.size() > 0){
 	if(debugGenOpenQASM)
 	  {
-	    errs() << "\nCall inst: " << CI->getCalledFunction()->getName();	    
-	    errs() << ": Found all arguments: ";       
+	    errs() << "\nCall inst: " << CI->getCalledFunction()->getName();
+	    errs() << ": Found all arguments: ";
 	    for(unsigned int vb=0; vb<allDepQbit.size(); vb++){
 	      if(allDepQbit[vb].argPtr)
 		errs() << allDepQbit[vb].argPtr->getName() <<" ";
@@ -755,53 +753,53 @@ void GenQASM::analyzeCallInst(Function* F, Instruction* pInst){
 	    }
 	    errs()<<"\n";
 	  }
-	
+
 	//populate vector of passed qubit arguments
 	for(unsigned int vb=0; vb<allDepQbit.size(); vb++)
 	  qInfo.qArgs.push_back(allDepQbit[vb]);
-	
+
       }
-      
-      //map<Function*, vector<FnCall> >::iterator mvdpit = mapFunction.find(F);	
-      //(*mvdpit).second.push_back(qInfo);      
+
+      //map<Function*, vector<FnCall> >::iterator mvdpit = mapFunction.find(F);
+      //(*mvdpit).second.push_back(qInfo);
       mapFunction.push_back(qInfo);
 
-      return;      
+      return;
     }
 }
 
 
-void GenQASM::analyzeInst(Function* F, Instruction* pInst){
+void GenOpenQASM::analyzeInst(Function* F, Instruction* pInst){
   if(debugGenOpenQASM)
     errs() << "--Processing Inst: "<<*pInst << '\n';
 
   //analyzeAllocInst(F,pInst);
   analyzeCallInst(F,pInst);
-    
+
   if(debugGenOpenQASM)
     {
       errs() << "Opcode: "<<pInst->getOpcodeName() << "\n";
-      
+
       unsigned numOps = pInst->getNumOperands();
       errs() << "Num Operands: " << numOps << ": ";
-      
+
       for(unsigned iop=0;iop<numOps;iop++){
 	errs() << pInst->getOperand(iop)->getName() << "; ";
       }
-      errs() << "\n";		
+      errs() << "\n";
       return;
     }
-    
+
   return;
 }
 
-std::string GenQASM::to_string(int var){
+std::string GenOpenQASM::to_string(int var){
 	stringstream ss;
 	ss << var;
 	return ss.str();
 }
 
-void GenQASM::printFuncDeclaredBits(Function* F)
+void GenOpenQASM::printFuncDeclaredBits(Function* F)
 {
   //print qbits declared in function
   for(vector<qGateArg>::iterator vvit=qbitsInitInFunc.begin(),vvitE=qbitsInitInFunc.end();vvit!=vvitE;++vvit)
@@ -825,16 +823,16 @@ void GenQASM::printFuncDeclaredBits(Function* F)
     }
 }
 
-void GenQASM::genQASM(Function* F)
+void GenOpenQASM::genQASM(Function* F)
 {
   //map<Function*, vector<qGateArg> >::iterator mpItr;
   //map<Function*, vector<qGateArg> >::iterator mpItr2;
   //map<Function*, vector<qGateArg> >::iterator mvpItr;
-  
+
   //mpItr = qbitsInFunc.find(F);
 //  if(qbitsInFunc.size()>0){
-    
-    mapFunction = mapMapFunc.find(F)->second; 
+
+    mapFunction = mapMapFunc.find(F)->second;
     //print gates in function
     //map<Function*, vector<FnCall> >::iterator mfvIt = mapFunction.find(F);
     for(unsigned mIndex=0;mIndex<mapFunction.size();mIndex++){
@@ -972,10 +970,10 @@ void GenQASM::genQASM(Function* F)
 }
 
 
-bool GenQASM::DetermineQFunc(Function* F)
+bool GenOpenQASM::DetermineQFunc(Function* F)
 {
     for(inst_iterator instIb = inst_begin(F),instIe=inst_end(F); instIb!=instIe;++instIb){
-        Instruction *pInst = &*instIb; // Grab pointer to instruction reference	      
+        Instruction *pInst = &*instIb; // Grab pointer to instruction reference
 	    analyzeAllocInstShort(F,pInst);
 	}
     if(qbitsInFuncShort.size() > 0) return true;
@@ -983,15 +981,15 @@ bool GenQASM::DetermineQFunc(Function* F)
     return false;
 }
 
-void GenQASM::getFunctionArguments(Function* F)
+void GenOpenQASM::getFunctionArguments(Function* F)
 {
-  //std::vector<unsigned> qGateArgs;  
+  //std::vector<unsigned> qGateArgs;
 
   for(Function::arg_iterator ait=F->arg_begin();ait!=F->arg_end();++ait)
-    {    
+    {
       std::string argName = (ait->getName()).str();
       Type* argType = ait->getType();
-      unsigned int argNum=ait->getArgNo();         
+      unsigned int argNum=ait->getArgNo();
 
       qGateArg tmpQArg;
       tmpQArg.argPtr = ait;
@@ -1046,7 +1044,7 @@ void GenQASM::getFunctionArguments(Function* F)
 		qbitsInFunc.push_back(tmpQArg);
 		funcArgList.push_back(tmpQArg);
 	  }
-      else if(argType->isDoubleTy())     
+      else if(argType->isDoubleTy())
 	funcArgList.push_back(tmpQArg);
 
       if(debugGenOpenQASM)
@@ -1055,31 +1053,29 @@ void GenQASM::getFunctionArguments(Function* F)
 }
 
 // run - Find datapaths for qubits
-bool GenQASM::runOnModule(Module &M) {
+bool GenOpenQASM::runOnModule(Module &M) {
   vector<Function*> qFuncs;
+  CallGraph &CG = getAnalysis<CallGraphWrapperPass>().getCallGraph();
 
   unsigned sccNum = 0;
 
   errs() << "OPENQASM 2.0;\n";
   errs() << "include \"qelib1.inc\";\n";
 
-  CallGraphNode* rootNode1 = getAnalysis<CallGraph>().getRoot();
-
   sccNum = 0;
 
-  for (scc_iterator<CallGraphNode*> sccIb = scc_begin(rootNode1),
-         E = scc_end(rootNode1); sccIb != E; ++sccIb)
-    {
+  for (scc_iterator<CallGraph *> sccIb = scc_begin(&CG);
+       !sccIb.isAtEnd(); ++sccIb) {
       const std::vector<CallGraphNode*> &nextSCC = *sccIb;
 
       if(debugGenOpenQASM)
-	errs() << "\nSCC #" << ++sccNum << " : ";      
+	errs() << "\nSCC #" << ++sccNum << " : ";
 
       for (std::vector<CallGraphNode*>::const_iterator nsccI = nextSCC.begin(),
 	     E = nextSCC.end(); nsccI != E; ++nsccI)
 	{
-	  Function *F=(*nsccI)->getFunction();	  
-	  
+	  Function *F=(*nsccI)->getFunction();
+
 	  if(F && !F->isDeclaration()){
 	    if(debugGenOpenQASM)
 	    errs() << "Processing Function:" << F->getName() <<" \n ";
@@ -1099,7 +1095,7 @@ bool GenQASM::runOnModule(Module &M) {
 
 	    for(inst_iterator instIb = inst_begin(F),instIe=inst_end(F); instIb!=instIe;++instIb){
 
-	      Instruction *pInst = &*instIb; // Grab pointer to instruction reference	      
+	      Instruction *pInst = &*instIb; // Grab pointer to instruction reference
 
 	      if(debugGenOpenQASM)
 		errs() << "\n Processing Inst: "<<*pInst << "\n";
@@ -1112,28 +1108,28 @@ bool GenQASM::runOnModule(Module &M) {
           mapQbitsInit.insert( make_pair( F, qbitsInitInFunc ) );
           mapFuncArgs.insert( make_pair( F, funcArgList ) );
           qFuncs.push_back(F);
-	    
+
 	      for(inst_iterator instIb = inst_begin(F),instIe=inst_end(F); instIb!=instIe;++instIb){
 
-		Instruction *pInst = &*instIb; // Grab pointer to instruction reference	      
+		Instruction *pInst = &*instIb; // Grab pointer to instruction reference
 		allDepQbit.clear();
-		
+
 		if(debugGenOpenQASM)
 		  errs() << "\n Processing Inst: "<<*pInst << "\n";
-		
+
 		analyzeInst(F,pInst); //spatil: need a bool return type?
 
 	      }
           mapMapFunc.insert( make_pair( F, mapFunction ) );
 	    }
 
-	    
+
 	  }
 	  else{
 	    if(debugGenOpenQASM)
 	      errs() << "WARNING: Ignoring external node or dummy function.";
 	  }
-	  
+
 	}
       if (nextSCC.size() == 1 && sccIb.hasLoop())
 	errs() << " (Has self-loop).";
@@ -1179,6 +1175,13 @@ bool GenQASM::runOnModule(Module &M) {
     }
 
   errs() << "\n";
-  
+
   return false;
 }
+
+char GenOpenQASM::ID = 0;
+static const char LS_NAME[] = "gen-openqasm";
+static const char ls_name[] = "Generate OpenQASM output code";
+INITIALIZE_PASS_BEGIN(GenOpenQASM, LS_NAME, ls_name, false, false)
+INITIALIZE_PASS_DEPENDENCY(CallGraphWrapperPass)
+INITIALIZE_PASS_END(GenOpenQASM, LS_NAME, ls_name, false, false)

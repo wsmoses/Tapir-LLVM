@@ -16,7 +16,7 @@
 ;===------------------------------------------------------------------------===;
 
 [common]
-subdirectories = Coroutines IPO InstCombine Instrumentation Scalar Tapir Utils Vectorize ObjCARC
+subdirectories = Coroutines IPO InstCombine Instrumentation Scalar Tapir Utils Vectorize ObjCARC Scaffold
 
 [component_0]
 type = Group

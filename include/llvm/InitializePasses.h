@@ -20,6 +20,25 @@ namespace llvm {
 class PassRegistry;
 
 /// Initialize all passes linked into the TransformUtils library.
+void initializeScaffold(PassRegistry&);
+
+void initializeResourceCountPass(PassRegistry&);
+void initializeGenRKQCPass(PassRegistry&);
+void initializeGenOpenQASMPass(PassRegistry&);
+void initializeGenQASMPass(PassRegistry&);
+void initializeOptimizePass(PassRegistry&);
+void initializeFlattenModulePass(PassRegistry&);
+void initializeFunctionClonePass(PassRegistry&);
+void initializeFunctionReversePass(PassRegistry&);
+void initializeRotationsPass(PassRegistry&);
+void initializeRTFreqEstHybPass(PassRegistry&);
+void initializeRTResourceEst_MemPass(PassRegistry&);
+void initializeRTResourceEstPass(PassRegistry&);
+void initializeSortCloneArgumentsPass(PassRegistry&);
+void initializeToffoliReplacePass(PassRegistry&);
+void initializeXformCbitStoresPass(PassRegistry&);
+
+/// Initialize all passes linked into the TransformUtils library.
 void initializeCore(PassRegistry&);
 
 /// Initialize all passes linked into the TransformUtils library.

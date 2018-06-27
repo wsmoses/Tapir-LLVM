@@ -11,6 +11,7 @@ set(LLVM_LINK_COMPONENTS
   Instrumentation
   MC
   ObjCARCOpts
+  Scaffold
   ScalarOpts
   Support
   TapirOpts
