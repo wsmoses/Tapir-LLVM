@@ -93,6 +93,10 @@ extern bool VerifyDomInfo;
 ///
 extern bool VerifyLoopInfo;
 
+/// Enables verification of Tapir task info.
+///
+extern bool VerifyTaskInfo;
+
 ///\}
 
 /// EnableDebugBuffering - This defaults to false.  If true, the debug
