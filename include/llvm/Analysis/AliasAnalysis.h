@@ -632,9 +632,6 @@ public:
       if (auto *D = dyn_cast<DetachInst>(I)) {
         return createModRefInfo(getModRefBehavior(D));
       }
-      if (auto *S = dyn_cast<SyncInst>(I)) {
-        return createModRefInfo(getModRefBehavior(S));
-      }
     }
 
     const MemoryLocation &Loc = OptLoc.getValueOr(MemoryLocation());
