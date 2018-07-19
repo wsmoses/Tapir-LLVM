@@ -121,6 +121,7 @@ FUNCTION_ANALYSIS("scalar-evolution", ScalarEvolutionAnalysis())
 FUNCTION_ANALYSIS("targetlibinfo", TargetLibraryAnalysis())
 FUNCTION_ANALYSIS("targetir",
                   TM ? TM->getTargetIRAnalysis() : TargetIRAnalysis())
+FUNCTION_ANALYSIS("tasks", TaskAnalysis())
 FUNCTION_ANALYSIS("verify", VerifierAnalysis())
 
 #ifndef FUNCTION_ALIAS_ANALYSIS
