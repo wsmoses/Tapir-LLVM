@@ -32,6 +32,7 @@ class Instruction;
 class LLVMContext;
 class PHINode;
 class SelectInst;
+class TaskInfo;
 class Use;
 
 /// A private "module" namespace for types and utilities used by SROA. These
@@ -68,6 +69,7 @@ class SROA : public PassInfoMixin<SROA> {
   LLVMContext *C = nullptr;
   DominatorTree *DT = nullptr;
   AssumptionCache *AC = nullptr;
+  TaskInfo *TI = nullptr;
 
   /// Worklist of alloca instructions to simplify.
   ///
@@ -123,7 +125,7 @@ private:
 
   /// Helper used by both the public run method and by the legacy pass.
   PreservedAnalyses runImpl(Function &F, DominatorTree &RunDT,
-                            AssumptionCache &RunAC);
+                            AssumptionCache &RunAC, TaskInfo &RunTI);
 
   bool presplitLoadsAndStores(AllocaInst &AI, sroa::AllocaSlices &AS);
   AllocaInst *rewritePartition(AllocaInst &AI, sroa::AllocaSlices &AS,
