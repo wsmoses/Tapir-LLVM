@@ -70,6 +70,7 @@ void initializeAddressSanitizerPass(PassRegistry&);
 void initializeAliasSetPrinterPass(PassRegistry&);
 void initializeAlignmentFromAssumptionsPass(PassRegistry&);
 void initializeAlwaysInlinerLegacyPassPass(PassRegistry&);
+void initializeAnalyzeTapirPass(PassRegistry&);
 void initializeArgPromotionPass(PassRegistry&);
 void initializeAssumptionCacheTrackerPass(PassRegistry&);
 void initializeAtomicExpandPass(PassRegistry&);
