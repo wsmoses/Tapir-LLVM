@@ -19,6 +19,8 @@ namespace llvm {
 
 class PassRegistry;
 
+void initializeParallelPollySchedulePass(PassRegistry&);
+
 /// Initialize all passes linked into the TransformUtils library.
 void initializeCore(PassRegistry&);
 

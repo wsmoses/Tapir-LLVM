@@ -33,6 +33,7 @@ void llvm::initializeTapirOpts(PassRegistry &Registry) {
   initializeNestedDetachMotionPass(Registry);
   initializeSmallBlockPass(Registry);
   initializeLowerTapirToTargetPass(Registry);
+  initializeParallelPollySchedulePass(Registry);
 }
 
 void LLVMInitializeTapirOpts(LLVMPassRegistryRef R) {

@@ -22,6 +22,9 @@ class Pass;
 class ModulePass;
 class FunctionPass;
 
+Pass *createParallelPollySchedulePass();
+
+
 //===----------------------------------------------------------------------===//
 //
 // LoopSpawning - Create a loop spawning pass.
