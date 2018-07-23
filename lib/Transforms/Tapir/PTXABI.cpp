@@ -123,17 +123,14 @@ void PTXABI::createSync(SyncInst &SI, ValueToValueMapTy &DetachCtxToStackFrame) 
 Function *PTXABI::createDetach(DetachInst &detach,
                                ValueToValueMapTy &DetachCtxToStackFrame,
                                DominatorTree &DT, AssumptionCache &AC) {
+  //TODO nicely replace with serializeDetach
   BasicBlock *detB = detach.getParent();
-  // unused -- Function &F = *(detB->getParent());
 
   BasicBlock *Spawned  = detach.getDetached();
   BasicBlock *Continue = detach.getContinue();
 
-  // unused -- Module *M = F.getParent();
-
   CallInst *cal = nullptr;
   Function *extracted = extractDetachBodyToFunction(detach, DT, AC, &cal);
-  //extracted = formatFunctionToTask(extracted, cal);
 
   // Replace the detach with a branch to the continuation.
   BranchInst *ContinueBr = BranchInst::Create(Continue);

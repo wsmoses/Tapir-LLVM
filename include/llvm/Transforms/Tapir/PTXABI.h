@@ -78,7 +78,7 @@
 
 namespace llvm {
 
-/// PTXABILoopSpawning uses the Cilk Plus ABI to handle Tapir loops.
+/// PTXABILoopSpawning uses the LLVM PTX backend to handle Tapir loops.
 class PTXABILoopSpawning : public LoopOutline {
 public:
   PTXABILoopSpawning(Loop *OrigLoop, ScalarEvolution &SE,
