@@ -1428,13 +1428,11 @@ bool LoopSpawningImpl::processLoop(Loop *L) {
     DEBUG(dbgs() << "LS: Hints dictate sequential spawning.\n");
     break;
   case LoopSpawningHints::ST_GPU:
-    DEBUG(dbgs() << "LS: Hints dictate DAC spawning.\n");
+    DEBUG(dbgs() << "LS: Hints dictate GPU spawning.\n");
     {
       DebugLoc DLoc = L->getStartLoc();
       BasicBlock *Header = L->getHeader();
       PTXABILoopSpawning DLS(L, SE, &LI, &DT, &AC, ORE);
-      // CilkABILoopSpawning DLS(L, SE, &LI, &DT, &AC, ORE);
-      // DACLoopSpawning DLS(L, SE, LI, DT, TLI, TTI, ORE);
       if (DLS.processLoop()) {
         DEBUG({
             if (verifyFunction(*L->getHeader()->getParent())) {
@@ -1443,14 +1441,14 @@ bool LoopSpawningImpl::processLoop(Loop *L) {
             }
           });
         // Report success.
-        ORE.emit(OptimizationRemark(LS_NAME, "DACSpawning", DLoc, Header)
-                 << "spawning iterations using divide-and-conquer");
+        ORE.emit(OptimizationRemark(LS_NAME, "GPUSpawning", DLoc, Header)
+                 << "spawning iterations using direct gpu mapping");
         return true;
       } else {
         // Report failure.
-        ORE.emit(OptimizationRemarkMissed(LS_NAME, "NoDACSpawning", DLoc,
+        ORE.emit(OptimizationRemarkMissed(LS_NAME, "NoGPUSpawning", DLoc,
                                           Header)
-                 << "cannot spawn iterations using divide-and-conquer");
+                 << "cannot spawn iterations using direct gpu mapping");
         emitMissedWarning(F, L, Hints, &ORE);
         return false;
       }

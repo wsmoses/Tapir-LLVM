@@ -488,19 +488,15 @@ Function* formatFunctionToTask(Function* extracted, CallInst* cal) {
   IRBuilder<> CallerIRBuilder(cal);
   auto *SharedsTySize =
       CallerIRBuilder.getInt64(DL.getTypeAllocSize(SharedsTy));
-  //unused -- auto *KmpTaskTTy = createKmpTaskTTy(C);
-  auto *KmpTaskTWithPrivatesTy = createKmpTaskTWithPrivatesTy(SharedsTy);//KmpTaskTTy);
+  auto *KmpTaskTWithPrivatesTy = createKmpTaskTWithPrivatesTy(SharedsTy);
   auto *KmpTaskTWithPrivatesPtrTy =
       PointerType::getUnqual(KmpTaskTWithPrivatesTy);
   auto *KmpTaskTWithPrivatesTySize =
       CallerIRBuilder.getInt64(DL.getTypeAllocSize(KmpTaskTWithPrivatesTy));
 
   auto *VoidTy = Type::getVoidTy(C);
-  // unused -- auto *Int8PtrTy = Type::getInt8PtrTy(C);
   auto *Int32Ty = Type::getInt32Ty(C);
 
-  // unused -- auto *CopyFnTy = FunctionType::get(VoidTy, {Int8PtrTy}, true);
-  // unused -- auto *CopyFnPtrTy = PointerType::getUnqual(CopyFnTy);
 
   auto *OutlinedFnTy = FunctionType::get(
       VoidTy,
@@ -593,12 +589,10 @@ Function *llvm::OpenMPABI::createDetach(DetachInst &detach,
                                         ValueToValueMapTy &DetachCtxToStackFrame,
                                         DominatorTree &DT, AssumptionCache &AC) {
   BasicBlock *detB = detach.getParent();
-  // unused -- Function &F = *(detB->getParent());
 
   BasicBlock *Spawned  = detach.getDetached();
   BasicBlock *Continue = detach.getContinue();
 
-  // unused -- Module *M = F.getParent();
 
   CallInst *cal = nullptr;
   Function *extracted = extractDetachBodyToFunction(detach, DT, AC, &cal);
@@ -803,7 +797,7 @@ void llvm::OpenMPABI::postProcessFunction(Function &F) {
       OpenMPRuntimeFunction::OMPRTL__kmpc_fork_call, F.getParent());
   // Replace the old call with __kmpc_fork_call
   auto *ForkCall = emitRuntimeCall(ForkRTFn, OMPRegionFnArgs, "", b);
-  assert(ForkCall != 0); // play it safe -- something better to do here?
+  assert(ForkCall != 0 && "Failed to emit omp runtime call");
   
   ExtractedFnCI->eraseFromParent();
   RegionFn->eraseFromParent();
