@@ -6011,8 +6011,13 @@ static bool serializeTrivialDetachedBlock(BasicBlock *BB) {
     // This detached block is empty
     // Scan predecessors to verify that all of them detach BB.
     for (BasicBlock *PredBB : predecessors(BB)) {
-      if (!isa<DetachInst>(PredBB->getTerminator()))
-	return false;
+      if (auto DI = dyn_cast<DetachInst>(PredBB->getTerminator())) {
+        // check that we are the detached (and not continuation)
+        if(DI->getDetached() != BB) return false;
+      } else {
+        // don't serialize if nondetached predecessor
+        return false;
+      }
     }
     // All predecessors detach BB, so we can serialize
     for (BasicBlock *PredBB : predecessors(BB)) {
