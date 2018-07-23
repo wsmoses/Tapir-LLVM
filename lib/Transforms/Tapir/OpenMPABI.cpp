@@ -488,7 +488,7 @@ Function* formatFunctionToTask(Function* extracted, CallInst* cal) {
   IRBuilder<> CallerIRBuilder(cal);
   auto *SharedsTySize =
       CallerIRBuilder.getInt64(DL.getTypeAllocSize(SharedsTy));
-  auto *KmpTaskTTy = createKmpTaskTTy(C);
+  //unused -- auto *KmpTaskTTy = createKmpTaskTTy(C);
   auto *KmpTaskTWithPrivatesTy = createKmpTaskTWithPrivatesTy(SharedsTy);//KmpTaskTTy);
   auto *KmpTaskTWithPrivatesPtrTy =
       PointerType::getUnqual(KmpTaskTWithPrivatesTy);
@@ -496,11 +496,11 @@ Function* formatFunctionToTask(Function* extracted, CallInst* cal) {
       CallerIRBuilder.getInt64(DL.getTypeAllocSize(KmpTaskTWithPrivatesTy));
 
   auto *VoidTy = Type::getVoidTy(C);
-  auto *Int8PtrTy = Type::getInt8PtrTy(C);
+  // unused -- auto *Int8PtrTy = Type::getInt8PtrTy(C);
   auto *Int32Ty = Type::getInt32Ty(C);
 
-  auto *CopyFnTy = FunctionType::get(VoidTy, {Int8PtrTy}, true);
-  auto *CopyFnPtrTy = PointerType::getUnqual(CopyFnTy);
+  // unused -- auto *CopyFnTy = FunctionType::get(VoidTy, {Int8PtrTy}, true);
+  // unused -- auto *CopyFnPtrTy = PointerType::getUnqual(CopyFnTy);
 
   auto *OutlinedFnTy = FunctionType::get(
       VoidTy,
@@ -593,12 +593,12 @@ Function *llvm::OpenMPABI::createDetach(DetachInst &detach,
                                         ValueToValueMapTy &DetachCtxToStackFrame,
                                         DominatorTree &DT, AssumptionCache &AC) {
   BasicBlock *detB = detach.getParent();
-  Function &F = *(detB->getParent());
+  // unused -- Function &F = *(detB->getParent());
 
   BasicBlock *Spawned  = detach.getDetached();
   BasicBlock *Continue = detach.getContinue();
 
-  Module *M = F.getParent();
+  // unused -- Module *M = F.getParent();
 
   CallInst *cal = nullptr;
   Function *extracted = extractDetachBodyToFunction(detach, DT, AC, &cal);
@@ -676,7 +676,7 @@ void llvm::OpenMPABI::postProcessFunction(Function &F) {
     }
   }
 
-  for(int i=1; i<VisitedVec.size(); i++) {
+  for(unsigned int i=1; i<VisitedVec.size(); i++) {
       for (auto P : predecessors(VisitedVec[i])) {
         if (Visited.count(P) == 0) {
           std::swap(VisitedVec[0], VisitedVec[i]);
@@ -803,6 +803,8 @@ void llvm::OpenMPABI::postProcessFunction(Function &F) {
       OpenMPRuntimeFunction::OMPRTL__kmpc_fork_call, F.getParent());
   // Replace the old call with __kmpc_fork_call
   auto *ForkCall = emitRuntimeCall(ForkRTFn, OMPRegionFnArgs, "", b);
+  assert(ForkCall != 0); // play it safe -- something better to do here?
+  
   ExtractedFnCI->eraseFromParent();
   RegionFn->eraseFromParent();
 }

@@ -60,6 +60,7 @@ public:
   enum SpawningStrategy {
     ST_SEQ,
     ST_DAC,
+    ST_GPU,
     ST_END,
   };
 
@@ -93,7 +94,8 @@ public:
       return "Spawn iterations sequentially";
     case LoopSpawningHints::ST_DAC:
       return "Use divide-and-conquer";
-    case LoopSpawningHints::ST_END:
+    case LoopSpawningHints::ST_GPU:
+      return "Use gpu";
     default:
       return "Unknown";
     }
@@ -142,8 +144,8 @@ private:
 /// 4) The loop only branches to the exit block from the header or the latch.
 bool isCanonicalTapirLoop(const Loop *L, bool print = false);
 
-//! Identify if a loop could be a DAC loop
-bool isDACFor(Loop* L);
+//! Identify if a loop could should be handled manually by a parallel loop backend
+bool isBackendParallelFor(Loop* L);
 
 /// canDetach - Return true if the given function can perform a detach, false
 /// otherwise.

@@ -178,7 +178,7 @@ bool llvm::MoveStaticAllocasInBlock(
 BranchInst *llvm::SerializeDetachedCFG(DetachInst *DI, DominatorTree *DT) {
   //TODO allow to work without dominatortree or code workaround
   //assert(DT && "Requires DominatorTree (could remove by fixing later TODO)");
-  
+
   // Get the parent of the detach instruction.
   BasicBlock *Detacher = DI->getParent();
   // Get the detached block and continuation of this detach.
@@ -537,11 +537,12 @@ bool llvm::isCanonicalTapirLoop(const Loop *L, bool print) {
   return true;
 }
 
-bool llvm::isDACFor(Loop* L) {
+bool llvm::isBackendParallelFor(Loop* L) {
   // TODO: Use a more precise detection of cilk_for loops.
   for (BasicBlock* BB : L->blocks())
     if (isa<DetachInst>(BB->getTerminator()))
-      return LoopSpawningHints(L).getStrategy() == LoopSpawningHints::ST_DAC;
+      return LoopSpawningHints(L).getStrategy() == LoopSpawningHints::ST_DAC
+          || LoopSpawningHints(L).getStrategy() == LoopSpawningHints::ST_GPU;
   return false;
 }
 

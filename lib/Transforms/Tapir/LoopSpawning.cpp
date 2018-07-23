@@ -46,6 +46,7 @@
 #include "llvm/Transforms/Scalar/LoopDeletion.h"
 #include "llvm/Transforms/Tapir.h"
 #include "llvm/Transforms/Tapir/Outline.h"
+#include "llvm/Transforms/Tapir/PTXABI.h"
 #include "llvm/Transforms/Tapir/TapirUtils.h"
 #include "llvm/Transforms/Utils/PromoteMemToReg.h"
 #include "llvm/Transforms/Utils/LoopUtils.h"
@@ -75,7 +76,9 @@ static cl::opt<TapirTargetType> ClTapirTarget(
                clEnumValN(TapirTargetType::OpenMP,
                           "openmp", "OpenMP"),
                clEnumValN(TapirTargetType::Qthreads,
-                          "qthreads", "Qthreads")));
+                          "qthreads", "Qthreads"),
+               clEnumValN(TapirTargetType::PTX,
+                          "ptx", "PTX")));
 
 namespace {
 // /// \brief This modifies LoopAccessReport to initialize message with
@@ -114,6 +117,13 @@ static void emitMissedWarning(Function *F, Loop *L,
                   L->getStartLoc(), L->getHeader())
               << "Tapir loop not transformed: "
               << "failed to use divide-and-conquer loop spawning");
+    break;
+  case LoopSpawningHints::ST_GPU:
+    ORE->emit(DiagnosticInfoOptimizationFailure(
+                  DEBUG_TYPE, "FailedRequestedSpawning",
+                  L->getStartLoc(), L->getHeader())
+              << "Tapir loop not transformed: "
+              << "failed to use GPU loop spawning");
     break;
   case LoopSpawningHints::ST_SEQ:
     ORE->emit(DiagnosticInfoOptimizationFailure(
@@ -1416,6 +1426,35 @@ bool LoopSpawningImpl::processLoop(Loop *L) {
   switch(Hints.getStrategy()) {
   case LoopSpawningHints::ST_SEQ:
     DEBUG(dbgs() << "LS: Hints dictate sequential spawning.\n");
+    break;
+  case LoopSpawningHints::ST_GPU:
+    DEBUG(dbgs() << "LS: Hints dictate DAC spawning.\n");
+    {
+      DebugLoc DLoc = L->getStartLoc();
+      BasicBlock *Header = L->getHeader();
+      PTXABILoopSpawning DLS(L, SE, &LI, &DT, &AC, ORE);
+      // CilkABILoopSpawning DLS(L, SE, &LI, &DT, &AC, ORE);
+      // DACLoopSpawning DLS(L, SE, LI, DT, TLI, TTI, ORE);
+      if (DLS.processLoop()) {
+        DEBUG({
+            if (verifyFunction(*L->getHeader()->getParent())) {
+              dbgs() << "Transformed function is invalid.\n";
+              return false;
+            }
+          });
+        // Report success.
+        ORE.emit(OptimizationRemark(LS_NAME, "DACSpawning", DLoc, Header)
+                 << "spawning iterations using divide-and-conquer");
+        return true;
+      } else {
+        // Report failure.
+        ORE.emit(OptimizationRemarkMissed(LS_NAME, "NoDACSpawning", DLoc,
+                                          Header)
+                 << "cannot spawn iterations using divide-and-conquer");
+        emitMissedWarning(F, L, Hints, &ORE);
+        return false;
+      }
+    }
     break;
   case LoopSpawningHints::ST_DAC:
     DEBUG(dbgs() << "LS: Hints dictate DAC spawning.\n");

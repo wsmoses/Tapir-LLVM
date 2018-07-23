@@ -14,6 +14,7 @@
 #include "llvm/IR/DebugInfoMetadata.h"
 #include "llvm/Transforms/Tapir/CilkABI.h"
 #include "llvm/Transforms/Tapir/OpenMPABI.h"
+#include "llvm/Transforms/Tapir/PTXABI.h"
 #include "llvm/Transforms/Tapir/QthreadsABI.h"
 #include "llvm/Transforms/Tapir/Outline.h"
 #include "llvm/Transforms/Utils/EscapeEnumerator.h"
@@ -30,6 +31,8 @@ TapirTarget *llvm::getTapirTargetFromType(TapirTargetType Type) {
     return new CilkABI();
   case TapirTargetType::OpenMP:
     return new OpenMPABI();
+  case TapirTargetType::PTX:
+    return new PTXABI();
   case TapirTargetType::Qthreads:
     return new QthreadsABI();
   case TapirTargetType::None:
