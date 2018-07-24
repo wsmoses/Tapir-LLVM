@@ -15,80 +15,1082 @@
 
 #include "llvm/IR/CFG.h"
 
+
+#include "isl/union_map.h"
+
+extern "C" {
+#include "ppcg/cuda.h"
+#include "ppcg/gpu.h"
+#include "ppcg/gpu_print.h"
+#include "ppcg/ppcg.h"
+#include "ppcg/schedule.h"
+}
+
+
+
+#include "polly/CodeGen/PPCGCodeGeneration.h"
+#include "polly/CodeGen/IslAst.h"
+#include "polly/CodeGen/IslNodeBuilder.h"
+#include "polly/CodeGen/Utils.h"
+#include "polly/DependenceInfo.h"
+#include "polly/LinkAllPasses.h"
+#include "polly/Options.h"
+#include "polly/ScopDetection.h"
+#include "polly/ScopInfo.h"
+#include "polly/Support/SCEVValidator.h"
+#include "llvm/ADT/PostOrderIterator.h"
+#include "llvm/Analysis/AliasAnalysis.h"
+#include "llvm/Analysis/BasicAliasAnalysis.h"
+#include "llvm/Analysis/GlobalsModRef.h"
+#include "llvm/Analysis/ScalarEvolutionAliasAnalysis.h"
+#include "llvm/Analysis/TargetLibraryInfo.h"
+#include "llvm/Analysis/TargetTransformInfo.h"
+#include "llvm/IR/LegacyPassManager.h"
+#include "llvm/IR/Verifier.h"
+#include "llvm/Support/TargetRegistry.h"
+#include "llvm/Support/TargetSelect.h"
+#include "llvm/Target/TargetMachine.h"
+#include "llvm/Transforms/IPO/PassManagerBuilder.h"
+#include "llvm/Transforms/Utils/BasicBlockUtils.h"
+
+#include "isl/union_map.h"
+
+extern "C" {
+#include "ppcg/cuda.h"
+#include "ppcg/gpu.h"
+#include "ppcg/gpu_print.h"
+#include "ppcg/ppcg.h"
+#include "ppcg/schedule.h"
+}
+
+#include "llvm/Support/Debug.h"
+
+
+#define DEBUG_TYPE "parallelpolly"
 using namespace llvm;
 using namespace polly;
 
+//NOTE WILL NEED TO MODIFY UNPROFITABLE IN POLLY
 extern bool polly::PollyProcessUnprofitable;
+
+bool ManagedMemory = false;
+bool SharedMemory = true;
+bool PrivateMemory = true;
+
+bool DumpSchedule = true;
+bool DumpCode = true;
+bool DumpKernelIR = true;
+bool DumpKernelASM = true;
+
+unsigned int MinCompute = 0; //10 * 512 * 512;
+bool FastMath = true;
+bool FailOnVerifyModuleFailure = true;
+auto CudaVersion = "sm_50";
 
 namespace {
 
+    /// Check if F is a function that we can code-generate in a GPU kernel.
+static bool isValidFunctionInKernel(llvm::Function *F) {
+  assert(F && "F is an invalid pointer");
+  // We string compare against the name of the function to allow
+  // all variants of the intrinsic "llvm.sqrt.*"
+  return F->isIntrinsic() && F->getName().startswith("llvm.sqrt");
+}
+
+#include "GPUNodeBuilder.inl"
+#include "MustKillsInfo.inl"
+
+  /// Construct compilation options for PPCG.
+  ///
+  /// @returns The compilation options.
+  ppcg_options *createPPCGOptions() {
+    auto DebugOptions =
+        (ppcg_debug_options *)malloc(sizeof(ppcg_debug_options));
+    auto Options = (ppcg_options *)malloc(sizeof(ppcg_options));
+
+    DebugOptions->dump_schedule_constraints = false;
+    DebugOptions->dump_schedule = false;
+    DebugOptions->dump_final_schedule = false;
+    DebugOptions->dump_sizes = false;
+    DebugOptions->verbose = false;
+
+    Options->debug = DebugOptions;
+
+    Options->reschedule = true;
+    Options->scale_tile_loops = false;
+    Options->wrap = false;
+
+    Options->non_negative_parameters = false;
+    Options->ctx = nullptr;
+    Options->sizes = nullptr;
+
+    Options->tile_size = 32;
+
+    Options->use_private_memory = PrivateMemory;
+    Options->use_shared_memory = SharedMemory;
+    Options->max_shared_memory = 48 * 1024;
+
+    Options->target = PPCG_TARGET_CUDA;
+    Options->openmp = false;
+    Options->linearize_device_arrays = true;
+    Options->live_range_reordering = false;
+
+    Options->opencl_compiler_options = nullptr;
+    Options->opencl_use_gpu = false;
+    Options->opencl_n_include_file = 0;
+    Options->opencl_include_files = nullptr;
+    Options->opencl_print_kernel_types = false;
+    Options->opencl_embed_kernel_code = false;
+
+    Options->save_schedule_file = nullptr;
+    Options->load_schedule_file = nullptr;
+
+    return Options;
+  }
+
+    /// Get a tagged access relation containing all accesses of type @p AccessTy.
+  ///
+  /// Instead of a normal access of the form:
+  ///
+  ///   Stmt[i,j,k] -> Array[f_0(i,j,k), f_1(i,j,k)]
+  ///
+  /// a tagged access has the form
+  ///
+  ///   [Stmt[i,j,k] -> id[]] -> Array[f_0(i,j,k), f_1(i,j,k)]
+  ///
+  /// where 'id' is an additional space that references the memory access that
+  /// triggered the access.
+  ///
+  /// @param AccessTy The type of the memory accesses to collect.
+  ///
+  /// @return The relation describing all tagged memory accesses.
+  isl_union_map *getTaggedAccesses(Scop &S, enum MemoryAccess::AccessType AccessTy) {
+    isl_union_map *Accesses = isl_union_map_empty(S.getParamSpace());
+
+    for (auto &Stmt : S)
+      for (auto &Acc : Stmt)
+        if (Acc->getType() == AccessTy) {
+          isl_map *Relation = Acc->getAccessRelation();
+          Relation = isl_map_intersect_domain(Relation, Stmt.getDomain());
+
+          isl_space *Space = isl_map_get_space(Relation);
+          Space = isl_space_range(Space);
+          Space = isl_space_from_range(Space);
+          Space = isl_space_set_tuple_id(Space, isl_dim_in, Acc->getId());
+          isl_map *Universe = isl_map_universe(Space);
+          Relation = isl_map_domain_product(Relation, Universe);
+          Accesses = isl_union_map_add_map(Accesses, Relation);
+        }
+
+    return Accesses;
+  }
+
+  /// Get the set of all read accesses, tagged with the access id.
+  ///
+  /// @see getTaggedAccesses
+  isl_union_map *getTaggedReads(Scop &S) {
+    return getTaggedAccesses(S, MemoryAccess::READ);
+  }
+
+  /// Get the set of all may (and must) accesses, tagged with the access id.
+  ///
+  /// @see getTaggedAccesses
+  isl_union_map *getTaggedMayWrites(Scop &S) {
+    return isl_union_map_union(getTaggedAccesses(S, MemoryAccess::MAY_WRITE),
+                               getTaggedAccesses(S, MemoryAccess::MUST_WRITE));
+  }
+
+  /// Get the set of all must accesses, tagged with the access id.
+  ///
+  /// @see getTaggedAccesses
+  isl_union_map *getTaggedMustWrites(Scop &S) {
+    return getTaggedAccesses(S, MemoryAccess::MUST_WRITE);
+  }
+
+  /// Collect parameter and array names as isl_ids.
+  ///
+  /// To reason about the different parameters and arrays used, ppcg requires
+  /// a list of all isl_ids in use. As PPCG traditionally performs
+  /// source-to-source compilation each of these isl_ids is mapped to the
+  /// expression that represents it. As we do not have a corresponding
+  /// expression in Polly, we just map each id to a 'zero' expression to match
+  /// the data format that ppcg expects.
+  ///
+  /// @returns Retun a map from collected ids to 'zero' ast expressions.
+  __isl_give isl_id_to_ast_expr *getNames(Scop& S) {
+    auto *Names = isl_id_to_ast_expr_alloc(
+        S.getIslCtx(),
+        S.getNumParams() + std::distance(S.array_begin(), S.array_end()));
+    auto *Zero = isl_ast_expr_from_val(isl_val_zero(S.getIslCtx()));
+    auto *Space = S.getParamSpace();
+
+    for (int I = 0, E = S.getNumParams(); I < E; ++I) {
+      isl_id *Id = isl_space_get_dim_id(Space, isl_dim_param, I);
+      Names = isl_id_to_ast_expr_set(Names, Id, isl_ast_expr_copy(Zero));
+    }
+
+    for (auto &Array : S.arrays()) {
+      auto Id = Array->getBasePtrId();
+      Names = isl_id_to_ast_expr_set(Names, Id, isl_ast_expr_copy(Zero));
+    }
+
+    isl_space_free(Space);
+    isl_ast_expr_free(Zero);
+
+    return Names;
+  }
+
+  /// Create a new PPCG scop from the current scop.
+  ///
+  /// The PPCG scop is initialized with data from the current polly::Scop. From
+  /// this initial data, the data-dependences in the PPCG scop are initialized.
+  /// We do not use Polly's dependence analysis for now, to ensure we match
+  /// the PPCG default behaviour more closely.
+  ///
+  /// @returns A new ppcg scop.
+  ppcg_scop *createPPCGScop(Scop &S) {
+    auto PPCGScop = (ppcg_scop *)malloc(sizeof(ppcg_scop));
+
+    PPCGScop->options = createPPCGOptions();
+    // enable live range reordering
+    PPCGScop->options->live_range_reordering = 1;
+
+    PPCGScop->start = 0;
+    PPCGScop->end = 0;
+
+    PPCGScop->context = S.getContext();
+    PPCGScop->domain = S.getDomains();
+    PPCGScop->call = nullptr;
+    PPCGScop->tagged_reads = getTaggedReads(S);
+    PPCGScop->reads = S.getReads();
+    PPCGScop->live_in = nullptr;
+    PPCGScop->tagged_may_writes = getTaggedMayWrites(S);
+    PPCGScop->may_writes = S.getWrites();
+    PPCGScop->tagged_must_writes = getTaggedMustWrites(S);
+    PPCGScop->must_writes = S.getMustWrites();
+    PPCGScop->live_out = nullptr;
+    PPCGScop->tagger = nullptr;
+    PPCGScop->independence =
+        isl_union_map_empty(isl_set_get_space(PPCGScop->context));
+    PPCGScop->dep_flow = nullptr;
+    PPCGScop->tagged_dep_flow = nullptr;
+    PPCGScop->dep_false = nullptr;
+    PPCGScop->dep_forced = nullptr;
+    PPCGScop->dep_order = nullptr;
+    PPCGScop->tagged_dep_order = nullptr;
+
+    PPCGScop->schedule = S.getScheduleTree();
+
+    MustKillsInfo KillsInfo = computeMustKillsInfo(S);
+    // If we have something non-trivial to kill, add it to the schedule
+    if (KillsInfo.KillsSchedule.get())
+      PPCGScop->schedule = isl_schedule_sequence(
+          PPCGScop->schedule, KillsInfo.KillsSchedule.take());
+    PPCGScop->tagged_must_kills = KillsInfo.TaggedMustKills.take();
+
+    PPCGScop->names = getNames(S);
+    PPCGScop->pet = nullptr;
+
+    compute_tagger(PPCGScop);
+    compute_dependences(PPCGScop);
+
+    return PPCGScop;
+  }
+
+  /// Collect the array accesses in a statement.
+  ///
+  /// @param Stmt The statement for which to collect the accesses.
+  ///
+  /// @returns A list of array accesses.
+  gpu_stmt_access *getStmtAccesses(Scop &S, ScopStmt &Stmt) {
+    gpu_stmt_access *Accesses = nullptr;
+
+    for (MemoryAccess *Acc : Stmt) {
+      auto Access = isl_alloc_type(S.getIslCtx(), struct gpu_stmt_access);
+      Access->read = Acc->isRead();
+      Access->write = Acc->isWrite();
+      Access->access = Acc->getAccessRelation();
+      isl_space *Space = isl_map_get_space(Access->access);
+      Space = isl_space_range(Space);
+      Space = isl_space_from_range(Space);
+      Space = isl_space_set_tuple_id(Space, isl_dim_in, Acc->getId());
+      isl_map *Universe = isl_map_universe(Space);
+      Access->tagged_access =
+          isl_map_domain_product(Acc->getAccessRelation(), Universe);
+      Access->exact_write = !Acc->isMayWrite();
+      Access->ref_id = Acc->getId();
+      Access->next = Accesses;
+      Access->n_index = Acc->getScopArrayInfo()->getNumberOfDimensions();
+      Accesses = Access;
+    }
+
+    return Accesses;
+  }
+
+  /// Collect the list of GPU statements.
+  ///
+  /// Each statement has an id, a pointer to the underlying data structure,
+  /// as well as a list with all memory accesses.
+  ///
+  /// TODO: Initialize the list of memory accesses.
+  ///
+  /// @returns A linked-list of statements.
+  gpu_stmt *getStatements(Scop& S) {
+    gpu_stmt *Stmts = isl_calloc_array(S.getIslCtx(), struct gpu_stmt,
+                                       std::distance(S.begin(), S.end()));
+
+    int i = 0;
+    for (auto &Stmt : S) {
+      gpu_stmt *GPUStmt = &Stmts[i];
+
+      GPUStmt->id = Stmt.getDomainId();
+
+      // We use the pet stmt pointer to keep track of the Polly statements.
+      GPUStmt->stmt = (pet_stmt *)&Stmt;
+      GPUStmt->accesses = getStmtAccesses(S, Stmt);
+      i++;
+    }
+
+    return Stmts;
+  }
+
+  /// Create an identity map between the arrays in the scop.
+  ///
+  /// @returns An identity map between the arrays in the scop.
+  isl_union_map *getArrayIdentity(Scop &S) {
+    isl_union_map *Maps = isl_union_map_empty(S.getParamSpace());
+
+    for (auto &Array : S.arrays()) {
+      isl_space *Space = Array->getSpace();
+      Space = isl_space_map_from_set(Space);
+      isl_map *Identity = isl_map_identity(Space);
+      Maps = isl_union_map_add_map(Maps, Identity);
+    }
+
+    return Maps;
+  }
+
+    /// Derive the extent of an array.
+  ///
+  /// The extent of an array is the set of elements that are within the
+  /// accessed array. For the inner dimensions, the extent constraints are
+  /// 0 and the size of the corresponding array dimension. For the first
+  /// (outermost) dimension, the extent constraints are the minimal and maximal
+  /// subscript value for the first dimension.
+  ///
+  /// @param Array The array to derive the extent for.
+  ///
+  /// @returns An isl_set describing the extent of the array.
+  __isl_give isl_set *getExtent(Scop &S, ScopArrayInfo *Array) {
+    unsigned NumDims = Array->getNumberOfDimensions();
+    isl_union_map *Accesses = S.getAccesses();
+    Accesses = isl_union_map_intersect_domain(Accesses, S.getDomains());
+    Accesses = isl_union_map_detect_equalities(Accesses);
+    isl_union_set *AccessUSet = isl_union_map_range(Accesses);
+    AccessUSet = isl_union_set_coalesce(AccessUSet);
+    AccessUSet = isl_union_set_detect_equalities(AccessUSet);
+    AccessUSet = isl_union_set_coalesce(AccessUSet);
+
+    if (isl_union_set_is_empty(AccessUSet)) {
+      isl_union_set_free(AccessUSet);
+      return isl_set_empty(Array->getSpace());
+    }
+
+    if (Array->getNumberOfDimensions() == 0) {
+      isl_union_set_free(AccessUSet);
+      return isl_set_universe(Array->getSpace());
+    }
+
+    isl_set *AccessSet =
+        isl_union_set_extract_set(AccessUSet, Array->getSpace());
+
+    isl_union_set_free(AccessUSet);
+    isl_local_space *LS = isl_local_space_from_space(Array->getSpace());
+
+    isl_pw_aff *Val =
+        isl_pw_aff_from_aff(isl_aff_var_on_domain(LS, isl_dim_set, 0));
+
+    isl_pw_aff *OuterMin = isl_set_dim_min(isl_set_copy(AccessSet), 0);
+    isl_pw_aff *OuterMax = isl_set_dim_max(AccessSet, 0);
+    OuterMin = isl_pw_aff_add_dims(OuterMin, isl_dim_in,
+                                   isl_pw_aff_dim(Val, isl_dim_in));
+    OuterMax = isl_pw_aff_add_dims(OuterMax, isl_dim_in,
+                                   isl_pw_aff_dim(Val, isl_dim_in));
+    OuterMin =
+        isl_pw_aff_set_tuple_id(OuterMin, isl_dim_in, Array->getBasePtrId());
+    OuterMax =
+        isl_pw_aff_set_tuple_id(OuterMax, isl_dim_in, Array->getBasePtrId());
+
+    isl_set *Extent = isl_set_universe(Array->getSpace());
+
+    Extent = isl_set_intersect(
+        Extent, isl_pw_aff_le_set(OuterMin, isl_pw_aff_copy(Val)));
+    Extent = isl_set_intersect(Extent, isl_pw_aff_ge_set(OuterMax, Val));
+
+    for (unsigned i = 1; i < NumDims; ++i)
+      Extent = isl_set_lower_bound_si(Extent, isl_dim_set, i, 0);
+
+    for (unsigned i = 0; i < NumDims; ++i) {
+      isl_pw_aff *PwAff =
+          const_cast<isl_pw_aff *>(Array->getDimensionSizePw(i));
+
+      // isl_pw_aff can be NULL for zero dimension. Only in the case of a
+      // Fortran array will we have a legitimate dimension.
+      if (!PwAff) {
+        assert(i == 0 && "invalid dimension isl_pw_aff for nonzero dimension");
+        continue;
+      }
+
+      isl_pw_aff *Val = isl_pw_aff_from_aff(isl_aff_var_on_domain(
+          isl_local_space_from_space(Array->getSpace()), isl_dim_set, i));
+      PwAff = isl_pw_aff_add_dims(PwAff, isl_dim_in,
+                                  isl_pw_aff_dim(Val, isl_dim_in));
+      PwAff = isl_pw_aff_set_tuple_id(PwAff, isl_dim_in,
+                                      isl_pw_aff_get_tuple_id(Val, isl_dim_in));
+      auto *Set = isl_pw_aff_gt_set(PwAff, Val);
+      Extent = isl_set_intersect(Set, Extent);
+    }
+
+    return Extent;
+  }
+
+  /// Derive the bounds of an array.
+  ///
+  /// For the first dimension we derive the bound of the array from the extent
+  /// of this dimension. For inner dimensions we obtain their size directly from
+  /// ScopArrayInfo.
+  ///
+  /// @param PPCGArray The array to compute bounds for.
+  /// @param Array The polly array from which to take the information.
+  void setArrayBounds(Scop &S, gpu_array_info &PPCGArray, ScopArrayInfo *Array) {
+    if (PPCGArray.n_index > 0) {
+      if (isl_set_is_empty(PPCGArray.extent)) {
+        isl_set *Dom = isl_set_copy(PPCGArray.extent);
+        isl_local_space *LS = isl_local_space_from_space(
+            isl_space_params(isl_set_get_space(Dom)));
+        isl_set_free(Dom);
+        isl_aff *Zero = isl_aff_zero_on_domain(LS);
+        PPCGArray.bound[0] = isl_pw_aff_from_aff(Zero);
+      } else {
+        isl_set *Dom = isl_set_copy(PPCGArray.extent);
+        Dom = isl_set_project_out(Dom, isl_dim_set, 1, PPCGArray.n_index - 1);
+        isl_pw_aff *Bound = isl_set_dim_max(isl_set_copy(Dom), 0);
+        isl_set_free(Dom);
+        Dom = isl_pw_aff_domain(isl_pw_aff_copy(Bound));
+        isl_local_space *LS =
+            isl_local_space_from_space(isl_set_get_space(Dom));
+        isl_aff *One = isl_aff_zero_on_domain(LS);
+        One = isl_aff_add_constant_si(One, 1);
+        Bound = isl_pw_aff_add(Bound, isl_pw_aff_alloc(Dom, One));
+        Bound = isl_pw_aff_gist(Bound, S.getContext());
+        PPCGArray.bound[0] = Bound;
+      }
+    }
+
+    for (unsigned i = 1; i < PPCGArray.n_index; ++i) {
+      isl_pw_aff *Bound = Array->getDimensionSizePw(i);
+      auto LS = isl_pw_aff_get_domain_space(Bound);
+      auto Aff = isl_multi_aff_zero(LS);
+      Bound = isl_pw_aff_pullback_multi_aff(Bound, Aff);
+      PPCGArray.bound[i] = Bound;
+    }
+  }
+
+  /// Create the arrays for @p PPCGProg.
+  ///
+  /// @param PPCGProg The program to compute the arrays for.
+  void createArrays(Scop &S, gpu_prog *PPCGProg) {
+    int i = 0;
+    for (auto &Array : S.arrays()) {
+      std::string TypeName;
+      raw_string_ostream OS(TypeName);
+
+      OS << *Array->getElementType();
+      TypeName = OS.str();
+
+      gpu_array_info &PPCGArray = PPCGProg->array[i];
+
+      PPCGArray.space = Array->getSpace();
+      PPCGArray.type = strdup(TypeName.c_str());
+      PPCGArray.size = Array->getElementType()->getPrimitiveSizeInBits() / 8;
+      PPCGArray.name = strdup(Array->getName().c_str());
+      PPCGArray.extent = nullptr;
+      PPCGArray.n_index = Array->getNumberOfDimensions();
+      PPCGArray.bound =
+          isl_alloc_array(S.getIslCtx(), isl_pw_aff *, PPCGArray.n_index);
+      PPCGArray.extent = getExtent(S, Array);
+      PPCGArray.n_ref = 0;
+      PPCGArray.refs = nullptr;
+      PPCGArray.accessed = true;
+      PPCGArray.read_only_scalar =
+          Array->isReadOnly() && Array->getNumberOfDimensions() == 0;
+      PPCGArray.has_compound_element = false;
+      PPCGArray.local = false;
+      PPCGArray.declare_local = false;
+      PPCGArray.global = false;
+      PPCGArray.linearize = false;
+      PPCGArray.dep_order = nullptr;
+      PPCGArray.user = Array;
+
+      setArrayBounds(S, PPCGArray, Array);
+      i++;
+
+      collect_references(PPCGProg, &PPCGArray);
+    }
+  }
+
+  /// Create a default-initialized PPCG GPU program.
+  ///
+  /// @returns A new gpu program description.
+  gpu_prog *createPPCGProg(Scop& S, ppcg_scop *PPCGScop) {
+
+    if (!PPCGScop)
+      return nullptr;
+
+    auto PPCGProg = isl_calloc_type(S.getIslCtx(), struct gpu_prog);
+
+    PPCGProg->ctx = S.getIslCtx();
+    PPCGProg->scop = PPCGScop;
+    PPCGProg->context = isl_set_copy(PPCGScop->context);
+    PPCGProg->read = isl_union_map_copy(PPCGScop->reads);
+    PPCGProg->may_write = isl_union_map_copy(PPCGScop->may_writes);
+    PPCGProg->must_write = isl_union_map_copy(PPCGScop->must_writes);
+    PPCGProg->tagged_must_kill =
+        isl_union_map_copy(PPCGScop->tagged_must_kills);
+    PPCGProg->to_inner = getArrayIdentity(S);
+    PPCGProg->to_outer = getArrayIdentity(S);
+    PPCGProg->any_to_outer = nullptr;
+
+    // this needs to be set when live range reordering is enabled.
+    // NOTE: I believe that is conservatively correct. I'm not sure
+    //       what the semantics of this is.
+    // Quoting PPCG/gpu.h: "Order dependences on non-scalars."
+    PPCGProg->array_order =
+        isl_union_map_empty(isl_set_get_space(PPCGScop->context));
+    PPCGProg->n_stmts = std::distance(S.begin(), S.end());
+    PPCGProg->stmts = getStatements(S);
+    PPCGProg->n_array = std::distance(S.array_begin(), S.array_end());
+    PPCGProg->array = isl_calloc_array(S.getIslCtx(), struct gpu_array_info,
+                                       PPCGProg->n_array);
+
+    createArrays(S, PPCGProg);
+
+    PPCGProg->may_persist = compute_may_persist(PPCGProg);
+    return PPCGProg;
+  }
+
+  struct PrintGPUUserData {
+    struct cuda_info *CudaInfo;
+    struct gpu_prog *PPCGProg;
+    std::vector<ppcg_kernel *> Kernels;
+  };
+
+  /// Print C code corresponding to the control flow in @p Kernel.
+  ///
+  /// @param Kernel The kernel to print
+  void printKernel(Scop &S, ppcg_kernel *Kernel) {
+    auto *P = isl_printer_to_str(S.getIslCtx());
+    P = isl_printer_set_output_format(P, ISL_FORMAT_C);
+    auto *Options = isl_ast_print_options_alloc(S.getIslCtx());
+    P = isl_ast_node_print(Kernel->tree, P, Options);
+    char *String = isl_printer_get_str(P);
+    printf("%s\n", String);
+    free(String);
+    isl_printer_free(P);
+  }
+
+  /// Print a user statement node in the host code.
+  ///
+  /// We use ppcg's printing facilities to print the actual statement and
+  /// additionally build up a list of all kernels that are encountered in the
+  /// host ast.
+  ///
+  /// @param P The printer to print to
+  /// @param Options The printing options to use
+  /// @param Node The node to print
+  /// @param User A user pointer to carry additional data. This pointer is
+  ///             expected to be of type PrintGPUUserData.
+  ///
+  /// @returns A printer to which the output has been printed.
+  static __isl_give isl_printer *
+  printHostUser(__isl_take isl_printer *P,
+                __isl_take isl_ast_print_options *Options,
+                __isl_take isl_ast_node *Node, void *User) {
+    auto Data = (struct PrintGPUUserData *)User;
+    auto Id = isl_ast_node_get_annotation(Node);
+
+    if (Id) {
+      bool IsUser = !strcmp(isl_id_get_name(Id), "user");
+
+      // If this is a user statement, format it ourselves as ppcg would
+      // otherwise try to call pet functionality that is not available in
+      // Polly.
+      if (IsUser) {
+        P = isl_printer_start_line(P);
+        P = isl_printer_print_ast_node(P, Node);
+        P = isl_printer_end_line(P);
+        isl_id_free(Id);
+        isl_ast_print_options_free(Options);
+        return P;
+      }
+
+      auto Kernel = (struct ppcg_kernel *)isl_id_get_user(Id);
+      isl_id_free(Id);
+      Data->Kernels.push_back(Kernel);
+    }
+
+    return print_host_user(P, Options, Node, User);
+  }
+
+  /// Print C code corresponding to the GPU code described by @p Tree.
+  ///
+  /// @param Tree An AST describing GPU code
+  /// @param PPCGProg The PPCG program from which @Tree has been constructed.
+  void printGPUTree(Scop &S, isl_ast_node *Tree, gpu_prog *PPCGProg) {
+    auto *P = isl_printer_to_str(S.getIslCtx());
+    P = isl_printer_set_output_format(P, ISL_FORMAT_C);
+
+    PrintGPUUserData Data;
+    Data.PPCGProg = PPCGProg;
+
+    auto *Options = isl_ast_print_options_alloc(S.getIslCtx());
+    Options =
+        isl_ast_print_options_set_print_user(Options, printHostUser, &Data);
+    P = isl_ast_node_print(Tree, P, Options);
+    char *String = isl_printer_get_str(P);
+    printf("# host\n");
+    printf("%s\n", String);
+    free(String);
+    isl_printer_free(P);
+
+    for (auto Kernel : Data.Kernels) {
+      printf("# kernel%d\n", Kernel->id);
+      printKernel(S, Kernel);
+    }
+  }
+
+/// Create the ast expressions for a ScopStmt.
+///
+/// This function is a callback for to generate the ast expressions for each
+/// of the scheduled ScopStmts.
+static __isl_give isl_id_to_ast_expr *pollyBuildAstExprForStmt(
+    void *StmtT, isl_ast_build *Build,
+    isl_multi_pw_aff *(*FunctionIndex)(__isl_take isl_multi_pw_aff *MPA,
+                                       isl_id *Id, void *User),
+    void *UserIndex,
+    isl_ast_expr *(*FunctionExpr)(isl_ast_expr *Expr, isl_id *Id, void *User),
+    void *UserExpr) {
+
+  ScopStmt *Stmt = (ScopStmt *)StmtT;
+
+  isl_ctx *Ctx;
+
+  if (!Stmt || !Build)
+    return NULL;
+
+  Ctx = isl_ast_build_get_ctx(Build);
+  isl_id_to_ast_expr *RefToExpr = isl_id_to_ast_expr_alloc(Ctx, 0);
+
+  for (MemoryAccess *Acc : *Stmt) {
+    isl_map *AddrFunc = Acc->getAddressFunction();
+    AddrFunc = isl_map_intersect_domain(AddrFunc, Stmt->getDomain());
+    isl_id *RefId = Acc->getId();
+    isl_pw_multi_aff *PMA = isl_pw_multi_aff_from_map(AddrFunc);
+    isl_multi_pw_aff *MPA = isl_multi_pw_aff_from_pw_multi_aff(PMA);
+    MPA = isl_multi_pw_aff_coalesce(MPA);
+    MPA = FunctionIndex(MPA, RefId, UserIndex);
+    isl_ast_expr *Access = isl_ast_build_access_from_multi_pw_aff(Build, MPA);
+    Access = FunctionExpr(Access, RefId, UserExpr);
+    RefToExpr = isl_id_to_ast_expr_set(RefToExpr, RefId, Access);
+  }
+
+  return RefToExpr;
+}
+
+  // Generate a GPU program using PPCG.
+  //
+  // GPU mapping consists of multiple steps:
+  //
+  //  1) Compute new schedule for the program.
+  //  2) Map schedule to GPU (TODO)
+  //  3) Generate code for new schedule (TODO)
+  //
+  // We do not use here the Polly ScheduleOptimizer, as the schedule optimizer
+  // is mostly CPU specific. Instead, we use PPCG's GPU code generation
+  // strategy directly from this pass.
+  gpu_gen *generateGPU(Scop &S, ppcg_scop *PPCGScop, gpu_prog *PPCGProg) {
+
+    auto PPCGGen = isl_calloc_type(S.getIslCtx(), struct gpu_gen);
+
+    PPCGGen->ctx = S.getIslCtx();
+    PPCGGen->options = PPCGScop->options;
+    PPCGGen->print = nullptr;
+    PPCGGen->print_user = nullptr;
+    PPCGGen->build_ast_expr = &pollyBuildAstExprForStmt;
+    PPCGGen->prog = PPCGProg;
+    PPCGGen->tree = nullptr;
+    PPCGGen->types.n = 0;
+    PPCGGen->types.name = nullptr;
+    PPCGGen->sizes = nullptr;
+    PPCGGen->used_sizes = nullptr;
+    PPCGGen->kernel_id = 0;
+
+    // Set scheduling strategy to same strategy PPCG is using.
+    isl_options_set_schedule_outer_coincidence(PPCGGen->ctx, true);
+    isl_options_set_schedule_maximize_band_depth(PPCGGen->ctx, true);
+    isl_options_set_schedule_whole_component(PPCGGen->ctx, false);
+
+    isl_schedule *Schedule = get_schedule(PPCGGen);
+
+    int has_permutable = has_any_permutable_node(Schedule);
+
+    if (!has_permutable || has_permutable < 0) {
+      Schedule = isl_schedule_free(Schedule);
+    } else {
+      Schedule = map_to_device(PPCGGen, Schedule);
+      PPCGGen->tree = generate_code(PPCGGen, isl_schedule_copy(Schedule));
+    }
+
+    if (DumpSchedule) {
+      isl_printer *P = isl_printer_to_str(S.getIslCtx());
+      P = isl_printer_set_yaml_style(P, ISL_YAML_STYLE_BLOCK);
+      P = isl_printer_print_str(P, "Schedule\n");
+      P = isl_printer_print_str(P, "========\n");
+      if (Schedule)
+        P = isl_printer_print_schedule(P, Schedule);
+      else
+        P = isl_printer_print_str(P, "No schedule found\n");
+
+      printf("%s\n", isl_printer_get_str(P));
+      isl_printer_free(P);
+    }
+
+    if (DumpCode) {
+      printf("Code\n");
+      printf("====\n");
+      if (PPCGGen->tree)
+        printGPUTree(S, PPCGGen->tree, PPCGProg);
+      else
+        printf("No code generated\n");
+    }
+
+    isl_schedule_free(Schedule);
+
+    return PPCGGen;
+  }
+
+  /// Approximate the number of points in the set.
+  ///
+  /// This function returns an ast expression that overapproximates the number
+  /// of points in an isl set through the rectangular hull surrounding this set.
+  ///
+  /// @param Set   The set to count.
+  /// @param Build The isl ast build object to use for creating the ast
+  ///              expression.
+  ///
+  /// @returns An approximation of the number of points in the set.
+  __isl_give isl_ast_expr *approxPointsInSet(__isl_take isl_set *Set,
+                                             __isl_keep isl_ast_build *Build) {
+
+    isl_val *One = isl_val_int_from_si(isl_set_get_ctx(Set), 1);
+    auto *Expr = isl_ast_expr_from_val(isl_val_copy(One));
+
+    isl_space *Space = isl_set_get_space(Set);
+    Space = isl_space_params(Space);
+    auto *Univ = isl_set_universe(Space);
+    isl_pw_aff *OneAff = isl_pw_aff_val_on_domain(Univ, One);
+
+    for (long i = 0; i < isl_set_dim(Set, isl_dim_set); i++) {
+      isl_pw_aff *Max = isl_set_dim_max(isl_set_copy(Set), i);
+      isl_pw_aff *Min = isl_set_dim_min(isl_set_copy(Set), i);
+      isl_pw_aff *DimSize = isl_pw_aff_sub(Max, Min);
+      DimSize = isl_pw_aff_add(DimSize, isl_pw_aff_copy(OneAff));
+      auto DimSizeExpr = isl_ast_build_expr_from_pw_aff(Build, DimSize);
+      Expr = isl_ast_expr_mul(Expr, DimSizeExpr);
+    }
+
+    isl_set_free(Set);
+    isl_pw_aff_free(OneAff);
+
+    return Expr;
+  }
+
+  /// Approximate a number of dynamic instructions executed by a given
+  /// statement.
+  ///
+  /// @param Stmt  The statement for which to compute the number of dynamic
+  ///              instructions.
+  /// @param Build The isl ast build object to use for creating the ast
+  ///              expression.
+  /// @returns An approximation of the number of dynamic instructions executed
+  ///          by @p Stmt.
+  __isl_give isl_ast_expr *approxDynamicInst(Scop &S, ScopStmt &Stmt,
+                                             __isl_keep isl_ast_build *Build) {
+    auto Iterations = approxPointsInSet(Stmt.getDomain(), Build);
+
+    long InstCount = 0;
+
+    if (Stmt.isBlockStmt()) {
+      auto *BB = Stmt.getBasicBlock();
+      InstCount = std::distance(BB->begin(), BB->end());
+    } else {
+      auto *R = Stmt.getRegion();
+
+      for (auto *BB : R->blocks()) {
+        InstCount += std::distance(BB->begin(), BB->end());
+      }
+    }
+
+    isl_val *InstVal = isl_val_int_from_si(S.getIslCtx(), InstCount);
+    auto *InstExpr = isl_ast_expr_from_val(InstVal);
+    return isl_ast_expr_mul(InstExpr, Iterations);
+  }
+
+  __isl_give isl_ast_expr *
+  getNumberOfIterations(Scop &S, __isl_keep isl_ast_build *Build) {
+    isl_ast_expr *Instructions;
+
+    isl_val *Zero = isl_val_int_from_si(S.getIslCtx(), 0);
+    Instructions = isl_ast_expr_from_val(Zero);
+
+    for (ScopStmt &Stmt : S) {
+      isl_ast_expr *StmtInstructions = approxDynamicInst(S, Stmt, Build);
+      Instructions = isl_ast_expr_add(Instructions, StmtInstructions);
+    }
+    return Instructions;
+  }
+
+  /// Create a check that ensures sufficient compute in scop.
+  ///
+  /// @param S     The scop for which to ensure sufficient compute.
+  /// @param Build The isl ast build object to use for creating the ast
+  ///              expression.
+  /// @returns An expression that evaluates to TRUE in case of sufficient
+  ///          compute and to FALSE, otherwise.
+  __isl_give isl_ast_expr *
+  createSufficientComputeCheck(Scop &S, __isl_keep isl_ast_build *Build) {
+    auto Iterations = getNumberOfIterations(S, Build);
+    auto *MinComputeVal = isl_val_int_from_si(S.getIslCtx(), MinCompute);
+    auto *MinComputeExpr = isl_ast_expr_from_val(MinComputeVal);
+    return isl_ast_expr_ge(Iterations, MinComputeExpr);
+  }
+
+  /// Generate code for a given GPU AST described by @p Root.
+  ///
+  /// @param Root An isl_ast_node pointing to the root of the GPU AST.
+  /// @param Prog The GPU Program to generate code for.
+  void generateCode(Scop &S, __isl_take isl_ast_node *Root, gpu_prog *Prog, 
+  LoopInfo &LI,
+  DominatorTree &DT,
+  RegionInfo &RI,
+  ScalarEvolution &SE,
+  const DataLayout &DL
+    ) {
+    ScopAnnotator Annotator;
+    Annotator.buildAliasScopes(S);
+
+    Region *R = &S.getRegion();
+
+    simplifyRegion(R, &DT, &LI, &RI);
+
+    BasicBlock *EnteringBB = R->getEnteringBlock();
+
+    PollyIRBuilder Builder = createPollyIRBuilder(EnteringBB, Annotator);
+
+    // Only build the run-time condition and parameters _after_ having
+    // introduced the conditional branch. This is important as the conditional
+    // branch will guard the original scop from new induction variables that
+    // the SCEVExpander may introduce while code generating the parameters and
+    // which may introduce scalar dependences that prevent us from correctly
+    // code generating this scop.
+    BBPair StartExitBlocks;
+    BranchInst *CondBr = nullptr;
+    std::tie(StartExitBlocks, CondBr) =
+        executeScopConditionally(S, Builder.getTrue(), DT, RI, LI);
+    BasicBlock *StartBlock = std::get<0>(StartExitBlocks);
+
+    assert(CondBr && "CondBr not initialized by executeScopConditionally");
+
+    GPUNodeBuilder NodeBuilder(Builder, Annotator, DL, LI, SE, DT, S,
+                               StartBlock, Prog, GPURuntime::CUDA, GPUArch::NVPTX64);
+
+    // TODO: Handle LICM
+    auto SplitBlock = StartBlock->getSinglePredecessor();
+    Builder.SetInsertPoint(SplitBlock->getTerminator());
+    NodeBuilder.addParameters(S.getContext());
+
+    isl_ast_build *Build = isl_ast_build_alloc(S.getIslCtx());
+    isl_ast_expr *Condition = IslAst::buildRunCondition(S, Build);
+    isl_ast_expr *SufficientCompute = createSufficientComputeCheck(S, Build);
+    Condition = isl_ast_expr_and(Condition, SufficientCompute);
+    isl_ast_build_free(Build);
+
+    Value *RTC = NodeBuilder.createRTC(Condition);
+    Builder.GetInsertBlock()->getTerminator()->setOperand(0, RTC);
+
+    Builder.SetInsertPoint(&*StartBlock->begin());
+
+    NodeBuilder.initializeAfterRTH();
+    NodeBuilder.preloadInvariantLoads();
+    NodeBuilder.create(Root);
+    NodeBuilder.finalize();
+
+    /// In case a sequential kernel has more surrounding loops as any parallel
+    /// kernel, the SCoP is probably mostly sequential. Hence, there is no
+    /// point in running it on a GPU.
+    if (NodeBuilder.DeepestSequential > NodeBuilder.DeepestParallel)
+      CondBr->setOperand(0, Builder.getFalse());
+
+    if (!NodeBuilder.BuildSuccessful)
+      CondBr->setOperand(0, Builder.getFalse());
+  }
+
+  /// Free gpu_gen structure.
+  ///
+  /// @param PPCGGen The ppcg_gen object to free.
+  void freePPCGGen(gpu_gen *PPCGGen) {
+    isl_ast_node_free(PPCGGen->tree);
+    isl_union_map_free(PPCGGen->sizes);
+    isl_union_map_free(PPCGGen->used_sizes);
+    free(PPCGGen);
+  }
+
+  /// Free the options in the ppcg scop structure.
+  ///
+  /// ppcg is not freeing these options for us. To avoid leaks we do this
+  /// ourselves.
+  ///
+  /// @param PPCGScop The scop referencing the options to free.
+  void freeOptions(ppcg_scop *PPCGScop) {
+    free(PPCGScop->options->debug);
+    PPCGScop->options->debug = nullptr;
+    free(PPCGScop->options);
+    PPCGScop->options = nullptr;
+  }
+
 struct ParallelPollySchedule : public ScopPass {
   static char ID; // Pass identification, replacement for typeid
+
   ParallelPollySchedule() : ScopPass(ID) {
     initializeParallelPollySchedulePass(*PassRegistry::getPassRegistry());
   }
 
-  /// Export the SCoP @p S to a JSON file.
-  bool runOnScop(Scop &S) override {
-    llvm::errs() << "running on scop!\n";
-    S.print(llvm::errs());
+  /// Check if the basic block contains a function we cannot codegen for GPU
+  /// kernels.
+  ///
+  /// If this basic block does something with a `Function` other than calling
+  /// a function that we support in a kernel, return true.
+  bool containsInvalidKernelFunctionInBlock(const BasicBlock *BB) {
+    for (const Instruction &Inst : *BB) {
+      const CallInst *Call = dyn_cast<CallInst>(&Inst);
+      if (Call && isValidFunctionInKernel(Call->getCalledFunction())) {
+        continue;
+      }
+
+      for (Value *SrcVal : Inst.operands()) {
+        PointerType *p = dyn_cast<PointerType>(SrcVal->getType());
+        if (!p)
+          continue;
+        if (isa<FunctionType>(p->getElementType()))
+          return true;
+      }
+    }
     return false;
+  }
+
+  /// Return whether the Scop S uses functions in a way that we do not support.
+  bool containsInvalidKernelFunction(const Scop &S) {
+    for (auto &Stmt : S) {
+      if (Stmt.isBlockStmt()) {
+        if (containsInvalidKernelFunctionInBlock(Stmt.getBasicBlock()))
+          return true;
+      } else {
+        assert(Stmt.isRegionStmt() &&
+               "Stmt was neither block nor region statement");
+        for (const BasicBlock *BB : Stmt.getRegion()->blocks())
+          if (containsInvalidKernelFunctionInBlock(BB))
+            return true;
+      }
+    }
+    return false;
+  }
+
+
+  bool runOnScop(Scop &CurrentScop) override {
+    auto& LI = getAnalysis<LoopInfoWrapperPass>().getLoopInfo();
+    auto& DT = getAnalysis<DominatorTreeWrapperPass>().getDomTree();
+    auto& RI = getAnalysis<RegionInfoPass>().getRegionInfo();
+    auto& SE = getAnalysis<ScalarEvolutionWrapperPass>().getSE();
+    auto& DL = CurrentScop.getRegion().getEntry()->getModule()->getDataLayout();
+
+    // We currently do not support functions other than intrinsics inside
+    // kernels, as code generation will need to offload function calls to the
+    // kernel. This may lead to a kernel trying to call a function on the host.
+    // This also allows us to prevent codegen from trying to take the
+    // address of an intrinsic function to send to the kernel.
+    if (containsInvalidKernelFunction(CurrentScop)) {
+      DEBUG(
+          dbgs()
+              << "Scop contains function which cannot be materialised in a GPU "
+                 "kernel. Bailing out.\n";);
+      return false;
+    }
+
+    auto PPCGScop = createPPCGScop(CurrentScop);
+    auto PPCGProg = createPPCGProg(CurrentScop, PPCGScop);
+    auto PPCGGen = generateGPU(CurrentScop, PPCGScop, PPCGProg);
+
+    if (PPCGGen->tree) {
+      generateCode(CurrentScop, isl_ast_node_copy(PPCGGen->tree), PPCGProg, LI, DT, RI, SE, DL);
+      CurrentScop.markAsToBeSkipped();
+    }
+
+    freeOptions(PPCGScop);
+    freePPCGGen(PPCGGen);
+    gpu_prog_free(PPCGProg);
+    ppcg_scop_free(PPCGScop);
+
+    return true;
   }
 
   /// Register all analyses and transformation required.
   void getAnalysisUsage(AnalysisUsage &AU) const override {
+    AU.addRequired<DominatorTreeWrapperPass>();
+    AU.addRequired<RegionInfoPass>();
+    AU.addRequired<ScalarEvolutionWrapperPass>();
+    AU.addRequired<ScopDetectionWrapperPass>();
     AU.addRequired<ScopInfoRegionPass>();
-    AU.setPreservesAll();
-  }
-};
-
-/*
-struct ParallelPollySchedule : public FunctionPass {
-  static char ID; // Pass identification, replacement for typeid
-  ParallelPollySchedule() : FunctionPass(ID) {
-    initializeParallelPollySchedulePass(*PassRegistry::getPassRegistry());
-  }
-
-  void getAnalysisUsage(AnalysisUsage &AU) const override {
     AU.addRequired<LoopInfoWrapperPass>();
-      AU.addRequiredTransitive<ScalarEvolutionWrapperPass>();
-      AU.addRequired<DominatorTreeWrapperPass>();
-      AU.addRequired<OptimizationRemarkEmitterWrapperPass>();
-      // We also need AA and RegionInfo when we are verifying analysis.
-      AU.addRequiredTransitive<AAResultsWrapperPass>();
-      AU.addRequiredTransitive<RegionInfoPass>();
-      AU.setPreservesAll();
-  }
 
-  bool runOnFunction(Function &F) override {
-    if (skipFunction(F))
-        return false;
-    return false;
+    AU.addPreserved<AAResultsWrapperPass>();
+    AU.addPreserved<BasicAAWrapperPass>();
+    AU.addPreserved<LoopInfoWrapperPass>();
+    AU.addPreserved<DominatorTreeWrapperPass>();
+    AU.addPreserved<GlobalsAAWrapperPass>();
+    AU.addPreserved<ScopDetectionWrapperPass>();
+    AU.addPreserved<ScalarEvolutionWrapperPass>();
+    AU.addPreserved<SCEVAAWrapperPass>();
 
-    auto tmp = polly::PollyProcessUnprofitable;
-    polly::PollyProcessUnprofitable = true;
-    std::unique_ptr<polly::ScopDetection> Result;
-
-    auto &LI = getAnalysis<LoopInfoWrapperPass>().getLoopInfo();
-    auto &RI = getAnalysis<RegionInfoPass>().getRegionInfo();
-    auto &AA = getAnalysis<AAResultsWrapperPass>().getAAResults();
-    auto &SE = getAnalysis<ScalarEvolutionWrapperPass>().getSE();
-    auto &DT = getAnalysis<DominatorTreeWrapperPass>().getDomTree();
-    auto &ORE = getAnalysis<OptimizationRemarkEmitterWrapperPass>().getORE();
-    Result.reset(new polly::ScopDetection(F, DT, SE, LI, RI, AA, ORE));
-    polly::PollyProcessUnprofitable = tmp;
-    return false;
+    // FIXME: We do not yet add regions for the newly generated code to the
+    //        region tree.
+    AU.addPreserved<RegionInfoPass>();
+    AU.addPreserved<ScopInfoRegionPass>();
   }
 };
-*/
-}
 
+}
 
 char ParallelPollySchedule::ID = 0;
 static const char LS_NAME[] = "parallelpollyschedule";
 static const char ls_name[] = "Do polly transformations on tapir in llvm proper for mapping";
 INITIALIZE_PASS_BEGIN(ParallelPollySchedule, LS_NAME, ls_name, false, false)
-INITIALIZE_PASS_DEPENDENCY(ScopInfoRegionPass)
+//INITIALIZE_PASS_DEPENDENCY(ScopInfoRegionPass)
+INITIALIZE_PASS_DEPENDENCY(DependenceInfo);
+INITIALIZE_PASS_DEPENDENCY(DominatorTreeWrapperPass);
+INITIALIZE_PASS_DEPENDENCY(LoopInfoWrapperPass);
+INITIALIZE_PASS_DEPENDENCY(RegionInfoPass);
+INITIALIZE_PASS_DEPENDENCY(ScalarEvolutionWrapperPass);
+INITIALIZE_PASS_DEPENDENCY(ScopDetectionWrapperPass);
 //INITIALIZE_PASS_DEPENDENCY(AAResultsWrapperPass)
 //INITIALIZE_PASS_DEPENDENCY(DominatorTreeWrapperPass)
 //INITIALIZE_PASS_DEPENDENCY(LoopInfoWrapperPass)

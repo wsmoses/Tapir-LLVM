@@ -1,6 +1,14 @@
 include_directories("${PROJECT_SOURCE_DIR}/tools/polly/include")
+include_directories("${PROJECT_BINARY_DIR}/tools/polly/include")
+
+include_directories(BEFORE "${PROJECT_SOURCE_DIR}/tools/polly/lib/External")
+include_directories(BEFORE "${PROJECT_BINARY_DIR}/tools/polly/lib/External")
+
 include_directories(BEFORE "${PROJECT_SOURCE_DIR}/tools/polly/lib/External/isl/include")
 include_directories(BEFORE "${PROJECT_BINARY_DIR}/tools/polly/lib/External/isl/include")
+
+include_directories(BEFORE "${PROJECT_SOURCE_DIR}/tools/polly/lib/External/pet/include")
+include_directories(BEFORE "${PROJECT_BINARY_DIR}/tools/polly/lib/External/pet/include")
 
 if (CMAKE_COMPILER_IS_GNUCXX)
   # FIXME: Turn off exceptions, RTTI:
