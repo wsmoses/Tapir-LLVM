@@ -267,3 +267,7 @@ bool QthreadsABI::processMain(Function &F) {
   return true;
 }
 
+bool llvm::QthreadsABI::processLoop(LoopSpawningHints LSH, LoopInfo &LI, ScalarEvolution &SE, DominatorTree &DT,
+                                    AssumptionCache &AC, OptimizationRemarkEmitter &ORE) { 
+  return false; 
+}

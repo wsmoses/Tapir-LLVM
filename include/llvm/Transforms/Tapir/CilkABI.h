@@ -54,19 +54,6 @@ public:
   bool processLoop();
 
   virtual ~CilkABILoopSpawning() {}
-
-protected:
-  // PHINode* canonicalizeIVs(Type *Ty);
-  Value* canonicalizeLoopLatch(PHINode *IV, Value *Limit);
-
-// private:
-//   /// Report an analysis message to assist the user in diagnosing loops that are
-//   /// not transformed.  These are handled as LoopAccessReport rather than
-//   /// VectorizationReport because the << operator of LoopSpawningReport returns
-//   /// LoopAccessReport.
-//   void emitAnalysis(const LoopAccessReport &Message) const {
-//     emitAnalysisDiag(OrigLoop, *ORE, Message);
-//   }
 };
 
 class CilkABI : public TapirTarget {
@@ -83,6 +70,8 @@ public:
   void postProcessFunction(Function &F) override final;
   void postProcessHelper(Function &F) override final;
   bool processMain(Function &F) override final;
+  bool processLoop(LoopSpawningHints LSH, LoopInfo &LI, ScalarEvolution &SE, DominatorTree &DT,
+                   AssumptionCache &AC, OptimizationRemarkEmitter &ORE) override final;
 
   struct __cilkrts_pedigree {};
   struct __cilkrts_stack_frame {};
