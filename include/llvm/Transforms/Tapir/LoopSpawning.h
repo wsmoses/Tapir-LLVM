@@ -58,9 +58,46 @@ public:
 
 protected:
   PHINode* canonicalizeIVs(Type *Ty);
+  const SCEV* getLimit();
+
+    /// \brief Compute the grainsize of the loop, based on the limit.
+    ///
+    /// The grainsize is computed by the following equation:
+    ///
+    ///     Grainsize = min(2048, ceil(Limit / (8 * workers)))
+    ///
+    /// This computation is inserted into the preheader of the loop.
+    ///
+    /// TODO: This method is the only method that depends on the CilkABI.
+    /// Generalize this method for other grainsize calculations and to query TLI.
+  Value* computeGrainsize(Value *Limit, TapirTarget* tapirTarget);
+
   Value* canonicalizeLoopLatch(PHINode *IV, Value *Limit);
-  bool removeNonCanonicalIVs(BasicBlock* Header, BasicBlock* Preheader, PHINode* CanonicalIV, SmallVector<PHINode*, 8> &IVs, SCEVExpander &Exp);
-  //bool setIVStartingValues();
+
+  bool getHandledExits(BasicBlock* Header, SmallPtrSetImpl<BasicBlock *> &HandledExits);
+
+  bool removeNonCanonicalIVs(BasicBlock* Header, BasicBlock* Preheader, PHINode* CanonicalIV, SmallVectorImpl<PHINode*> &IVs);
+  bool setIVStartingValues(Value* newStart, Value* CanonicalIV, const SmallVectorImpl<PHINode*> &IVs, BasicBlock* NewPreheader, ValueToValueMapTy &VMap);
+
+    // In the general case, var is the result of some computation
+    // in the loop's preheader. The pass wants to prevent outlining from passing
+    // var as an arbitrary argument to the outlined function, but one that is
+    // potentially in a specific place for ABI reasons.
+    // Hence, this pass adds the loop-limit variable as an argument
+    // manually.
+    //
+    // There are two special cases to consider: the var is a constant, or
+    // the var is used elsewhere within the loop.  To handle these two
+    // cases, this pass adds an explict argument for var, to ensure it isn't
+    // clobberred by the other use or not passed because it is constant.
+  static inline Value* ensureDistinctArgument(Value* var, const Twine &name="") {
+    if (isa<Constant>(var) || !var->hasOneUse()) {
+        Argument *argument = new Argument(var->getType(), name);
+        return argument;
+    } else {
+        return var;
+    }
+  }
 
   void unlinkLoop();
 

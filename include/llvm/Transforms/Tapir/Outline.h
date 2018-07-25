@@ -29,6 +29,23 @@ namespace llvm {
 
 typedef SetVector<Value *> ValueSet;
 
+/// definedInRegion - Return true if the specified value is used in the
+/// extracted region.
+template<class BasicBlockPtrContainer>
+static inline bool usedInRegion(const BasicBlockPtrContainer &Blocks,
+                                Value *V) {
+  if (Instruction *I = dyn_cast<Instruction>(V)) {
+    for (User *U : I->users()) {
+      if (Instruction *Inst = dyn_cast<Instruction>(U)) {
+        if (std::find(Blocks.begin(), Blocks.end(), Inst->getParent()) != Blocks.end()) {
+          return true;
+        }
+      }
+    }
+  }
+  return false;
+}
+
 /// definedInRegion - Return true if the specified value is defined in the
 /// extracted region.
 template<class BasicBlockPtrContainer>

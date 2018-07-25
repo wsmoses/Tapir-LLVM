@@ -146,14 +146,23 @@ private:
 /// induction variable created or inserted by the scalar evolution expander.
 PHINode* LoopOutline::canonicalizeIVs(Type *Ty) {
   Loop *L = OrigLoop;
-
   BasicBlock* Header = L->getHeader();
-  Module* M = Header->getParent()->getParent();
+
+  Module* M = OrigFunction->getParent();
   const DataLayout &DL = M->getDataLayout();
 
   SCEVExpander Exp(SE, DL, "ls");
 
   PHINode *CanonicalIV = Exp.getOrInsertCanonicalInductionVariable(L, Ty);
+  if (!CanonicalIV) {
+      DEBUG(dbgs() << "Could not get canonical IV.\n");
+      ORE.emit(OptimizationRemarkAnalysis(LS_NAME, "NoCanonicalIV",
+                                          L->getStartLoc(),
+                                          Header)
+            << "could not find or create canonical IV");
+      return nullptr;
+  }
+
   DEBUG(dbgs() << "LS Canonical induction variable " << *CanonicalIV << "\n");
 
   SmallVector<WeakTrackingVH, 16> DeadInsts;
@@ -167,8 +176,123 @@ PHINode* LoopOutline::canonicalizeIVs(Type *Ty) {
   return CanonicalIV;
 }
 
+/// Helper routine to get all exit blocks of a loop that are unreachable.
+static void getEHExits(Loop *L, const BasicBlock *DesignatedExitBlock,
+                       SmallVectorImpl<BasicBlock *> &EHExits) {
+  SmallVector<BasicBlock *, 4> ExitBlocks;
+  L->getExitBlocks(ExitBlocks);
+
+  SmallVector<BasicBlock *, 4> WorkList;
+  for (BasicBlock *Exit : ExitBlocks) {
+    if (Exit == DesignatedExitBlock) continue;
+    EHExits.push_back(Exit);
+    WorkList.push_back(Exit);
+  }
+
+  // Traverse the CFG from these frontier blocks to find all blocks involved in
+  // exception-handling exit code.
+  SmallPtrSet<BasicBlock *, 4> Visited;
+  while (!WorkList.empty()) {
+    BasicBlock *BB = WorkList.pop_back_val();
+    if (!Visited.insert(BB).second)
+      continue;
+
+    // Check that the exception handling blocks do not reenter the loop.
+    assert(!L->contains(BB) &&
+           "Exception handling blocks re-enter loop.");
+
+    for (BasicBlock *Succ : successors(BB)) {
+      EHExits.push_back(Succ);
+      WorkList.push_back(Succ);
+    }
+  }
+}
+
+Value* LoopOutline::computeGrainsize(Value *Limit, TapirTarget* tapirTarget) {
+  Loop *L = OrigLoop;
+
+  Value *Grainsize;
+  BasicBlock *Preheader = L->getLoopPreheader();
+  assert(Preheader && "No Preheader found for loop.");
+
+  IRBuilder<> Builder(Preheader->getTerminator());
+
+  // Get 8 * workers
+  Value *Workers8 = Builder.CreateIntCast(tapirTarget->GetOrCreateWorker8(*Preheader->getParent()),
+                                          Limit->getType(), false);
+  // Compute ceil(limit / 8 * workers) = (limit + 8 * workers - 1) / (8 * workers)
+  Value *SmallLoopVal =
+    Builder.CreateUDiv(Builder.CreateSub(Builder.CreateAdd(Limit, Workers8),
+                                         ConstantInt::get(Limit->getType(), 1)),
+                       Workers8);
+  // Compute min
+  Value *LargeLoopVal = ConstantInt::get(Limit->getType(), 2048);
+  Value *Cmp = Builder.CreateICmpULT(LargeLoopVal, SmallLoopVal);
+  Grainsize = Builder.CreateSelect(Cmp, LargeLoopVal, SmallLoopVal);
+
+  return Grainsize;
+}
+
+bool LoopOutline::getHandledExits(BasicBlock* Header, SmallPtrSetImpl<BasicBlock *> &HandledExits) {
+
+    // Check that this loop has a valid exit block after the latch.
+    if (!ExitBlock) {
+        DEBUG(dbgs() << "LS loop does not contain valid exit block after latch.\n");
+        ORE.emit(OptimizationRemarkAnalysis(LS_NAME, "InvalidLatchExit",
+                                            OrigLoop->getStartLoc(),
+                                            Header)
+                 << "invalid latch exit");
+        return false;
+    }
+
+    assert(HandledExits.size() == 0);
+    // Get special exits from this loop.
+    SmallVector<BasicBlock *, 4> EHExits;
+    getEHExits(OrigLoop, ExitBlock, EHExits);
+
+    // Check the exit blocks of the loop.
+    SmallVector<BasicBlock *, 4> ExitBlocks;
+    OrigLoop->getExitBlocks(ExitBlocks);
+
+  for (const BasicBlock *Exit : ExitBlocks) {
+    if (Exit == ExitBlock) continue;
+    if (Exit->isLandingPad()) {
+      DEBUG({
+          const LandingPadInst *LPI = Exit->getLandingPadInst();
+          dbgs() << "landing pad found: " << *LPI << "\n";
+          for (const User *U : LPI->users())
+            dbgs() << "\tuser " << *U << "\n";
+        });
+    }
+  }
+  for (BasicBlock *BB : EHExits)
+    HandledExits.insert(BB);
+  for (BasicBlock *Exit : ExitBlocks) {
+    if (Exit == ExitBlock) continue;
+    if (!HandledExits.count(Exit)) {
+      DEBUG(dbgs() << "LS loop contains a bad exit block " << *Exit);
+      ORE.emit(OptimizationRemarkAnalysis(LS_NAME, "BadExit",
+                                          OrigLoop->getStartLoc(),
+                                          Header)
+               << "bad exit block found");
+      return false;
+    }
+  }
+
+  DEBUG({
+    dbgs() << "Handled exits of loop:";
+    for (BasicBlock *HE : HandledExits)
+      dbgs() << *HE;
+    dbgs() << "\n";
+  });
+
+  return true;
+}
+
 // IVs is output
-bool LoopOutline::removeNonCanonicalIVs(BasicBlock* Header, BasicBlock* Preheader, PHINode* CanonicalIV, SmallVector<PHINode*, 8> &IVs, SCEVExpander &Exp) {
+bool LoopOutline::removeNonCanonicalIVs(BasicBlock* Header, BasicBlock* Preheader, PHINode* CanonicalIV, SmallVectorImpl<PHINode*> &IVs) {
+  assert(IVs.size() == 0);
+
   // Remove all IV's other than CanonicalIV.
   // First, check that we can do this.
   bool CanRemoveIVs = true;
@@ -190,6 +314,7 @@ bool LoopOutline::removeNonCanonicalIVs(BasicBlock* Header, BasicBlock* Preheade
   }
 
   {
+    SCEVExpander Exp(SE, OrigFunction->getParent()->getDataLayout(), "ls");
     SmallVector<PHINode*, 8> IVsToRemove;
     for (BasicBlock::iterator II = Header->begin(); isa<PHINode>(II); ++II) {
       PHINode *PN = cast<PHINode>(II);
@@ -245,34 +370,99 @@ bool LoopOutline::removeNonCanonicalIVs(BasicBlock* Header, BasicBlock* Preheade
       AllCanonical = false;
       DEBUG(dbgs() << "Remaining non-canonical PHI Node found: " << *PN <<
             "\n");
-      // emitAnalysis(LoopSpawningReport(PN)
-      //              << "Found a remaining non-canonical IV.\n");
       ORE.emit(OptimizationRemarkAnalysis(DEBUG_TYPE, "NonCanonicalIV", PN)
                << "found a remaining noncanonical IV");
     }
   }
   if (!AllCanonical)
     return false;   
+
+  return true;
 }
 
-// TODO
-/*
-bool LoopOutline::setIVStartingValues(Value* newStart, Value* NewCanonicalIV, BasicBlock* NewPreheader) {
+/// Begin copied from <Transforms/Vectorizer/LoopVectorize.cpp>
+
+/// Convert a pointer to an integer type.
+static Type *convertPointerToIntegerType(const DataLayout &DL, Type *Ty) {
+  if (Ty->isPointerTy())
+    return DL.getIntPtrType(Ty);
+
+  // It is possible that char's or short's overflow when we ask for the loop's
+  // trip count, work around this by changing the type size.
+  if (Ty->getScalarSizeInBits() < 32)
+    return Type::getInt32Ty(Ty->getContext());
+
+  return Ty;
+}
+
+/// Get the wider of two integer types.
+static inline Type *getWiderType(const DataLayout &DL, Type *Ty0, Type *Ty1) {
+  Ty0 = convertPointerToIntegerType(DL, Ty0);
+  Ty1 = convertPointerToIntegerType(DL, Ty1);
+  if (Ty0->getScalarSizeInBits() > Ty1->getScalarSizeInBits())
+    return Ty0;
+  return Ty1;
+}
+/// End copied from <Transforms/Vectorizer/LoopVectorize.cpp>
+
+
+const SCEV* LoopOutline::getLimit() {
+    Loop* L = OrigLoop;
+    BasicBlock *Header = L->getHeader();
+    BasicBlock *Latch = L->getLoopLatch();
+
+    const SCEV *Limit = SE.getExitCount(L, Latch);
+    DEBUG(dbgs() << "LS Loop limit: " << *Limit << "\n");
+
+    if (SE.getCouldNotCompute() == Limit) {
+      DEBUG(dbgs() << "SE could not compute loop limit.\n");
+      ORE.emit(OptimizationRemarkAnalysis(LS_NAME, "UnknownLoopLimit",
+                                          L->getStartLoc(),
+                                          Header)
+               << "could not compute limit");
+      return nullptr;
+    }
+
+    /// Determine the type of the canonical IV.
+    Type *CanonicalIVTy = Limit->getType();
+    const DataLayout &DL = OrigFunction->getParent()->getDataLayout();
+    
+    for (BasicBlock::iterator II = Header->begin(); isa<PHINode>(II); ++II) {
+        PHINode *PN = cast<PHINode>(II);
+        if (PN->getType()->isFloatingPointTy()) continue;
+        CanonicalIVTy = getWiderType(DL, PN->getType(), CanonicalIVTy);
+    }
+
+    Limit = SE.getNoopOrAnyExtend(Limit, CanonicalIVTy);
+    return Limit;
+}
+
+bool LoopOutline::setIVStartingValues(Value* newStart, Value* CanonicalIV, const SmallVectorImpl<PHINode*> &IVs, BasicBlock* NewPreheader, ValueToValueMapTy &VMap) {
     if (auto startInst = dyn_cast<Instruction>(NewPreheader)) {
         assert(DT->dominates(startInst, NewPreheader->getTerminator()));
     }
 
+    PHINode *NewCanonicalIV = cast<PHINode>(VMap[CanonicalIV]);
+    Value* startingValue = nullptr;
     {
       int NewPreheaderIdx = NewCanonicalIV->getBasicBlockIndex(NewPreheader);
-      assert(isa<Constant>(NewCanonicalIV->getIncomingValue(NewPreheaderIdx)) &&
-             "Cloned canonical IV does not inherit a constant value from cloned preheader.");
+      startingValue = NewCanonicalIV->getIncomingValue(NewPreheaderIdx);
+      if (Constant* C = dyn_cast<Constant>(startingValue)) {
+        if (C->isZeroValue())
+            startingValue = nullptr;
+      }
+      //assert(isa<Constant>(NewCanonicalIV->getIncomingValue(NewPreheaderIdx)) &&
+      //       "Cloned canonical IV does not inherit a constant value from cloned preheader.");
       NewCanonicalIV->setIncomingValue(NewPreheaderIdx, newStart);
     }
+
+    SCEVExpander Exp(SE, OrigFunction->getParent()->getDataLayout(), "ls");
 
     // Rewrite other cloned IV's to start at their value at the start
     // iteration.
     const SCEV *StartIterSCEV = SE.getSCEV(newStart);
     DEBUG(dbgs() << "StartIterSCEV: " << *StartIterSCEV << "\n");
+
     for (PHINode *IV : IVs) {
       if (CanonicalIV == IV) continue;
 
@@ -289,6 +479,11 @@ bool LoopOutline::setIVStartingValues(Value* newStart, Value* NewCanonicalIV, Ba
       Value *IVStart = Exp.expandCodeFor(IVAtIter, IVAtIter->getType(),
                                          NewPreheader->getTerminator());
 
+      if (startingValue) {
+        IRBuilder<> B(NewPreheader->getTerminator());
+        IVStart = B.CreateSub(IVStart, startingValue);
+      }
+
       // Set the value that the cloned IV inherits from the cloned preheader.
       PHINode *NewIV = cast<PHINode>(VMap[IV]);
       int NewPreheaderIdx = NewIV->getBasicBlockIndex(NewPreheader);
@@ -296,8 +491,14 @@ bool LoopOutline::setIVStartingValues(Value* newStart, Value* NewCanonicalIV, Ba
              "Cloned IV does not inherit a constant value from cloned preheader.");
       NewIV->setIncomingValue(NewPreheaderIdx, IVStart);
     }
+
+    // Remap the newly added instructions in the new preheader to use
+    // values local to the helper.
+    for (Instruction &II : *NewPreheader)
+      RemapInstruction(&II, VMap, RF_IgnoreMissingLocals,
+                       /*TypeMapper=*/nullptr, /*Materializer=*/nullptr);
+    return true;
 }
-*/
 
 /// \brief Replace the latch of the loop to check that IV is always less than or
 /// equal to the limit.
@@ -498,6 +699,14 @@ bool LoopSpawningImpl::processLoop(Loop *L) {
     DEBUG(dbgs() << "LS: Hints dictate sequential spawning.\n");
     break;
   default:
+    DEBUG({
+      llvm::LoopBlocksDFS DFS(L);
+      DFS.perform(&LI);
+      dbgs() << "Blocks in loop (from DFS):\n";
+      for (BasicBlock *BB : make_range(DFS.beginRPO(), DFS.endRPO()))
+        dbgs() << *BB;
+    });
+
     return tapirTarget->processLoop(Hints, LI, SE, DT, AC, ORE);
   case LoopSpawningHints::ST_END:
     dbgs() << "LS: Hints specify unknown spawning strategy.\n";
