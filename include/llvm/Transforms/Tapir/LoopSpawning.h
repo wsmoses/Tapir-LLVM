@@ -36,11 +36,11 @@ namespace llvm {
 /// lifting a Tapir loop into a separate helper function.
 class LoopOutline {
 public:
-  LoopOutline(Loop *OrigLoop, ScalarEvolution &SE,
+   inline LoopOutline(Loop *OrigLoop, ScalarEvolution &SE,
               LoopInfo *LI, DominatorTree *DT,
               AssumptionCache *AC,
               OptimizationRemarkEmitter &ORE)
-      : OrigLoop(OrigLoop), SE(SE), LI(LI), DT(DT), AC(AC), ORE(ORE),
+      : OrigLoop(OrigLoop), OrigFunction(OrigLoop->getHeader()->getParent()), SE(SE), LI(LI), DT(DT), AC(AC), ORE(ORE),
         ExitBlock(nullptr)
   {
     // Use the loop latch to determine the canonical exit block for this loop.
@@ -59,10 +59,16 @@ public:
 protected:
   PHINode* canonicalizeIVs(Type *Ty);
   Value* canonicalizeLoopLatch(PHINode *IV, Value *Limit);
+  bool removeNonCanonicalIVs(BasicBlock* Header, BasicBlock* Preheader, PHINode* CanonicalIV, SmallVector<PHINode*, 8> &IVs, SCEVExpander &Exp);
+  //bool setIVStartingValues();
+
   void unlinkLoop();
 
   /// The original loop.
-  Loop *OrigLoop;
+  Loop * const OrigLoop;
+
+  // Function containing original loop
+  Function * const OrigFunction;
 
   /// A wrapper around ScalarEvolution used to add runtime SCEV checks. Applies
   /// dynamic knowledge to simplify SCEV expressions and converts them to a
@@ -82,15 +88,6 @@ protected:
   /// latch, and handle other exit blocks (i.e., for exception handling) in a
   /// special manner.
   BasicBlock *ExitBlock;
-
-// private:
-//   /// Report an analysis message to assist the user in diagnosing loops that are
-//   /// not transformed.  These are handled as LoopAccessReport rather than
-//   /// VectorizationReport because the << operator of LoopSpawningReport returns
-//   /// LoopAccessReport.
-//   void emitAnalysis(const LoopAccessReport &Message) const {
-//     emitAnalysisDiag(OrigLoop, *ORE, Message);
-//   }
 };
 
 /// The LoopSpawning Pass.

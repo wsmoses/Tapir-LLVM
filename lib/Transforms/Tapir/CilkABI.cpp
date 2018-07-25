@@ -1293,41 +1293,6 @@ bool CilkABI::processMain(Function &F) {
   return false;
 }
 
-/// \brief Replace the latch of the loop to check that IV is always less than or
-/// equal to the limit.
-///
-/// This method assumes that the loop has a single loop latch.
-Value* CilkABILoopSpawning::canonicalizeLoopLatch(PHINode *IV, Value *Limit) {
-  Loop *L = OrigLoop;
-
-  Value *NewCondition;
-  BasicBlock *Header = L->getHeader();
-  BasicBlock *Latch = L->getLoopLatch();
-  assert(Latch && "No single loop latch found for loop.");
-
-  IRBuilder<> Builder(&*Latch->getFirstInsertionPt());
-
-  // This process assumes that IV's increment is in Latch.
-
-  // Create comparison between IV and Limit at top of Latch.
-  NewCondition =
-    Builder.CreateICmpULT(Builder.CreateAdd(IV,
-                                            ConstantInt::get(IV->getType(), 1)),
-                          Limit);
-
-  // Replace the conditional branch at the end of Latch.
-  BranchInst *LatchBr = dyn_cast_or_null<BranchInst>(Latch->getTerminator());
-  assert(LatchBr && LatchBr->isConditional() &&
-         "Latch does not terminate with a conditional branch.");
-  Builder.SetInsertPoint(Latch->getTerminator());
-  Builder.CreateCondBr(NewCondition, Header, ExitBlock);
-
-  // Erase the old conditional branch.
-  LatchBr->eraseFromParent();
-
-  return NewCondition;
-}
-
 /// Top-level call to convert a Tapir loop to be processed using an appropriate
 /// Cilk ABI call.
 bool CilkABILoopSpawning::processLoop() {
@@ -1363,25 +1328,18 @@ bool CilkABILoopSpawning::processLoop() {
     }
   }
 
-  Function *F = Header->getParent();
-  Module* M = F->getParent();
+  Module* M = OrigFunction->getParent();
 
   DEBUG(dbgs() << "LS loop header:" << *Header);
   DEBUG(dbgs() << "LS loop latch:" << *Latch);
 
-  // DEBUG(dbgs() << "LS SE backedge taken count: " << *(SE.getBackedgeTakenCount(L)) << "\n");
-  // DEBUG(dbgs() << "LS SE max backedge taken count: " << *(SE.getMaxBackedgeTakenCount(L)) << "\n");
   DEBUG(dbgs() << "LS SE exit count: " << *(SE.getExitCount(L, Latch)) << "\n");
 
   /// Get loop limit.
   const SCEV *BETC = SE.getExitCount(L, Latch);
   const SCEV *Limit = SE.getAddExpr(BETC, SE.getOne(BETC->getType()));
   DEBUG(dbgs() << "LS Loop limit: " << *Limit << "\n");
-  // PredicatedScalarEvolution PSE(SE, *L);
-  // const SCEV *PLimit = PSE.getExitCount(L, Latch);
-  // DEBUG(dbgs() << "LS predicated loop limit: " << *PLimit << "\n");
-  // emitAnalysis(LoopSpawningReport()
-  //              << "computed loop limit " << *Limit << "\n");
+
   if (SE.getCouldNotCompute() == Limit) {
     DEBUG(dbgs() << "SE could not compute loop limit.\n");
     ORE.emit(OptimizationRemarkAnalysis(LS_NAME, "UnknownLoopLimit",
@@ -1390,107 +1348,29 @@ bool CilkABILoopSpawning::processLoop() {
              << "could not compute limit");
     return false;
   }
-  // ORE.emit(OptimizationRemarkAnalysis(LS_NAME, "LoopLimit", L->getStartLoc(),
-  //                                     Header)
-  //          << "loop limit: " << NV("Limit", Limit));
-  /// Clean up the loop's induction variables.
+
   PHINode *CanonicalIV = canonicalizeIVs(Limit->getType());
   if (!CanonicalIV) {
     DEBUG(dbgs() << "Could not get canonical IV.\n");
-    // emitAnalysis(LoopSpawningReport()
-    //              << "Could not get a canonical IV.\n");
     ORE.emit(OptimizationRemarkAnalysis(LS_NAME, "NoCanonicalIV",
                                         L->getStartLoc(),
                                         Header)
              << "could not find or create canonical IV");
     return false;
   }
+
+    // Remove the IV's (other than CanonicalIV) and replace them with
+    // their stronger forms.
+    //
+    // TODO?: We can probably adapt this loop->DAC process such that we
+    // don't require all IV's to be canonical.
+      SmallVector<PHINode*, 8> IVs;
+      SCEVExpander Exp(SE, M->getDataLayout(), "ls");
+     if (!removeNonCanonicalIVs(Header, Preheader, CanonicalIV, IVs, Exp))
+        return false;
+
   const SCEVAddRecExpr *CanonicalSCEV =
     cast<const SCEVAddRecExpr>(SE.getSCEV(CanonicalIV));
-
-  // Remove all IV's other can CanonicalIV.
-  // First, check that we can do this.
-  bool CanRemoveIVs = true;
-  for (BasicBlock::iterator II = Header->begin(); isa<PHINode>(II); ++II) {
-    PHINode *PN = cast<PHINode>(II);
-    if (CanonicalIV == PN) continue;
-    // dbgs() << "IV " << *PN;
-    const SCEV *S = SE.getSCEV(PN);
-    // dbgs() << " SCEV " << *S << "\n";
-    if (SE.getCouldNotCompute() == S) {
-      // emitAnalysis(LoopSpawningReport(PN)
-      //              << "Could not compute the scalar evolution.\n");
-      ORE.emit(OptimizationRemarkAnalysis(LS_NAME, "NoSCEV", PN)
-               << "could not compute scalar evolution of "
-               << NV("PHINode", PN));
-      CanRemoveIVs = false;
-    }
-  }
-
-  if (!CanRemoveIVs) {
-    DEBUG(dbgs() << "Could not compute scalar evolutions for all IV's.\n");
-    return false;
-  }
-
-  ////////////////////////////////////////////////////////////////////////
-  // We now have everything we need to extract the loop.  It's time to
-  // do some surgery.
-
-  SCEVExpander Exp(SE, M->getDataLayout(), "ls");
-
-  // Remove the IV's (other than CanonicalIV) and replace them with
-  // their stronger forms.
-  //
-  // TODO?: We can probably adapt this process such that we don't require all
-  // IV's to be canonical.
-  {
-    SmallVector<PHINode*, 8> IVsToRemove;
-    for (BasicBlock::iterator II = Header->begin(); isa<PHINode>(II); ++II) {
-      PHINode *PN = cast<PHINode>(II);
-      if (PN == CanonicalIV) continue;
-      const SCEV *S = SE.getSCEV(PN);
-      Value *NewIV = Exp.expandCodeFor(S, S->getType(), CanonicalIV);
-      PN->replaceAllUsesWith(NewIV);
-      IVsToRemove.push_back(PN);
-    }
-    for (PHINode *PN : IVsToRemove)
-      PN->eraseFromParent();
-  }
-
-  // All remaining IV's should be canonical.  Collect them.
-  //
-  // TODO?: We can probably adapt this process such that we don't require all
-  // IV's to be canonical.
-  SmallVector<PHINode*, 8> IVs;
-  bool AllCanonical = true;
-  for (BasicBlock::iterator II = Header->begin(); isa<PHINode>(II); ++II) {
-    PHINode *PN = cast<PHINode>(II);
-    DEBUG({
-        const SCEVAddRecExpr *PNSCEV =
-          dyn_cast<const SCEVAddRecExpr>(SE.getSCEV(PN));
-        assert(PNSCEV && "PHINode did not have corresponding SCEVAddRecExpr");
-        assert(PNSCEV->getStart()->isZero() &&
-               "PHINode SCEV does not start at 0");
-        dbgs() << "LS step recurrence for SCEV " << *PNSCEV << " is "
-               << *(PNSCEV->getStepRecurrence(SE)) << "\n";
-        assert(PNSCEV->getStepRecurrence(SE)->isOne() &&
-               "PHINode SCEV step is not 1");
-      });
-    if (ConstantInt *C =
-        dyn_cast<ConstantInt>(PN->getIncomingValueForBlock(Preheader))) {
-      if (C->isZero())
-        IVs.push_back(PN);
-    } else {
-      AllCanonical = false;
-      DEBUG(dbgs() << "Remaining non-canonical PHI Node found: " << *PN << "\n");
-      // emitAnalysis(LoopSpawningReport(PN)
-      //              << "Found a remaining non-canonical IV.\n");
-      ORE.emit(OptimizationRemarkAnalysis(DEBUG_TYPE, "NonCanonicalIV", PN)
-               << "found a remaining noncanonical IV");
-    }
-  }
-  if (!AllCanonical)
-    return false;
 
   // Insert the computation for the loop limit into the Preheader.
   Value *LimitVar = Exp.expandCodeFor(Limit, Limit->getType(),
@@ -1506,45 +1386,11 @@ bool CilkABILoopSpawning::processLoop() {
   SetVector<Value*> Inputs, Outputs;
   SetVector<Value*> BodyInputs, BodyOutputs;
   ValueToValueMapTy VMap, InputMap;
-  std::vector<BasicBlock *> LoopBlocks;
   AllocaInst* closure;
   // Add start iteration, end iteration, and grainsize to inputs.
   {
-    LoopBlocks = L->getBlocks();
-    // // Add exit blocks terminated by unreachable.  There should not be any other
-    // // exit blocks in the loop.
-    // SmallSet<BasicBlock *, 4> UnreachableExits;
-    // for (BasicBlock *Exit : ExitBlocks) {
-    //   if (Exit == ExitBlock) continue;
-    //   assert(isa<UnreachableInst>(Exit->getTerminator()) &&
-    //          "Found problematic exit block.");
-    //   UnreachableExits.insert(Exit);
-    // }
-
-    // // Add unreachable and exception-handling exits to the set of loop blocks to
-    // // clone.
-    // for (BasicBlock *BB : UnreachableExits)
-    //   LoopBlocks.push_back(BB);
-    // for (BasicBlock *BB : EHExits)
-    //   LoopBlocks.push_back(BB);
-
-    // DEBUG({
-    //     dbgs() << "LoopBlocks: ";
-    //     for (BasicBlock *LB : LoopBlocks)
-    //       dbgs() << LB->getName() << "("
-    //              << *(LB->getTerminator()) << "), ";
-    //     dbgs() << "\n";
-    //   });
-
     // Get the inputs and outputs for the loop body.
-    {
-      // CodeExtractor Ext(LoopBlocks, DT);
-      // Ext.findInputsOutputs(BodyInputs, BodyOutputs);
-      SmallPtrSet<BasicBlock *, 32> Blocks;
-      for (BasicBlock *BB : LoopBlocks)
-        Blocks.insert(BB);
-      findInputsOutputs(Blocks, BodyInputs, BodyOutputs);
-    }
+    findInputsOutputs(L->getBlocks(), BodyInputs, BodyOutputs);
 
     // Add argument for start of CanonicalIV.
     DEBUG({
@@ -1601,18 +1447,11 @@ bool CilkABILoopSpawning::processLoop() {
       }
     }
     Inputs.insert(closure);
-    //errs() << "<B>\n";
-    //for(auto& a : Inputs) a->dump();
-    //errs() << "</B>\n";
-    //StartArg->dump();
-    //ea->dump();
+
     Inputs.remove(StartArg);
     Inputs.insert(StartArg);
     Inputs.remove(ea);
     Inputs.insert(ea);
-    //errs() << "<A>\n";
-    //for(auto& a : Inputs) a->dump();
-    //errs() << "</A>\n";
     for (Value *V : BodyInputsToRemove)
       BodyInputs.remove(V);
     assert(0 == BodyOutputs.size() &&
@@ -1630,19 +1469,17 @@ bool CilkABILoopSpawning::processLoop() {
   {
     SmallVector<ReturnInst *, 4> Returns;  // Ignore returns cloned.
 
-    // LowerDbgDeclare(*(Header->getParent()));
-
     Helper = CreateHelper(Inputs, Outputs, L->getBlocks(),
                           Header, Preheader, ExitBlock/*L->getExitBlock()*/,
                           VMap, M,
-                          F->getSubprogram() != nullptr, Returns, ".ls",
+                          OrigFunction->getSubprogram() != nullptr, Returns, ".ls",
                           nullptr, nullptr, nullptr);
 
     assert(Returns.empty() && "Returns cloned when cloning loop.");
 
     // Use a fast calling convention for the helper.
     //Helper->setCallingConv(CallingConv::Fast);
-    // Helper->setCallingConv(Header->getParent()->getCallingConv());
+    //Helper->setCallingConv(Header->getParent()->getCallingConv());
   }
 
   BasicBlock *NewPreheader = cast<BasicBlock>(VMap[Preheader]);
@@ -1781,4 +1618,47 @@ bool CilkABILoopSpawning::processLoop() {
   unlinkLoop();
 
   return Helper;
+}
+
+bool llvm::CilkABI::processLoop(LoopSpawningHints LSH, LoopInfo &LI, ScalarEvolution &SE, DominatorTree &DT,
+                                AssumptionCache &AC, OptimizationRemarkEmitter &ORE) { 
+    if (LSH.getStrategy() != LoopSpawningHints::ST_DAC)
+        return false;
+
+    if (LSH.getStrategy() == LoopSpawningHints::ST_DAC)
+        return processDACLoop(LSH, LI, SE, DT, AC, ORE);
+
+    DEBUG(dbgs() << "LS: Using CilkABI spawning.\n");
+
+    Loop* L = LSH.TheLoop;
+
+    DebugLoc DLoc = L->getStartLoc();
+    BasicBlock *Header = L->getHeader();
+    CilkABILoopSpawning DLS(L, SE, &LI, &DT, &AC, ORE);
+    if (DLS.processLoop()) {
+        DEBUG({
+            if (verifyFunction(*L->getHeader()->getParent())) {
+              dbgs() << "Transformed function is invalid.\n";
+              return false;
+            }
+          });
+        // Report success.
+        ORE.emit(OptimizationRemark(LS_NAME, "DACSpawning", DLoc, Header)
+                 << "spawning iterations using divide-and-conquer");
+        return true;
+    } else {
+        // Report failure.
+        ORE.emit(OptimizationRemarkMissed(LS_NAME, "NoDACSpawning", DLoc,
+                                          Header)
+                 << "cannot spawn iterations using divide-and-conquer");
+
+        ORE.emit(DiagnosticInfoOptimizationFailure(
+              DEBUG_TYPE, "FailedRequestedSpawning",
+              L->getStartLoc(), L->getHeader())
+          << "Tapir loop not transformed: "
+          << "failed to use divide-and-conquer loop spawning");
+        return false;
+    }
+
+    return false; 
 }
