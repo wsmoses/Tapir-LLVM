@@ -77,7 +77,9 @@
 
 using namespace llvm;
 
-namespace{
+#define DEBUG_TYPE "ptxabi"
+
+namespace {
 
   template<class F>
   Function* getFunction(Module& M, const char* name){
@@ -719,4 +721,44 @@ bool PTXABILoopSpawning::processLoop(){
   // ptxModule.dump();
 
   return true;
+}
+
+bool llvm::PTXABI::processLoop(LoopSpawningHints LSH, LoopInfo &LI, ScalarEvolution &SE, DominatorTree &DT,
+                               AssumptionCache &AC, OptimizationRemarkEmitter &ORE) { 
+    if (LSH.getStrategy() != LoopSpawningHints::ST_GPU)
+        return false;
+
+    Loop* L = LSH.TheLoop;
+    DEBUG(dbgs() << "LS: Hints dictate GPU spawning.\n");
+    {
+      DebugLoc DLoc = L->getStartLoc();
+      BasicBlock *Header = L->getHeader();
+      PTXABILoopSpawning DLS(L, SE, &LI, &DT, &AC, ORE);
+      if (DLS.processLoop()) {
+        DEBUG({
+            if (verifyFunction(*L->getHeader()->getParent())) {
+              dbgs() << "Transformed function is invalid.\n";
+              return false;
+            }
+          });
+        // Report success.
+        ORE.emit(OptimizationRemark(LS_NAME, "GPUSpawning", DLoc, Header)
+                 << "spawning iterations using direct gpu mapping");
+        return true;
+      } else {
+        // Report failure.
+        ORE.emit(OptimizationRemarkMissed(LS_NAME, "NoGPUSpawning", DLoc,
+                                          Header)
+                 << "cannot spawn iterations using direct gpu mapping");
+
+        ORE.emit(DiagnosticInfoOptimizationFailure(
+              DEBUG_TYPE, "FailedRequestedGPUSpawning",
+              L->getStartLoc(), L->getHeader())
+          << "Tapir loop not transformed: "
+          << "failed to use direct gpu mapping");
+        return false;
+      }
+    }
+
+  return false; 
 }

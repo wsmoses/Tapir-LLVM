@@ -808,3 +808,8 @@ void llvm::OpenMPABI::postProcessHelper(Function &F) {}
 bool llvm::OpenMPABI::processMain(Function &F) { 
   return false; 
 }
+
+bool llvm::OpenMPABI::processLoop(LoopSpawningHints LSH, LoopInfo &LI, ScalarEvolution &SE, DominatorTree &DT,
+                                  AssumptionCache &AC, OptimizationRemarkEmitter &ORE) { 
+  return false; 
+}
