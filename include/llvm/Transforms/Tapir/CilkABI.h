@@ -41,21 +41,6 @@
 
 namespace llvm {
 
-/// CilkABILoopSpawning uses the Cilk Plus ABI to handle Tapir loops.
-class CilkABILoopSpawning : public LoopOutline {
-public:
-  CilkABILoopSpawning(Loop *OrigLoop, ScalarEvolution &SE,
-                      LoopInfo *LI, DominatorTree *DT,
-                      AssumptionCache *AC,
-                      OptimizationRemarkEmitter &ORE)
-      : LoopOutline(OrigLoop, SE, LI, DT, AC, ORE)
-  {}
-
-  bool processLoop();
-
-  virtual ~CilkABILoopSpawning() {}
-};
-
 class CilkABI : public TapirTarget {
 public:
   CilkABI();

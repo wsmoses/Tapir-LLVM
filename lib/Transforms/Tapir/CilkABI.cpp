@@ -1293,6 +1293,26 @@ bool CilkABI::processMain(Function &F) {
   return false;
 }
 
+/// CilkABILoopSpawning uses the Cilk Plus ABI to handle Tapir loops.
+class CilkABILoopSpawning : public LoopOutline {
+public:
+  TapirTarget* tapirTarget;
+  unsigned SpecifiedGrainsize;
+  CilkABILoopSpawning(Loop *OrigLoop, unsigned Grainsize,
+                  ScalarEvolution &SE,
+                  LoopInfo *LI, DominatorTree *DT,
+                  AssumptionCache *AC,
+                  OptimizationRemarkEmitter &ORE, TapirTarget* tapirTarget)
+      : LoopOutline(OrigLoop, SE, LI, DT, AC, ORE),
+        tapirTarget(tapirTarget),
+        SpecifiedGrainsize(Grainsize)
+  {}
+
+  bool processLoop();
+
+  virtual ~CilkABILoopSpawning() {}
+};
+
 /// Top-level call to convert a Tapir loop to be processed using an appropriate
 /// Cilk ABI call.
 bool CilkABILoopSpawning::processLoop() {
@@ -1304,118 +1324,106 @@ bool CilkABILoopSpawning::processLoop() {
 
   using namespace ore;
 
-  // Check the exit blocks of the loop.
-  if (!ExitBlock) {
-    DEBUG(dbgs() << "LS loop does not contain valid exit block after latch.\n");
-    ORE.emit(OptimizationRemarkAnalysis(LS_NAME, "InvalidLatchExit",
-                                        L->getStartLoc(),
-                                        Header)
-             << "invalid latch exit");
+  SmallPtrSet<BasicBlock *, 4> HandledExits;
+  if (!getHandledExits(Header, HandledExits))
     return false;
-  }
-
-  SmallVector<BasicBlock *, 4> ExitBlocks;
-  L->getExitBlocks(ExitBlocks);
-  for (const BasicBlock *Exit : ExitBlocks) {
-    if (Exit == ExitBlock) continue;
-    if (!isa<UnreachableInst>(Exit->getTerminator())) {
-      DEBUG(dbgs() << "LS loop contains a bad exit block " << *Exit);
-      ORE.emit(OptimizationRemarkAnalysis(LS_NAME, "BadExit",
-                                          L->getStartLoc(),
-                                          Header)
-               << "bad exit block found");
-      return false;
-    }
-  }
 
   Module* M = OrigFunction->getParent();
 
   DEBUG(dbgs() << "LS loop header:" << *Header);
   DEBUG(dbgs() << "LS loop latch:" << *Latch);
-
   DEBUG(dbgs() << "LS SE exit count: " << *(SE.getExitCount(L, Latch)) << "\n");
 
   /// Get loop limit.
-  const SCEV *BETC = SE.getExitCount(L, Latch);
-  const SCEV *Limit = SE.getAddExpr(BETC, SE.getOne(BETC->getType()));
-  DEBUG(dbgs() << "LS Loop limit: " << *Limit << "\n");
+  const SCEV *Limit = getLimit();
+  if (!Limit) return false;
 
-  if (SE.getCouldNotCompute() == Limit) {
-    DEBUG(dbgs() << "SE could not compute loop limit.\n");
-    ORE.emit(OptimizationRemarkAnalysis(LS_NAME, "UnknownLoopLimit",
-                                        L->getStartLoc(),
-                                        Header)
-             << "could not compute limit");
-    return false;
-  }
-
+  /// Clean up the loop's induction variable.
   PHINode *CanonicalIV = canonicalizeIVs(Limit->getType());
-  if (!CanonicalIV) {
-    DEBUG(dbgs() << "Could not get canonical IV.\n");
-    ORE.emit(OptimizationRemarkAnalysis(LS_NAME, "NoCanonicalIV",
-                                        L->getStartLoc(),
-                                        Header)
-             << "could not find or create canonical IV");
-    return false;
-  }
+  if (!CanonicalIV) return false;
 
-    // Remove the IV's (other than CanonicalIV) and replace them with
-    // their stronger forms.
-    //
-    // TODO?: We can probably adapt this loop->DAC process such that we
-    // don't require all IV's to be canonical.
-      SmallVector<PHINode*, 8> IVs;
-      SCEVExpander Exp(SE, M->getDataLayout(), "ls");
-     if (!removeNonCanonicalIVs(Header, Preheader, CanonicalIV, IVs, Exp))
-        return false;
+  // Remove the IV's (other than CanonicalIV) and replace them with
+  // their stronger forms.
+  //
+  // TODO?: We can probably adapt this loop->DAC process such that we
+  // don't require all IV's to be canonical.
+  SmallVector<PHINode*, 8> IVs;
+  if (!removeNonCanonicalIVs(Header, Preheader, CanonicalIV, IVs))
+    return false;
 
   const SCEVAddRecExpr *CanonicalSCEV =
     cast<const SCEVAddRecExpr>(SE.getSCEV(CanonicalIV));
 
   // Insert the computation for the loop limit into the Preheader.
+  SCEVExpander Exp(SE, M->getDataLayout(), "ls");
   Value *LimitVar = Exp.expandCodeFor(Limit, Limit->getType(),
                                       Preheader->getTerminator());
   DEBUG(dbgs() << "LimitVar: " << *LimitVar << "\n");
 
   // Canonicalize the loop latch.
+  assert(SE.isLoopBackedgeGuardedByCond(L, ICmpInst::ICMP_ULT,
+                                        CanonicalSCEV, Limit) &&
+         "Loop backedge is not guarded by canonical comparison with limit.");
   Value *NewCond = canonicalizeLoopLatch(CanonicalIV, LimitVar);
+
+  // Insert computation of grainsize into the Preheader.
+  Value *GrainVar;
+  if (!SpecifiedGrainsize)
+    GrainVar = computeGrainsize(LimitVar, tapirTarget);
+  else
+    GrainVar = ConstantInt::get(LimitVar->getType(), SpecifiedGrainsize);
+
+  DEBUG(dbgs() << "GrainVar: " << *GrainVar << "\n");
 
   /// Clone the loop into a new function.
 
   // Get the inputs and outputs for the Loop blocks.
   SetVector<Value*> Inputs, Outputs;
   SetVector<Value*> BodyInputs, BodyOutputs;
-  ValueToValueMapTy VMap, InputMap;
+  ValueToValueMapTy VMap;
+  std::vector<BasicBlock *> LoopBlocks;
+  SmallPtrSet<BasicBlock *, 4> ExitsToSplit;
   AllocaInst* closure;
+
   // Add start iteration, end iteration, and grainsize to inputs.
-  {
-    // Get the inputs and outputs for the loop body.
-    findInputsOutputs(L->getBlocks(), BodyInputs, BodyOutputs);
+    LoopBlocks = L->getBlocks();
 
-    // Add argument for start of CanonicalIV.
-    DEBUG({
-        Value *CanonicalIVInput =
-          CanonicalIV->getIncomingValueForBlock(Preheader);
-        // CanonicalIVInput should be the constant 0.
-        assert(isa<Constant>(CanonicalIVInput) &&
-               "Input to canonical IV from preheader is not constant.");
-      });
-    Argument *StartArg = new Argument(CanonicalIV->getType(),
-                                      CanonicalIV->getName()+".start");
-    Inputs.insert(StartArg);
-    InputMap[CanonicalIV] = StartArg;
+    // Add unreachable and exception-handling exits to the set of loop blocks to
+    // clone.
+    for (BasicBlock *HE : HandledExits)
+      LoopBlocks.push_back(HE);
 
-    // Add argument for end.
-    Value* ea;
-    if (isa<Constant>(LimitVar)) {
-      Argument *EndArg = new Argument(LimitVar->getType(), "end");
-      Inputs.insert(EndArg);
-      ea = InputMap[LimitVar] = EndArg;
-    } else {
-      Inputs.insert(LimitVar);
-      ea = InputMap[LimitVar] = LimitVar;
+    {
+      const DetachInst *DI = cast<DetachInst>(Header->getTerminator());
+      BasicBlockEdge DetachEdge(Header, DI->getDetached());
+      for (BasicBlock *HE : HandledExits)
+        if (!DT || !DT->dominates(DetachEdge, HE))
+          ExitsToSplit.insert(HE);
+      DEBUG({
+          dbgs() << "Loop exits to split:";
+          for (BasicBlock *ETS : ExitsToSplit)
+            dbgs() << *ETS;
+          dbgs() << "\n";
+        });
     }
 
+    // Get the inputs and outputs for the loop body.
+    findInputsOutputs(LoopBlocks, BodyInputs, BodyOutputs, &ExitsToSplit);
+
+
+    Value *CanonicalIVInput = CanonicalIV->getIncomingValueForBlock(Preheader);
+
+    // CanonicalIVInput should be the constant 0.
+    assert(isa<Constant>(CanonicalIVInput) &&
+           "Input to canonical IV from preheader is not constant.");
+
+    // Add explicit argument for loop start.
+    Value* startArg = ensureDistinctArgument(CanonicalIVInput, "start");
+
+    // Add explicit argument for loop end.
+    Value* limitArg = ensureDistinctArgument(LimitVar, "end");
+
+    {
     // Put all of the inputs together, and clear redundant inputs from
     // the set for the loop body.
     SmallVector<Value*, 8> BodyInputsToRemove;
@@ -1446,17 +1454,16 @@ bool CilkABILoopSpawning::processLoop() {
         U.set(l2);
       }
     }
-    Inputs.insert(closure);
 
-    Inputs.remove(StartArg);
-    Inputs.insert(StartArg);
-    Inputs.remove(ea);
-    Inputs.insert(ea);
+    Inputs.insert(closure);
+    Inputs.insert(startArg);
+    Inputs.insert(limitArg);
+
     for (Value *V : BodyInputsToRemove)
       BodyInputs.remove(V);
     assert(0 == BodyOutputs.size() &&
            "All results from parallel loop should be passed by memory already.");
-  }
+    }
   DEBUG({
       for (Value *V : Inputs)
         dbgs() << "EL input: " << *V << "\n";
@@ -1469,11 +1476,11 @@ bool CilkABILoopSpawning::processLoop() {
   {
     SmallVector<ReturnInst *, 4> Returns;  // Ignore returns cloned.
 
-    Helper = CreateHelper(Inputs, Outputs, L->getBlocks(),
-                          Header, Preheader, ExitBlock/*L->getExitBlock()*/,
+    Helper = CreateHelper(Inputs, Outputs, LoopBlocks,
+                          Header, Preheader, ExitBlock,
                           VMap, M,
                           OrigFunction->getSubprogram() != nullptr, Returns, ".ls",
-                          nullptr, nullptr, nullptr);
+                          &ExitsToSplit, nullptr, nullptr);
 
     assert(Returns.empty() && "Returns cloned when cloning loop.");
 
@@ -1483,66 +1490,32 @@ bool CilkABILoopSpawning::processLoop() {
   }
 
   BasicBlock *NewPreheader = cast<BasicBlock>(VMap[Preheader]);
-  PHINode *NewCanonicalIV = cast<PHINode>(VMap[CanonicalIV]);
 
   // Rewrite the cloned IV's to start at the start iteration argument.
-  {
-    // Rewrite clone of canonical IV to start at the start iteration
-    // argument.
-    Argument *NewCanonicalIVStart = cast<Argument>(VMap[InputMap[CanonicalIV]]);
-    {
-      int NewPreheaderIdx = NewCanonicalIV->getBasicBlockIndex(NewPreheader);
-      assert(isa<Constant>(NewCanonicalIV->getIncomingValue(NewPreheaderIdx)) &&
-             "Cloned canonical IV does not inherit a constant value from cloned preheader.");
-      NewCanonicalIV->setIncomingValue(NewPreheaderIdx, NewCanonicalIVStart);
-    }
+  Argument *NewCanonicalIVStart = cast<Argument>(VMap[startArg]);
+  setIVStartingValues(NewCanonicalIVStart, CanonicalIV, IVs, NewPreheader, VMap);
 
-    // Rewrite other cloned IV's to start at their value at the start
-    // iteration.
-    const SCEV *StartIterSCEV = SE.getSCEV(NewCanonicalIVStart);
-    DEBUG(dbgs() << "StartIterSCEV: " << *StartIterSCEV << "\n");
-    for (PHINode *IV : IVs) {
-      if (CanonicalIV == IV) continue;
-
-      // Get the value of the IV at the start iteration.
-      DEBUG(dbgs() << "IV " << *IV);
-      const SCEV *IVSCEV = SE.getSCEV(IV);
-      DEBUG(dbgs() << " (SCEV " << *IVSCEV << ")");
-      const SCEVAddRecExpr *IVSCEVAddRec = cast<const SCEVAddRecExpr>(IVSCEV);
-      const SCEV *IVAtIter = IVSCEVAddRec->evaluateAtIteration(StartIterSCEV, SE);
-      DEBUG(dbgs() << " expands at iter " << *StartIterSCEV <<
-            " to " << *IVAtIter << "\n");
-
-      // NOTE: Expanded code should not refer to other IV's.
-      Value *IVStart = Exp.expandCodeFor(IVAtIter, IVAtIter->getType(),
-                                         NewPreheader->getTerminator());
-
-
-      // Set the value that the cloned IV inherits from the cloned preheader.
-      PHINode *NewIV = cast<PHINode>(VMap[IV]);
-      int NewPreheaderIdx = NewIV->getBasicBlockIndex(NewPreheader);
-      assert(isa<Constant>(NewIV->getIncomingValue(NewPreheaderIdx)) &&
-             "Cloned IV does not inherit a constant value from cloned preheader.");
-      NewIV->setIncomingValue(NewPreheaderIdx, IVStart);
-    }
-
-    // Remap the newly added instructions in the new preheader to use
-    // values local to the helper.
-    for (Instruction &II : *NewPreheader)
-      RemapInstruction(&II, VMap, RF_IgnoreMissingLocals,
-                       /*TypeMapper=*/nullptr, /*Materializer=*/nullptr);
-  }
-
-  // If the loop limit is constant, then rewrite the loop latch
-  // condition to use the end-iteration argument.
-  if (isa<Constant>(LimitVar)) {
+  // The loop has been outlined by this point.  To handle the special cases
+  // where the loop limit was constant or used elsewhere within the loop, this
+  // pass rewrites the outlined loop-latch condition to use the explicit
+  // end-iteration argument.
+  if (isa<Constant>(LimitVar) || !LimitVar->hasOneUse()) {
     CmpInst *HelperCond = cast<CmpInst>(VMap[NewCond]);
-    assert(HelperCond->getOperand(1) == LimitVar);
+    assert(((isa<Constant>(LimitVar) &&
+             HelperCond->getOperand(1) == LimitVar) ||
+            (!LimitVar->hasOneUse() &&
+             HelperCond->getOperand(1) == limitArg)) &&
+           "Unexpected condition in loop latch.");
     IRBuilder<> Builder(HelperCond);
     Value *NewHelperCond = Builder.CreateICmpULT(HelperCond->getOperand(0),
-                                                 VMap[InputMap[LimitVar]]);
+                                                 VMap[limitArg]);
     HelperCond->replaceAllUsesWith(NewHelperCond);
     HelperCond->eraseFromParent();
+    DEBUG(dbgs() << "Rewritten Latch: " <<
+          *(cast<Instruction>(NewHelperCond)->getParent()));
+  } else {
+    CmpInst *HelperCond = cast<CmpInst>(VMap[NewCond]);
+    assert(HelperCond->getOperand(1) == VMap[limitArg]);
   }
 
   // For debugging:
@@ -1600,7 +1573,7 @@ bool CilkABILoopSpawning::processLoop() {
       Builder.CreatePointerCast(Helper, F->getFunctionType()->getParamType(0)),
       Builder.CreatePointerCast(closure, F->getFunctionType()->getParamType(1)),
       LimitVar,
-      ConstantInt::get(IntegerType::get(F->getContext(), sizeof(int)*8),0)
+      GrainVar
     };
 
     /*CallInst *TopCall = */Builder.CreateCall(F, args);
@@ -1634,7 +1607,7 @@ bool llvm::CilkABI::processLoop(LoopSpawningHints LSH, LoopInfo &LI, ScalarEvolu
 
     DebugLoc DLoc = L->getStartLoc();
     BasicBlock *Header = L->getHeader();
-    CilkABILoopSpawning DLS(L, SE, &LI, &DT, &AC, ORE);
+    CilkABILoopSpawning DLS(L, LSH.getGrainsize(), SE, &LI, &DT, &AC, ORE, this);
     if (DLS.processLoop()) {
         DEBUG({
             if (verifyFunction(*L->getHeader()->getParent())) {
