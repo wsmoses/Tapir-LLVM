@@ -82,8 +82,8 @@ namespace llvm {
 class PTXABILoopSpawning : public LoopOutline {
 public:
   PTXABILoopSpawning(Loop *OrigLoop, ScalarEvolution &SE,
-                     LoopInfo *LI, DominatorTree *DT,
-                     AssumptionCache *AC,
+                     LoopInfo &LI, DominatorTree &DT,
+                     AssumptionCache &AC,
                      OptimizationRemarkEmitter &ORE)
       : LoopOutline(OrigLoop, SE, LI, DT, AC, ORE)
   {}

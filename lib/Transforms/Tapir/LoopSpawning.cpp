@@ -166,7 +166,7 @@ PHINode* LoopOutline::canonicalizeIVs(Type *Ty) {
   DEBUG(dbgs() << "LS Canonical induction variable " << *CanonicalIV << "\n");
 
   SmallVector<WeakTrackingVH, 16> DeadInsts;
-  Exp.replaceCongruentIVs(L, DT, DeadInsts);
+  Exp.replaceCongruentIVs(L, &DT, DeadInsts);
   for (WeakTrackingVH V : DeadInsts) {
     DEBUG(dbgs() << "LS erasing dead inst " << *V << "\n");
     Instruction *I = cast<Instruction>(V);
@@ -289,6 +289,16 @@ bool LoopOutline::getHandledExits(BasicBlock* Header, SmallPtrSetImpl<BasicBlock
   return true;
 }
 
+
+  Value* LoopOutline::ensureDistinctArgument(const std::vector<BasicBlock *> &LoopBlocks, Value* var, const Twine &name) {
+    if (isa<Constant>(var) || countUseInRegion(LoopBlocks, var) != 1) {
+        Argument *argument = new Argument(var->getType(), name);
+        return argument;
+    } else {
+        return var;
+    }
+  }
+
 // IVs is output
 bool LoopOutline::removeNonCanonicalIVs(BasicBlock* Header, BasicBlock* Preheader, PHINode* CanonicalIV, SmallVectorImpl<PHINode*> &IVs) {
   assert(IVs.size() == 0);
@@ -375,7 +385,7 @@ bool LoopOutline::removeNonCanonicalIVs(BasicBlock* Header, BasicBlock* Preheade
     }
   }
   if (!AllCanonical)
-    return false;   
+    return false;
 
   return true;
 }
@@ -426,7 +436,7 @@ const SCEV* LoopOutline::getLimit() {
     /// Determine the type of the canonical IV.
     Type *CanonicalIVTy = Limit->getType();
     const DataLayout &DL = OrigFunction->getParent()->getDataLayout();
-    
+
     for (BasicBlock::iterator II = Header->begin(); isa<PHINode>(II); ++II) {
         PHINode *PN = cast<PHINode>(II);
         if (PN->getType()->isFloatingPointTy()) continue;
@@ -439,7 +449,7 @@ const SCEV* LoopOutline::getLimit() {
 
 bool LoopOutline::setIVStartingValues(Value* newStart, Value* CanonicalIV, const SmallVectorImpl<PHINode*> &IVs, BasicBlock* NewPreheader, ValueToValueMapTy &VMap) {
     if (auto startInst = dyn_cast<Instruction>(NewPreheader)) {
-        assert(DT->dominates(startInst, NewPreheader->getTerminator()));
+        assert(DT.dominates(startInst, NewPreheader->getTerminator()));
     }
 
     PHINode *NewCanonicalIV = cast<PHINode>(VMap[CanonicalIV]);

@@ -32,18 +32,19 @@ typedef SetVector<Value *> ValueSet;
 /// definedInRegion - Return true if the specified value is used in the
 /// extracted region.
 template<class BasicBlockPtrContainer>
-static inline bool usedInRegion(const BasicBlockPtrContainer &Blocks,
+static inline size_t countUseInRegion(const BasicBlockPtrContainer &Blocks,
                                 Value *V) {
+  size_t count = 0;
   if (Instruction *I = dyn_cast<Instruction>(V)) {
     for (User *U : I->users()) {
       if (Instruction *Inst = dyn_cast<Instruction>(U)) {
         if (std::find(Blocks.begin(), Blocks.end(), Inst->getParent()) != Blocks.end()) {
-          return true;
+          count++;
         }
       }
     }
   }
-  return false;
+  return count;
 }
 
 /// definedInRegion - Return true if the specified value is defined in the
@@ -65,7 +66,7 @@ static inline bool definedInCaller(const BasicBlockPtrContainer &Blocks,
                             Value *V) {
   if (isa<Argument>(V)) return true;
   if (Instruction *I = dyn_cast<Instruction>(V))
-    if (std::find(Blocks.begin(), Blocks.end(), I->getParent()) != Blocks.end())
+    if (std::find(Blocks.begin(), Blocks.end(), I->getParent()) == Blocks.end())
       return true;
   return false;
 }
@@ -77,8 +78,8 @@ static inline bool definedInCaller(const BasicBlockPtrContainer &Blocks,
 template<class BasicBlockPtrContainer>
 static inline void findInputsOutputs(const BasicBlockPtrContainer &&Blocks,
                              ValueSet &Inputs, ValueSet &Outputs,
-                             const SmallPtrSetImpl<BasicBlock *> *ExitBlocks = nullptr,
-                             DominatorTree *DT = nullptr) {
+                             DominatorTree& DT,
+                             const SmallPtrSetImpl<BasicBlock *> *ExitBlocks = nullptr) {
   for (BasicBlock *BB : Blocks) {
     // If a used value is defined outside the region, it's an input.  If an
     // instruction is used outside the region, it's an output.
@@ -90,7 +91,7 @@ static inline void findInputsOutputs(const BasicBlockPtrContainer &&Blocks,
         // defined outside the region.
         if (ExitBlocks && ExitBlocks->count(BB))
           if (PHINode *PN = dyn_cast<PHINode>(&II))
-            if (std::find(Blocks.begin(), Blocks.end(), PN->getIncomingBlock(*OI)) != Blocks.end())
+            if (std::find(Blocks.begin(), Blocks.end(), PN->getIncomingBlock(*OI)) == Blocks.end())
               continue;
         if (definedInCaller(Blocks, *OI))
           Inputs.insert(*OI);
@@ -104,7 +105,7 @@ static inline void findInputsOutputs(const BasicBlockPtrContainer &&Blocks,
             // possible for the use to appear in a basic block that is no longer
             // alive.  We use the DT to check that this use is still alive.
             if (Instruction *I = dyn_cast<Instruction>(U)) {
-              if (DT && DT->isReachableFromEntry(I->getParent())) {
+              if (DT.isReachableFromEntry(I->getParent())) {
                 Outputs.insert(&II);
                 break;
               }
@@ -123,8 +124,8 @@ static inline void findInputsOutputs(const BasicBlockPtrContainer &&Blocks,
 template<class BasicBlockPtrContainer>
 static inline void findInputsOutputs(const BasicBlockPtrContainer &Blocks,
                              ValueSet &Inputs, ValueSet &Outputs,
-                             const SmallPtrSetImpl<BasicBlock *> *ExitBlocks = nullptr,
-                             DominatorTree *DT = nullptr) {
+                             DominatorTree& DT,
+                             const SmallPtrSetImpl<BasicBlock *> *ExitBlocks = nullptr) {
   for (BasicBlock *BB : Blocks) {
     // If a used value is defined outside the region, it's an input.  If an
     // instruction is used outside the region, it's an output.
@@ -136,7 +137,7 @@ static inline void findInputsOutputs(const BasicBlockPtrContainer &Blocks,
         // defined outside the region.
         if (ExitBlocks && ExitBlocks->count(BB))
           if (PHINode *PN = dyn_cast<PHINode>(&II))
-            if (std::find(Blocks.begin(), Blocks.end(), PN->getIncomingBlock(*OI)) != Blocks.end())
+            if (std::find(Blocks.begin(), Blocks.end(), PN->getIncomingBlock(*OI)) == Blocks.end())
               continue;
         if (definedInCaller(Blocks, *OI))
           Inputs.insert(*OI);
@@ -150,7 +151,7 @@ static inline void findInputsOutputs(const BasicBlockPtrContainer &Blocks,
             // possible for the use to appear in a basic block that is no longer
             // alive.  We use the DT to check that this use is still alive.
             if (Instruction *I = dyn_cast<Instruction>(U)) {
-              if (DT && DT->isReachableFromEntry(I->getParent())) {
+              if (DT.isReachableFromEntry(I->getParent())) {
                 Outputs.insert(&II);
                 break;
               }
