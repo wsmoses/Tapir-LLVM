@@ -37,8 +37,8 @@ namespace llvm {
 class LoopOutline {
 public:
    inline LoopOutline(Loop *OrigLoop, ScalarEvolution &SE,
-              LoopInfo *LI, DominatorTree *DT,
-              AssumptionCache *AC,
+              LoopInfo &LI, DominatorTree &DT,
+              AssumptionCache &AC,
               OptimizationRemarkEmitter &ORE)
       : OrigLoop(OrigLoop), OrigFunction(OrigLoop->getHeader()->getParent()), SE(SE), LI(LI), DT(DT), AC(AC), ORE(ORE),
         ExitBlock(nullptr)
@@ -90,14 +90,7 @@ protected:
     // the var is used elsewhere within the loop.  To handle these two
     // cases, this pass adds an explict argument for var, to ensure it isn't
     // clobberred by the other use or not passed because it is constant.
-  static inline Value* ensureDistinctArgument(Value* var, const Twine &name="") {
-    if (isa<Constant>(var) || !var->hasOneUse()) {
-        Argument *argument = new Argument(var->getType(), name);
-        return argument;
-    } else {
-        return var;
-    }
-  }
+  Value* ensureDistinctArgument(const std::vector<BasicBlock *> &LoopBlocks, Value* var, const Twine &name="");
 
   void unlinkLoop();
 
@@ -113,11 +106,11 @@ protected:
   // PredicatedScalarEvolution &PSE;
   ScalarEvolution &SE;
   /// Loop info.
-  LoopInfo *LI;
+  LoopInfo &LI;
   /// Dominator tree.
-  DominatorTree *DT;
+  DominatorTree &DT;
   /// Assumption cache.
-  AssumptionCache *AC;
+  AssumptionCache &AC;
   /// Interface to emit optimization remarks.
   OptimizationRemarkEmitter &ORE;
 

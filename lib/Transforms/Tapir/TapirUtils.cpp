@@ -291,7 +291,7 @@ Function *llvm::extractDetachBodyToFunction(DetachInst &detach,
   // Get the inputs and outputs for the detached CFG.
   SetVector<Value *> Inputs, Outputs;
   SetVector<Value *> BodyInputs;
-  findInputsOutputs(functionPieces, BodyInputs, Outputs, &ExitBlocks, &DT);
+  findInputsOutputs(functionPieces, BodyInputs, Outputs, DT, &ExitBlocks);
   assert(Outputs.empty() &&
          "All results from detached CFG should be passed by memory already.");
   {
@@ -405,7 +405,7 @@ bool llvm::isConstantMemoryFreeOperation(Instruction* I, bool allowsyncregion) {
     auto id = call->getCalledFunction()->getIntrinsicID();
     return (id == Intrinsic::lifetime_start ||
             id == Intrinsic::lifetime_end ||
-        allowsyncregion && (id == Intrinsic::syncregion_start));
+        (allowsyncregion && (id == Intrinsic::syncregion_start)));
   }
   return isa<BinaryOperator>(I) ||
       isa<CmpInst>(I) ||
@@ -429,7 +429,7 @@ bool llvm::isConstantOperation(Instruction* I, bool allowsyncregion) {
     auto id = call->getCalledFunction()->getIntrinsicID();
     return (id == Intrinsic::lifetime_start ||
             id == Intrinsic::lifetime_end ||
-        allowsyncregion && (id == Intrinsic::syncregion_start));
+        (allowsyncregion && (id == Intrinsic::syncregion_start)));
   }
   return
       isa<AtomicCmpXchgInst>(I) ||
@@ -805,8 +805,8 @@ public:
   unsigned SpecifiedGrainsize;
   DACLoopSpawning(Loop *OrigLoop, unsigned Grainsize,
                   ScalarEvolution &SE,
-                  LoopInfo *LI, DominatorTree *DT,
-                  AssumptionCache *AC,
+                  LoopInfo &LI, DominatorTree &DT,
+                  AssumptionCache &AC,
                   OptimizationRemarkEmitter &ORE, TapirTarget* tapirTarget)
       : LoopOutline(OrigLoop, SE, LI, DT, AC, ORE),
         tapirTarget(tapirTarget),
@@ -850,7 +850,7 @@ public:
       SmallVector<PHINode*, 8> IVs;
       if (!removeNonCanonicalIVs(Header, Preheader, CanonicalIV, IVs))
         return false;
-    
+
      const SCEVAddRecExpr *CanonicalSCEV =
         cast<const SCEVAddRecExpr>(SE.getSCEV(CanonicalIV));
 
@@ -885,7 +885,7 @@ public:
       Value *SRetInput = nullptr;
 
       // Get the sync region containing this Tapir loop.
-      const Instruction *InputSyncRegion;
+      Instruction *InputSyncRegion;
       {
         const DetachInst *DI = cast<DetachInst>(Header->getTerminator());
         InputSyncRegion = cast<Instruction>(DI->getSyncRegion());
@@ -900,9 +900,10 @@ public:
         {
           const DetachInst *DI = cast<DetachInst>(Header->getTerminator());
           BasicBlockEdge DetachEdge(Header, DI->getDetached());
-          for (BasicBlock *HE : HandledExits)
-            if (!DT || !DT->dominates(DetachEdge, HE))
+          for (BasicBlock *HE : HandledExits) {
+            if (!DT.dominates(DetachEdge, HE))
               ExitsToSplit.insert(HE);
+          }
           DEBUG({
               dbgs() << "Loop exits to split:";
               for (BasicBlock *ETS : ExitsToSplit)
@@ -912,7 +913,26 @@ public:
         }
 
         // Get the inputs and outputs for the loop body.
-        findInputsOutputs(LoopBlocks, BodyInputs, BodyOutputs, &ExitsToSplit);
+        findInputsOutputs(LoopBlocks, BodyInputs, BodyOutputs, DT, &ExitsToSplit);
+        BodyInputs.remove(InputSyncRegion);
+
+        Value *CanonicalIVInput = CanonicalIV->getIncomingValueForBlock(Preheader);
+
+        // CanonicalIVInput should be the constant 0.
+        assert(isa<Constant>(CanonicalIVInput) &&
+               "Input to canonical IV from preheader is not constant.");
+
+        // Add explicit argument for loop start, removing from inputs if didn't make new var
+        Value* startArg = ensureDistinctArgument(LoopBlocks, CanonicalIVInput, "start");
+        BodyInputs.remove(startArg);
+
+        // Add explicit argument for loop end, removing from inputs if didn't make new var
+        Value* limitArg = ensureDistinctArgument(LoopBlocks, LimitVar, "end");
+        BodyInputs.remove(limitArg);
+
+        // Add explicit argument for grainsize, removing from inputs if didn't make new var
+        Value* grainArg = ensureDistinctArgument(LoopBlocks, GrainVar, "grainsize");
+        BodyInputs.remove(grainArg);
 
         // Scan for any sret parameters in BodyInputs and add them first.
         if (OrigFunction->hasStructRetAttr()) {
@@ -925,39 +945,24 @@ public:
             if (BodyInputs.count(&*ArgIter))
               SRetInput = &*ArgIter;
           }
+          if (SRetInput) BodyInputs.remove(SRetInput);
         }
+
+        // Put all of the inputs together
         if (SRetInput) {
           DEBUG(dbgs() << "sret input " << *SRetInput << "\n");
           Inputs.insert(SRetInput);
         }
 
-        Value *CanonicalIVInput = CanonicalIV->getIncomingValueForBlock(Preheader);
-
-        // CanonicalIVInput should be the constant 0.
-        assert(isa<Constant>(CanonicalIVInput) &&
-               "Input to canonical IV from preheader is not constant.");
-
-        // Add explicit argument for loop start.
-        Value* startArg = ensureDistinctArgument(CanonicalIVInput, "start");
         Inputs.insert(startArg);
-
-        // Add explicit argument for loop end.
-        Value* limitArg = ensureDistinctArgument(LimitVar, "end");
         Inputs.insert(limitArg);
-
-        // Add explicit argument for grainsize.
-        Value* grainArg = ensureDistinctArgument(GrainVar, "grainsize");
         Inputs.insert(grainArg);
-
-        // Put all of the inputs together, and clear redundant inputs from
-        // the set for the loop body.
-        for (Value *V : BodyInputs)
-          if (V != InputSyncRegion && !Inputs.count(V)) {
+        for (Value *V : BodyInputs) {
             Inputs.insert(V);
             DEBUG({ dbgs() << "Remaining body input: " << *V << "\n"; });
-          }
+        }
 
-        DEBUG({ 
+        DEBUG({
             for (Value *V : BodyOutputs)
                dbgs() << "EL output: " << *V << "\n";
         });
@@ -975,7 +980,6 @@ public:
       Function *Helper;
       {
         SmallVector<ReturnInst *, 0> Returns;  // Ignore returns cloned.
-
         Helper = CreateHelper(Inputs, Outputs, LoopBlocks,
                               Header, Preheader, ExitBlock,
                               VMap, M,
@@ -997,7 +1001,7 @@ public:
         assert(isa<ReturnInst>(HelperExit->getTerminator()));
         BasicBlock *NewHelperExit = SplitBlock(HelperExit,
                                                HelperExit->getTerminator(),
-                                               DT, LI);
+                                               &DT, &LI);
         IRBuilder<> Builder(&(HelperExit->front()));
         SyncInst *NewSync = Builder.CreateSync(
             NewHelperExit,
@@ -1019,12 +1023,12 @@ public:
       // where the loop limit was constant or used elsewhere within the loop, this
       // pass rewrites the outlined loop-latch condition to use the explicit
       // end-iteration argument.
-      if (isa<Constant>(LimitVar) || !LimitVar->hasOneUse()) {
+      if (isa<Constant>(LimitVar) || countUseInRegion(LoopBlocks, LimitVar) != 1) {
         CmpInst *HelperCond = cast<CmpInst>(VMap[NewCond]);
         assert(((isa<Constant>(LimitVar) &&
                  HelperCond->getOperand(1) == LimitVar) ||
-                (!LimitVar->hasOneUse() &&
-                 HelperCond->getOperand(1) == limitArg)) &&
+                (countUseInRegion(LoopBlocks, LimitVar) != 1 &&
+                 HelperCond->getOperand(1) == VMap[LimitVar] )) &&
                "Unexpected condition in loop latch.");
         IRBuilder<> Builder(HelperCond);
         Value *NewHelperCond = Builder.CreateICmpULT(HelperCond->getOperand(0),
@@ -1101,7 +1105,7 @@ public:
       // Add alignment assumptions to arguments of helper, based on alignment of
       // values in old function.
       AddAlignmentAssumptions(OrigFunction, Inputs, VMap,
-                              Preheader->getTerminator(), AC, DT);
+                              Preheader->getTerminator(), &AC, &DT);
 
       // Add call to new helper function in original function.
       {
@@ -1119,8 +1123,9 @@ public:
         // Add grainsize.
         TopCallArgs.push_back(GrainVar);
         // Add the rest of the arguments.
-        for (Value *V : BodyInputs)
+        for (Value *V : BodyInputs) {
           TopCallArgs.push_back(V);
+        }
         DEBUG({
             for (Value *TCArg : TopCallArgs)
               dbgs() << "Top call arg: " << *TCArg << "\n";
@@ -1133,7 +1138,6 @@ public:
 
         // Use a fast calling convention for the helper.
         TopCall->setCallingConv(CallingConv::Fast);
-        // TopCall->setCallingConv(Helper->getCallingConv());
         TopCall->setDebugLoc(Header->getTerminator()->getDebugLoc());
         // // Update CG graph with the call we just added.
         // CG[F]->addCalledFunction(TopCall, CG[Helper]);
@@ -1382,7 +1386,7 @@ bool llvm::TapirTarget::processDACLoop(LoopSpawningHints LSH, LoopInfo &LI, Scal
 
     DebugLoc DLoc = L->getStartLoc();
     BasicBlock *Header = L->getHeader();
-    DACLoopSpawning DLS(L, LSH.getGrainsize(), SE, &LI, &DT, &AC, ORE, this);
+    DACLoopSpawning DLS(L, LSH.getGrainsize(), SE, LI, DT, AC, ORE, this);
       if (DLS.processLoop()) {
         DEBUG({
             if (verifyFunction(*L->getHeader()->getParent())) {
@@ -1407,5 +1411,5 @@ bool llvm::TapirTarget::processDACLoop(LoopSpawningHints LSH, LoopInfo &LI, Scal
         return false;
       }
 
-  return false; 
+  return false;
 }
