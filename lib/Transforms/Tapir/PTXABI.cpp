@@ -59,8 +59,8 @@
 #include "llvm/Transforms/Scalar/GVN.h"
 #include "llvm/Transforms/Vectorize.h"
 #include "llvm/Target/TargetSubtargetInfo.h"
-#include "llvm/Target/TargetMachine.h"           
-#include "llvm/Support/TargetRegistry.h"    
+#include "llvm/Target/TargetMachine.h"
+#include "llvm/Support/TargetRegistry.h"
 #include "llvm/IR/LegacyPassManager.h"
 
 #include <iostream>
@@ -85,7 +85,7 @@ namespace {
   Function* getFunction(Module& M, const char* name){
     return cast<Function>(M.getOrInsertFunction(name,
       TypeBuilder<F, false>::get(M.getContext())));
-  } 
+  }
 
   template<class B>
   Value* convertInteger(B& b, Value* from, Value* to, const std::string& name){
@@ -104,7 +104,7 @@ namespace {
 
     return from;
   }
-  
+
 } // namespace
 
 
@@ -114,7 +114,7 @@ PTXABI::PTXABI() {}
 
 /// \brief Get/Create the worker count for the spawning function.
 Value *PTXABI::GetOrCreateWorker8(Function &F) {
-  Module *M = F.getParent(); 
+  Module *M = F.getParent();
   LLVMContext& C = M->getContext();
   return ConstantInt::get(C, APInt(16, 8));
 }
@@ -186,7 +186,7 @@ bool PTXABILoopSpawning::processLoop(){
   IntegerType* i64Ty = Type::getInt64Ty(c);
   PointerType* voidPtrTy = Type::getInt8PtrTy(c);
 
-  //  and LLVM transformation is able in some cases to transform the loop to 
+  //  and LLVM transformation is able in some cases to transform the loop to
   //  contain a phi node that exists at the entry block
 
   PHINode* loopNode = L->getCanonicalInductionVariable();
@@ -269,7 +269,7 @@ bool PTXABILoopSpawning::processLoop(){
         extValues.insert(v);
       }
     }
-    
+
     values.insert(&ii);
   }
 
@@ -345,7 +345,7 @@ bool PTXABILoopSpawning::processLoop(){
   // and simply return if the thread ID is beyond the run size
 
   BasicBlock* br = BasicBlock::Create(c, "entry", f);
-  
+
   b.SetInsertPoint(br);
 
   using SREGFunc = uint32_t();
@@ -355,14 +355,14 @@ bool PTXABILoopSpawning::processLoop(){
 
   Value* threadIdx = b.CreateCall(getFunction<SREGFunc>(ptxModule,
     "llvm.nvvm.read.ptx.sreg.tid.x"));
-  
+
   Value* blockIdx = b.CreateCall(getFunction<SREGFunc>(ptxModule,
     "llvm.nvvm.read.ptx.sreg.ctaid.x"));
-  
+
   Value* blockDim = b.CreateCall(getFunction<SREGFunc>(ptxModule,
     "llvm.nvvm.read.ptx.sreg.ntid.x"));
 
-  Value* threadId = 
+  Value* threadId =
     b.CreateAdd(threadIdx, b.CreateMul(blockIdx, blockDim), "threadId");
 
   // convert the thread ID into the proper integer type of the loop variable
@@ -408,7 +408,7 @@ bool PTXABILoopSpawning::processLoop(){
       continue;
     }
 
-    // determine if we are reading or writing the external variables 
+    // determine if we are reading or writing the external variables
     // i.e. those passed as CUDA arrays
 
     Instruction* ic = ii.clone();
@@ -435,7 +435,7 @@ bool PTXABILoopSpawning::processLoop(){
         extVars[gi] = v;
         if(isa<ArrayType>(gi->getSourceElementType())){
           auto cgi = dyn_cast<GetElementPtrInst>(ic);
-          cgi->setSourceElementType(m[v]->getType()); 
+          cgi->setSourceElementType(m[v]->getType());
         }
       }
     }
@@ -454,12 +454,12 @@ bool PTXABILoopSpawning::processLoop(){
 
   // add the necessary NVPTX to mark the global function
 
-  NamedMDNode* annotations = 
+  NamedMDNode* annotations =
     ptxModule.getOrInsertNamedMetadata("nvvm.annotations");
-  
+
   SmallVector<Metadata*, 3> av;
 
-  av.push_back(ValueAsMetadata::get(f));    
+  av.push_back(ValueAsMetadata::get(f));
   av.push_back(MDString::get(ptxModule.getContext(), "kernel"));
   av.push_back(ValueAsMetadata::get(llvm::ConstantInt::get(i32Ty, 1)));
 
@@ -493,7 +493,7 @@ bool PTXABILoopSpawning::processLoop(){
       for(BasicBlock* bn : b->getTerminator()->successors()){
         if(visited.find(bn) == visited.end()){
           next.push_back(bn);
-        } 
+        }
       }
 
       b->dropAllReferences();
@@ -521,11 +521,11 @@ bool PTXABILoopSpawning::processLoop(){
 
   Triple triple(sys::getDefaultTargetTriple());
   triple.setArch(Triple::nvptx64);
-    
+
   // TODO:  the version of LLVM that we are using currently only supports
   // up to SM_60 – we need SM_70 for Volta architectures
 
-  TargetMachine* targetMachine =  
+  TargetMachine* targetMachine =
       target->createTargetMachine(triple.getTriple(),
                                   //"sm_35",
                                   //"sm_70",
@@ -562,7 +562,7 @@ bool PTXABILoopSpawning::processLoop(){
 
   SmallVector<char, 65536> buf;
   raw_svector_ostream ostr(buf);
-  
+
   bool fail =
   targetMachine->addPassesToEmitFile(*passManager,
                                      ostr,
@@ -570,9 +570,9 @@ bool PTXABILoopSpawning::processLoop(){
                                      false);
 
   assert(!fail && "failed to emit PTX");
-  
+
   passManager->run(ptxModule);
-      
+
   delete passManager;
 
   std::string ptx = ostr.str().str();
@@ -581,7 +581,7 @@ bool PTXABILoopSpawning::processLoop(){
 
   // create a global string to hold the PTX code
 
-  GlobalVariable* ptxGlobal = 
+  GlobalVariable* ptxGlobal =
     new GlobalVariable(hostModule,
                        pcs->getType(),
                        true,
@@ -630,7 +630,7 @@ bool PTXABILoopSpawning::processLoop(){
 
       Constant* fn = ConstantDataArray::getString(c, ci->getName());
 
-      GlobalVariable* fieldNameGlobal = 
+      GlobalVariable* fieldNameGlobal =
         new GlobalVariable(hostModule,
                            fn->getType(),
                            true,
@@ -649,7 +649,7 @@ bool PTXABILoopSpawning::processLoop(){
     else if(auto ai = dyn_cast<AllocaInst>(v)){
       Constant* fn = ConstantDataArray::getString(c, ai->getName());
 
-      GlobalVariable* fieldNameGlobal = 
+      GlobalVariable* fieldNameGlobal =
         new GlobalVariable(hostModule,
                            fn->getType(),
                            true,
@@ -666,7 +666,7 @@ bool PTXABILoopSpawning::processLoop(){
 
       elementSize = ConstantInt::get(i32Ty,
         at->getElementType()->getPrimitiveSizeInBits()/8);
-      
+
       size = ConstantInt::get(i64Ty, at->getNumElements());
     }
 
@@ -724,7 +724,7 @@ bool PTXABILoopSpawning::processLoop(){
 }
 
 bool llvm::PTXABI::processLoop(LoopSpawningHints LSH, LoopInfo &LI, ScalarEvolution &SE, DominatorTree &DT,
-                               AssumptionCache &AC, OptimizationRemarkEmitter &ORE) { 
+                               AssumptionCache &AC, OptimizationRemarkEmitter &ORE) {
     if (LSH.getStrategy() != LoopSpawningHints::ST_GPU)
         return false;
 
@@ -733,7 +733,7 @@ bool llvm::PTXABI::processLoop(LoopSpawningHints LSH, LoopInfo &LI, ScalarEvolut
     {
       DebugLoc DLoc = L->getStartLoc();
       BasicBlock *Header = L->getHeader();
-      PTXABILoopSpawning DLS(L, SE, &LI, &DT, &AC, ORE);
+      PTXABILoopSpawning DLS(L, SE, LI, DT, AC, ORE);
       if (DLS.processLoop()) {
         DEBUG({
             if (verifyFunction(*L->getHeader()->getParent())) {
@@ -760,5 +760,5 @@ bool llvm::PTXABI::processLoop(LoopSpawningHints LSH, LoopInfo &LI, ScalarEvolut
       }
     }
 
-  return false; 
+  return false;
 }

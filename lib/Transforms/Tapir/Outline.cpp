@@ -114,10 +114,11 @@ void llvm::CloneIntoFunction(
   for (const BasicBlock *BB : Blocks) {
     BasicBlock *CBB = cast<BasicBlock>(VMap[BB]);
     // Loop over all instructions, fixing each one as we find it...
-    for (Instruction &II : *CBB)
+    for (Instruction &II : *CBB) {
       RemapInstruction(&II, VMap,
                        ModuleLevelChanges ? RF_None : RF_NoModuleLevelChanges,
                        TypeMapper, Materializer);
+    }
   }
 }
 

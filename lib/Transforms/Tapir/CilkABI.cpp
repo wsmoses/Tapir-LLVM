@@ -408,8 +408,8 @@ static CallInst *EmitCilkSetJmp(IRBuilder<> &B, Value *SF, Module& M) {
   LLVMContext &Ctx = M.getContext();
 
   // We always want to save the floating point state too
-  Triple T(M.getTargetTriple()); 
-  if(T.getArch() == Triple::x86 || T.getArch() == Triple::x86_64) 
+  Triple T(M.getTargetTriple());
+  if(T.getArch() == Triple::x86 || T.getArch() == Triple::x86_64)
     EmitSaveFloatingPointState(B, SF);
 
   Type *Int32Ty = Type::getInt32Ty(Ctx);
@@ -1300,8 +1300,8 @@ public:
   unsigned SpecifiedGrainsize;
   CilkABILoopSpawning(Loop *OrigLoop, unsigned Grainsize,
                   ScalarEvolution &SE,
-                  LoopInfo *LI, DominatorTree *DT,
-                  AssumptionCache *AC,
+                  LoopInfo &LI, DominatorTree &DT,
+                  AssumptionCache &AC,
                   OptimizationRemarkEmitter &ORE, TapirTarget* tapirTarget)
       : LoopOutline(OrigLoop, SE, LI, DT, AC, ORE),
         tapirTarget(tapirTarget),
@@ -1385,6 +1385,13 @@ bool CilkABILoopSpawning::processLoop() {
   SmallPtrSet<BasicBlock *, 4> ExitsToSplit;
   AllocaInst* closure;
 
+  // Get the sync region containing this Tapir loop.
+  Instruction *InputSyncRegion;
+  {
+    const DetachInst *DI = cast<DetachInst>(Header->getTerminator());
+    InputSyncRegion = cast<Instruction>(DI->getSyncRegion());
+  }
+
   // Add start iteration, end iteration, and grainsize to inputs.
     LoopBlocks = L->getBlocks();
 
@@ -1397,7 +1404,7 @@ bool CilkABILoopSpawning::processLoop() {
       const DetachInst *DI = cast<DetachInst>(Header->getTerminator());
       BasicBlockEdge DetachEdge(Header, DI->getDetached());
       for (BasicBlock *HE : HandledExits)
-        if (!DT || !DT->dominates(DetachEdge, HE))
+        if (!DT.dominates(DetachEdge, HE))
           ExitsToSplit.insert(HE);
       DEBUG({
           dbgs() << "Loop exits to split:";
@@ -1408,8 +1415,8 @@ bool CilkABILoopSpawning::processLoop() {
     }
 
     // Get the inputs and outputs for the loop body.
-    findInputsOutputs(LoopBlocks, BodyInputs, BodyOutputs, &ExitsToSplit);
-
+    findInputsOutputs(LoopBlocks, BodyInputs, BodyOutputs, DT, &ExitsToSplit);
+    BodyInputs.remove(InputSyncRegion);
 
     Value *CanonicalIVInput = CanonicalIV->getIncomingValueForBlock(Preheader);
 
@@ -1418,10 +1425,10 @@ bool CilkABILoopSpawning::processLoop() {
            "Input to canonical IV from preheader is not constant.");
 
     // Add explicit argument for loop start.
-    Value* startArg = ensureDistinctArgument(CanonicalIVInput, "start");
+    Value* startArg = ensureDistinctArgument(LoopBlocks, CanonicalIVInput, "start");
 
     // Add explicit argument for loop end.
-    Value* limitArg = ensureDistinctArgument(LimitVar, "end");
+    Value* limitArg = ensureDistinctArgument(LoopBlocks, LimitVar, "end");
 
     {
     // Put all of the inputs together, and clear redundant inputs from
@@ -1480,7 +1487,7 @@ bool CilkABILoopSpawning::processLoop() {
                           Header, Preheader, ExitBlock,
                           VMap, M,
                           OrigFunction->getSubprogram() != nullptr, Returns, ".ls",
-                          &ExitsToSplit, nullptr, nullptr);
+                          &ExitsToSplit, InputSyncRegion, nullptr, nullptr, nullptr);
 
     assert(Returns.empty() && "Returns cloned when cloning loop.");
 
@@ -1499,12 +1506,12 @@ bool CilkABILoopSpawning::processLoop() {
   // where the loop limit was constant or used elsewhere within the loop, this
   // pass rewrites the outlined loop-latch condition to use the explicit
   // end-iteration argument.
-  if (isa<Constant>(LimitVar) || !LimitVar->hasOneUse()) {
+  if (isa<Constant>(LimitVar) || countUseInRegion(LoopBlocks, LimitVar) != 1) {
     CmpInst *HelperCond = cast<CmpInst>(VMap[NewCond]);
     assert(((isa<Constant>(LimitVar) &&
              HelperCond->getOperand(1) == LimitVar) ||
-            (!LimitVar->hasOneUse() &&
-             HelperCond->getOperand(1) == limitArg)) &&
+            (countUseInRegion(LoopBlocks, LimitVar) != 1 &&
+             HelperCond->getOperand(1) == VMap[LimitVar] )) &&
            "Unexpected condition in loop latch.");
     IRBuilder<> Builder(HelperCond);
     Value *NewHelperCond = Builder.CreateICmpULT(HelperCond->getOperand(0),
@@ -1594,7 +1601,7 @@ bool CilkABILoopSpawning::processLoop() {
 }
 
 bool llvm::CilkABI::processLoop(LoopSpawningHints LSH, LoopInfo &LI, ScalarEvolution &SE, DominatorTree &DT,
-                                AssumptionCache &AC, OptimizationRemarkEmitter &ORE) { 
+                                AssumptionCache &AC, OptimizationRemarkEmitter &ORE) {
     if (LSH.getStrategy() != LoopSpawningHints::ST_DAC)
         return false;
 
@@ -1607,7 +1614,7 @@ bool llvm::CilkABI::processLoop(LoopSpawningHints LSH, LoopInfo &LI, ScalarEvolu
 
     DebugLoc DLoc = L->getStartLoc();
     BasicBlock *Header = L->getHeader();
-    CilkABILoopSpawning DLS(L, LSH.getGrainsize(), SE, &LI, &DT, &AC, ORE, this);
+    CilkABILoopSpawning DLS(L, LSH.getGrainsize(), SE, LI, DT, AC, ORE, this);
     if (DLS.processLoop()) {
         DEBUG({
             if (verifyFunction(*L->getHeader()->getParent())) {
@@ -1633,5 +1640,5 @@ bool llvm::CilkABI::processLoop(LoopSpawningHints LSH, LoopInfo &LI, ScalarEvolu
         return false;
     }
 
-    return false; 
+    return false;
 }
