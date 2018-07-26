@@ -21,8 +21,8 @@ enum class TapirTargetType {
   None = 0,
   Serial = 1,
   Cilk = 2,
-  OpenMP = 3,
-  CilkR = 4,
+  CilkLegacy = 3,
+  OpenMP = 4,
   Qthreads = 5,
   PTX = 6
 };
