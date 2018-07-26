@@ -120,11 +120,6 @@ protected:
   BasicBlock *ExitBlock;
 };
 
-/// The LoopSpawning Pass.
-struct LoopSpawningPass : public PassInfoMixin<LoopSpawningPass> {
-  TapirTarget* tapirTarget;
-  PreservedAnalyses run(Function &F, FunctionAnalysisManager &AM);
-};
 }
 
 #endif // LLVM_TRANSFORMS_TAPIR_LOOPSPAWNING_H

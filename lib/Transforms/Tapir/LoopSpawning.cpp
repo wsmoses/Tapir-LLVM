@@ -70,7 +70,9 @@ static cl::opt<TapirTargetType> ClTapirTarget(
                clEnumValN(TapirTargetType::Serial,
                           "serial", "Serial code"),
                clEnumValN(TapirTargetType::Cilk,
-                          "cilk", "Cilk Plus"),
+                          "cilk", "Cilk Plus (with new loop backend)"),
+               clEnumValN(TapirTargetType::CilkLegacy,
+                          "cilklegacy", "Cilk Plus (with ABI loop backend)"),
                clEnumValN(TapirTargetType::OpenMP,
                           "openmp", "OpenMP"),
                clEnumValN(TapirTargetType::Qthreads,
@@ -115,32 +117,7 @@ static void emitMissedWarning(Function *F, Loop *L,
   }
 }
 
-struct LoopSpawningImpl {
-  LoopSpawningImpl(Function &F,
-                   LoopInfo &LI,
-                   ScalarEvolution &SE,
-                   DominatorTree &DT,
-                   AssumptionCache &AC,
-                   OptimizationRemarkEmitter &ORE,
-                   TapirTarget* tapirTarget)
-      : F(F), LI(LI), SE(SE), DT(DT), AC(AC), ORE(ORE), tapirTarget(tapirTarget) {}
-
-  bool run();
-
-private:
-  void addTapirLoop(Loop *L, SmallVectorImpl<Loop *> &V);
-  bool processLoop(Loop *L);
-
-  Function &F;
-  LoopInfo &LI;
-  ScalarEvolution &SE;
-  DominatorTree &DT;
-  AssumptionCache &AC;
-  OptimizationRemarkEmitter &ORE;
-
-  TapirTarget* tapirTarget;
-};
-} // end anonymous namespace
+}
 
 /// Canonicalize the induction variables in the loop.  Return the canonical
 /// induction variable created or inserted by the scalar evolution expander.
@@ -289,15 +266,14 @@ bool LoopOutline::getHandledExits(BasicBlock* Header, SmallPtrSetImpl<BasicBlock
   return true;
 }
 
-
-  Value* LoopOutline::ensureDistinctArgument(const std::vector<BasicBlock *> &LoopBlocks, Value* var, const Twine &name) {
-    if (isa<Constant>(var) || countUseInRegion(LoopBlocks, var) != 1) {
-        Argument *argument = new Argument(var->getType(), name);
-        return argument;
-    } else {
-        return var;
-    }
+Value* LoopOutline::ensureDistinctArgument(const std::vector<BasicBlock *> &LoopBlocks, Value* var, const Twine &name) {
+  if (isa<Constant>(var) || countUseInRegion(LoopBlocks, var) != 1) {
+      Argument *argument = new Argument(var->getType(), name);
+      return argument;
+  } else {
+      return var;
   }
+}
 
 // IVs is output
 bool LoopOutline::removeNonCanonicalIVs(BasicBlock* Header, BasicBlock* Preheader, PHINode* CanonicalIV, SmallVectorImpl<PHINode*> &IVs) {
@@ -586,39 +562,6 @@ void LoopOutline::unlinkLoop() {
   }
 }
 
-/// This routine recursively examines all descendants of the specified loop and
-/// adds all Tapir loops in that tree to the vector.  This routine performs a
-/// pre-order traversal of the tree of loops and pushes each Tapir loop found
-/// onto the end of the vector.
-void LoopSpawningImpl::addTapirLoop(Loop *L, SmallVectorImpl<Loop *> &V) {
-  if (isCanonicalTapirLoop(L)) {
-    V.push_back(L);
-    return;
-  }
-
-  LoopSpawningHints Hints(L);
-
-  DEBUG(dbgs() << "LS: Loop hints:"
-               << " strategy = " << Hints.printStrategy(Hints.getStrategy())
-               << " grainsize = " << Hints.getGrainsize()
-               << "\n");
-
-  using namespace ore;
-
-  if (LoopSpawningHints::ST_SEQ != Hints.getStrategy()) {
-    DEBUG(dbgs() << "LS: Marked loop is not a valid Tapir loop.\n"
-          << "\tLoop hints:"
-          << " strategy = " << Hints.printStrategy(Hints.getStrategy())
-          << "\n");
-    ORE.emit(OptimizationRemarkMissed(LS_NAME, "NotTapir",
-                                      L->getStartLoc(), L->getHeader())
-             << "marked loop is not a valid Tapir loop");
-  }
-
-  for (Loop *InnerL : *L)
-    addTapirLoop(InnerL, V);
-}
-
 #ifndef NDEBUG
 /// \return string containing a file name and a line # for the given loop.
 static std::string getDebugLocString(const Loop *L) {
@@ -636,122 +579,6 @@ static std::string getDebugLocString(const Loop *L) {
 }
 #endif
 
-bool LoopSpawningImpl::run() {
-  // Build up a worklist of inner-loops to vectorize. This is necessary as
-  // the act of vectorizing or partially unrolling a loop creates new loops
-  // and can invalidate iterators across the loops.
-  SmallVector<Loop *, 8> Worklist;
-
-  // Examine all top-level loops in this function, and call addTapirLoop to push
-  // those loops onto the work list.
-  for (Loop *L : LI)
-    addTapirLoop(L, Worklist);
-
-  LoopsAnalyzed += Worklist.size();
-
-  // Now walk the identified inner loops.
-  bool Changed = false;
-  while (!Worklist.empty())
-    // Process the work list of loops backwards.  For each tree of loops in this
-    // function, addTapirLoop pushed those loops onto the work list according to
-    // a pre-order tree traversal.  Therefore, processing the work list
-    // backwards leads us to process innermost loops first.
-    Changed |= processLoop(Worklist.pop_back_val());
-
-  // Process each loop nest in the function.
-  return Changed;
-}
-
-
-// Top-level routine to process a given loop.
-bool LoopSpawningImpl::processLoop(Loop *L) {
-#ifndef NDEBUG
-  const std::string DebugLocStr = getDebugLocString(L);
-#endif /* NDEBUG */
-
-  // Function containing loop
-  Function *F = L->getHeader()->getParent();
-
-  DEBUG(dbgs() << "\nLS: Checking a Tapir loop in \""
-               << L->getHeader()->getParent()->getName() << "\" from "
-        << DebugLocStr << ": " << *L << "\n");
-
-  LoopSpawningHints Hints(L);
-
-  DEBUG(dbgs() << "LS: Loop hints:"
-               << " strategy = " << Hints.printStrategy(Hints.getStrategy())
-               << " grainsize = " << Hints.getGrainsize()
-               << "\n");
-
-  using namespace ore;
-
-  // Get the loop preheader.  LoopSimplify should guarantee that the loop
-  // preheader is not terminated by a sync.
-  BasicBlock *Preheader = L->getLoopPreheader();
-  if (!Preheader) {
-    DEBUG(dbgs() << "LS: Loop lacks a preheader.\n");
-    ORE.emit(OptimizationRemarkMissed(LS_NAME, "NoPreheader",
-                                      L->getStartLoc(), L->getHeader())
-             << "loop lacks a preheader");
-    emitMissedWarning(F, L, Hints, &ORE);
-    return false;
-  } else if (!isa<BranchInst>(Preheader->getTerminator())) {
-    DEBUG(dbgs() << "LS: Loop preheader is not terminated by a branch.\n");
-    ORE.emit(OptimizationRemarkMissed(LS_NAME, "ComplexPreheader",
-                                      L->getStartLoc(), L->getHeader())
-             << "loop preheader not terminated by a branch");
-    emitMissedWarning(F, L, Hints, &ORE);
-    return false;
-  }
-
-  switch(Hints.getStrategy()) {
-  case LoopSpawningHints::ST_SEQ:
-    DEBUG(dbgs() << "LS: Hints dictate sequential spawning.\n");
-    break;
-  default:
-    DEBUG({
-      llvm::LoopBlocksDFS DFS(L);
-      DFS.perform(&LI);
-      dbgs() << "Blocks in loop (from DFS):\n";
-      for (BasicBlock *BB : make_range(DFS.beginRPO(), DFS.endRPO()))
-        dbgs() << *BB;
-    });
-
-    return tapirTarget->processLoop(Hints, LI, SE, DT, AC, ORE);
-  case LoopSpawningHints::ST_END:
-    dbgs() << "LS: Hints specify unknown spawning strategy.\n";
-    break;
-  }
-  return false;
-}
-
-PreservedAnalyses LoopSpawningPass::run(Function &F,
-                                        FunctionAnalysisManager &AM) {
-  // Determine if function detaches.
-  bool DetachingFunction = false;
-  for (BasicBlock &BB : F)
-    if (isa<DetachInst>(BB.getTerminator()))
-      DetachingFunction = true;
-
-  if (!DetachingFunction)
-    return PreservedAnalyses::all();
-
-  auto &LI = AM.getResult<LoopAnalysis>(F);
-  auto &SE = AM.getResult<ScalarEvolutionAnalysis>(F);
-  auto &DT = AM.getResult<DominatorTreeAnalysis>(F);
-  auto &AC = AM.getResult<AssumptionAnalysis>(F);
-  auto &ORE =
-    AM.getResult<OptimizationRemarkEmitterAnalysis>(F);
-
-  bool Changed = LoopSpawningImpl(F, LI, SE, DT, AC, ORE, tapirTarget).run();
-
-  AM.invalidate<ScalarEvolutionAnalysis>(F);
-
-  if (Changed)
-    return PreservedAnalyses::none();
-  return PreservedAnalyses::all();
-}
-
 namespace {
 struct LoopSpawning : public FunctionPass {
   /// Pass identification, replacement for typeid
@@ -766,6 +593,91 @@ struct LoopSpawning : public FunctionPass {
     initializeLoopSpawningPass(*PassRegistry::getPassRegistry());
   }
 
+  /// This routine recursively examines all descendants of the specified loop and
+  /// adds all Tapir loops in that tree to the vector.  This routine performs a
+  /// pre-order traversal of the tree of loops and pushes each Tapir loop found
+  /// onto the end of the vector.
+  void addTapirLoop(Loop *L, SmallVectorImpl<Loop *> &V, OptimizationRemarkEmitter &ORE) {
+    if (isCanonicalTapirLoop(L)) {
+      V.push_back(L);
+      return;
+    }
+
+    LoopSpawningHints Hints(L);
+
+    DEBUG(dbgs() << "LS: Loop hints:"
+                 << " strategy = " << Hints.printStrategy(Hints.getStrategy())
+                 << " grainsize = " << Hints.getGrainsize()
+                 << "\n");
+
+    using namespace ore;
+
+    if (LoopSpawningHints::ST_SEQ != Hints.getStrategy()) {
+      DEBUG(dbgs() << "LS: Marked loop is not a valid Tapir loop.\n"
+            << "\tLoop hints:"
+            << " strategy = " << Hints.printStrategy(Hints.getStrategy())
+            << "\n");
+      ORE.emit(OptimizationRemarkMissed(LS_NAME, "NotTapir",
+                                        L->getStartLoc(), L->getHeader())
+               << "marked loop is not a valid Tapir loop");
+    }
+
+    for (Loop *InnerL : *L)
+      addTapirLoop(InnerL, V, ORE);
+  }
+
+  // Top-level routine to process a given loop.
+  bool processLoop(Loop *L, LoopInfo &LI, ScalarEvolution &SE,
+                   DominatorTree &DT, AssumptionCache &AC, OptimizationRemarkEmitter &ORE) {
+
+    // Function containing loop
+    Function *F = L->getHeader()->getParent();
+
+    DEBUG(dbgs() << "\nLS: Checking a Tapir loop in \""
+                 << L->getHeader()->getParent()->getName() << "\" from "
+          << getDebugLocString(L) << ": " << *L << "\n");
+
+    LoopSpawningHints Hints(L);
+
+    DEBUG(dbgs() << "LS: Loop hints:"
+                 << " strategy = " << Hints.printStrategy(Hints.getStrategy())
+                 << " grainsize = " << Hints.getGrainsize()
+                 << "\n");
+
+    using namespace ore;
+
+    // Get the loop preheader.  LoopSimplify should guarantee that the loop
+    // preheader is not terminated by a sync.
+    BasicBlock *Preheader = L->getLoopPreheader();
+    if (!Preheader) {
+      DEBUG(dbgs() << "LS: Loop lacks a preheader.\n");
+      ORE.emit(OptimizationRemarkMissed(LS_NAME, "NoPreheader",
+                                        L->getStartLoc(), L->getHeader())
+               << "loop lacks a preheader");
+      emitMissedWarning(F, L, Hints, &ORE);
+      return false;
+    } else if (!isa<BranchInst>(Preheader->getTerminator())) {
+      DEBUG(dbgs() << "LS: Loop preheader is not terminated by a branch.\n");
+      ORE.emit(OptimizationRemarkMissed(LS_NAME, "ComplexPreheader",
+                                        L->getStartLoc(), L->getHeader())
+               << "loop preheader not terminated by a branch");
+      emitMissedWarning(F, L, Hints, &ORE);
+      return false;
+    }
+
+    switch(Hints.getStrategy()) {
+    case LoopSpawningHints::ST_SEQ:
+      DEBUG(dbgs() << "LS: Hints dictate sequential spawning.\n");
+      break;
+    default:
+      return tapirTarget->processLoop(Hints, LI, SE, DT, AC, ORE);
+    case LoopSpawningHints::ST_END:
+      dbgs() << "LS: Hints specify unknown spawning strategy.\n";
+      break;
+    }
+    return false;
+  }
+
   bool runOnFunction(Function &F) override {
     if (skipFunction(F))
       return false;
@@ -778,15 +690,36 @@ struct LoopSpawning : public FunctionPass {
     if (!DetachingFunction)
       return false;
 
-    auto &LI = getAnalysis<LoopInfoWrapperPass>().getLoopInfo();
-    auto &SE = getAnalysis<ScalarEvolutionWrapperPass>().getSE();
-    auto &DT = getAnalysis<DominatorTreeWrapperPass>().getDomTree();
-    auto &AC = getAnalysis<AssumptionCacheTracker>().getAssumptionCache(F);
-    auto &ORE =
-      getAnalysis<OptimizationRemarkEmitterWrapperPass>().getORE();
-    // OptimizationRemarkEmitter ORE(F);
+    auto &LI  = getAnalysis<LoopInfoWrapperPass>().getLoopInfo();
+    auto &SE  = getAnalysis<ScalarEvolutionWrapperPass>().getSE();
+    auto &DT  = getAnalysis<DominatorTreeWrapperPass>().getDomTree();
+    auto &AC  = getAnalysis<AssumptionCacheTracker>().getAssumptionCache(F);
+    auto &ORE = getAnalysis<OptimizationRemarkEmitterWrapperPass>().getORE();
 
-    return LoopSpawningImpl(F, LI, SE, DT, AC, ORE, tapirTarget).run();
+
+    // Build up a worklist of inner-loops to vectorize. This is necessary as
+    // the act of vectorizing or partially unrolling a loop creates new loops
+    // and can invalidate iterators across the loops.
+    SmallVector<Loop *, 8> Worklist;
+
+    // Examine all top-level loops in this function, and call addTapirLoop to push
+    // those loops onto the work list.
+    for (Loop *L : LI)
+      addTapirLoop(L, Worklist, ORE);
+
+    LoopsAnalyzed += Worklist.size();
+
+    // Now walk the identified inner loops.
+    bool Changed = false;
+    while (!Worklist.empty())
+      // Process the work list of loops backwards.  For each tree of loops in this
+      // function, addTapirLoop pushed those loops onto the work list according to
+      // a pre-order tree traversal.  Therefore, processing the work list
+      // backwards leads us to process innermost loops first.
+      Changed |= processLoop(Worklist.pop_back_val(), LI, SE, DT, AC, ORE);
+
+    // Process each loop nest in the function.
+    return Changed;
   }
 
   void getAnalysisUsage(AnalysisUsage &AU) const override {

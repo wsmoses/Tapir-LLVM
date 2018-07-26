@@ -42,8 +42,9 @@
 namespace llvm {
 
 class CilkABI : public TapirTarget {
+  const bool _useRuntimeForLoop;
 public:
-  CilkABI();
+  CilkABI(bool useRuntimeForLoop);
   Value *GetOrCreateWorker8(Function &F) override final;
   void createSync(SyncInst &inst, ValueToValueMapTy &DetachCtxToStackFrame)
     override final;

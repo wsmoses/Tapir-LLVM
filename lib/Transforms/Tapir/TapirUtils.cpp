@@ -31,7 +31,9 @@ using namespace llvm;
 TapirTarget *llvm::getTapirTargetFromType(TapirTargetType Type) {
   switch(Type) {
   case TapirTargetType::Cilk:
-    return new CilkABI();
+    return new CilkABI(/*useRuntimeForLoop=*/false);
+  case TapirTargetType::CilkLegacy:
+    return new CilkABI(/*useRuntimeForLoop=*/true);
   case TapirTargetType::OpenMP:
     return new OpenMPABI();
   case TapirTargetType::PTX:
@@ -39,8 +41,10 @@ TapirTarget *llvm::getTapirTargetFromType(TapirTargetType Type) {
   case TapirTargetType::Qthreads:
     return new QthreadsABI();
   case TapirTargetType::None:
+    return nullptr;
   case TapirTargetType::Serial:
   default:
+    assert(0 && "Tapir target not implemented");
     return nullptr;
   }
 }

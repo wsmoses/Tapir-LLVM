@@ -1156,7 +1156,8 @@ bool makeFunctionDetachable(Function &extracted,
 
 //##############################################################################
 
-CilkABI::CilkABI() {}
+CilkABI::CilkABI(bool useRuntimeForLoop) :
+  _useRuntimeForLoop(useRuntimeForLoop) {}
 
 /// \brief Get/Create the worker count for the spawning function.
 Value *CilkABI::GetOrCreateWorker8(Function &F) {
@@ -1605,7 +1606,7 @@ bool llvm::CilkABI::processLoop(LoopSpawningHints LSH, LoopInfo &LI, ScalarEvolu
     if (LSH.getStrategy() != LoopSpawningHints::ST_DAC)
         return false;
 
-    if (LSH.getStrategy() == LoopSpawningHints::ST_DAC)
+    if (!_useRuntimeForLoop)
         return processDACLoop(LSH, LI, SE, DT, AC, ORE);
 
     DEBUG(dbgs() << "LS: Using CilkABI spawning.\n");
