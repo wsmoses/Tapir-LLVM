@@ -41,6 +41,7 @@
 #include "llvm/Analysis/ScalarEvolution.h"
 #include "llvm/Analysis/ScalarEvolutionExpander.h"
 #include "llvm/Analysis/ScalarEvolutionExpressions.h"
+#include "llvm/Analysis/TapirTaskInfo.h"
 #include "llvm/Analysis/TargetLibraryInfo.h"
 #include "llvm/Analysis/TargetTransformInfo.h"
 #include "llvm/IR/BasicBlock.h"
@@ -80,6 +81,7 @@
 #include "llvm/Transforms/Utils/Local.h"
 #include "llvm/Transforms/Utils/LoopUtils.h"
 #include "llvm/Transforms/Utils/SimplifyIndVar.h"
+#include "llvm/Transforms/Utils/TapirUtils.h"
 #include <cassert>
 #include <cstdint>
 #include <utility>
@@ -132,6 +134,7 @@ class IndVarSimplify {
   const DataLayout &DL;
   TargetLibraryInfo *TLI;
   const TargetTransformInfo *TTI;
+  TaskInfo *TI;
 
   SmallVector<WeakTrackingVH, 16> DeadInsts;
   bool Changed = false;
@@ -158,8 +161,8 @@ class IndVarSimplify {
 public:
   IndVarSimplify(LoopInfo *LI, ScalarEvolution *SE, DominatorTree *DT,
                  const DataLayout &DL, TargetLibraryInfo *TLI,
-                 TargetTransformInfo *TTI)
-      : LI(LI), SE(SE), DT(DT), DL(DL), TLI(TLI), TTI(TTI) {}
+                 TargetTransformInfo *TTI, TaskInfo *TI)
+      : LI(LI), SE(SE), DT(DT), DL(DL), TLI(TLI), TTI(TTI), TI(TI) {}
 
   bool run(Loop *L);
 };
@@ -1830,6 +1833,12 @@ void IndVarSimplify::simplifyAndExtend(Loop *L,
 //  linearFunctionTestReplace and its kin. Rewrite the loop exit condition.
 //===----------------------------------------------------------------------===//
 
+static Instruction *getExitingTerminator(Loop *L, TaskInfo *TI) {
+  if (getTaskIfTapirLoop(L, TI))
+    return L->getLoopLatch()->getTerminator();
+  return L->getExitingBlock()->getTerminator();
+}
+
 /// Return true if this loop's backedge taken count expression can be safely and
 /// cheaply expanded into an instruction sequence that can be used by
 /// linearFunctionTestReplace.
@@ -1844,20 +1853,24 @@ void IndVarSimplify::simplifyAndExtend(Loop *L,
 /// However, we don't yet have a strong motivation for converting loop tests
 /// into inequality tests.
 static bool canExpandBackedgeTakenCount(Loop *L, ScalarEvolution *SE,
-                                        SCEVExpander &Rewriter) {
+                                        SCEVExpander &Rewriter, TaskInfo *TI) {
   const SCEV *BackedgeTakenCount = SE->getBackedgeTakenCount(L);
+  Task *T = getTaskIfTapirLoop(L, TI);
+  if (isa<SCEVCouldNotCompute>(BackedgeTakenCount) && T)
+    BackedgeTakenCount = SE->getExitCount(L, L->getLoopLatch());
+
   if (isa<SCEVCouldNotCompute>(BackedgeTakenCount) ||
       BackedgeTakenCount->isZero())
     return false;
 
-  if (!L->getExitingBlock())
+  if (!L->getExitingBlock() && !T)
     return false;
 
   // Can't rewrite non-branch yet.
-  if (!isa<BranchInst>(L->getExitingBlock()->getTerminator()))
+  if (!isa<BranchInst>(getExitingTerminator(L, TI)))
     return false;
 
-  if (Rewriter.isHighCostExpansion(BackedgeTakenCount, L))
+  if (!T && Rewriter.isHighCostExpansion(BackedgeTakenCount, L))
     return false;
 
   return true;
@@ -1901,15 +1914,16 @@ static PHINode *getLoopPhiForCounter(Value *IncV, Loop *L, DominatorTree *DT) {
 }
 
 /// Return the compare guarding the loop latch, or NULL for unrecognized tests.
-static ICmpInst *getLoopTest(Loop *L) {
-  assert(L->getExitingBlock() && "expected loop exit");
+static ICmpInst *getLoopTest(Loop *L, TaskInfo *TI) {
+  assert((L->getExitingBlock() || getTaskIfTapirLoop(L, TI)) &&
+         "expected loop exit");
 
   BasicBlock *LatchBlock = L->getLoopLatch();
   // Don't bother with LFTR if the loop is not properly simplified.
   if (!LatchBlock)
     return nullptr;
 
-  BranchInst *BI = dyn_cast<BranchInst>(L->getExitingBlock()->getTerminator());
+  BranchInst *BI = dyn_cast<BranchInst>(getExitingTerminator(L, TI));
   assert(BI && "expected exit branch");
 
   return dyn_cast<ICmpInst>(BI->getCondition());
@@ -1917,9 +1931,9 @@ static ICmpInst *getLoopTest(Loop *L) {
 
 /// linearFunctionTestReplace policy. Return true unless we can show that the
 /// current exit test is already sufficiently canonical.
-static bool needsLFTR(Loop *L, DominatorTree *DT) {
+static bool needsLFTR(Loop *L, DominatorTree *DT, TaskInfo *TI) {
   // Do LFTR to simplify the exit condition to an ICMP.
-  ICmpInst *Cond = getLoopTest(L);
+  ICmpInst *Cond = getLoopTest(L, TI);
   if (!Cond)
     return true;
 
@@ -2024,11 +2038,12 @@ static bool AlmostDeadIV(PHINode *Phi, BasicBlock *LatchBlock, Value *Cond) {
 /// This is difficult in general for SCEV because of potential overflow. But we
 /// could at least handle constant BECounts.
 static PHINode *FindLoopCounter(Loop *L, const SCEV *BECount,
-                                ScalarEvolution *SE, DominatorTree *DT) {
+                                ScalarEvolution *SE, DominatorTree *DT,
+                                TaskInfo *TI) {
   uint64_t BCWidth = SE->getTypeSizeInBits(BECount->getType());
 
   Value *Cond =
-    cast<BranchInst>(L->getExitingBlock()->getTerminator())->getCondition();
+    cast<BranchInst>(getExitingTerminator(L, TI))->getCondition();
 
   // Loop over all of the PHI nodes, looking for a simple counter.
   PHINode *BestPhi = nullptr;
@@ -2072,7 +2087,7 @@ static PHINode *FindLoopCounter(Loop *L, const SCEV *BECount,
       // We explicitly allow unknown phis as long as they are already used by
       // the loop test. In this case we assume that performing LFTR could not
       // increase the number of undef users.
-      if (ICmpInst *Cond = getLoopTest(L)) {
+      if (ICmpInst *Cond = getLoopTest(L, TI)) {
         if (Phi != getLoopPhiForCounter(Cond->getOperand(0), L, DT) &&
             Phi != getLoopPhiForCounter(Cond->getOperand(1), L, DT)) {
           continue;
@@ -2107,7 +2122,8 @@ static PHINode *FindLoopCounter(Loop *L, const SCEV *BECount,
 /// Help linearFunctionTestReplace by generating a value that holds the RHS of
 /// the new loop test.
 static Value *genLoopLimit(PHINode *IndVar, const SCEV *IVCount, Loop *L,
-                           SCEVExpander &Rewriter, ScalarEvolution *SE) {
+                           SCEVExpander &Rewriter, ScalarEvolution *SE,
+                           TaskInfo *TI) {
   const SCEVAddRecExpr *AR = dyn_cast<SCEVAddRecExpr>(SE->getSCEV(IndVar));
   assert(AR && AR->getLoop() == L && AR->isAffine() && "bad loop counter");
   const SCEV *IVInit = AR->getStart();
@@ -2129,7 +2145,7 @@ static Value *genLoopLimit(PHINode *IndVar, const SCEV *IVCount, Loop *L,
     // Expand the code for the iteration count.
     assert(SE->isLoopInvariant(IVOffset, L) &&
            "Computed iteration count is not loop invariant!");
-    BranchInst *BI = cast<BranchInst>(L->getExitingBlock()->getTerminator());
+    BranchInst *BI = cast<BranchInst>(getExitingTerminator(L, TI));
     Value *GEPOffset = Rewriter.expandCodeFor(IVOffset, OfsTy, BI);
 
     Value *GEPBase = IndVar->getIncomingValueForBlock(L->getLoopPreheader());
@@ -2172,7 +2188,7 @@ static Value *genLoopLimit(PHINode *IndVar, const SCEV *IVCount, Loop *L,
       IVLimit = SE->getAddExpr(IVInit, IVCount);
     }
     // Expand the code for the iteration count.
-    BranchInst *BI = cast<BranchInst>(L->getExitingBlock()->getTerminator());
+    BranchInst *BI = cast<BranchInst>(getExitingTerminator(L, TI));
     IRBuilder<> Builder(BI);
     assert(SE->isLoopInvariant(IVLimit, L) &&
            "Computed iteration count is not loop invariant!");
@@ -2195,7 +2211,7 @@ linearFunctionTestReplace(Loop *L,
                           const SCEV *BackedgeTakenCount,
                           PHINode *IndVar,
                           SCEVExpander &Rewriter) {
-  assert(canExpandBackedgeTakenCount(L, SE, Rewriter) && "precondition");
+  assert(canExpandBackedgeTakenCount(L, SE, Rewriter, TI) && "precondition");
 
   // Initialize CmpIndVar and IVCount to their preincremented values.
   Value *CmpIndVar = IndVar;
@@ -2206,7 +2222,7 @@ linearFunctionTestReplace(Loop *L,
   // If the exiting block is the same as the backedge block, we prefer to
   // compare against the post-incremented value, otherwise we must compare
   // against the preincremented value.
-  if (L->getExitingBlock() == L->getLoopLatch()) {
+  if (getExitingTerminator(L, TI)->getParent() == L->getLoopLatch()) {
     // Add one to the "backedge-taken" count to get the trip count.
     // This addition may overflow, which is valid as long as the comparison is
     // truncated to BackedgeTakenCount->getType().
@@ -2215,16 +2231,16 @@ linearFunctionTestReplace(Loop *L,
     // The BackedgeTaken expression contains the number of times that the
     // backedge branches to the loop header.  This is one less than the
     // number of times the loop executes, so use the incremented indvar.
-    CmpIndVar = IndVar->getIncomingValueForBlock(L->getExitingBlock());
+    CmpIndVar = IndVar->getIncomingValueForBlock(L->getLoopLatch());
   }
 
-  Value *ExitCnt = genLoopLimit(IndVar, IVCount, L, Rewriter, SE);
+  Value *ExitCnt = genLoopLimit(IndVar, IVCount, L, Rewriter, SE, TI);
   assert(ExitCnt->getType()->isPointerTy() ==
              IndVar->getType()->isPointerTy() &&
          "genLoopLimit missed a cast");
 
   // Insert a new icmp_ne or icmp_eq instruction before the branch.
-  BranchInst *BI = cast<BranchInst>(L->getExitingBlock()->getTerminator());
+  BranchInst *BI = cast<BranchInst>(getExitingTerminator(L, TI));
   ICmpInst::Predicate P;
   if (L->contains(BI->getSuccessor(0)))
     P = ICmpInst::ICMP_NE;
@@ -2436,6 +2452,8 @@ bool IndVarSimplify::run(Loop *L) {
   rewriteNonIntegerIVs(L);
 
   const SCEV *BackedgeTakenCount = SE->getBackedgeTakenCount(L);
+  if (getTaskIfTapirLoop(L, TI))
+    BackedgeTakenCount = SE->getExitCount(L, L->getLoopLatch());
 
   // Create a rewriter object which we'll use to transform the code with.
   SCEVExpander Rewriter(*SE, DL, "indvars");
@@ -2467,9 +2485,9 @@ bool IndVarSimplify::run(Loop *L) {
 
   // If we have a trip count expression, rewrite the loop's exit condition
   // using it.  We can currently only handle loops with a single exit.
-  if (!DisableLFTR && canExpandBackedgeTakenCount(L, SE, Rewriter) &&
-      needsLFTR(L, DT)) {
-    PHINode *IndVar = FindLoopCounter(L, BackedgeTakenCount, SE, DT);
+  if (!DisableLFTR && canExpandBackedgeTakenCount(L, SE, Rewriter, TI) &&
+      needsLFTR(L, DT, TI)) {
+    PHINode *IndVar = FindLoopCounter(L, BackedgeTakenCount, SE, DT, TI);
     if (IndVar) {
       // Check preconditions for proper SCEVExpander operation. SCEV does not
       // express SCEVExpander's dependencies, such as LoopSimplify. Instead any
@@ -2541,7 +2559,10 @@ PreservedAnalyses IndVarSimplifyPass::run(Loop &L, LoopAnalysisManager &AM,
   Function *F = L.getHeader()->getParent();
   const DataLayout &DL = F->getParent()->getDataLayout();
 
-  IndVarSimplify IVS(&AR.LI, &AR.SE, &AR.DT, DL, &AR.TLI, &AR.TTI);
+  const auto &FAM =
+    AM.getResult<FunctionAnalysisManagerLoopProxy>(L, AR).getManager();
+  IndVarSimplify IVS(&AR.LI, &AR.SE, &AR.DT, DL, &AR.TLI, &AR.TTI,
+                     FAM.getCachedResult<TaskAnalysis>(*F));
   if (!IVS.run(&L))
     return PreservedAnalyses::all();
 
@@ -2570,15 +2591,17 @@ struct IndVarSimplifyLegacyPass : public LoopPass {
     auto *TLI = TLIP ? &TLIP->getTLI() : nullptr;
     auto *TTIP = getAnalysisIfAvailable<TargetTransformInfoWrapperPass>();
     auto *TTI = TTIP ? &TTIP->getTTI(*L->getHeader()->getParent()) : nullptr;
+    auto *TI = &getAnalysis<TaskInfoWrapperPass>().getTaskInfo();
     const DataLayout &DL = L->getHeader()->getModule()->getDataLayout();
 
-    IndVarSimplify IVS(LI, SE, DT, DL, TLI, TTI);
+    IndVarSimplify IVS(LI, SE, DT, DL, TLI, TTI, TI);
     return IVS.run(L);
   }
 
   void getAnalysisUsage(AnalysisUsage &AU) const override {
     AU.setPreservesCFG();
     getLoopAnalysisUsage(AU);
+    AU.addRequired<TaskInfoWrapperPass>();
   }
 };
 
@@ -2589,6 +2612,7 @@ char IndVarSimplifyLegacyPass::ID = 0;
 INITIALIZE_PASS_BEGIN(IndVarSimplifyLegacyPass, "indvars",
                       "Induction Variable Simplification", false, false)
 INITIALIZE_PASS_DEPENDENCY(LoopPass)
+INITIALIZE_PASS_DEPENDENCY(TaskInfoWrapperPass)
 INITIALIZE_PASS_END(IndVarSimplifyLegacyPass, "indvars",
                     "Induction Variable Simplification", false, false)
 
