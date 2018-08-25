@@ -4508,6 +4508,10 @@ public:
     setSuccessor(2, Unwind);
   }
 
+  /// Get the landingpad instruction from the landing pad
+  /// block (the unwind destination).
+  LandingPadInst *getLandingPadInst() const;
+
 private:
   friend TerminatorInst;
 
