@@ -52,6 +52,7 @@
 #include "llvm/Transforms/Scalar/InstSimplifyPass.h"
 #include "llvm/Transforms/Utils.h"
 #include "llvm/Transforms/Tapir.h"
+#include "llvm/Transforms/Tapir/TapirTargetIDs.h"
 #include "llvm/Transforms/Utils/SymbolRewriter.h"
 #include "llvm/Transforms/Utils/UnifyFunctionExitNodes.h"
 #include "llvm/Transforms/Vectorize.h"
@@ -143,7 +144,7 @@ namespace {
       (void) llvm::createLowerExpectIntrinsicPass();
       (void) llvm::createLowerInvokePass();
       (void) llvm::createLowerSwitchPass();
-      (void) llvm::createLowerTapirToTargetPass(nullptr);
+      (void) llvm::createLowerTapirToTargetPass(llvm::TapirTargetID::None);
       (void) llvm::createNaryReassociatePass();
       (void) llvm::createObjCARCAAWrapperPass();
       (void) llvm::createObjCARCAPElimPass();
