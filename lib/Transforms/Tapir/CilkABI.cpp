@@ -1370,9 +1370,9 @@ bool CilkABILoopSpawning::processLoop() {
   // Insert computation of grainsize into the Preheader.
   Value *GrainVar;
   if (!SpecifiedGrainsize)
-    GrainVar = computeGrainsize(LimitVar, tapirTarget);
+    GrainVar = computeGrainsize(LimitVar, tapirTarget, Type::getInt32Ty(LimitVar->getContext()));
   else
-    GrainVar = ConstantInt::get(LimitVar->getType(), SpecifiedGrainsize);
+    GrainVar = ConstantInt::get(Type::getInt32Ty(LimitVar->getContext()), SpecifiedGrainsize);
 
   DEBUG(dbgs() << "GrainVar: " << *GrainVar << "\n");
 
@@ -1382,7 +1382,6 @@ bool CilkABILoopSpawning::processLoop() {
   SetVector<Value*> Inputs, Outputs;
   SetVector<Value*> BodyInputs, BodyOutputs;
   ValueToValueMapTy VMap;
-  std::vector<BasicBlock *> LoopBlocks;
   SmallPtrSet<BasicBlock *, 4> ExitsToSplit;
   AllocaInst* closure;
 
@@ -1394,12 +1393,10 @@ bool CilkABILoopSpawning::processLoop() {
   }
 
   // Add start iteration, end iteration, and grainsize to inputs.
-    LoopBlocks = L->getBlocks();
 
-    // Add unreachable and exception-handling exits to the set of loop blocks to
-    // clone.
-    for (BasicBlock *HE : HandledExits)
-      LoopBlocks.push_back(HE);
+  // Blocks to clone are all those in loop and unreachable / exception-handling exits
+  std::vector<BasicBlock *> LoopBlocks(L->getBlocks());
+  LoopBlocks.insert(LoopBlocks.end(), HandledExits.begin(), HandledExits.end());
 
     {
       const DetachInst *DI = cast<DetachInst>(Header->getTerminator());
@@ -1427,9 +1424,12 @@ bool CilkABILoopSpawning::processLoop() {
 
     // Add explicit argument for loop start.
     Value* startArg = ensureDistinctArgument(LoopBlocks, CanonicalIVInput, "start");
+    BodyInputs.remove(startArg);
 
     // Add explicit argument for loop end.
     Value* limitArg = ensureDistinctArgument(LoopBlocks, LimitVar, "end");
+    BodyInputs.remove(limitArg);
+
 
     {
     // Put all of the inputs together, and clear redundant inputs from
@@ -1438,21 +1438,30 @@ bool CilkABILoopSpawning::processLoop() {
     SmallVector<Value*, 8> StructInputs;
     SmallVector<Type*, 8> StructIT;
     for (Value *V : BodyInputs) {
-      if (!Inputs.count(V)) {
+      if (!Inputs.count(V) && V != startArg && V != limitArg) {
         StructInputs.push_back(V);
         StructIT.push_back(V->getType());
       }
       else
         BodyInputsToRemove.push_back(V);
     }
+    if (StructIT.size() == 0) {
+      StructIT.push_back(startArg->getType());
+    }
     StructType* ST = StructType::create(StructIT);
-    IRBuilder<> B(L->getLoopPreheader()->getTerminator());
-    IRBuilder<> B2(L->getHeader()->getFirstNonPHIOrDbgOrLifetime());
+
+    BasicBlock* newPH = SplitBlock(Preheader, Preheader->getTerminator(),
+                                               &DT, &LI);
+    LoopBlocks.push_back(newPH);
+    IRBuilder<> B(Preheader->getTerminator());
+    IRBuilder<> B2(newPH->getFirstNonPHIOrDbgOrLifetime());
+    Preheader = newPH;
     closure = B.CreateAlloca(ST);
     for(unsigned i=0; i<StructInputs.size(); i++) {
       B.CreateStore(StructInputs[i], B.CreateConstGEP2_32(ST, closure, 0, i));
       auto l2 = B2.CreateLoad(B2.CreateConstGEP2_32(ST, closure, 0, i));
       auto UI = StructInputs[i]->use_begin(), E = StructInputs[i]->use_end();
+      VMap[StructInputs[i]] = l2;
       for (; UI != E;) {
         Use &U = *UI;
         ++UI;
@@ -1485,10 +1494,11 @@ bool CilkABILoopSpawning::processLoop() {
     SmallVector<ReturnInst *, 4> Returns;  // Ignore returns cloned.
 
     Helper = CreateHelper(Inputs, Outputs, LoopBlocks,
-                          Header, Preheader, ExitBlock,
+                          Preheader, Preheader, ExitBlock,
                           VMap, M,
                           OrigFunction->getSubprogram() != nullptr, Returns, ".ls",
-                          &ExitsToSplit, InputSyncRegion, nullptr, nullptr, nullptr);
+                          &ExitsToSplit, InputSyncRegion,
+                          nullptr, nullptr, nullptr);
 
     assert(Returns.empty() && "Returns cloned when cloning loop.");
 
@@ -1512,7 +1522,7 @@ bool CilkABILoopSpawning::processLoop() {
     assert(((isa<Constant>(LimitVar) &&
              HelperCond->getOperand(1) == LimitVar) ||
             (countUseInRegion(LoopBlocks, LimitVar) != 1 &&
-             HelperCond->getOperand(1) == VMap[LimitVar] )) &&
+             HelperCond->getOperand(1) == VMap[VMap[LimitVar]] )) &&
            "Unexpected condition in loop latch.");
     IRBuilder<> Builder(HelperCond);
     Value *NewHelperCond = Builder.CreateICmpULT(HelperCond->getOperand(0),
@@ -1528,7 +1538,8 @@ bool CilkABILoopSpawning::processLoop() {
 
   // For debugging:
   BasicBlock *NewHeader = cast<BasicBlock>(VMap[Header]);
-  SerializeDetachedCFG(cast<DetachInst>(NewHeader->getTerminator()), nullptr);
+  DominatorTree HelperDT(*Helper);
+  SerializeDetachedCFG(cast<DetachInst>(NewHeader->getTerminator()), &HelperDT);
   {
     Value* v = &*Helper->arg_begin();
     auto UI = v->use_begin(), E = v->use_end();
@@ -1548,8 +1559,11 @@ bool CilkABILoopSpawning::processLoop() {
     }
   }
 
-  if (verifyFunction(*Helper, &dbgs()))
+  if (verifyFunction(*Helper, &dbgs())) {
+    llvm::errs() << "Failed to verify function";
+    Helper->dump();
     return false;
+  }
 
   // Add call to new helper function in original function.
   {
@@ -1567,20 +1581,25 @@ bool CilkABILoopSpawning::processLoop() {
     for (Value *V : BodyInputs)
       TopCallArgs.insert(V);
 
+
+    Value *NumIters = Exp.expandCodeFor(SE.getAddExpr(SE.getOne(Limit->getType()), Limit), Limit->getType(),
+                                        Preheader->getTerminator());
+
     // Create call instruction.
     IRBuilder<> Builder(Preheader->getTerminator());
-
     Function* F;
-    if( ((IntegerType*)LimitVar->getType())->getBitWidth() == 32 )
+    if( ((IntegerType*)NumIters->getType())->getBitWidth() == 32 )
       F = CILKRTS_FUNC(cilk_for_32, *M);
     else {
-      assert( ((IntegerType*)LimitVar->getType())->getBitWidth() == 64 );
+      assert( ((IntegerType*)NumIters->getType())->getBitWidth() == 64 );
       F = CILKRTS_FUNC(cilk_for_64, *M);
     }
+
+
     Value* args[] = {
       Builder.CreatePointerCast(Helper, F->getFunctionType()->getParamType(0)),
       Builder.CreatePointerCast(closure, F->getFunctionType()->getParamType(1)),
-      LimitVar,
+      NumIters,
       GrainVar
     };
 

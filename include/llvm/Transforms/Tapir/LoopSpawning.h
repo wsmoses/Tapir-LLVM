@@ -70,7 +70,7 @@ protected:
     ///
     /// TODO: This method is the only method that depends on the CilkABI.
     /// Generalize this method for other grainsize calculations and to query TLI.
-  Value* computeGrainsize(Value *Limit, TapirTarget* tapirTarget);
+  Value* computeGrainsize(Value *Limit, TapirTarget* tapirTarget, Type* T=nullptr);
 
   Value* canonicalizeLoopLatch(PHINode *IV, Value *Limit);
 

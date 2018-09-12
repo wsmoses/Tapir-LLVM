@@ -14,10 +14,10 @@ entry:
 pfor.detach.preheader:                            ; preds = %entry
 ; CHECK: pfor.detach.preheader:
 ; CHECK: [[LIMIT:%[0-9]+]] = add [[TYPE:i[0-9]+]] %n, -1
-; CHECK: call fastcc void @[[OUTLINED:[a-zA-Z0-9._]+]](
-; CHECK: [[TYPE]] 0
-; CHECK: [[TYPE]] [[LIMIT]]
-; CHECK: [[TYPE]] {{[%]?[a-zA-Z0-9._]+}}
+; CHECK: [[CLOSUREALLOC:%[0-9]+]] = alloca [[CLOSURETYPE:%[0-9]+]]
+; CHECK-NEXT: br label %pfor.detach.preheader.split
+; CHECK: [[CLOSURECAST:%[0-9]+]] = bitcast [[CLOSURETYPE]]* [[CLOSUREALLOC]] to i8*
+; CHECK: call void @__cilkrts_cilk_for_32(void (i8*, i32, i32)* bitcast (void (%0*, i32, i32)* @[[OUTLINED:[a-zA-Z0-9._]+]] to void (i8*, i32, i32)*), i8* [[CLOSURECAST]], i32 %n, i32 [[GRAIN:%[0-9]+]])
 ; CHECK-NEXT: br label %pfor.cond.cleanup.loopexit
   br label %pfor.detach
 
@@ -25,64 +25,47 @@ pfor.cond.cleanup.loopexit:                       ; preds = %pfor.inc
   br label %pfor.cond.cleanup
 
 pfor.cond.cleanup:                                ; preds = %pfor.cond.cleanup.loopexit, %entry
-; CHECK: pfor.cond.cleanup
-; CHECK-NOT: sync within %syncreg, label %0
   sync within %syncreg, label %0
 
 ; <label>:0:                                      ; preds = %pfor.cond.cleanup
   ret void
 
 pfor.detach:                                      ; preds = %pfor.detach.preheader, %pfor.inc
-; CHECK: pfor.detach:
-; CHECK: phi i32
-; CHECK-NOT: %pfor.detach.preheader
-; CHECK: detach
-
-; CHECK: define internal fastcc void @[[OUTLINED]](
-; CHECK: [[TYPE]] [[START:%[a-zA-Z0-9._]+]]
-; CHECK: [[TYPE]] [[END:%[a-zA-Z0-9._]+]]
-; CHECK: [[TYPE]] [[GRAIN:%[a-zA-Z0-9._]+]]
-; CHECK: [[NEWSYNCREG:%[a-zA-Z0-9._]+]] = call token @llvm.syncregion.start(
-
-; CHECK: {{^(; <label>:)?}}[[DACSTART:[a-zA-Z0-9._]+]]:
-; CHECK: [[ITERSTART:%[a-zA-Z0-9._]+]] = phi [[TYPE]] [{{.*}}[[START]]{{.*}}]
-; CHECK-NEXT: [[ITERCOUNT:%[a-zA-Z0-9._]+]] = sub [[TYPE]] [[END]], [[ITERSTART]]
-; CHECK-NEXT: [[CMP:%[0-9]+]] = icmp ugt [[TYPE]] [[ITERCOUNT]], [[GRAIN]]
-; CHECK-NEXT: br i1 [[CMP]], label %[[RECUR:[0-9]+]], label %[[BODY:[0-9]+]]
-
-; CHECK: {{^(; <label>:)?}}[[RECUR]]:
-; CHECK-NEXT: [[HALFCOUNT:%[a-zA-Z0-9._]+]] = lshr [[TYPE]] [[ITERCOUNT]], 1
-; CHECK-NEXT: [[MIDITER:%[a-zA-Z0-9._]+]] = add {{.*}} [[TYPE]] [[ITERSTART]], [[HALFCOUNT]]
-; CHECK-NEXT: detach within [[NEWSYNCREG]], label %[[DETACHED:[a-zA-Z0-9._]+]], label %[[CONTINUE:[a-zA-Z0-9._]+]]
-
-; CHECK: {{^(; <label>:)?}}[[DETACHED]]:
-; CHECK-NEXT: call fastcc void @[[OUTLINED]]([[TYPE]] [[ITERSTART]], [[TYPE]] [[MIDITER]], [[TYPE]] [[GRAIN]]
-; CHECK-NEXT: reattach within [[NEWSYNCREG]], label %[[CONTINUE]]
-
-; CHECK: {{^(; <label>:)?}}[[CONTINUE]]:
-; CHECK-NEXT: [[MIDITERP1:%[a-zA-Z0-9._]+]] = add {{.*}} [[TYPE]] [[MIDITER]], 1
-; CHECK-NEXT: br label %[[DACSTART]]
   %i.06 = phi i32 [ %inc, %pfor.inc ], [ 0, %pfor.detach.preheader ]
   detach within %syncreg, label %pfor.body, label %pfor.inc
-; CHECK: sync within [[NEWSYNCREG]]
-; CHECK: br label %pfor.body.ls
 
 pfor.body:                                        ; preds = %pfor.detach
-; CHECK: pfor.body.ls:
   tail call void @bar(i32 %i.06) #2
-; CHECK-NEXT: tail call void @bar(i32 %i.06.ls)
   reattach within %syncreg, label %pfor.inc
-; CHECK-NEXT: br label %[[INC:[a-zA-Z0-9._]+]]
 
 pfor.inc:                                         ; preds = %pfor.body, %pfor.detach
-; CHECK: {{^(; <label>:)?}}[[INC]]:
-; CHECK-NEXT: [[LOCALCMP:%[0-9]+]] = icmp ult {{.*}} [[LOCALITER:%[a-zA-Z0-9._]+]], [[END]]
   %inc = add nuw nsw i32 %i.06, 1
-; CHECK-NEXT: add {{.*}} [[LOCALITER]], 1
   %exitcond = icmp eq i32 %inc, %n
-; CHECK: br i1 [[LOCALCMP]]
   br i1 %exitcond, label %pfor.cond.cleanup.loopexit, label %pfor.detach, !llvm.loop !1
 }
+
+; CHECK: define internal void @[[OUTLINED]](%0* %.ls, i32 %start.ls, i32 %.ls1) local_unnamed_addr
+; CHECK-NEXT: pfor.detach.preheader.split.ls:
+; CHECK-NEXT:  br label %pfor.detach.preheader.split.ls2
+
+; CHECK: pfor.cond.cleanup.loopexit.ls:                    ; preds = %pfor.inc.ls
+; CHECK-NEXT:  ret void
+
+; CHECK: pfor.detach.ls:                                   ; preds = %pfor.detach.preheader.split.ls2, %pfor.inc.ls
+; CHECK-NEXT:   %i.06.ls = phi i32 [ %inc.ls, %pfor.inc.ls ], [ %start.ls, %pfor.detach.preheader.split.ls2 ]
+; CHECK-NEXT:   br label %pfor.body.ls
+
+; CHECK: pfor.body.ls:                                     ; preds = %pfor.detach.ls
+; CHECK-NEXT:   tail call void @bar(i32 %i.06.ls) #4
+; CHECK-NEXT:   br label %pfor.inc.ls
+
+; CHECK: pfor.inc.ls:                                      ; preds = %pfor.body.ls
+; CHECK-NEXT:   %0 = icmp ult i32 %i.06.ls, %.ls1
+; CHECK-NEXT:   %inc.ls = add nuw nsw i32 %i.06.ls, 1
+; CHECK-NEXT:   br i1 %0, label %pfor.detach.ls, label %pfor.cond.cleanup.loopexit.ls
+
+; CHECK: pfor.detach.preheader.split.ls2:
+; CHECK-NEXT: br label %pfor.detach.ls
 
 declare void @bar(i32) local_unnamed_addr #1
 

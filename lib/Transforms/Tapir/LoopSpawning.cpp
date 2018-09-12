@@ -185,7 +185,7 @@ static void getEHExits(Loop *L, const BasicBlock *DesignatedExitBlock,
   }
 }
 
-Value* LoopOutline::computeGrainsize(Value *Limit, TapirTarget* tapirTarget) {
+Value* LoopOutline::computeGrainsize(Value *Limit, TapirTarget* tapirTarget, Type* T) {
   Loop *L = OrigLoop;
 
   Value *Grainsize;
@@ -206,7 +206,9 @@ Value* LoopOutline::computeGrainsize(Value *Limit, TapirTarget* tapirTarget) {
   Value *LargeLoopVal = ConstantInt::get(Limit->getType(), 2048);
   Value *Cmp = Builder.CreateICmpULT(LargeLoopVal, SmallLoopVal);
   Grainsize = Builder.CreateSelect(Cmp, LargeLoopVal, SmallLoopVal);
-
+  if (T) {
+    Grainsize = Builder.CreateIntCast(Grainsize, T, false);
+  }
   return Grainsize;
 }
 

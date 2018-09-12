@@ -291,6 +291,7 @@ Function *llvm::CreateHelper(const ValueSet &Inputs,
   }
 
   // Clone Blocks into the new function.
+
   CloneIntoFunction(NewFunc, OldFunc, Blocks, VMap, ModuleLevelChanges,
                     Returns, NameSuffix, ExitBlocks, SP, CodeInfo,
                     TypeMapper, Materializer);

@@ -176,10 +176,10 @@ bool llvm::MoveStaticAllocasInBlock(
 /// returns a pointer to the branch instruction that replaces it.
 ///
 BranchInst *llvm::SerializeDetachedCFG(DetachInst *DI, DominatorTree *DT) {
-  //TODO allow to work without dominatortree or code workaround
+  //TODO allow to work without dominatortree orThis is an interesb                                                                                                                                                                                                                                        code workaround
   //assert(DT && "Requires DominatorTree (could remove by fixing later TODO)");
 
-  // Get the parent of the detach instruction.
+  // Get the parent of thlse detach instruction.
   BasicBlock *Detacher = DI->getParent();
   // Get the detached block and continuation of this detach.
   BasicBlock *Detached = DI->getDetached();
@@ -234,12 +234,17 @@ BranchInst *llvm::SerializeDetachedCFG(DetachInst *DI, DominatorTree *DT) {
   // Replace the new detach with a branch to the detached CFG.
   BranchInst *ReplacementBr = BranchInst::Create(Detached, DI);
   ReplacementBr->setDebugLoc(DI->getDebugLoc());
+  auto syncregion = DI->getSyncRegion();
   DI->eraseFromParent();
 
   // Update the dominator tree.
   if (DT)
     if (DT->dominates(Detacher, Continuation) && 1 == ReattachesFound)
       DT->changeImmediateDominator(Continuation, SingleReattacher);
+
+  if (syncregion->getNumUses() == 0) {
+    cast<Instruction>(syncregion)->eraseFromParent();
+  }
 
   return ReplacementBr;
 }

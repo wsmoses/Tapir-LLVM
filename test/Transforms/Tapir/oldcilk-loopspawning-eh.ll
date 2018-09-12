@@ -1,6 +1,7 @@
 ; RUN: opt < %s -loop-spawning -ls-tapir-target=cilklegacy -simplifycfg -S | FileCheck %s
 
-; CHECK: define internal fastcc void @foo_pfor.detach.ls(i64 %start.ls, i64 %.ls, i64 %grainsize.ls) #0 personality i8* bitcast (i32 (...)* @__gxx_personality_v0 to i8*)
+; CHECK: call void @__cilkrts_cilk_for_64(void (i8*, i64, i64)* bitcast
+; CHECK: define internal void @foo_entry.split.ls(%0* %.ls, i64
 
 ; ModuleID = 'newstart.ll'
 source_filename = "sret-test.cpp"
