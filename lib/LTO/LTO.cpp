@@ -134,6 +134,7 @@ static void computeCacheKey(
   AddUnsigned(Conf.CGFileType);
   AddUnsigned(Conf.OptLevel);
   AddUnsigned(Conf.UseNewPM);
+  AddUnsigned(static_cast<unsigned>(Conf.TapirTarget));
   AddString(Conf.OptPipeline);
   AddString(Conf.AAPipeline);
   AddString(Conf.OverrideTriple);
