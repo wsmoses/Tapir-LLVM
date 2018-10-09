@@ -1021,8 +1021,10 @@ PassBuilder::buildThinLTOPreLinkDefaultPipeline(OptimizationLevel Level,
 
 ModulePassManager PassBuilder::buildThinLTODefaultPipeline(
     OptimizationLevel Level, bool DebugLogging,
-    const ModuleSummaryIndex *ImportSummary) {
+    const ModuleSummaryIndex *ImportSummary, bool LowerTapir) {
   ModulePassManager MPM(DebugLogging);
+  bool RerunAfterTapirLowering = false;
+  bool TapirHasBeenLowered = !LowerTapir;
 
   if (ImportSummary) {
     // These passes import type identifier resolutions for whole-program
@@ -1053,12 +1055,23 @@ ModulePassManager PassBuilder::buildThinLTODefaultPipeline(
     MPM.addPass(PGOIndirectCallPromotion(true /* InLTO */,
                                          false /* SamplePGO */));
 
-  // Add the core simplification pipeline.
-  MPM.addPass(buildModuleSimplificationPipeline(Level, ThinLTOPhase::PostLink,
-                                                DebugLogging));
+  do {
+    RerunAfterTapirLowering = !TapirHasBeenLowered && LowerTapir;
 
-  // Now add the optimization pipeline.
-  MPM.addPass(buildModuleOptimizationPipeline(Level, DebugLogging));
+    // Add the core simplification pipeline.
+    MPM.addPass(buildModuleSimplificationPipeline(Level, ThinLTOPhase::PostLink,
+                                                  DebugLogging));
+
+    // Now add the optimization pipeline.
+    MPM.addPass(buildModuleOptimizationPipeline(Level, DebugLogging));
+
+    if (!TapirHasBeenLowered) {
+      MPM.addPass(buildTapirLoweringPipeline(Level, ThinLTOPhase::PostLink,
+                                             DebugLogging));
+
+      TapirHasBeenLowered = true;
+    }
+  } while (RerunAfterTapirLowering);
 
   return MPM;
 }
@@ -1073,9 +1086,12 @@ PassBuilder::buildLTOPreLinkDefaultPipeline(OptimizationLevel Level,
 
 ModulePassManager
 PassBuilder::buildLTODefaultPipeline(OptimizationLevel Level, bool DebugLogging,
-                                     ModuleSummaryIndex *ExportSummary) {
+                                     ModuleSummaryIndex *ExportSummary,
+                                     bool LowerTapir) {
   assert(Level != O0 && "Must request optimizations for the default pipeline!");
   ModulePassManager MPM(DebugLogging);
+  bool RerunAfterTapirLowering = false;
+  bool TapirHasBeenLowered = !LowerTapir;
 
   if (PGOOpt && !PGOOpt->SampleProfileFile.empty()) {
     // Load sample profile before running the LTO optimization pipeline.
@@ -1109,12 +1125,15 @@ PassBuilder::buildLTODefaultPipeline(OptimizationLevel Level, bool DebugLogging,
     // Propagate constants at call sites into the functions they call.  This
     // opens opportunities for globalopt (and inlining) by substituting function
     // pointers passed as arguments to direct uses of functions.
-   MPM.addPass(IPSCCPPass());
+    MPM.addPass(IPSCCPPass());
 
-   // Attach metadata to indirect call sites indicating the set of functions
-   // they may target at run-time. This should follow IPSCCP.
-   MPM.addPass(CalledValuePropagationPass());
+    // Attach metadata to indirect call sites indicating the set of functions
+    // they may target at run-time. This should follow IPSCCP.
+    MPM.addPass(CalledValuePropagationPass());
   }
+
+  do {
+    RerunAfterTapirLowering = !TapirHasBeenLowered && LowerTapir;
 
   // Now deduce any function attributes based in the current code.
   MPM.addPass(createModuleToPostOrderCGSCCPassAdaptor(
@@ -1258,6 +1277,14 @@ PassBuilder::buildLTODefaultPipeline(OptimizationLevel Level, bool DebugLogging,
 
   // Now that we have optimized the program, discard unreachable functions.
   MPM.addPass(GlobalDCEPass());
+
+    if (!TapirHasBeenLowered) {
+      MPM.addPass(buildTapirLoweringPipeline(Level, ThinLTOPhase::None,
+                                             DebugLogging));
+
+      TapirHasBeenLowered = true;
+    }
+  } while (RerunAfterTapirLowering);
 
   // FIXME: Enable MergeFuncs, conditionally, after ported, maybe.
   return MPM;
