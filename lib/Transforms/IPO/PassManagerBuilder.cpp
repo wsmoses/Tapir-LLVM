@@ -455,7 +455,7 @@ void PassManagerBuilder::populateModulePassManager(
 
     if (TapirTargetID::None != TapirTarget) {
       // MPM.add(createAnalyzeTapirPass());
-      MPM.add(createLowerTapirToTargetPass(TapirTarget));
+      MPM.add(createLowerTapirToTargetPass());
       // The lowering pass may leave cruft around.  Clean it up.
       MPM.add(createCFGSimplificationPass());
     }
@@ -521,7 +521,7 @@ void PassManagerBuilder::populateModulePassManager(
 
   if ((TapirTargetID::None != TapirTarget) && DisableTapirOpts) { // -fdetach
     // MPM.add(createAnalyzeTapirPass());
-    MPM.add(createLowerTapirToTargetPass(TapirTarget));
+    MPM.add(createLowerTapirToTargetPass());
     TapirHasBeenLowered = true;
   }
 
@@ -813,7 +813,7 @@ void PassManagerBuilder::populateModulePassManager(
     // TODO: Make this sequence of passes check the library info for the target
     // parallel RTS.
 
-    MPM.add(createLowerTapirToTargetPass(TapirTarget));
+    MPM.add(createLowerTapirToTargetPass());
     // The lowering pass introduces new functions and may leave cruft around.
     // Clean it up.
     MPM.add(createCFGSimplificationPass());
