@@ -19,6 +19,7 @@
 #include "llvm/Support/CodeGen.h"
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/Target/TargetOptions.h"
+#include "llvm/Transforms/Tapir/TapirTargetIDs.h"
 
 #include <functional>
 
@@ -51,6 +52,9 @@ struct Config {
 
   /// Disable entirely the optimizer, including importing for ThinLTO
   bool CodeGenOnly = false;
+
+  /// Target for lowering Tapir constructs
+  TapirTargetID TapirTarget = TapirTargetID::None;
 
   /// If this field is set, the set of passes run in the middle-end optimizer
   /// will be the one specified by the string. Only works with the new pass

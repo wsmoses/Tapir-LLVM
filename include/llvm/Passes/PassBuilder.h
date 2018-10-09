@@ -321,7 +321,8 @@ public:
   /// require some transformations for semantic reasons, they should explicitly
   /// build them.
   ModulePassManager buildThinLTODefaultPipeline(OptimizationLevel Level,
-                                                bool DebugLogging = false);
+                                                bool DebugLogging = false,
+                                                bool LowerTapir = false);
 
   /// Build a pre-link, LTO-targeting default optimization pipeline to a pass
   /// manager.
@@ -350,7 +351,8 @@ public:
   /// require some transformations for semantic reasons, they should explicitly
   /// build them.
   ModulePassManager buildLTODefaultPipeline(OptimizationLevel Level,
-                                            bool DebugLogging = false);
+                                            bool DebugLogging = false,
+                                            bool LowerTapir = false);
 
   /// Build the default `AAManager` with the default alias analysis pipeline
   /// registered.
