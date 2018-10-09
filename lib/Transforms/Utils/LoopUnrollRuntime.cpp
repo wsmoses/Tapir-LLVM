@@ -904,7 +904,7 @@ bool llvm::UnrollRuntimeLoopRemainder(Loop *L, unsigned Count,
                /*AllowExpensiveTripCount*/ false, /*PreserveCondBr*/ true,
                /*PreserveOnlyFirst*/ false, /*TripMultiple*/ 1,
                /*PeelCount*/ 0, /*UnrollRemainder*/ false, LI, SE, DT, AC,
-               /*ORE*/ nullptr, PreserveLCSSA);
+               /*TI*/ nullptr, /*ORE*/ nullptr, PreserveLCSSA);
   }
 
   NumRuntimeUnrolled++;

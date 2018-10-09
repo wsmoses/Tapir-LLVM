@@ -23,6 +23,7 @@
 #include "llvm/Analysis/LoopIterator.h"
 #include "llvm/Analysis/OptimizationRemarkEmitter.h"
 #include "llvm/Analysis/ScalarEvolution.h"
+#include "llvm/Analysis/TapirTaskInfo.h"
 #include "llvm/Transforms/Utils/Local.h"
 #include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/DataLayout.h"
@@ -37,6 +38,7 @@
 #include "llvm/Transforms/Utils/LoopSimplify.h"
 #include "llvm/Transforms/Utils/LoopUtils.h"
 #include "llvm/Transforms/Utils/SimplifyIndVar.h"
+#include "llvm/Transforms/Utils/TapirUtils.h"
 #include "llvm/Transforms/Utils/UnrollLoop.h"
 using namespace llvm;
 
@@ -152,15 +154,6 @@ BasicBlock *llvm::foldBlockIntoPredecessor(BasicBlock *BB, LoopInfo *LI,
   BB->eraseFromParent();
 
   return OnlyPred;
-}
-
-//! Identify if a loop could be a cilk for loop and thus diasble unrolling
-bool isCilkFor(Loop* L) {
-  //TODO use a more precise detection of cilk for loops
-  for (BasicBlock* BB : L->blocks())
-    if (dyn_cast<DetachInst>(BB->getTerminator()))
-      return true;
-  return false;
 }
 
 /// Check if unrolling created a situation where we need to insert phi nodes to
@@ -344,7 +337,7 @@ LoopUnrollResult llvm::UnrollLoop(
     bool AllowExpensiveTripCount, bool PreserveCondBr, bool PreserveOnlyFirst,
     unsigned TripMultiple, unsigned PeelCount, bool UnrollRemainder,
     LoopInfo *LI, ScalarEvolution *SE, DominatorTree *DT, AssumptionCache *AC,
-    OptimizationRemarkEmitter *ORE, bool PreserveLCSSA) {
+    TaskInfo *TI, OptimizationRemarkEmitter *ORE, bool PreserveLCSSA) {
 
   BasicBlock *Preheader = L->getLoopPreheader();
   if (!Preheader) {
@@ -418,8 +411,12 @@ LoopUnrollResult llvm::UnrollLoop(
 
   // Are we eliminating the loop control altogether?
   bool CompletelyUnroll = Count == TripCount;
-  if (isCilkFor(L) && !CompletelyUnroll)
+
+  // Disallow partial unrolling of Tapir loops.
+  // FIXME: Allow partial unrolling of a Tapir loop to produce a new Tapir loop.
+  if (getTaskIfTapirLoop(L, TI) && !CompletelyUnroll)
     return LoopUnrollResult::Unmodified;
+
   SmallVector<BasicBlock *, 4> ExitBlocks;
   L->getExitBlocks(ExitBlocks);
   std::vector<BasicBlock*> OriginalLoopBlocks = L->getBlocks();
@@ -886,6 +883,12 @@ LoopUnrollResult llvm::UnrollLoop(
       for (Loop *SubLoop : LoopsToSimplify)
         simplifyLoop(SubLoop, DT, LI, SE, AC, PreserveLCSSA);
     }
+
+    // Update TaskInfo manually using the updated DT.
+    if (TI)
+      // FIXME: Recalculating TaskInfo for the whole function is wasteful.
+      // Optimize this routine in the future.
+      TI->recalculate(*Header->getParent(), *DT);
   }
 
   return CompletelyUnroll ? LoopUnrollResult::FullyUnrolled

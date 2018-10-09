@@ -32,6 +32,7 @@ class LoopInfo;
 class MDNode;
 class OptimizationRemarkEmitter;
 class ScalarEvolution;
+class TaskInfo;
 
 using NewLoopsMap = SmallDenseMap<const Loop *, Loop *, 4>;
 
@@ -61,7 +62,8 @@ LoopUnrollResult UnrollLoop(Loop *L, unsigned Count, unsigned TripCount,
                             unsigned PeelCount, bool UnrollRemainder,
                             LoopInfo *LI, ScalarEvolution *SE,
                             DominatorTree *DT, AssumptionCache *AC,
-                            OptimizationRemarkEmitter *ORE, bool PreserveLCSSA);
+                            TaskInfo *TI, OptimizationRemarkEmitter *ORE,
+                            bool PreserveLCSSA);
 
 bool UnrollRuntimeLoopRemainder(Loop *L, unsigned Count,
                                 bool AllowExpensiveTripCount,
