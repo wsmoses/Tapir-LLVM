@@ -22,6 +22,7 @@
 #include "llvm/Analysis/ScalarEvolutionAliasAnalysis.h"
 #include "llvm/Analysis/ScalarEvolutionExpander.h"
 #include "llvm/Analysis/ScalarEvolutionExpressions.h"
+#include "llvm/Analysis/TapirTaskInfo.h"
 #include "llvm/Analysis/TargetTransformInfo.h"
 #include "llvm/Analysis/ValueTracking.h"
 #include "llvm/IR/Dominators.h"
@@ -1254,6 +1255,7 @@ void llvm::getLoopAnalysisUsage(AnalysisUsage &AU) {
   AU.addPreserved<SCEVAAWrapperPass>();
   AU.addRequired<ScalarEvolutionWrapperPass>();
   AU.addPreserved<ScalarEvolutionWrapperPass>();
+  AU.addRequired<TaskInfoWrapperPass>();
 }
 
 /// Manually defined generic "LoopPass" dependency initialization. This is used
@@ -1274,6 +1276,7 @@ void llvm::initializeLoopPassPass(PassRegistry &Registry) {
   INITIALIZE_PASS_DEPENDENCY(GlobalsAAWrapperPass)
   INITIALIZE_PASS_DEPENDENCY(SCEVAAWrapperPass)
   INITIALIZE_PASS_DEPENDENCY(ScalarEvolutionWrapperPass)
+  INITIALIZE_PASS_DEPENDENCY(TaskInfoWrapperPass)
 }
 
 /// \brief Find string metadata for loop
@@ -1481,6 +1484,11 @@ bool llvm::isGuaranteedToExecute(const Instruction &Inst,
   SmallVector<BasicBlock *, 8> ExitBlocks;
   CurLoop->getExitBlocks(ExitBlocks);
 
+  // As a degenerate case, if the loop is statically infinite then we haven't
+  // proven anything since there are no exit blocks.
+  if (ExitBlocks.empty())
+    return false;
+
   // Verify that the block dominates each of the exit blocks of the loop.
   for (unsigned i=0,e=ExitBlocks.size(); i<e; i++)
     if (!DT->dominates(Inst.getParent(), ExitBlocks[i])) {
@@ -1504,11 +1512,6 @@ bool llvm::isGuaranteedToExecute(const Instruction &Inst,
       if (valid) continue;
       return false;
     }
-
-  // As a degenerate case, if the loop is statically infinite then we haven't
-  // proven anything since there are no exit blocks.
-  if (ExitBlocks.empty())
-    return false;
 
   // FIXME: In general, we have to prove that the loop isn't an infinite loop.
   // See http::llvm.org/PR24078 .  (The "ExitBlocks.empty()" check above is

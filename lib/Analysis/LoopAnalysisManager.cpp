@@ -60,6 +60,7 @@ bool LoopAnalysisManagerFunctionProxy::Result::invalidate(
       Inv.invalidate<DominatorTreeAnalysis>(F, PA) ||
       Inv.invalidate<LoopAnalysis>(F, PA) ||
       Inv.invalidate<ScalarEvolutionAnalysis>(F, PA) ||
+      Inv.invalidate<TaskAnalysis>(F, PA) ||
       invalidateMemorySSAAnalysis) {
     // Note that the LoopInfo may be stale at this point, however the loop
     // objects themselves remain the only viable keys that could be in the
@@ -149,6 +150,8 @@ PreservedAnalyses llvm::getLoopPassPreservedAnalyses() {
   PA.preserve<ScalarEvolutionAnalysis>();
   // FIXME: Uncomment this when all loop passes preserve MemorySSA
   // PA.preserve<MemorySSAAnalysis>();
+  // FIXME: Uncomment this when all loop passes preserve TaskInfo
+  // PA.preserve<TaskAnalysis>();
   // FIXME: What we really want to do here is preserve an AA category, but that
   // concept doesn't exist yet.
   PA.preserve<AAManager>();

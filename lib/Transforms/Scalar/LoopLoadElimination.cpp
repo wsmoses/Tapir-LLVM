@@ -37,6 +37,7 @@
 #include "llvm/Analysis/ScalarEvolution.h"
 #include "llvm/Analysis/ScalarEvolutionExpander.h"
 #include "llvm/Analysis/ScalarEvolutionExpressions.h"
+#include "llvm/Analysis/TapirTaskInfo.h"
 #include "llvm/Analysis/TargetLibraryInfo.h"
 #include "llvm/Analysis/TargetTransformInfo.h"
 #include "llvm/IR/DataLayout.h"
@@ -662,12 +663,13 @@ PreservedAnalyses LoopLoadEliminationPass::run(Function &F,
   auto &TLI = AM.getResult<TargetLibraryAnalysis>(F);
   auto &AA = AM.getResult<AAManager>(F);
   auto &AC = AM.getResult<AssumptionAnalysis>(F);
+  auto &TI = AM.getResult<TaskAnalysis>(F);
 
   auto &LAM = AM.getResult<LoopAnalysisManagerFunctionProxy>(F).getManager();
   bool Changed = eliminateLoadsAcrossLoops(
       F, LI, DT, [&](Loop &L) -> const LoopAccessInfo & {
         LoopStandardAnalysisResults AR = {AA, AC,  DT,  LI,
-                                          SE, TLI, TTI, nullptr};
+                                          SE, TLI, TTI, TI, nullptr};
         return LAM.getResult<LoopAccessAnalysis>(L, AR);
       });
 
