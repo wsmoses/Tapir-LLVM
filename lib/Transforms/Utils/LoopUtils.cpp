@@ -1340,7 +1340,8 @@ llvm::collectChildrenInLoop(DomTreeNode *N, const Loop *CurLoop) {
 
 void llvm::deleteDeadLoop(Loop *L, DominatorTree *DT = nullptr,
                           ScalarEvolution *SE = nullptr,
-                          LoopInfo *LI = nullptr) {
+                          LoopInfo *LI = nullptr,
+                          TaskInfo *TI = nullptr) {
   assert((!DT || L->isLCSSAForm(*DT)) && "Expected LCSSA!");
   auto *Preheader = L->getLoopPreheader();
   assert(Preheader && "Preheader should exist!");
@@ -1456,6 +1457,12 @@ void llvm::deleteDeadLoop(Loop *L, DominatorTree *DT = nullptr,
     // The last step is to update LoopInfo now that we've eliminated this loop.
     LI->erase(L);
   }
+
+  if (TI && DT)
+    // Recompute task info.
+    // FIXME: Figure out a way to update task info that is less computationally
+    // wasteful.
+    TI->recalculate(*Preheader->getParent(), *DT);
 }
 
 /// Returns true if the instruction in a loop is guaranteed to execute at least

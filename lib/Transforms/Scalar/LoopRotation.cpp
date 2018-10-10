@@ -59,14 +59,16 @@ class LoopRotate {
   AssumptionCache *AC;
   DominatorTree *DT;
   ScalarEvolution *SE;
+  TaskInfo *TaskI;
   const SimplifyQuery &SQ;
 
 public:
   LoopRotate(unsigned MaxHeaderSize, LoopInfo *LI,
              const TargetTransformInfo *TTI, AssumptionCache *AC,
-             DominatorTree *DT, ScalarEvolution *SE, const SimplifyQuery &SQ)
+             DominatorTree *DT, ScalarEvolution *SE, TaskInfo *TaskI,
+             const SimplifyQuery &SQ)
       : MaxHeaderSize(MaxHeaderSize), LI(LI), TTI(TTI), AC(AC), DT(DT), SE(SE),
-        SQ(SQ) {}
+        TaskI(TaskI), SQ(SQ) {}
   bool processLoop(Loop *L);
 
 private:
@@ -218,6 +220,7 @@ bool LoopRotate::rotateLoop(Loop *L, bool SimplifiedLatch) {
 
   BasicBlock *OrigHeader = L->getHeader();
   BasicBlock *OrigLatch = L->getLoopLatch();
+  Function *ParentF = OrigHeader->getParent();
 
   BranchInst *BI = dyn_cast<BranchInst>(OrigHeader->getTerminator());
   if (!BI || BI->isUnconditional())
@@ -495,6 +498,12 @@ bool LoopRotate::rotateLoop(Loop *L, bool SimplifiedLatch) {
   // emitted code isn't too gross in this common case.
   MergeBlockIntoPredecessor(OrigHeader, DT, LI);
 
+  if (TaskI && DT)
+    // Recompute task info.
+    // FIXME: Figure out a way to update task info that is less computationally
+    // wasteful.
+    TaskI->recalculate(*ParentF, *DT);
+
   DEBUG(dbgs() << "LoopRotation: into "; L->dump());
 
   ++NumRotated;
@@ -655,7 +664,7 @@ PreservedAnalyses LoopRotatePass::run(Loop &L, LoopAnalysisManager &AM,
   const DataLayout &DL = L.getHeader()->getModule()->getDataLayout();
   const SimplifyQuery SQ = getBestSimplifyQuery(AR, DL);
   LoopRotate LR(Threshold, &AR.LI, &AR.TTI, &AR.AC, &AR.DT, &AR.SE,
-                SQ);
+                &AR.TI, SQ);
 
   bool Changed = LR.processLoop(&L);
   if (!Changed)
@@ -698,8 +707,10 @@ public:
     auto *DT = DTWP ? &DTWP->getDomTree() : nullptr;
     auto *SEWP = getAnalysisIfAvailable<ScalarEvolutionWrapperPass>();
     auto *SE = SEWP ? &SEWP->getSE() : nullptr;
+    auto *TIWP = getAnalysisIfAvailable<TaskInfoWrapperPass>();
+    auto *TI = TIWP ? &TIWP->getTaskInfo() : nullptr;
     const SimplifyQuery SQ = getBestSimplifyQuery(*this, F);
-    LoopRotate LR(MaxHeaderSize, LI, TTI, AC, DT, SE, SQ);
+    LoopRotate LR(MaxHeaderSize, LI, TTI, AC, DT, SE, TI, SQ);
     return LR.processLoop(L);
   }
 };

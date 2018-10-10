@@ -2084,6 +2084,12 @@ PreservedAnalyses SimpleLoopUnswitchPass::run(Loop &L, LoopAnalysisManager &AM,
   // in asserts builds.
   AR.DT.verifyDomTree();
 #endif
+
+  // Recompute task info.
+  // FIXME: Figure out a way to update task info that is less computationally
+  // wasteful.
+  AR.TI.recalculate(F, AR.DT);
+
   return getLoopPassPreservedAnalyses();
 }
 
