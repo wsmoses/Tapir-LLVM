@@ -40,8 +40,8 @@ PreservedAnalyses LoopRotatePass::run(Loop &L, LoopAnalysisManager &AM,
   const DataLayout &DL = L.getHeader()->getModule()->getDataLayout();
   const SimplifyQuery SQ = getBestSimplifyQuery(AR, DL);
 
-  bool Changed = LoopRotation(&L, &AR.LI, &AR.TTI, &AR.AC, &AR.DT, &AR.SE, SQ,
-                              false, Threshold, false);
+  bool Changed = LoopRotation(&L, &AR.LI, &AR.TTI, &AR.AC, &AR.DT, &AR.SE,
+                              &AR.TI, SQ, false, Threshold, false);
 
   if (!Changed)
     return PreservedAnalyses::all();
@@ -83,8 +83,10 @@ public:
     auto *DT = DTWP ? &DTWP->getDomTree() : nullptr;
     auto *SEWP = getAnalysisIfAvailable<ScalarEvolutionWrapperPass>();
     auto *SE = SEWP ? &SEWP->getSE() : nullptr;
+    auto *TIWP = getAnalysisIfAvailable<TaskInfoWrapperPass>();
+    auto *TI = TIWP ? &TIWP->getTaskInfo() : nullptr;
     const SimplifyQuery SQ = getBestSimplifyQuery(*this, F);
-    return LoopRotation(L, LI, TTI, AC, DT, SE, SQ, false, MaxHeaderSize,
+    return LoopRotation(L, LI, TTI, AC, DT, SE, TI, SQ, false, MaxHeaderSize,
                         false);
   }
 };
