@@ -119,8 +119,6 @@ void initializeDelinearizationPass(PassRegistry&);
 void initializeDemandedBitsWrapperPassPass(PassRegistry&);
 void initializeDependenceAnalysisPass(PassRegistry&);
 void initializeDependenceAnalysisWrapperPassPass(PassRegistry&);
-void initializeDetachSSAPrinterLegacyPassPass(PassRegistry&);
-void initializeDetachSSAWrapperPassPass(PassRegistry&);
 void initializeDetectDeadLanesPass(PassRegistry&);
 void initializeDivergenceAnalysisPass(PassRegistry&);
 void initializeDivRemPairsLegacyPassPass(PassRegistry&);
