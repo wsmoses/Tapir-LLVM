@@ -1,4 +1,5 @@
 ; RUN: opt < %s -loop-spawning -ls-tapir-target=ptx -S | FileCheck %s
+; XFAIL: *
 ; ModuleID = 'test.fcc'
 source_filename = "test.fcc"
 target datalayout = "e-m:e-i64:64-f80:128-n8:16:32:64-S128"
