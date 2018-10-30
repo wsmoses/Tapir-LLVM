@@ -176,10 +176,10 @@ bool llvm::MoveStaticAllocasInBlock(
 /// returns a pointer to the branch instruction that replaces it.
 ///
 BranchInst *llvm::SerializeDetachedCFG(DetachInst *DI, DominatorTree *DT) {
-  //TODO allow to work without dominatortree or code workaround
+  //TODO allow to work without dominatortree orThis is an interesb                                                                                                                                                                                                                                        code workaround
   //assert(DT && "Requires DominatorTree (could remove by fixing later TODO)");
-  
-  // Get the parent of the detach instruction.
+
+  // Get the parent of thlse detach instruction.
   BasicBlock *Detacher = DI->getParent();
   // Get the detached block and continuation of this detach.
   BasicBlock *Detached = DI->getDetached();
@@ -234,12 +234,17 @@ BranchInst *llvm::SerializeDetachedCFG(DetachInst *DI, DominatorTree *DT) {
   // Replace the new detach with a branch to the detached CFG.
   BranchInst *ReplacementBr = BranchInst::Create(Detached, DI);
   ReplacementBr->setDebugLoc(DI->getDebugLoc());
+  auto syncregion = DI->getSyncRegion();
   DI->eraseFromParent();
 
   // Update the dominator tree.
   if (DT)
     if (DT->dominates(Detacher, Continuation) && 1 == ReattachesFound)
       DT->changeImmediateDominator(Continuation, SingleReattacher);
+
+  if (syncregion->getNumUses() == 0) {
+    cast<Instruction>(syncregion)->eraseFromParent();
+  }
 
   return ReplacementBr;
 }
@@ -322,147 +327,6 @@ bool llvm::isCriticalContinueEdge(const TerminatorInst *TI, unsigned SuccNum) {
   return false;
 }
 
-llvm::LoopSpawningHints::LoopSpawningHints(const Loop *L)
-    : Strategy("spawn.strategy", ST_SEQ, HK_STRATEGY),
-      Grainsize("grainsize", 0, HK_GRAINSIZE),
-      TheLoop(L) {
-  // Populate values with existing loop metadata.
-  getHintsFromMetadata();
-}
-
-LoopSpawningHints::SpawningStrategy
-llvm::LoopSpawningHints::getStrategy() const {
-  return (SpawningStrategy)Strategy.Value;
-}
-
-unsigned llvm::LoopSpawningHints::getGrainsize() const {
-  return Grainsize.Value;
-}
-
-void llvm::LoopSpawningHints::getHintsFromMetadata() {
-  MDNode *LoopID = TheLoop->getLoopID();
-  if (!LoopID)
-    return;
-
-  // First operand should refer to the loop id itself.
-  assert(LoopID->getNumOperands() > 0 && "requires at least one operand");
-  assert(LoopID->getOperand(0) == LoopID && "invalid loop id");
-
-  for (unsigned i = 1, ie = LoopID->getNumOperands(); i < ie; ++i) {
-    const MDString *S = nullptr;
-    SmallVector<Metadata *, 4> Args;
-
-    // The expected hint is either a MDString or a MDNode with the first
-    // operand a MDString.
-    if (const MDNode *MD = dyn_cast<MDNode>(LoopID->getOperand(i))) {
-      if (!MD || MD->getNumOperands() == 0)
-        continue;
-      S = dyn_cast<MDString>(MD->getOperand(0));
-      for (unsigned i = 1, ie = MD->getNumOperands(); i < ie; ++i)
-        Args.push_back(MD->getOperand(i));
-    } else {
-      S = dyn_cast<MDString>(LoopID->getOperand(i));
-      assert(Args.size() == 0 && "too many arguments for MDString");
-    }
-
-    if (!S)
-      continue;
-
-    // Check if the hint starts with the loop metadata prefix.
-    StringRef Name = S->getString();
-    if (Args.size() == 1)
-      setHint(Name, Args[0]);
-  }
-}
-
-/// Checks string hint with one operand and set value if valid.
-void llvm::LoopSpawningHints::setHint(StringRef Name, Metadata *Arg) {
-  if (!Name.startswith(Prefix()))
-    return;
-  Name = Name.substr(Prefix().size(), StringRef::npos);
-
-  const ConstantInt *C = mdconst::dyn_extract<ConstantInt>(Arg);
-  if (!C)
-    return;
-  unsigned Val = C->getZExtValue();
-
-  Hint *Hints[] = {&Strategy, &Grainsize};
-  for (auto H : Hints) {
-    if (Name == H->Name) {
-      if (H->validate(Val))
-        H->Value = Val;
-      else
-        DEBUG(dbgs() << " ignoring invalid hint '" <<
-              Name << "'\n");
-      break;
-    }
-  }
-}
-
-/// Create a new hint from name / value pair.
-MDNode *llvm::LoopSpawningHints::createHintMetadata(StringRef Name,
-                                                    unsigned V) const {
-  LLVMContext &Context = TheLoop->getHeader()->getContext();
-  Metadata *MDs[] = {MDString::get(Context, Name),
-                     ConstantAsMetadata::get(
-                         ConstantInt::get(Type::getInt32Ty(Context), V))};
-  return MDNode::get(Context, MDs);
-}
-
-/// Matches metadata with hint name.
-bool llvm::LoopSpawningHints::matchesHintMetadataName(
-    MDNode *Node, ArrayRef<Hint> HintTypes) {
-  MDString *Name = dyn_cast<MDString>(Node->getOperand(0));
-  if (!Name)
-    return false;
-
-  for (auto H : HintTypes)
-    if (Name->getString().endswith(H.Name))
-      return true;
-  return false;
-}
-
-/// Sets current hints into loop metadata, keeping other values intact.
-void llvm::LoopSpawningHints::writeHintsToMetadata(ArrayRef<Hint> HintTypes) {
-  if (HintTypes.size() == 0)
-    return;
-
-  // Reserve the first element to LoopID (see below).
-  SmallVector<Metadata *, 4> MDs(1);
-  // If the loop already has metadata, then ignore the existing operands.
-  MDNode *LoopID = TheLoop->getLoopID();
-  if (LoopID) {
-    for (unsigned i = 1, ie = LoopID->getNumOperands(); i < ie; ++i) {
-      MDNode *Node = cast<MDNode>(LoopID->getOperand(i));
-      // If node in update list, ignore old value.
-      if (!matchesHintMetadataName(Node, HintTypes))
-        MDs.push_back(Node);
-    }
-  }
-
-  // Now, add the missing hints.
-  for (auto H : HintTypes)
-    MDs.push_back(createHintMetadata(Twine(Prefix(), H.Name).str(), H.Value));
-
-  // Replace current metadata node with new one.
-  LLVMContext &Context = TheLoop->getHeader()->getContext();
-  MDNode *NewLoopID = MDNode::get(Context, MDs);
-  // Set operand 0 to refer to the loop id itself.
-  NewLoopID->replaceOperandWith(0, NewLoopID);
-
-  TheLoop->setLoopID(NewLoopID);
-}
-
-bool llvm::LoopSpawningHints::Hint::validate(unsigned Val) {
-  switch (Kind) {
-  case HK_STRATEGY:
-    return (Val < ST_END);
-  case HK_GRAINSIZE:
-    return true;
-  }
-  return false;
-}
-
 /// Checks if this loop is a Tapir loop.  Right now we check that the loop is
 /// in a canonical form:
 /// 1) The header detaches the body.
@@ -535,14 +399,6 @@ bool llvm::isCanonicalTapirLoop(const Loop *L, bool print) {
   }
 
   return true;
-}
-
-bool llvm::isDACFor(Loop* L) {
-  // TODO: Use a more precise detection of cilk_for loops.
-  for (BasicBlock* BB : L->blocks())
-    if (isa<DetachInst>(BB->getTerminator()))
-      return LoopSpawningHints(L).getStrategy() == LoopSpawningHints::ST_DAC;
-  return false;
 }
 
 /// canDetach - Return true if the given function can perform a detach, false

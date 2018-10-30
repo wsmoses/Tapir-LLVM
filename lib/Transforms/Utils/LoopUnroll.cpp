@@ -32,13 +32,13 @@
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/Transforms/Tapir/TapirUtils.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include "llvm/Transforms/Utils/Cloning.h"
 #include "llvm/Transforms/Utils/Local.h"
 #include "llvm/Transforms/Utils/LoopSimplify.h"
 #include "llvm/Transforms/Utils/LoopUtils.h"
 #include "llvm/Transforms/Utils/SimplifyIndVar.h"
-#include "llvm/Transforms/Utils/TapirUtils.h"
 #include "llvm/Transforms/Utils/UnrollLoop.h"
 using namespace llvm;
 
@@ -372,7 +372,7 @@ bool llvm::UnrollLoop(Loop *L, unsigned Count, unsigned TripCount, bool Force,
 
   // Are we eliminating the loop control altogether?
   bool CompletelyUnroll = Count == TripCount;
-  if (isDACFor(L) && !CompletelyUnroll) return false;
+  if (isBackendParallelFor(L) && !CompletelyUnroll) return false;
   SmallVector<BasicBlock *, 4> ExitBlocks;
   L->getExitBlocks(ExitBlocks);
   std::vector<BasicBlock*> OriginalLoopBlocks = L->getBlocks();

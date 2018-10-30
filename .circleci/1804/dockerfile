@@ -1,0 +1,4 @@
+FROM library/ubuntu:18.04
+RUN apt-get update
+RUN apt-get install -y --no-install-recommends cmake build-essential ssh git python binutils-gold binutils-dev libsnappy-dev
+

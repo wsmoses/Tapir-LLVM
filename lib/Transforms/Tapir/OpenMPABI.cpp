@@ -488,19 +488,15 @@ Function* formatFunctionToTask(Function* extracted, CallInst* cal) {
   IRBuilder<> CallerIRBuilder(cal);
   auto *SharedsTySize =
       CallerIRBuilder.getInt64(DL.getTypeAllocSize(SharedsTy));
-  auto *KmpTaskTTy = createKmpTaskTTy(C);
-  auto *KmpTaskTWithPrivatesTy = createKmpTaskTWithPrivatesTy(SharedsTy);//KmpTaskTTy);
+  auto *KmpTaskTWithPrivatesTy = createKmpTaskTWithPrivatesTy(SharedsTy);
   auto *KmpTaskTWithPrivatesPtrTy =
       PointerType::getUnqual(KmpTaskTWithPrivatesTy);
   auto *KmpTaskTWithPrivatesTySize =
       CallerIRBuilder.getInt64(DL.getTypeAllocSize(KmpTaskTWithPrivatesTy));
 
   auto *VoidTy = Type::getVoidTy(C);
-  auto *Int8PtrTy = Type::getInt8PtrTy(C);
   auto *Int32Ty = Type::getInt32Ty(C);
 
-  auto *CopyFnTy = FunctionType::get(VoidTy, {Int8PtrTy}, true);
-  auto *CopyFnPtrTy = PointerType::getUnqual(CopyFnTy);
 
   auto *OutlinedFnTy = FunctionType::get(
       VoidTy,
@@ -593,12 +589,10 @@ Function *llvm::OpenMPABI::createDetach(DetachInst &detach,
                                         ValueToValueMapTy &DetachCtxToStackFrame,
                                         DominatorTree &DT, AssumptionCache &AC) {
   BasicBlock *detB = detach.getParent();
-  Function &F = *(detB->getParent());
 
   BasicBlock *Spawned  = detach.getDetached();
   BasicBlock *Continue = detach.getContinue();
 
-  Module *M = F.getParent();
 
   CallInst *cal = nullptr;
   Function *extracted = extractDetachBodyToFunction(detach, DT, AC, &cal);
@@ -676,7 +670,7 @@ void llvm::OpenMPABI::postProcessFunction(Function &F) {
     }
   }
 
-  for(int i=1; i<VisitedVec.size(); i++) {
+  for(unsigned int i=1; i<VisitedVec.size(); i++) {
       for (auto P : predecessors(VisitedVec[i])) {
         if (Visited.count(P) == 0) {
           std::swap(VisitedVec[0], VisitedVec[i]);
@@ -803,6 +797,8 @@ void llvm::OpenMPABI::postProcessFunction(Function &F) {
       OpenMPRuntimeFunction::OMPRTL__kmpc_fork_call, F.getParent());
   // Replace the old call with __kmpc_fork_call
   auto *ForkCall = emitRuntimeCall(ForkRTFn, OMPRegionFnArgs, "", b);
+  assert(ForkCall != 0 && "Failed to emit omp runtime call");
+  
   ExtractedFnCI->eraseFromParent();
   RegionFn->eraseFromParent();
 }
@@ -810,5 +806,10 @@ void llvm::OpenMPABI::postProcessFunction(Function &F) {
 void llvm::OpenMPABI::postProcessHelper(Function &F) {}
 
 bool llvm::OpenMPABI::processMain(Function &F) { 
+  return false; 
+}
+
+bool llvm::OpenMPABI::processLoop(LoopSpawningHints LSH, LoopInfo &LI, ScalarEvolution &SE, DominatorTree &DT,
+                                  AssumptionCache &AC, OptimizationRemarkEmitter &ORE) { 
   return false; 
 }

@@ -887,16 +887,16 @@ _ZNSt12_Vector_baseISt5tupleIJidiEESaIS1_EE13_M_deallocateEPS1_m.exit64: ; preds
   ret void
 }
 
-; LS-LABEL: define internal fastcc void @_Z14func_with_sretidRSt6vectorI6paramsSaIS0_EE_pfor.detach.ls(%"class.std::vector.0"* noalias sret align 8 %agg.result.ls, i64 %indvars.iv395.start.ls, i64 %end.ls, i64 %.ls,
+; LS-LABEL: define internal fastcc void @_Z14func_with_sretidRSt6vectorI6paramsSaIS0_EE_pfor.detach.ls(%"class.std::vector.0"* noalias sret align 8 %agg.result.ls,
 ; LS: {{^.split:}}
-; LS-NEXT: call fastcc void @_Z14func_with_sretidRSt6vectorI6paramsSaIS0_EE_pfor.detach.ls(%"class.std::vector.0"* %agg.result.ls, i64 %indvars.iv395.ls.dac, i64 %miditer, i64 %.ls,
+; LS-NEXT: call fastcc void @_Z14func_with_sretidRSt6vectorI6paramsSaIS0_EE_pfor.detach.ls(%"class.std::vector.0"* %agg.result.ls,
 
 ; LS: {{^pfor.detach30.preheader.ls:}}
 ; LS: call fastcc void @_Z14func_with_sretidRSt6vectorI6paramsSaIS0_EE_pfor.detach.ls_pfor.detach30.ls.ls(%"class.std::vector.0"* %agg.result.ls, i64 0,
 
-; LS-LABEL: define internal fastcc void @_Z14func_with_sretidRSt6vectorI6paramsSaIS0_EE_pfor.detach.ls_pfor.detach30.ls.ls(%"class.std::vector.0"* noalias sret align 8 %agg.result.ls.ls, i64 %indvars.iv391.ls.start.ls, i64 %end.ls, i64 %.ls,
+; LS-LABEL: define internal fastcc void @_Z14func_with_sretidRSt6vectorI6paramsSaIS0_EE_pfor.detach.ls_pfor.detach30.ls.ls(%"class.std::vector.0"* noalias sret align 8 %agg.result.ls.ls,
 ; LS: {{^.split:}}
-; LS: call fastcc void @_Z14func_with_sretidRSt6vectorI6paramsSaIS0_EE_pfor.detach.ls_pfor.detach30.ls.ls(%"class.std::vector.0"* %agg.result.ls.ls, i64 %indvars.iv391.ls.ls.dac, i64 %miditer, i64 %.ls,
+; LS: call fastcc void @_Z14func_with_sretidRSt6vectorI6paramsSaIS0_EE_pfor.detach.ls_pfor.detach30.ls.ls(%"class.std::vector.0"* %agg.result.ls.ls,
 
 ; TT-LABEL: define internal fastcc void @_Z14func_with_sretidRSt6vectorI6paramsSaIS0_EE_pfor.body.cilk(%"class.std::vector.0"* noalias sret align 8 %agg.result.cilk,
 ; TT: {{^pfor.detach30.cilk.split:}}

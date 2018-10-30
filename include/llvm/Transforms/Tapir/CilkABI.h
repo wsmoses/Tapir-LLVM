@@ -41,37 +41,10 @@
 
 namespace llvm {
 
-/// CilkABILoopSpawning uses the Cilk Plus ABI to handle Tapir loops.
-class CilkABILoopSpawning : public LoopOutline {
-public:
-  CilkABILoopSpawning(Loop *OrigLoop, ScalarEvolution &SE,
-                      LoopInfo *LI, DominatorTree *DT,
-                      AssumptionCache *AC,
-                      OptimizationRemarkEmitter &ORE)
-      : LoopOutline(OrigLoop, SE, LI, DT, AC, ORE)
-  {}
-
-  bool processLoop();
-
-  virtual ~CilkABILoopSpawning() {}
-
-protected:
-  // PHINode* canonicalizeIVs(Type *Ty);
-  Value* canonicalizeLoopLatch(PHINode *IV, Value *Limit);
-
-// private:
-//   /// Report an analysis message to assist the user in diagnosing loops that are
-//   /// not transformed.  These are handled as LoopAccessReport rather than
-//   /// VectorizationReport because the << operator of LoopSpawningReport returns
-//   /// LoopAccessReport.
-//   void emitAnalysis(const LoopAccessReport &Message) const {
-//     emitAnalysisDiag(OrigLoop, *ORE, Message);
-//   }
-};
-
 class CilkABI : public TapirTarget {
+  const bool _useRuntimeForLoop;
 public:
-  CilkABI();
+  CilkABI(bool useRuntimeForLoop);
   Value *GetOrCreateWorker8(Function &F) override final;
   void createSync(SyncInst &inst, ValueToValueMapTy &DetachCtxToStackFrame)
     override final;
@@ -83,6 +56,8 @@ public:
   void postProcessFunction(Function &F) override final;
   void postProcessHelper(Function &F) override final;
   bool processMain(Function &F) override final;
+  bool processLoop(LoopSpawningHints LSH, LoopInfo &LI, ScalarEvolution &SE, DominatorTree &DT,
+                   AssumptionCache &AC, OptimizationRemarkEmitter &ORE) override final;
 
   struct __cilkrts_pedigree {};
   struct __cilkrts_stack_frame {};

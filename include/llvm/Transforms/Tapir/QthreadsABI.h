@@ -56,6 +56,8 @@ public:
   void postProcessFunction(Function &F) override final;
   void postProcessHelper(Function &F) override final;
   bool processMain(Function &F) override final;
+  bool processLoop(LoopSpawningHints LSH, LoopInfo &LI, ScalarEvolution &SE, DominatorTree &DT,
+                   AssumptionCache &AC, OptimizationRemarkEmitter &ORE) override final;
 };
 
 }  // end of llvm namespace

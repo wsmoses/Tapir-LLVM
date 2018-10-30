@@ -49,90 +49,6 @@ BasicBlock *GetDetachedCtx(BasicBlock *BB);
 /// - even after ignoring all reattach edges.
 bool isCriticalContinueEdge(const TerminatorInst *TI, unsigned SuccNum);
 
-/// Utility class for getting and setting loop spawning hints in the form
-/// of loop metadata.
-/// This class keeps a number of loop annotations locally (as member variables)
-/// and can, upon request, write them back as metadata on the loop. It will
-/// initially scan the loop for existing metadata, and will update the local
-/// values based on information in the loop.
-class LoopSpawningHints {
-public:
-  enum SpawningStrategy {
-    ST_SEQ,
-    ST_DAC,
-    ST_END,
-  };
-
-private:
-  enum HintKind { HK_STRATEGY, HK_GRAINSIZE };
-
-  /// Hint - associates name and validation with the hint value.
-  struct Hint {
-    const char *Name;
-    unsigned Value; // This may have to change for non-numeric values.
-    HintKind Kind;
-
-    Hint(const char *Name, unsigned Value, HintKind Kind)
-        : Name(Name), Value(Value), Kind(Kind) {}
-
-    bool validate(unsigned Val);
-  };
-
-  /// Spawning strategy
-  Hint Strategy;
-  /// Grainsize
-  Hint Grainsize;
-
-  /// Return the loop metadata prefix.
-  static inline StringRef Prefix() { return "tapir.loop."; }
-
-public:
-  static inline std::string printStrategy(enum SpawningStrategy Strat) {
-    switch(Strat) {
-    case LoopSpawningHints::ST_SEQ:
-      return "Spawn iterations sequentially";
-    case LoopSpawningHints::ST_DAC:
-      return "Use divide-and-conquer";
-    case LoopSpawningHints::ST_END:
-    default:
-      return "Unknown";
-    }
-  }
-
-  LoopSpawningHints(const Loop *L);
-
-  // /// Dumps all the hint information.
-  // std::string emitRemark() const {
-  //   LoopSpawningReport R;
-  //   R << "Strategy = " << printStrategy(getStrategy());
-
-  //   return R.str();
-  // }
-
-  SpawningStrategy getStrategy() const;
-
-  unsigned getGrainsize() const;
-
-private:
-  /// Find hints specified in the loop metadata and update local values.
-  void getHintsFromMetadata();
-
-  /// Checks string hint with one operand and set value if valid.
-  void setHint(StringRef Name, Metadata *Arg);
-
-  /// Create a new hint from name / value pair.
-  MDNode *createHintMetadata(StringRef Name, unsigned V) const;
-
-  /// Matches metadata with hint name.
-  bool matchesHintMetadataName(MDNode *Node, ArrayRef<Hint> HintTypes);
-
-  /// Sets current hints into loop metadata, keeping other values intact.
-  void writeHintsToMetadata(ArrayRef<Hint> HintTypes);
-
-  /// The loop these hints belong to.
-  const Loop *TheLoop;
-};
-
 /// Checks if this loop is a Tapir loop.  Right now we check that the loop is
 /// in a canonical form:
 /// 1) The header detaches the body.
@@ -141,9 +57,6 @@ private:
 ///    detached CFG).
 /// 4) The loop only branches to the exit block from the header or the latch.
 bool isCanonicalTapirLoop(const Loop *L, bool print = false);
-
-//! Identify if a loop could be a DAC loop
-bool isDACFor(Loop* L);
 
 /// canDetach - Return true if the given function can perform a detach, false
 /// otherwise.

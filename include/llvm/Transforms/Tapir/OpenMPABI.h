@@ -60,17 +60,19 @@ enum OpenMPSchedType {
 
 class OpenMPABI : public TapirTarget {
 public:
-OpenMPABI();
-Value *GetOrCreateWorker8(Function &F) override final;
-void createSync(SyncInst &inst, ValueToValueMapTy &DetachCtxToStackFrame) override final;
+  OpenMPABI();
+  Value *GetOrCreateWorker8(Function &F) override final;
+  void createSync(SyncInst &inst, ValueToValueMapTy &DetachCtxToStackFrame) override final;
 
-Function *createDetach(DetachInst &Detach,
-                       ValueToValueMapTy &DetachCtxToStackFrame,
-                       DominatorTree &DT, AssumptionCache &AC) override final;
-void preProcessFunction(Function &F) override final;
-void postProcessFunction(Function &F) override final;
-void postProcessHelper(Function &F) override final;
-bool processMain(Function &F) override final;
+  Function *createDetach(DetachInst &Detach,
+                         ValueToValueMapTy &DetachCtxToStackFrame,
+                         DominatorTree &DT, AssumptionCache &AC) override final;
+  void preProcessFunction(Function &F) override final;
+  void postProcessFunction(Function &F) override final;
+  void postProcessHelper(Function &F) override final;
+  bool processMain(Function &F) override final;
+  bool processLoop(LoopSpawningHints LSH, LoopInfo &LI, ScalarEvolution &SE, DominatorTree &DT,
+                   AssumptionCache &AC, OptimizationRemarkEmitter &ORE) override final;
 };
 
 }  // end of llvm namespace

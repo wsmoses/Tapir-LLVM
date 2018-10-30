@@ -30,11 +30,16 @@ static cl::opt<TapirTargetType> ClTapirTarget(
                clEnumValN(TapirTargetType::Serial,
                           "serial", "Serial code"),
                clEnumValN(TapirTargetType::Cilk,
-                          "cilk", "Cilk Plus"),
+                          "cilk", "Cilk Plus (with new loop backend)"),
+               clEnumValN(TapirTargetType::CilkLegacy,
+                          "cilklegacy", "Cilk Plus (with ABI loop backend)"),
                clEnumValN(TapirTargetType::Qthreads,
                           "qthreads", "Qthreads"),
                clEnumValN(TapirTargetType::OpenMP,
-                          "openmp", "OpenMP")));
+                          "openmp", "OpenMP"),
+               clEnumValN(TapirTargetType::PTX,
+                          "ptx", "PTX")
+               ));
 
 namespace {
 
