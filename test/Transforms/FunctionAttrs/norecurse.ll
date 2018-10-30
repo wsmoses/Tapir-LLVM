@@ -30,7 +30,7 @@ define i32 @extern() {
 }
 declare i32 @k() readnone
 
-; CHECK: define void @intrinsic(i8* nocapture %dest, i8* nocapture readonly %src, i32 %len) {
+; CHECK: define void @intrinsic(i8* nocapture %dest, i8* nocapture readonly %src, i32 %len) #2 {
 define void @intrinsic(i8* %dest, i8* %src, i32 %len) {
   call void @llvm.memcpy.p0i8.p0i8.i32(i8* %dest, i8* %src, i32 %len, i32 1, i1 false)
   ret void
@@ -63,3 +63,4 @@ define void @p() norecurse {
 
 ; CHECK: attributes #0 = { norecurse readnone }
 ; CHECK: attributes #1 = { readnone }
+; CHECK: attributes #2 = { argmemonly }

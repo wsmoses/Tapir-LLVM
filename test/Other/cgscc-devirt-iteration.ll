@@ -104,7 +104,7 @@ declare i8* @memcpy(i8*, i8*, i64)
 ; creates the memcpy intrinsic call, and we rely on the count of indirect calls
 ; decreasing and the count of direct calls increasing.
 define void @test3(i8* %src, i8* %dest, i64 %size) {
-; CHECK-NOT: Function Attrs
+; BEFORE-NOT: Function Attrs
 ; BEFORE: define void @test3(i8* %src, i8* %dest, i64 %size)
 ; AFTER: define void @test3(i8* nocapture readonly %src, i8* nocapture %dest, i64 %size)
   %fptr = alloca i8* (i8*, i8*, i64)*

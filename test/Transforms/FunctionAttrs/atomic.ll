@@ -20,4 +20,4 @@ entry:
 }
 
 ; CHECK: attributes #0 = { norecurse readnone ssp uwtable }
-; CHECK: attributes #1 = { norecurse ssp uwtable }
+; CHECK: attributes #1 = { argmemonly norecurse ssp uwtable }
