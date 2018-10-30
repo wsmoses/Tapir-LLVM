@@ -237,6 +237,7 @@ public:
 
   void getAnalysisUsage(AnalysisUsage &AU) const override {
     getLoopAnalysisUsage(AU);
+    AU.addPreserved<TaskInfoWrapperPass>();
   }
 };
 }

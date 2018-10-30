@@ -635,6 +635,8 @@ public:
     DominatorTree &DT = getAnalysis<DominatorTreeWrapperPass>().getDomTree();
     LoopInfo &LI = getAnalysis<LoopInfoWrapperPass>().getLoopInfo();
     ScalarEvolution &SE = getAnalysis<ScalarEvolutionWrapperPass>().getSE();
+    auto *TIWP = getAnalysisIfAvailable<TaskInfoWrapperPass>();
+    TaskInfo *TI = TIWP ? &TIWP->getTaskInfo() : nullptr;
     Optional<MemorySSAUpdater> MSSAU;
     if (EnableMSSALoopDependency) {
       MemorySSA *MSSA = &getAnalysis<MemorySSAWrapperPass>().getMSSA();
@@ -642,8 +644,15 @@ public:
       if (VerifyMemorySSA)
         MSSA->verifyMemorySSA();
     }
-    return simplifyLoopCFG(*L, DT, LI, SE,
-                           MSSAU.hasValue() ? MSSAU.getPointer() : nullptr);
+    bool Changed =
+      simplifyLoopCFG(*L, DT, LI, SE,
+                      MSSAU.hasValue() ? MSSAU.getPointer() : nullptr);
+    if (TI && Changed)
+      // Recompute task info.
+      // FIXME: Figure out a way to update task info that is less
+      // computationally wasteful.
+      TI->recalculate(*L->getHeader()->getParent(), DT);
+    return Changed;
   }
 
   void getAnalysisUsage(AnalysisUsage &AU) const override {
@@ -653,6 +662,7 @@ public:
     }
     AU.addPreserved<DependenceAnalysisWrapperPass>();
     getLoopAnalysisUsage(AU);
+    AU.addPreserved<TaskInfoWrapperPass>();
   }
 };
 }
