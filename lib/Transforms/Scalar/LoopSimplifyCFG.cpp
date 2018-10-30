@@ -95,12 +95,21 @@ public:
     DominatorTree &DT = getAnalysis<DominatorTreeWrapperPass>().getDomTree();
     LoopInfo &LI = getAnalysis<LoopInfoWrapperPass>().getLoopInfo();
     ScalarEvolution &SE = getAnalysis<ScalarEvolutionWrapperPass>().getSE();
-    return simplifyLoopCFG(*L, DT, LI, SE);
+    auto *TIWP = getAnalysisIfAvailable<TaskInfoWrapperPass>();
+    TaskInfo *TI = TIWP ? &TIWP->getTaskInfo() : nullptr;
+    bool Changed = simplifyLoopCFG(*L, DT, LI, SE);
+    if (TI && Changed)
+      // Recompute task info.
+      // FIXME: Figure out a way to update task info that is less
+      // computationally wasteful.
+      TI->recalculate(*L->getHeader()->getParent(), DT);
+    return Changed;
   }
 
   void getAnalysisUsage(AnalysisUsage &AU) const override {
     AU.addPreserved<DependenceAnalysisWrapperPass>();
     getLoopAnalysisUsage(AU);
+    AU.addPreserved<TaskInfoWrapperPass>();
   }
 };
 }

@@ -368,6 +368,7 @@ public:
     PA.preserve<ScalarEvolutionAnalysis>();
     // FIXME: Uncomment this when all loop passes preserve MemorySSA
     // PA.preserve<MemorySSAAnalysis>();
+    PA.preserve<TaskAnalysis>();
     // FIXME: What we really want to do here is preserve an AA category, but
     // that concept doesn't exist yet.
     PA.preserve<AAManager>();
