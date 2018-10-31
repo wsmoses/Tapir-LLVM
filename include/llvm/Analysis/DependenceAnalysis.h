@@ -530,6 +530,7 @@ template <typename T> class ArrayRef;
                                 const Instruction *Dst);
 
     unsigned CommonLevels, SrcLevels, MaxLevels;
+    const Loop *CommonLoop;
 
     /// mapSrcLoop - Given one of the loops containing the source, return
     /// its level index in our numbering scheme.
@@ -542,6 +543,11 @@ template <typename T> class ArrayRef;
     /// isLoopInvariant - Returns true if Expression is loop invariant
     /// in LoopNest.
     bool isLoopInvariant(const SCEV *Expression, const Loop *LoopNest) const;
+
+    /// isTrueAtLoopEntry - Returns true if the predicate LHS `Pred` RHS is true
+    /// at entry of L.
+    bool isTrueAtLoopEntry(const Loop *L, ICmpInst::Predicate Pred,
+                           const SCEV *LHS, const SCEV *RHS) const;
 
     /// Makes sure all subscript pairs share the same integer type by
     /// sign-extending as necessary.
@@ -579,7 +585,8 @@ template <typename T> class ArrayRef;
     /// extensions and symbolics.
     bool isKnownPredicate(ICmpInst::Predicate Pred,
                           const SCEV *X,
-                          const SCEV *Y) const;
+                          const SCEV *Y,
+                          const Loop *L = nullptr) const;
 
     /// collectUpperBound - All subscripts are the same type (on my machine,
     /// an i64). The loop bound may be a smaller type. collectUpperBound

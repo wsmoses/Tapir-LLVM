@@ -731,6 +731,7 @@ void DependenceInfo::establishNestingLevels(const Instruction *Src,
   }
   CommonLevels = SrcLevel;
   MaxLevels -= CommonLevels;
+  CommonLoop = SrcLoop;
 }
 
 
@@ -938,7 +939,7 @@ DependenceInfo::classifyPair(const SCEV *Src, const Loop *SrcLoopNest,
 // we try simple subtraction, which seems to help in some cases
 // involving symbolics.
 bool DependenceInfo::isKnownPredicate(ICmpInst::Predicate Pred, const SCEV *X,
-                                      const SCEV *Y) const {
+                                      const SCEV *Y, const Loop *L) const {
   if (Pred == CmpInst::ICMP_EQ ||
       Pred == CmpInst::ICMP_NE) {
     if ((isa<SCEVSignExtendExpr>(X) &&
@@ -956,6 +957,9 @@ bool DependenceInfo::isKnownPredicate(ICmpInst::Predicate Pred, const SCEV *X,
     }
   }
   if (SE->isKnownPredicate(Pred, X, Y))
+    return true;
+  if (L && isLoopInvariant(X, L) && isLoopInvariant(Y, L) &&
+      isTrueAtLoopEntry(L, Pred, X, Y))
     return true;
   // If SE->isKnownPredicate can't prove the condition,
   // we try the brute-force approach of subtracting
@@ -2634,10 +2638,10 @@ bool DependenceInfo::testBounds(unsigned char DirKind, unsigned Level,
                                 BoundInfo *Bound, const SCEV *Delta) const {
   Bound[Level].Direction = DirKind;
   if (const SCEV *LowerBound = getLowerBound(Bound))
-    if (isKnownPredicate(CmpInst::ICMP_SGT, LowerBound, Delta))
+    if (isKnownPredicate(CmpInst::ICMP_SGT, LowerBound, Delta, CommonLoop))
       return false;
   if (const SCEV *UpperBound = getUpperBound(Bound))
-    if (isKnownPredicate(CmpInst::ICMP_SGT, Delta, UpperBound))
+    if (isKnownPredicate(CmpInst::ICMP_SGT, Delta, UpperBound, CommonLoop))
       return false;
   return true;
 }
@@ -2672,10 +2676,12 @@ void DependenceInfo::findBoundsALL(CoefficientInfo *A, CoefficientInfo *B,
   }
   else {
     // If the difference is 0, we won't need to know the number of iterations.
-    if (isKnownPredicate(CmpInst::ICMP_EQ, A[K].NegPart, B[K].PosPart))
+    if (isKnownPredicate(CmpInst::ICMP_EQ, A[K].NegPart, B[K].PosPart,
+                         CommonLoop))
       Bound[K].Lower[Dependence::DVEntry::ALL] =
           SE->getZero(A[K].Coeff->getType());
-    if (isKnownPredicate(CmpInst::ICMP_EQ, A[K].PosPart, B[K].NegPart))
+    if (isKnownPredicate(CmpInst::ICMP_EQ, A[K].PosPart, B[K].NegPart,
+                         CommonLoop))
       Bound[K].Upper[Dependence::DVEntry::ALL] =
           SE->getZero(A[K].Coeff->getType());
   }
@@ -2810,14 +2816,43 @@ void DependenceInfo::findBoundsGT(CoefficientInfo *A, CoefficientInfo *B,
 }
 
 
+// Returns true if predicate LHS `Pred` RHS is true at entry of L.
+bool DependenceInfo::isTrueAtLoopEntry(const Loop *L, ICmpInst::Predicate Pred,
+                                       const SCEV *LHS, const SCEV *RHS) const {
+  return SE->isLoopEntryGuardedByCond(L, Pred, LHS, RHS);
+}
+
+
 // X^+ = max(X, 0)
 const SCEV *DependenceInfo::getPositivePart(const SCEV *X) const {
+  if (CommonLoop) {
+    const SCEV *Zero = SE->getZero(X->getType());
+    if (!SE->isLoopInvariant(X, CommonLoop))
+      return SE->getSMaxExpr(X, SE->getZero(X->getType()));
+    if (isTrueAtLoopEntry(CommonLoop, CmpInst::ICMP_SGT, X, Zero) ||
+        isTrueAtLoopEntry(CommonLoop, CmpInst::ICMP_SGT,
+                          Zero, SE->getNegativeSCEV(X)))
+      return X;
+    if (isTrueAtLoopEntry(CommonLoop, CmpInst::ICMP_SGE, Zero, X))
+      return Zero;
+  }
   return SE->getSMaxExpr(X, SE->getZero(X->getType()));
 }
 
 
 // X^- = min(X, 0)
 const SCEV *DependenceInfo::getNegativePart(const SCEV *X) const {
+  if (CommonLoop) {
+    const SCEV *Zero = SE->getZero(X->getType());
+    if (!SE->isLoopInvariant(X, CommonLoop))
+      return SE->getSMinExpr(X, SE->getZero(X->getType()));
+    if (isTrueAtLoopEntry(CommonLoop, CmpInst::ICMP_SGT, Zero, X) ||
+        isTrueAtLoopEntry(CommonLoop, CmpInst::ICMP_SGT,
+                          SE->getNegativeSCEV(X), Zero))
+      return X;
+    if (isTrueAtLoopEntry(CommonLoop, CmpInst::ICMP_SGE, X, Zero))
+      return Zero;
+  }
   return SE->getSMinExpr(X, SE->getZero(X->getType()));
 }
 
