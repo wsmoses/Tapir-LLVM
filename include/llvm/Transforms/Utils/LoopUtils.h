@@ -112,6 +112,7 @@ bool formLCSSARecursively(Loop &L, DominatorTree &DT, LoopInfo *LI,
 bool sinkRegion(DomTreeNode *, AliasAnalysis *, LoopInfo *, DominatorTree *,
                 TargetLibraryInfo *, TargetTransformInfo *, Loop *,
                 AliasSetTracker *, MemorySSAUpdater *, ICFLoopSafetyInfo *,
+                TaskInfo *,
                 OptimizationRemarkEmitter *ORE, bool Rhino);
 
 /// Walk the specified region of the CFG (defined by all blocks
@@ -124,7 +125,7 @@ bool sinkRegion(DomTreeNode *, AliasAnalysis *, LoopInfo *, DominatorTree *,
 /// ORE. It returns changed status.
 bool hoistRegion(DomTreeNode *, AliasAnalysis *, LoopInfo *, DominatorTree *,
                  TargetLibraryInfo *, Loop *, AliasSetTracker *,
-                 MemorySSAUpdater *, ICFLoopSafetyInfo *,
+                 MemorySSAUpdater *, ICFLoopSafetyInfo *, TaskInfo *,
                  OptimizationRemarkEmitter *ORE, bool Rhino);
 
 /// This function deletes dead loops. The caller of this function needs to
@@ -155,7 +156,7 @@ bool promoteLoopAccessesToScalars(const SmallSetVector<Value *, 8> &,
                                   PredIteratorCache &, LoopInfo *,
                                   DominatorTree *, const TargetLibraryInfo *,
                                   Loop *, AliasSetTracker *,
-                                  ICFLoopSafetyInfo *,
+                                  ICFLoopSafetyInfo *, TaskInfo *,
                                   OptimizationRemarkEmitter *);
 
 /// Does a BFS from a given node to all of its children inside a given loop.
@@ -278,6 +279,7 @@ void getLoopAnalysisUsage(AnalysisUsage &AU);
 bool canSinkOrHoistInst(Instruction &I, AAResults *AA, DominatorTree *DT,
                         Loop *CurLoop, AliasSetTracker *CurAST,
                         MemorySSAUpdater *MSSAU, bool TargetExecutesOncePerLoop,
+                        TaskInfo *TI,
                         OptimizationRemarkEmitter *ORE = nullptr);
 
 /// Returns a Min/Max operation corresponding to MinMaxRecurrenceKind.

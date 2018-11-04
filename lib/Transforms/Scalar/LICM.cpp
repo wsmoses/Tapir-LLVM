@@ -126,7 +126,8 @@ static bool isNotUsedOrFreeInLoop(const Instruction &I, const Loop *CurLoop,
                                   TargetTransformInfo *TTI, bool &FreeInLoop);
 static void hoist(Instruction &I, const DominatorTree *DT, const Loop *CurLoop,
                   BasicBlock *Dest, ICFLoopSafetyInfo *SafetyInfo,
-                  MemorySSAUpdater *MSSAU, OptimizationRemarkEmitter *ORE);
+                  MemorySSAUpdater *MSSAU, const TaskInfo *TI,
+                  OptimizationRemarkEmitter *ORE);
 static bool sink(Instruction &I, LoopInfo *LI, DominatorTree *DT,
                  const Loop *CurLoop, ICFLoopSafetyInfo *SafetyInfo,
                  MemorySSAUpdater *MSSAU, OptimizationRemarkEmitter *ORE,
@@ -135,6 +136,7 @@ static bool isSafeToExecuteUnconditionally(Instruction &Inst,
                                            const DominatorTree *DT,
                                            const Loop *CurLoop,
                                            const LoopSafetyInfo *SafetyInfo,
+                                           const TaskInfo *TI,
                                            OptimizationRemarkEmitter *ORE,
                                            const Instruction *CtxI = nullptr);
 static bool pointerInvalidatedByLoop(MemoryLocation MemLoc,
@@ -157,7 +159,7 @@ struct LoopInvariantCodeMotion {
   using ASTrackerMapTy = DenseMap<Loop *, std::unique_ptr<AliasSetTracker>>;
   bool runOnLoop(Loop *L, AliasAnalysis *AA, LoopInfo *LI, DominatorTree *DT,
                  TargetLibraryInfo *TLI, TargetTransformInfo *TTI,
-                 ScalarEvolution *SE, MemorySSA *MSSA,
+                 ScalarEvolution *SE, MemorySSA *MSSA, TaskInfo *TI,
                  OptimizationRemarkEmitter *ORE, bool DeleteAST, bool Rhino);
 
   ASTrackerMapTy &getLoopToAliasSetMap() { return LoopToAliasSetMap; }
@@ -293,8 +295,9 @@ struct LegacyLICMCommonPass : public LoopPass {
                           &getAnalysis<TargetLibraryInfoWrapperPass>().getTLI(),
                           &getAnalysis<TargetTransformInfoWrapperPass>().getTTI(
                               *L->getHeader()->getParent()),
-                          SE ? &SE->getSE() : nullptr, MSSA, &ORE, false,
-                          Rhino);
+                          SE ? &SE->getSE() : nullptr, MSSA,
+                          &getAnalysis<TaskInfoWrapperPass>().getTaskInfo(),
+                          &ORE, false, Rhino);
   }
 
   /// This transformation requires natural loop information & requires that
@@ -371,7 +374,7 @@ PreservedAnalyses LICMPass::run(Loop &L, LoopAnalysisManager &AM,
 
   LoopInvariantCodeMotion LICM;
   if (!LICM.runOnLoop(&L, &AR.AA, &AR.LI, &AR.DT, &AR.TLI, &AR.TTI, &AR.SE,
-                      AR.MSSA, ORE, true, Rhino))
+                      AR.MSSA, &AR.TI, ORE, true, Rhino))
     return PreservedAnalyses::all();
 
   auto PA = getLoopPassPreservedAnalyses();
@@ -426,8 +429,8 @@ Pass *llvm::createLICMPass(bool Rhino) {
 bool LoopInvariantCodeMotion::runOnLoop(
     Loop *L, AliasAnalysis *AA, LoopInfo *LI, DominatorTree *DT,
     TargetLibraryInfo *TLI, TargetTransformInfo *TTI, ScalarEvolution *SE,
-    MemorySSA *MSSA, OptimizationRemarkEmitter *ORE, bool DeleteAST,
-    bool Rhino) {
+    MemorySSA *MSSA, TaskInfo *TI, OptimizationRemarkEmitter *ORE,
+    bool DeleteAST, bool Rhino) {
   bool Changed = false;
 
   assert(L->isLCSSAForm(*DT) && "Loop is not in LCSSA form.");
@@ -461,10 +464,12 @@ bool LoopInvariantCodeMotion::runOnLoop(
   //
   if (L->hasDedicatedExits())
     Changed |= sinkRegion(DT->getNode(L->getHeader()), AA, LI, DT, TLI, TTI, L,
-                          CurAST.get(), MSSAU.get(), &SafetyInfo, ORE, Rhino);
+                          CurAST.get(), MSSAU.get(), &SafetyInfo, TI, ORE,
+                          Rhino);
   if (Preheader)
     Changed |= hoistRegion(DT->getNode(L->getHeader()), AA, LI, DT, TLI, L,
-                           CurAST.get(), MSSAU.get(), &SafetyInfo, ORE, Rhino);
+                           CurAST.get(), MSSAU.get(), &SafetyInfo, TI, ORE,
+                           Rhino);
 
   // Now that all loop invariants have been removed from the loop, promote any
   // memory references to scalars that we can.
@@ -513,7 +518,7 @@ bool LoopInvariantCodeMotion::runOnLoop(
 
           Promoted |= promoteLoopAccessesToScalars(
               PointerMustAliases, ExitBlocks, InsertPts, PIC, LI, DT, TLI, L,
-              CurAST.get(), &SafetyInfo, ORE);
+              CurAST.get(), &SafetyInfo, TI, ORE);
         }
       }
       // FIXME: Promotion initially disabled when using MemorySSA.
@@ -560,12 +565,12 @@ bool llvm::sinkRegion(DomTreeNode *N, AliasAnalysis *AA, LoopInfo *LI,
                       DominatorTree *DT, TargetLibraryInfo *TLI,
                       TargetTransformInfo *TTI, Loop *CurLoop,
                       AliasSetTracker *CurAST, MemorySSAUpdater *MSSAU,
-                      ICFLoopSafetyInfo *SafetyInfo,
+                      ICFLoopSafetyInfo *SafetyInfo, TaskInfo *TI,
                       OptimizationRemarkEmitter *ORE, bool Rhino) {
 
   // Verify inputs.
   assert(N != nullptr && AA != nullptr && LI != nullptr && DT != nullptr &&
-         CurLoop != nullptr && SafetyInfo != nullptr &&
+         CurLoop != nullptr && SafetyInfo != nullptr && TI != nullptr &&
          "Unexpected input to sinkRegion.");
   assert(((CurAST != nullptr) ^ (MSSAU != nullptr)) &&
          "Either AliasSetTracker or MemorySSA should be initialized.");
@@ -611,7 +616,8 @@ bool llvm::sinkRegion(DomTreeNode *N, AliasAnalysis *AA, LoopInfo *LI,
       //
       bool FreeInLoop = false;
       if (isNotUsedOrFreeInLoop(I, CurLoop, SafetyInfo, TTI, FreeInLoop) &&
-          canSinkOrHoistInst(I, AA, DT, CurLoop, CurAST, MSSAU, true, ORE) &&
+          canSinkOrHoistInst(I, AA, DT, CurLoop, CurAST, MSSAU, true, TI,
+                             ORE) &&
           !I.mayHaveSideEffects()) {
         if (sink(I, LI, DT, CurLoop, SafetyInfo, MSSAU, ORE, FreeInLoop)) {
           if (!FreeInLoop) {
@@ -865,11 +871,11 @@ public:
 bool llvm::hoistRegion(DomTreeNode *N, AliasAnalysis *AA, LoopInfo *LI,
                        DominatorTree *DT, TargetLibraryInfo *TLI, Loop *CurLoop,
                        AliasSetTracker *CurAST, MemorySSAUpdater *MSSAU,
-                       ICFLoopSafetyInfo *SafetyInfo,
+                       ICFLoopSafetyInfo *SafetyInfo, TaskInfo *TI,
                        OptimizationRemarkEmitter *ORE, bool Rhino) {
   // Verify inputs.
   assert(N != nullptr && AA != nullptr && LI != nullptr && DT != nullptr &&
-         CurLoop != nullptr && SafetyInfo != nullptr &&
+         CurLoop != nullptr && SafetyInfo != nullptr && TI != nullptr &&
          "Unexpected input to hoistRegion.");
   assert(((CurAST != nullptr) ^ (MSSAU != nullptr)) &&
          "Either AliasSetTracker or MemorySSA should be initialized.");
@@ -891,30 +897,32 @@ bool llvm::hoistRegion(DomTreeNode *N, AliasAnalysis *AA, LoopInfo *LI,
     // subloop (which would already have been processed).
     if (inSubLoop(BB, CurLoop, LI))
       continue;
+
+    if (Rhino)
+      CurAST = collectAliasInfoForLoopAtPoint(CurLoop, LI, AA, &*BB->begin(),
+                                              /*collectBefore*/true,
+                                              /*onlyBlock*/true);
+    for (BasicBlock::iterator II = BB->begin(), E = BB->end(); II != E;) {
+      Instruction &I = *II++;
       if (Rhino)
-        CurAST = collectAliasInfoForLoopAtPoint(CurLoop, LI, AA, &*BB->begin(),
-                                                /*collectBefore*/true,
-                                                /*onlyBlock*/true);
-      for (BasicBlock::iterator II = BB->begin(), E = BB->end(); II != E;) {
-        Instruction &I = *II++;
-        if (Rhino)
-          CurAST->add(&I);
-        // Try constant folding this instruction.  If all the operands are
-        // constants, it is technically hoistable, but it would be better to
-        // just fold it.
-        if (Constant *C = ConstantFoldInstruction(
-                &I, I.getModule()->getDataLayout(), TLI)) {
-          DEBUG(dbgs() << "LICM folding inst: " << I << "  --> " << *C << '\n');
-          CurAST->copyValue(&I, C);
-          I.replaceAllUsesWith(C);
-          if (isInstructionTriviallyDead(&I, TLI)) {
-            CurAST->deleteValue(&I);
-            I.eraseFromParent();
-          }
-          Changed = true;
-          continue;
+        CurAST->add(&I);
+      // Try constant folding this instruction.  If all the operands are
+      // constants, it is technically hoistable, but it would be better to
+      // just fold it.
+      if (Constant *C = ConstantFoldInstruction(
+              &I, I.getModule()->getDataLayout(), TLI)) {
+        LLVM_DEBUG(dbgs() <<
+                   "LICM folding inst: " << I << "  --> " << *C << '\n');
+        CurAST->copyValue(&I, C);
+        I.replaceAllUsesWith(C);
+        if (isInstructionTriviallyDead(&I, TLI)) {
+          CurAST->deleteValue(&I);
+          I.eraseFromParent();
         }
+        Changed = true;
+        continue;
       }
+    }
 
     for (BasicBlock::iterator II = BB->begin(), E = BB->end(); II != E;) {
       Instruction &I = *II++;
@@ -942,12 +950,13 @@ bool llvm::hoistRegion(DomTreeNode *N, AliasAnalysis *AA, LoopInfo *LI,
       // and we have accurately duplicated the control flow from the loop header
       // to that block.
       if (CurLoop->hasLoopInvariantOperands(&I) &&
-          canSinkOrHoistInst(I, AA, DT, CurLoop, CurAST, MSSAU, true, ORE) &&
+          canSinkOrHoistInst(I, AA, DT, CurLoop, CurAST, MSSAU, true, TI,
+                             ORE) &&
           isSafeToExecuteUnconditionally(
-              I, DT, CurLoop, SafetyInfo, ORE,
+              I, DT, CurLoop, SafetyInfo, TI, ORE,
               CurLoop->getLoopPreheader()->getTerminator())) {
         hoist(I, DT, CurLoop, CFH.getOrCreateHoistedBlock(BB), SafetyInfo,
-              MSSAU, ORE);
+              MSSAU, TI, ORE);
         HoistedInstructions.push_back(&I);
         Changed = true;
         continue;
@@ -974,7 +983,7 @@ bool llvm::hoistRegion(DomTreeNode *N, AliasAnalysis *AA, LoopInfo *LI,
         eraseInstruction(I, *SafetyInfo, CurAST, MSSAU);
 
         hoist(*ReciprocalDivisor, DT, CurLoop, CFH.getOrCreateHoistedBlock(BB),
-              SafetyInfo, MSSAU, ORE);
+              SafetyInfo, MSSAU, TI, ORE);
         HoistedInstructions.push_back(ReciprocalDivisor);
         Changed = true;
         continue;
@@ -1168,7 +1177,7 @@ bool isOnlyMemoryAccess(const Instruction *I, const Loop *L,
 bool llvm::canSinkOrHoistInst(Instruction &I, AAResults *AA, DominatorTree *DT,
                               Loop *CurLoop, AliasSetTracker *CurAST,
                               MemorySSAUpdater *MSSAU,
-                              bool TargetExecutesOncePerLoop,
+                              bool TargetExecutesOncePerLoop, TaskInfo *TI,
                               OptimizationRemarkEmitter *ORE) {
   // If we don't understand the instruction, bail early.
   if (!isHoistableAndSinkableInst(I))
@@ -1700,7 +1709,8 @@ static bool sink(Instruction &I, LoopInfo *LI, DominatorTree *DT,
 ///
 static void hoist(Instruction &I, const DominatorTree *DT, const Loop *CurLoop,
                   BasicBlock *Dest, ICFLoopSafetyInfo *SafetyInfo,
-                  MemorySSAUpdater *MSSAU, OptimizationRemarkEmitter *ORE) {
+                  MemorySSAUpdater *MSSAU, const TaskInfo *TI,
+                  OptimizationRemarkEmitter *ORE) {
   LLVM_DEBUG(dbgs() << "LICM hoisting to " << Dest->getName() << ": " << I
                     << "\n");
   ORE->emit([&]() {
@@ -1755,6 +1765,7 @@ static bool isSafeToExecuteUnconditionally(Instruction &Inst,
                                            const DominatorTree *DT,
                                            const Loop *CurLoop,
                                            const LoopSafetyInfo *SafetyInfo,
+                                           const TaskInfo *TI,
                                            OptimizationRemarkEmitter *ORE,
                                            const Instruction *CtxI) {
   if (isSafeToSpeculativelyExecute(&Inst, CtxI, DT))
@@ -1898,10 +1909,10 @@ bool llvm::promoteLoopAccessesToScalars(
     SmallVectorImpl<Instruction *> &InsertPts, PredIteratorCache &PIC,
     LoopInfo *LI, DominatorTree *DT, const TargetLibraryInfo *TLI,
     Loop *CurLoop, AliasSetTracker *CurAST, ICFLoopSafetyInfo *SafetyInfo,
-    OptimizationRemarkEmitter *ORE) {
+    TaskInfo *TI, OptimizationRemarkEmitter *ORE) {
   // Verify inputs.
   assert(LI != nullptr && DT != nullptr && CurLoop != nullptr &&
-         CurAST != nullptr && SafetyInfo != nullptr &&
+         CurAST != nullptr && SafetyInfo != nullptr && TI != nullptr &&
          "Unexpected Input to promoteLoopAccessesToScalars");
 
   Value *SomePtr = *PointerMustAliases.begin();
@@ -1951,13 +1962,11 @@ bool llvm::promoteLoopAccessesToScalars(
   // context within the loop.  Precompute whether or not there is a
   // detach within this loop.
   bool DetachWithinLoop =
-    isa<DetachInst>(CurLoop->getHeader()->getTerminator());
-  if (!DetachWithinLoop)
-    for (BasicBlock *BB : CurLoop->getBlocks())
-      if (isa<DetachInst>(BB->getTerminator())) {
-        DetachWithinLoop = true;
-        break;
-      }
+    isa<DetachInst>(CurLoop->getHeader()->getTerminator()) ||
+    llvm::any_of(CurLoop->getBlocks(),
+                 [](const BasicBlock *BB) {
+                   return isa<DetachInst>(BB->getTerminator());
+                 });
 
   SmallVector<Instruction *, 64> LoopUses;
 
@@ -2013,7 +2022,8 @@ bool llvm::promoteLoopAccessesToScalars(
 
         if (!DereferenceableInPH)
           DereferenceableInPH = isSafeToExecuteUnconditionally(
-              *Load, DT, CurLoop, SafetyInfo, ORE, Preheader->getTerminator());
+              *Load, DT, CurLoop, SafetyInfo, TI, ORE,
+              Preheader->getTerminator());
       } else if (const StoreInst *Store = dyn_cast<StoreInst>(UI)) {
         // Stores *of* the pointer are not interesting, only stores *to* the
         // pointer.
@@ -2028,12 +2038,9 @@ bool llvm::promoteLoopAccessesToScalars(
 	// -- but to preserve the serial execution, we have to avoid
 	// moving stores that are loaded.  For now, we simply avoid
 	// moving these stores.
-	//
-	// TODO: The call to GetDetachedCtx can potentially be
-	// expensive.  Optimize this analysis in the future.
 	if (DetachWithinLoop &&
-	    CurLoop->contains(GetDetachedCtx(Store->getParent())))
-	  return false;
+            CurLoop->contains(TI->getTaskFor(Store->getParent())->getEntry()))
+          return false;
 
         // Note that we only check GuaranteedToExecute inside the store case
         // so that we do not introduce stores where they did not exist before

@@ -255,7 +255,8 @@ static bool sinkInstruction(Loop &L, Instruction &I,
 static bool sinkLoopInvariantInstructions(Loop &L, AAResults &AA, LoopInfo &LI,
                                           DominatorTree &DT,
                                           BlockFrequencyInfo &BFI,
-                                          ScalarEvolution *SE) {
+                                          ScalarEvolution *SE,
+                                          TaskInfo *TI) {
   BasicBlock *Preheader = L.getLoopPreheader();
   if (!Preheader)
     return false;
@@ -304,7 +305,7 @@ static bool sinkLoopInvariantInstructions(Loop &L, AAResults &AA, LoopInfo &LI,
     // No need to check for instruction's operands are loop invariant.
     assert(L.hasLoopInvariantOperands(I) &&
            "Insts in a loop's preheader should have loop invariant operands!");
-    if (!canSinkOrHoistInst(*I, &AA, &DT, &L, &CurAST, nullptr, false))
+    if (!canSinkOrHoistInst(*I, &AA, &DT, &L, &CurAST, nullptr, false, TI))
       continue;
     if (sinkInstruction(L, *I, ColdLoopBBs, LoopBlockNumber, LI, DT, BFI))
       Changed = true;
@@ -323,6 +324,7 @@ PreservedAnalyses LoopSinkPass::run(Function &F, FunctionAnalysisManager &FAM) {
 
   AAResults &AA = FAM.getResult<AAManager>(F);
   DominatorTree &DT = FAM.getResult<DominatorTreeAnalysis>(F);
+  TaskInfo &TI = FAM.getResult<TaskAnalysis>(F);
   BlockFrequencyInfo &BFI = FAM.getResult<BlockFrequencyAnalysis>(F);
 
   // We want to do a postorder walk over the loops. Since loops are a tree this
@@ -340,7 +342,8 @@ PreservedAnalyses LoopSinkPass::run(Function &F, FunctionAnalysisManager &FAM) {
     // loops in SCEV and we don't preserve (or request) SCEV at all making that
     // unnecessary.
     Changed |= sinkLoopInvariantInstructions(L, AA, LI, DT, BFI,
-                                             /*ScalarEvolution*/ nullptr);
+                                             /*ScalarEvolution*/ nullptr,
+                                             &TI);
   } while (!PreorderLoops.empty());
 
   if (!Changed)
@@ -363,12 +366,14 @@ struct LegacyLoopSinkPass : public LoopPass {
       return false;
 
     auto *SE = getAnalysisIfAvailable<ScalarEvolutionWrapperPass>();
+    auto *TI = getAnalysisIfAvailable<TaskInfoWrapperPass>();
     return sinkLoopInvariantInstructions(
         *L, getAnalysis<AAResultsWrapperPass>().getAAResults(),
         getAnalysis<LoopInfoWrapperPass>().getLoopInfo(),
         getAnalysis<DominatorTreeWrapperPass>().getDomTree(),
         getAnalysis<BlockFrequencyInfoWrapperPass>().getBFI(),
-        SE ? &SE->getSE() : nullptr);
+        SE ? &SE->getSE() : nullptr,
+        TI ? &TI->getTaskInfo() : nullptr);
   }
 
   void getAnalysisUsage(AnalysisUsage &AU) const override {
