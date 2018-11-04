@@ -6027,7 +6027,7 @@ static bool serializeDetachToImmediateSync(BasicBlock *BB) {
     // This block is empty
     bool Changed = false;
     // Collect the detach and reattach predecessors.
-    SmallSet<DetachInst *, 4> DetachPreds;
+    SmallPtrSet<DetachInst *, 4> DetachPreds;
     SmallVector<Instruction *, 4> ReattachPreds;
     for (BasicBlock *PredBB : predecessors(BB)) {
       if (DetachInst *DI = dyn_cast<DetachInst>(PredBB->getTerminator())) {

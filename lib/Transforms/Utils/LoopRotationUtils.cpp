@@ -22,6 +22,7 @@
 #include "llvm/Analysis/LoopPass.h"
 #include "llvm/Analysis/ScalarEvolution.h"
 #include "llvm/Analysis/ScalarEvolutionAliasAnalysis.h"
+#include "llvm/Analysis/TapirTaskInfo.h"
 #include "llvm/Analysis/TargetTransformInfo.h"
 #include "llvm/Transforms/Utils/Local.h"
 #include "llvm/Analysis/ValueTracking.h"
@@ -53,6 +54,7 @@ class LoopRotate {
   AssumptionCache *AC;
   DominatorTree *DT;
   ScalarEvolution *SE;
+  TaskInfo *TaskI;
   const SimplifyQuery &SQ;
   bool RotationOnly;
   bool IsUtilMode;
@@ -60,10 +62,11 @@ class LoopRotate {
 public:
   LoopRotate(unsigned MaxHeaderSize, LoopInfo *LI,
              const TargetTransformInfo *TTI, AssumptionCache *AC,
-             DominatorTree *DT, ScalarEvolution *SE, const SimplifyQuery &SQ,
-             bool RotationOnly, bool IsUtilMode)
+             DominatorTree *DT, ScalarEvolution *SE, TaskInfo *TaskI,
+             const SimplifyQuery &SQ, bool RotationOnly, bool IsUtilMode)
       : MaxHeaderSize(MaxHeaderSize), LI(LI), TTI(TTI), AC(AC), DT(DT), SE(SE),
-        SQ(SQ), RotationOnly(RotationOnly), IsUtilMode(IsUtilMode) {}
+        TaskI(TaskI), SQ(SQ), RotationOnly(RotationOnly),
+        IsUtilMode(IsUtilMode) {}
   bool processLoop(Loop *L);
 
 private:
@@ -204,6 +207,7 @@ bool LoopRotate::rotateLoop(Loop *L, bool SimplifiedLatch) {
 
   BasicBlock *OrigHeader = L->getHeader();
   BasicBlock *OrigLatch = L->getLoopLatch();
+  Function *ParentF = OrigHeader->getParent();
 
   BranchInst *BI = dyn_cast<BranchInst>(OrigHeader->getTerminator());
   if (!BI || BI->isUnconditional())
@@ -478,6 +482,12 @@ bool LoopRotate::rotateLoop(Loop *L, bool SimplifiedLatch) {
   // emitted code isn't too gross in this common case.
   MergeBlockIntoPredecessor(OrigHeader, DT, LI);
 
+  if (TaskI && DT)
+    // Recompute task info.
+    // FIXME: Figure out a way to update task info that is less computationally
+    // wasteful.
+    TaskI->recalculate(*ParentF, *DT);
+
   LLVM_DEBUG(dbgs() << "LoopRotation: into "; L->dump());
 
   ++NumRotated;
@@ -635,11 +645,12 @@ bool LoopRotate::processLoop(Loop *L) {
 /// The utility to convert a loop into a loop with bottom test.
 bool llvm::LoopRotation(Loop *L, LoopInfo *LI, const TargetTransformInfo *TTI,
                         AssumptionCache *AC, DominatorTree *DT,
-                        ScalarEvolution *SE, const SimplifyQuery &SQ,
-                        bool RotationOnly = true,
+                        ScalarEvolution *SE, TaskInfo *TI,
+                        const SimplifyQuery &SQ, bool RotationOnly = true,
                         unsigned Threshold = unsigned(-1),
                         bool IsUtilMode = true) {
-  LoopRotate LR(Threshold, LI, TTI, AC, DT, SE, SQ, RotationOnly, IsUtilMode);
+  LoopRotate LR(Threshold, LI, TTI, AC, DT, SE, TI, SQ, RotationOnly,
+                IsUtilMode);
 
   return LR.processLoop(L);
 }

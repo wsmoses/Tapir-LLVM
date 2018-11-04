@@ -21,6 +21,7 @@ class DominatorTree;
 class Loop;
 class LoopInfo;
 class ScalarEvolution;
+class TaskInfo;
 struct SimplifyQuery;
 class TargetTransformInfo;
 
@@ -32,7 +33,7 @@ class TargetTransformInfo;
 /// LoopRotation. If it is true, the profitability heuristic will be ignored.
 bool LoopRotation(Loop *L, LoopInfo *LI, const TargetTransformInfo *TTI,
                   AssumptionCache *AC, DominatorTree *DT, ScalarEvolution *SE,
-                  const SimplifyQuery &SQ, bool RotationOnly,
+                  TaskInfo *TI, const SimplifyQuery &SQ, bool RotationOnly,
                   unsigned Threshold, bool IsUtilMode);
 
 } // namespace llvm

@@ -13,6 +13,7 @@
 ; CHECK-NEXT:     Instrument function entry/exit with calls to e.g. mcount() (pre inlining)
 ; CHECK-NEXT:     Simplify the CFG
 ; CHECK-NEXT:     Dominator Tree Construction
+; CHECK-NEXT:     Tapir Task Information
 ; CHECK-NEXT:     SROA
 ; CHECK-NEXT:     Early CSE
 ; CHECK-NEXT:     Lower 'expect' Intrinsics
@@ -35,6 +36,7 @@
 ; CHECK-NEXT:       Unnamed pass: implement Pass::getPassName()
 ; CHECK-NEXT:     FunctionPass Manager
 ; CHECK-NEXT:       Dominator Tree Construction
+; CHECK-NEXT:       Tapir Task Information
 ; CHECK-NEXT:       Promote Memory to Register
 ; CHECK-NEXT:     Dead Argument Elimination
 ; CHECK-NEXT:     FunctionPass Manager
@@ -47,6 +49,9 @@
 ; CHECK-NEXT:       Optimization Remark Emitter
 ; CHECK-NEXT:       Combine redundant instructions
 ; CHECK-NEXT:       Simplify the CFG
+; CHECK-NEXT:       Dominator Tree Construction
+; CHECK-NEXT:       Tapir Task Information
+; CHECK-NEXT:       Simplify Tapir tasks
 ; CHECK-NEXT:     CallGraph Construction
 ; CHECK-NEXT:     Globals Alias Analysis
 ; CHECK-NEXT:     Call Graph SCC Pass Manager
@@ -56,6 +61,7 @@
 ; CHECK-NEXT:       Promote 'by reference' arguments to scalars
 ; CHECK-NEXT:       FunctionPass Manager
 ; CHECK-NEXT:         Dominator Tree Construction
+; CHECK-NEXT:         Tapir Task Information
 ; CHECK-NEXT:         SROA
 ; CHECK-NEXT:         Basic Alias Analysis (stateless AA impl)
 ; CHECK-NEXT:         Function Alias Analysis Results
@@ -68,6 +74,9 @@
 ; CHECK-NEXT:         Jump Threading
 ; CHECK-NEXT:         Value Propagation
 ; CHECK-NEXT:         Simplify the CFG
+; CHECK-NEXT:         Dominator Tree Construction
+; CHECK-NEXT:         Tapir Task Information
+; CHECK-NEXT:         Simplify Tapir tasks
 ; CHECK-NEXT:         Dominator Tree Construction
 ; CHECK-NEXT:         Combine pattern based expressions
 ; CHECK-NEXT:         Basic Alias Analysis (stateless AA impl)
@@ -93,6 +102,9 @@
 ; CHECK-NEXT:         Optimization Remark Emitter
 ; CHECK-NEXT:         Tail Call Elimination
 ; CHECK-NEXT:         Simplify the CFG
+; CHECK-NEXT:         Dominator Tree Construction
+; CHECK-NEXT:         Tapir Task Information
+; CHECK-NEXT:         Simplify Tapir tasks
 ; CHECK-NEXT:         Reassociate expressions
 ; CHECK-NEXT:         Dominator Tree Construction
 ; CHECK-NEXT:         Natural Loop Information
@@ -102,11 +114,15 @@
 ; CHECK-NEXT:         Basic Alias Analysis (stateless AA impl)
 ; CHECK-NEXT:         Function Alias Analysis Results
 ; CHECK-NEXT:         Scalar Evolution Analysis
+; CHECK-NEXT:         Tapir Task Information
 ; CHECK-NEXT:         Loop Pass Manager
 ; CHECK-NEXT:           Rotate Loops
 ; CHECK-NEXT:           Loop Invariant Code Motion
 ; CHECK-NEXT:           Unswitch loops
 ; CHECK-NEXT:         Simplify the CFG
+; CHECK-NEXT:         Dominator Tree Construction
+; CHECK-NEXT:         Tapir Task Information
+; CHECK-NEXT:         Simplify Tapir tasks
 ; CHECK-NEXT:         Dominator Tree Construction
 ; CHECK-NEXT:         Basic Alias Analysis (stateless AA impl)
 ; CHECK-NEXT:         Function Alias Analysis Results
@@ -119,6 +135,7 @@
 ; CHECK-NEXT:         LCSSA Verifier
 ; CHECK-NEXT:         Loop-Closed SSA Form Pass
 ; CHECK-NEXT:         Scalar Evolution Analysis
+; CHECK-NEXT:         Tapir Task Information
 ; CHECK-NEXT:         Loop Pass Manager
 ; CHECK-NEXT:           Induction Variable Simplification
 ; CHECK-NEXT:           Recognize loop idioms
@@ -163,11 +180,15 @@
 ; CHECK-NEXT:         Basic Alias Analysis (stateless AA impl)
 ; CHECK-NEXT:         Function Alias Analysis Results
 ; CHECK-NEXT:         Scalar Evolution Analysis
+; CHECK-NEXT:         Tapir Task Information
 ; CHECK-NEXT:         Loop Pass Manager
 ; CHECK-NEXT:           Loop Invariant Code Motion
 ; CHECK-NEXT:         Post-Dominator Tree Construction
 ; CHECK-NEXT:         Aggressive Dead Code Elimination
 ; CHECK-NEXT:         Simplify the CFG
+; CHECK-NEXT:         Dominator Tree Construction
+; CHECK-NEXT:         Tapir Task Information
+; CHECK-NEXT:         Simplify Tapir tasks
 ; CHECK-NEXT:         Dominator Tree Construction
 ; CHECK-NEXT:         Basic Alias Analysis (stateless AA impl)
 ; CHECK-NEXT:         Function Alias Analysis Results
@@ -195,6 +216,7 @@
 ; CHECK-NEXT:       Basic Alias Analysis (stateless AA impl)
 ; CHECK-NEXT:       Function Alias Analysis Results
 ; CHECK-NEXT:       Scalar Evolution Analysis
+; CHECK-NEXT:       Tapir Task Information
 ; CHECK-NEXT:       Loop Pass Manager
 ; CHECK-NEXT:         Rotate Loops
 ; CHECK-NEXT:       Loop Access Analysis
@@ -224,6 +246,8 @@
 ; CHECK-NEXT:       Lazy Block Frequency Analysis
 ; CHECK-NEXT:       Optimization Remark Emitter
 ; CHECK-NEXT:       Combine redundant instructions
+; CHECK-NEXT:       Tapir Task Information
+; CHECK-NEXT:       Simplify Tapir tasks
 ; CHECK-NEXT:       Simplify the CFG
 ; CHECK-NEXT:       Dominator Tree Construction
 ; CHECK-NEXT:       Natural Loop Information
@@ -241,6 +265,7 @@
 ; CHECK-NEXT:       LCSSA Verifier
 ; CHECK-NEXT:       Loop-Closed SSA Form Pass
 ; CHECK-NEXT:       Scalar Evolution Analysis
+; CHECK-NEXT:       Tapir Task Information
 ; CHECK-NEXT:       Loop Pass Manager
 ; CHECK-NEXT:         Unroll loops
 ; CHECK-NEXT:       Lazy Branch Probability Analysis
@@ -251,6 +276,7 @@
 ; CHECK-NEXT:       LCSSA Verifier
 ; CHECK-NEXT:       Loop-Closed SSA Form Pass
 ; CHECK-NEXT:       Scalar Evolution Analysis
+; CHECK-NEXT:       Tapir Task Information
 ; CHECK-NEXT:       Loop Pass Manager
 ; CHECK-NEXT:         Loop Invariant Code Motion
 ; CHECK-NEXT:       Alignment from assumptions
@@ -268,6 +294,7 @@
 ; CHECK-NEXT:       Basic Alias Analysis (stateless AA impl)
 ; CHECK-NEXT:       Function Alias Analysis Results
 ; CHECK-NEXT:       Scalar Evolution Analysis
+; CHECK-NEXT:       Tapir Task Information
 ; CHECK-NEXT:       Branch Probability Analysis
 ; CHECK-NEXT:       Block Frequency Analysis
 ; CHECK-NEXT:       Loop Pass Manager
@@ -278,6 +305,9 @@
 ; CHECK-NEXT:       Remove redundant instructions
 ; CHECK-NEXT:       Hoist/decompose integer division and remainder
 ; CHECK-NEXT:       Simplify the CFG
+; CHECK-NEXT:       Dominator Tree Construction
+; CHECK-NEXT:       Tapir Task Information
+; CHECK-NEXT:       Simplify Tapir tasks
 ; CHECK-NEXT:       Module Verifier
 ; CHECK-NEXT:     Bitcode Writer
 ; CHECK-NEXT: Pass Arguments:

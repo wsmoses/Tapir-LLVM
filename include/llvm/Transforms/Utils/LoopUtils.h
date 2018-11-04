@@ -421,7 +421,7 @@ bool formLCSSARecursively(Loop &L, DominatorTree &DT, LoopInfo *LI,
 /// arguments. Diagnostics is emitted via \p ORE. It returns changed status.
 bool sinkRegion(DomTreeNode *, AliasAnalysis *, LoopInfo *, DominatorTree *,
                 TargetLibraryInfo *, TargetTransformInfo *, Loop *,
-                AliasSetTracker *, LoopSafetyInfo *,
+                AliasSetTracker *, LoopSafetyInfo *, TaskInfo *,
                 OptimizationRemarkEmitter *ORE, bool Rhino);
 
 /// Walk the specified region of the CFG (defined by all blocks
@@ -434,7 +434,8 @@ bool sinkRegion(DomTreeNode *, AliasAnalysis *, LoopInfo *, DominatorTree *,
 /// ORE. It returns changed status.
 bool hoistRegion(DomTreeNode *, AliasAnalysis *, LoopInfo *, DominatorTree *,
                  TargetLibraryInfo *, Loop *, AliasSetTracker *,
-                 LoopSafetyInfo *, OptimizationRemarkEmitter *ORE, bool Rhino);
+                 LoopSafetyInfo *, TaskInfo *, OptimizationRemarkEmitter *ORE,
+                 bool Rhino);
 
 /// This function deletes dead loops. The caller of this function needs to
 /// guarantee that the loop is infact dead.
@@ -464,6 +465,7 @@ bool promoteLoopAccessesToScalars(const SmallSetVector<Value *, 8> &,
                                   PredIteratorCache &, LoopInfo *,
                                   DominatorTree *, const TargetLibraryInfo *,
                                   Loop *, AliasSetTracker *, LoopSafetyInfo *,
+                                  TaskInfo *,
                                   OptimizationRemarkEmitter *);
 
 /// Does a BFS from a given node to all of its children inside a given loop.
@@ -507,7 +509,7 @@ void getLoopAnalysisUsage(AnalysisUsage &AU);
 /// If \p ORE is set use it to emit optimization remarks.
 bool canSinkOrHoistInst(Instruction &I, AAResults *AA, DominatorTree *DT,
                         Loop *CurLoop, AliasSetTracker *CurAST,
-                        LoopSafetyInfo *SafetyInfo,
+                        LoopSafetyInfo *SafetyInfo, TaskInfo *TI,
                         OptimizationRemarkEmitter *ORE = nullptr);
 
 /// Generates an ordered vector reduction using extracts to reduce the value.

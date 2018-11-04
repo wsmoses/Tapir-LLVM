@@ -29,6 +29,7 @@ namespace llvm {
 class Instruction;
 class DominatorTree;
 class Loop;
+class TaskInfo;
 
 /// Captures loop safety information.
 /// It keep information for loop & its header may throw exception or otherwise
@@ -57,7 +58,8 @@ void computeLoopSafetyInfo(LoopSafetyInfo *, Loop *);
 /// once (under the assumption that the loop is entered).
 bool isGuaranteedToExecute(const Instruction &Inst, const DominatorTree *DT,
                            const Loop *CurLoop,
-                           const LoopSafetyInfo *SafetyInfo);
+                           const LoopSafetyInfo *SafetyInfo,
+                           const TaskInfo *TI = nullptr);
 
 }
 

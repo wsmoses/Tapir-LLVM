@@ -11,6 +11,7 @@
 #include "llvm/Analysis/InstructionSimplify.h"
 #include "llvm/Analysis/LoopInfo.h"
 #include "llvm/Analysis/Passes.h"
+#include "llvm/Analysis/TapirTaskInfo.h"
 #include "llvm/Analysis/ValueTracking.h"
 #include "llvm/IR/AssemblyAnnotationWriter.h"
 #include "llvm/IR/DataLayout.h"
@@ -99,11 +100,34 @@ static bool CanProveNotTakenFirstIteration(BasicBlock *ExitBlock,
   return SimpleCst->isAllOnesValue();
 }
 
+// Helper function to check if an instruction is guaranteed to execute in the
+// task T containing it.
+static bool isGuaranteedToExecuteInTask(const Instruction &Inst,
+                                        const DominatorTree *DT,
+                                        const Task *T) {
+  assert(T && T->encloses(Inst.getParent()) && "Inst is not in given task.");
+  // Examine all exiting blocks of the task.
+  for (const Spindle *S :
+         depth_first<InTask<Spindle *>>(T->getEntrySpindle())) {
+    for (const BasicBlock *Exit : S->spindle_exits()) {
+      if (!T->isTaskExiting(Exit))
+        continue;
+
+      // If Inst does not dominate the exiting block, then it's not guaranteed
+      // to execute.
+      if (!DT->dominates(Inst.getParent(), Exit))
+        return false;
+    }
+  }
+  return true;
+}
+
 /// Returns true if the instruction in a loop is guaranteed to execute at least
 /// once.
 bool llvm::isGuaranteedToExecute(const Instruction &Inst,
                                  const DominatorTree *DT, const Loop *CurLoop,
-                                 const LoopSafetyInfo *SafetyInfo) {
+                                 const LoopSafetyInfo *SafetyInfo,
+                                 const TaskInfo *TI) {
   // We have to check to make sure that the instruction dominates all
   // of the exit blocks.  If it doesn't, then there is a path out of the loop
   // which does not execute this instruction, so we can't hoist it.
@@ -124,6 +148,34 @@ bool llvm::isGuaranteedToExecute(const Instruction &Inst,
   if (SafetyInfo->MayThrow)
     return false;
 
+  // If the instruction is inside of a subtask, verify that it dominates the
+  // exits of the subtask, and use the corresponding detach to determine whether
+  // the instruction is guaranteed to execute.
+  bool InstGuaranteedToExecuteInSubtask = true;
+  const Instruction *RepInst = &Inst;
+  if (TI) {
+    const Task *LoopTask = TI->getTaskFor(CurLoop->getHeader());
+    while (InstGuaranteedToExecuteInSubtask) {
+      const Task *T = TI->getTaskFor(RepInst->getParent());
+      // If the representative instruction and loop are in the same task, we're
+      // done traversing subtasks.
+      if (T == LoopTask)
+        break;
+
+      // Check if the instruction is guaranteed to execute in its task.
+      if (!isGuaranteedToExecuteInTask(*RepInst, DT, T))
+        InstGuaranteedToExecuteInSubtask = false;
+      else
+        // Use the task's detach in place of the original instruction.
+        RepInst = T->getDetach();
+    }
+  }
+
+  // If a subtask was found in which the instruction is not guaranteed to
+  // execute, then the instruction is not guaranteed to execute.
+  if (!InstGuaranteedToExecuteInSubtask)
+    return false;
+
   // Note: There are two styles of reasoning intermixed below for
   // implementation efficiency reasons.  They are:
   // 1) If we can prove that the instruction dominates all exit blocks, then we
@@ -138,7 +190,7 @@ bool llvm::isGuaranteedToExecute(const Instruction &Inst,
 
   const bool InstDominatesLatch =
     CurLoop->getLoopLatch() != nullptr &&
-    DT->dominates(Inst.getParent(), CurLoop->getLoopLatch());
+    DT->dominates(RepInst->getParent(), CurLoop->getLoopLatch());
 
   // Get the exit blocks for the current loop.
   SmallVector<BasicBlock *, 8> ExitBlocks;
@@ -146,7 +198,7 @@ bool llvm::isGuaranteedToExecute(const Instruction &Inst,
 
   // Verify that the block dominates each of the exit blocks of the loop.
   for (BasicBlock *ExitBlock : ExitBlocks)
-    if (!DT->dominates(Inst.getParent(), ExitBlock))
+    if (!DT->dominates(RepInst->getParent(), ExitBlock))
       if (!InstDominatesLatch ||
           !CanProveNotTakenFirstIteration(ExitBlock, DT, CurLoop))
         return false;

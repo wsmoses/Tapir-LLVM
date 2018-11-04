@@ -1261,6 +1261,7 @@ void llvm::getLoopAnalysisUsage(AnalysisUsage &AU) {
   AU.addRequired<ScalarEvolutionWrapperPass>();
   AU.addPreserved<ScalarEvolutionWrapperPass>();
   AU.addRequired<TaskInfoWrapperPass>();
+  AU.addPreserved<TaskInfoWrapperPass>();
 }
 
 /// Manually defined generic "LoopPass" dependency initialization. This is used
