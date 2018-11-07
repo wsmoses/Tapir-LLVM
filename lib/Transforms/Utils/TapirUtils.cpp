@@ -104,7 +104,8 @@ bool llvm::MoveStaticAllocasInBlock(
   // Move any dbg.declares describing the allocas into the entry basic block.
   DIBuilder DIB(*F->getParent());
   for (auto &AI : StaticAllocas)
-    replaceDbgDeclareForAlloca(AI, AI, DIB, /*Deref=*/false);
+    replaceDbgDeclareForAlloca(AI, AI, DIB, DIExpression::NoDeref, 0,
+                               DIExpression::NoDeref);
 
   // Move any syncregion_start's into the entry basic block.
   for (BasicBlock::iterator I = Block->begin(),

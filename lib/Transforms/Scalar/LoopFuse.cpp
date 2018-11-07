@@ -106,7 +106,7 @@ Loop *LoopFuse::FuseLoops(Loop &L1, Loop &L2) {
   }
   // Remove L2.
   SE->forgetLoop(&L2);
-  LI->markAsRemoved(&L2);
+  //TODO FIX LI->eraseLoop(&L2);
 
   // Update DT: DT changed only at L2PH zap and was updated during zapping.
 
@@ -343,7 +343,7 @@ void LoopFuse::RemoveLoopCompletelyWithPreheader(Loop &L) {
   if (LI->getLoopFor(PH))
     LI->removeBlock(PH);
 
-  LI->markAsRemoved(&L);
+  //TODO FIX LI->eraseLoop(&L);
 }
 
 // Remove FusionSwitcher and branch directly to given loop @L's header. This

@@ -210,6 +210,57 @@ bool Loop::isSafeToClone() const {
   return true;
 }
 
+BasicBlock *Loop::getParallelEntryBlock() const {
+  DetachInst *Detach = dyn_cast<DetachInst>(getHeader()->getTerminator());
+  assert(Detach != nullptr && "Ill-formed parallel loop header block.");
+  return Detach->getDetached();
+}
+
+bool Loop::isCanonicalParallelLoop() const {
+  const BasicBlock *HeaderBlock = getHeader();
+  const BasicBlock *LoopLatchBlock = getLoopLatch();  // TODO: Multiple latches?
+
+  if (!LoopLatchBlock) {
+     return false;
+  }
+
+  const DetachInst *HeaderDetachInst = dyn_cast<DetachInst>(HeaderBlock->getTerminator());
+  if (!HeaderDetachInst) {
+     return false;
+  }
+
+  if (HeaderDetachInst->getContinue() != LoopLatchBlock) {
+     return false;
+  }
+
+  if (LoopLatchBlock->getSingleReattachPredecessor() == nullptr) {
+     return false;
+  }
+
+  return true;
+}
+
+SmallVector<BasicBlock *, 8> Loop::getBodyBlocks() const {
+  SmallVector<BasicBlock *, 8> result;
+  BasicBlock *BlockToExclude1 = nullptr;
+  BasicBlock *BlockToExclude2 = nullptr;
+
+  if (isCanonicalParallelLoop()) {
+    BlockToExclude1 = getHeader();
+    BlockToExclude2 = getLoopLatch();
+  }
+
+  for (BasicBlock *Block : blocks()) {
+    if (Block == BlockToExclude1 || Block == BlockToExclude2) {
+      continue;
+    }
+
+    result.push_back(Block);
+  }
+
+  return result;
+}
+
 MDNode *Loop::getLoopID() const {
   MDNode *LoopID = nullptr;
   if (BasicBlock *Latch = getLoopLatch()) {

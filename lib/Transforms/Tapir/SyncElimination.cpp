@@ -151,7 +151,7 @@ private:
   }
 
   bool willMod(const ModRefInfo &Info) {
-    return (Info == MRI_Mod || Info == MRI_ModRef);
+    return (Info == ModRefInfo::Mod || Info == ModRefInfo::ModRef || Info == ModRefInfo::MustMod || Info == ModRefInfo::MustModRef) != 0;
   }
 
   bool instTouchesMemory(const Instruction &Inst) {
@@ -194,14 +194,14 @@ private:
             if (!!RC) {
               // If RI is a call/invoke
               if (instTouchesMemory(VI) &&
-                  AA->getModRefInfo(const_cast<Instruction *>(&VI), RC) != MRI_NoModRef) {
+                  AA->getModRefInfo(const_cast<Instruction *>(&VI), RC) != ModRefInfo::NoModRef) {
                 errs() << "SyncElimination:     Conflict found between " << RI << " and " << VI << "\n";
                 return false;
               }
             } else if (!!VC) {
               // If VI is a call/invoke
               if (instTouchesMemory(RI) &&
-                  AA->getModRefInfo(const_cast<Instruction *>(&RI), VC) != MRI_NoModRef) {
+                  AA->getModRefInfo(const_cast<Instruction *>(&RI), VC) != ModRefInfo::NoModRef) {
                 errs() << "SyncElimination:     Conflict found between " << RI << " and " << VI << "\n";
                 return false;
               }

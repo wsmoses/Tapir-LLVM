@@ -5136,7 +5136,7 @@ bool LoopVectorizationLegality::canVectorize() {
 
   if (TheLoop->isCanonicalParallelLoop() && !Rhino) {
     DEBUG(dbgs() << "LV: Tapir loop not vectorized since Rhino is not enabled.\n");
-    if (ORE->allowExtraAnalysis())
+    if (DoExtraAnalysis)
       Result = false;
     else
       return false;

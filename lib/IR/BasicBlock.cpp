@@ -222,6 +222,18 @@ const BasicBlock *BasicBlock::getSinglePredecessor() const {
   return (PI == E) ? ThePred : nullptr /*multiple preds*/;
 }
 
+const BasicBlock *BasicBlock::getSingleReattachPredecessor() const {
+  const_pred_iterator PI = pred_begin(this), E = pred_end(this);
+  if (PI == E) return nullptr;
+  const BasicBlock *ThePred = nullptr;
+  for (; PI != E; ++PI) {
+    if (!isa<ReattachInst>((*PI)->getTerminator())) continue;
+    if (ThePred != nullptr) return nullptr; // multiple preds
+    ThePred = *PI;
+  }
+  return ThePred;
+}
+
 /// If this basic block has a single predecessor block,
 /// return the block, otherwise return a null pointer.
 const BasicBlock *BasicBlock::getSingleNonReattachPredecessor() const {

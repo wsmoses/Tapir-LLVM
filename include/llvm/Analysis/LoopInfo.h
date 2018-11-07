@@ -509,6 +509,14 @@ public:
   /// Return true if the loop body is safe to clone in practice.
   bool isSafeToClone() const;
 
+  BasicBlock *getParallelEntryBlock() const;
+
+  /// Return true if the loop body consists of a canonical
+  /// detach-reattach-continue structure.
+  bool isCanonicalParallelLoop() const;
+
+  SmallVector<BasicBlock *, 8> getBodyBlocks() const;
+
   /// Returns true if the loop is annotated parallel.
   ///
   /// A parallel loop can be assumed to not contain any dependencies between
