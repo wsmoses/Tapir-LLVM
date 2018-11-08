@@ -2319,7 +2319,10 @@ bool CilkSanitizerImpl::instrumentFunction(
       AtExit->CreateCall(CsanFuncExit,
                          {ExitCsiId, FuncId, FuncExitProp.getValue(*AtExit)});
     }
+
+    updateInstrumentedFnAttrs(F);
   }
+
   return Res;
 }
 
