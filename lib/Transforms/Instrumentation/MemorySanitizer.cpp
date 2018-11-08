@@ -4013,7 +4013,10 @@ bool MemorySanitizer::runOnFunction(Function &F) {
   // Clear out readonly/readnone attributes.
   AttrBuilder B;
   B.addAttribute(Attribute::ReadOnly)
-    .addAttribute(Attribute::ReadNone);
+    .addAttribute(Attribute::ReadNone)
+    .addAttribute(Attribute::ArgMemOnly)
+    .addAttribute(Attribute::InaccessibleMemOnly)
+    .addAttribute(Attribute::InaccessibleMemOrArgMemOnly);
   F.removeAttributes(AttributeList::FunctionIndex, B);
 
   return Visitor.runOnFunction();
