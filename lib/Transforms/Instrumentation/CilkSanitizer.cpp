@@ -561,7 +561,7 @@ struct CilkSanitizerLegacyPass : public ModulePass {
     return "CilkSanitizer";
   }
   void getAnalysisUsage(AnalysisUsage &AU) const override;
-  bool runOnModule(Module &M);
+  bool runOnModule(Module &M) override;
 };
 } // namespace
 
@@ -1073,7 +1073,7 @@ static bool GetGeneralAccesses(
   }
 
   // Handle more standard memory operations.
-  if (GA.Loc = MemoryLocation::getOrNone(I)) {
+  if ((GA.Loc = MemoryLocation::getOrNone(I))) {
     GA.Type = isa<LoadInst>(I) ? GeneralAccess::READ : GeneralAccess::WRITE;
     AccI.push_back(GA);
     return true;
