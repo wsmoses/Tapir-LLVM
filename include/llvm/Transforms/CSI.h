@@ -613,7 +613,7 @@ protected:
                                           PointerType *EntryPointerType);
   static Constant *sizeTableToUnitSizeTable(Module &M,
                                             StructType *UnitSizeTableType,
-                                            SizeTable &SzTable);
+                                            SizeTable &SzTable); 
   /// Initialize the front-end data table structures.
   void initializeFEDTables();
   /// Collect unit front-end data table structures for finalization.
