@@ -22,8 +22,7 @@ enum class TapirTargetType {
   Serial = 1,
   Cilk = 2,
   OpenMP = 3,
-  CilkR = 4,
-  Qthreads = 5
+  Qthreads = 4
 };
 
 } // end namespace llvm
