@@ -21,6 +21,7 @@
 #include "llvm/IR/Dominators.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/Module.h"
+#include "llvm/Transforms/Instrumentation/SurgicalInstrumentationConfig.h"
 
 namespace llvm {
 
@@ -664,6 +665,10 @@ protected:
   /// Return true if the given function should not be instrumented.
   bool shouldNotInstrumentFunction(Function &F);
 
+  void linkInToolFromBitcode(const std::string & bitcodePath);
+
+  void loadConfiguration();
+
   Module &M;
   const DataLayout &DL;
   CallGraph *CG;
@@ -698,6 +703,8 @@ protected:
 
   Type *IntptrTy;
   DenseMap<StringRef, uint64_t> FuncOffsetMap;
+
+  std::unique_ptr<InstrumentationConfig> config;
 };
 
 } // end namespace llvm
