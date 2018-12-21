@@ -13,7 +13,6 @@
 #ifndef LLVM_TRANSFORMS_CSI_H
 #define LLVM_TRANSFORMS_CSI_H
 
-#include "llvm/Transforms/Instrumentation.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Analysis/CallGraph.h"
@@ -21,6 +20,7 @@
 #include "llvm/IR/Dominators.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/Module.h"
+#include "llvm/Transforms/Instrumentation.h"
 #include "llvm/Transforms/Instrumentation/SurgicalInstrumentationConfig.h"
 
 namespace llvm {
@@ -28,17 +28,17 @@ namespace llvm {
 static const char *const CsiRtUnitInitName = "__csirt_unit_init";
 static const char *const CsiRtUnitCtorName = "csirt.unit_ctor";
 static const char *const CsiFunctionBaseIdName = "__csi_unit_func_base_id";
-static const char *const CsiFunctionExitBaseIdName = "__csi_unit_func_exit_base_id";
+static const char *const CsiFunctionExitBaseIdName =
+    "__csi_unit_func_exit_base_id";
 static const char *const CsiBasicBlockBaseIdName = "__csi_unit_bb_base_id";
 static const char *const CsiCallsiteBaseIdName = "__csi_unit_callsite_base_id";
 static const char *const CsiLoadBaseIdName = "__csi_unit_load_base_id";
 static const char *const CsiStoreBaseIdName = "__csi_unit_store_base_id";
 static const char *const CsiDetachBaseIdName = "__csi_unit_detach_base_id";
 static const char *const CsiTaskBaseIdName = "__csi_unit_task_base_id";
-static const char *const CsiTaskExitBaseIdName =
-  "__csi_unit_task_exit_base_id";
+static const char *const CsiTaskExitBaseIdName = "__csi_unit_task_exit_base_id";
 static const char *const CsiDetachContinueBaseIdName =
-  "__csi_unit_detach_continue_base_id";
+    "__csi_unit_detach_continue_base_id";
 static const char *const CsiSyncBaseIdName = "__csi_unit_sync_base_id";
 static const char *const CsiUnitSizeTableName = "__csi_unit_size_table";
 static const char *const CsiUnitFedTableName = "__csi_unit_fed_table";
@@ -163,8 +163,7 @@ private:
 class SizeTable : public ForensicTable {
 public:
   SizeTable() : ForensicTable() {}
-  SizeTable(Module &M, StringRef BaseIdName)
-      : ForensicTable(M, BaseIdName) {}
+  SizeTable(Module &M, StringRef BaseIdName) : ForensicTable(M, BaseIdName) {}
 
   /// The number of entries in this table
   uint64_t size() const { return LocalIdToSizeMap.size(); }
@@ -235,9 +234,7 @@ public:
 
 class CsiFuncProperty : public CsiProperty {
 public:
-  CsiFuncProperty() {
-    PropValue.Bits = 0;
-  }
+  CsiFuncProperty() { PropValue.Bits = 0; }
 
   /// Return the Type of a property.
   static Type *getType(LLVMContext &C) {
@@ -259,9 +256,7 @@ public:
   }
 
   /// Set the value of the MaySpawn property.
-  void setMaySpawn(bool v) {
-    PropValue.Fields.MaySpawn = v;
-  }
+  void setMaySpawn(bool v) { PropValue.Fields.MaySpawn = v; }
 
 private:
   typedef union {
@@ -282,14 +277,12 @@ private:
   } PropertyBits;
 
   /// The number of bits representing each property.
-  static constexpr PropertyBits PropBits = { 1, (64-1) };
+  static constexpr PropertyBits PropBits = {1, (64 - 1)};
 };
 
 class CsiFuncExitProperty : public CsiProperty {
 public:
-  CsiFuncExitProperty() {
-      PropValue.Bits = 0;
-  }
+  CsiFuncExitProperty() { PropValue.Bits = 0; }
 
   /// Return the Type of a property.
   static Type *getType(LLVMContext &C) {
@@ -312,13 +305,9 @@ public:
   }
 
   /// Set the value of the MaySpawn property.
-  void setMaySpawn(bool v) {
-    PropValue.Fields.MaySpawn = v;
-  }
+  void setMaySpawn(bool v) { PropValue.Fields.MaySpawn = v; }
   /// Set the value of the EHReturn property.
-  void setEHReturn(bool v) {
-    PropValue.Fields.EHReturn = v;
-  }
+  void setEHReturn(bool v) { PropValue.Fields.EHReturn = v; }
 
 private:
   typedef union {
@@ -341,14 +330,12 @@ private:
   } PropertyBits;
 
   /// The number of bits representing each property.
-  static constexpr PropertyBits PropBits = { 1, 1, (64-1-1) };
+  static constexpr PropertyBits PropBits = {1, 1, (64 - 1 - 1)};
 };
 
 class CsiBBProperty : public CsiProperty {
 public:
-  CsiBBProperty() {
-    PropValue.Bits = 0;
-  }
+  CsiBBProperty() { PropValue.Bits = 0; }
 
   /// Return the Type of a property.
   static Type *getType(LLVMContext &C) {
@@ -372,14 +359,10 @@ public:
   }
 
   /// Set the value of the IsLandingPad property.
-  void setIsLandingPad(bool v) {
-    PropValue.Fields.IsLandingPad = v;
-  }
+  void setIsLandingPad(bool v) { PropValue.Fields.IsLandingPad = v; }
 
   /// Set the value of the IsEHPad property.
-  void setIsEHPad(bool v) {
-    PropValue.Fields.IsEHPad = v;
-  }
+  void setIsEHPad(bool v) { PropValue.Fields.IsEHPad = v; }
 
 private:
   typedef union {
@@ -402,14 +385,12 @@ private:
   } PropertyBits;
 
   /// The number of bits representing each property.
-  static constexpr PropertyBits PropBits = { 1, 1, (64-1-1) };
+  static constexpr PropertyBits PropBits = {1, 1, (64 - 1 - 1)};
 };
 
 class CsiCallProperty : public CsiProperty {
 public:
-  CsiCallProperty() {
-    PropValue.Bits = 0;
-  }
+  CsiCallProperty() { PropValue.Bits = 0; }
 
   /// Return the Type of a property.
   static Type *getType(LLVMContext &C) {
@@ -434,9 +415,7 @@ public:
   }
 
   /// Set the value of the IsIndirect property.
-  void setIsIndirect(bool v) {
-    PropValue.Fields.IsIndirect = v;
-  }
+  void setIsIndirect(bool v) { PropValue.Fields.IsIndirect = v; }
 
 private:
   typedef union {
@@ -457,25 +436,24 @@ private:
   } PropertyBits;
 
   /// The number of bits representing each property.
-  static constexpr PropertyBits PropBits = { 1, (64-1) };
+  static constexpr PropertyBits PropBits = {1, (64 - 1)};
 };
 
 class CsiLoadStoreProperty : public CsiProperty {
 public:
-  CsiLoadStoreProperty() {
-    PropValue.Bits = 0;
-  }
+  CsiLoadStoreProperty() { PropValue.Bits = 0; }
   /// Return the Type of a property.
   static Type *getType(LLVMContext &C) {
     // Must match the definition of property type in csi.h
     return CsiProperty::getCoercedType(
-        C, StructType::get(IntegerType::get(C, PropBits.Alignment),
-                           IntegerType::get(C, PropBits.IsVtableAccess),
-                           IntegerType::get(C, PropBits.IsConstant),
-                           IntegerType::get(C, PropBits.IsOnStack),
-                           IntegerType::get(C, PropBits.MayBeCaptured),
-                           IntegerType::get(C, PropBits.LoadReadBeforeWriteInBB),
-                           IntegerType::get(C, PropBits.Padding)));
+        C,
+        StructType::get(IntegerType::get(C, PropBits.Alignment),
+                        IntegerType::get(C, PropBits.IsVtableAccess),
+                        IntegerType::get(C, PropBits.IsConstant),
+                        IntegerType::get(C, PropBits.IsOnStack),
+                        IntegerType::get(C, PropBits.MayBeCaptured),
+                        IntegerType::get(C, PropBits.LoadReadBeforeWriteInBB),
+                        IntegerType::get(C, PropBits.Padding)));
   }
   /// Return a constant value holding this property.
   Constant *getValueImpl(LLVMContext &C) const override {
@@ -492,7 +470,8 @@ public:
     //                      PropValue.IsVtableAccess),
     //     ConstantInt::get(IntegerType::get(C, PropBits.MayBeCaptured),
     //                      PropValue.IsVtableAccess),
-    //     ConstantInt::get(IntegerType::get(C, PropBits.LoadReadBeforeWriteInBB),
+    //     ConstantInt::get(IntegerType::get(C,
+    //     PropBits.LoadReadBeforeWriteInBB),
     //                      PropValue.LoadReadBeforeWriteInBB),
     //     ConstantInt::get(IntegerType::get(C, PropBits.Padding), 0),
     //     nullptr);
@@ -500,25 +479,15 @@ public:
   }
 
   /// Set the value of the Alignment property.
-  void setAlignment(char v) {
-    PropValue.Fields.Alignment = v;
-  }
+  void setAlignment(char v) { PropValue.Fields.Alignment = v; }
   /// Set the value of the IsVtableAccess property.
-  void setIsVtableAccess(bool v) {
-    PropValue.Fields.IsVtableAccess = v;
-  }
+  void setIsVtableAccess(bool v) { PropValue.Fields.IsVtableAccess = v; }
   /// Set the value of the IsConstant property.
-  void setIsConstant(bool v) {
-    PropValue.Fields.IsConstant = v;
-  }
+  void setIsConstant(bool v) { PropValue.Fields.IsConstant = v; }
   /// Set the value of the IsOnStack property.
-  void setIsOnStack(bool v) {
-    PropValue.Fields.IsOnStack = v;
-  }
+  void setIsOnStack(bool v) { PropValue.Fields.IsOnStack = v; }
   /// Set the value of the MayBeCaptured property.
-  void setMayBeCaptured(bool v) {
-    PropValue.Fields.MayBeCaptured = v;
-  }
+  void setMayBeCaptured(bool v) { PropValue.Fields.MayBeCaptured = v; }
   /// Set the value of the LoadReadBeforeWriteInBB property.
   void setLoadReadBeforeWriteInBB(bool v) {
     PropValue.Fields.LoadReadBeforeWriteInBB = v;
@@ -553,7 +522,8 @@ private:
   } PropertyBits;
 
   /// The number of bits representing each property.
-  static constexpr PropertyBits PropBits = { 8, 1, 1, 1, 1, 1, (64-8-1-1-1-1-1) };
+  static constexpr PropertyBits PropBits = {
+      8, 1, 1, 1, 1, 1, (64 - 8 - 1 - 1 - 1 - 1 - 1)};
 };
 
 struct CSIImpl {
@@ -562,14 +532,14 @@ public:
           function_ref<DominatorTree &(Function &)> GetDomTree,
           const CSIOptions &Options = CSIOptions())
       : M(M), DL(M.getDataLayout()), CG(CG), GetDomTree(GetDomTree),
-        Options(Options),
-        CsiFuncEntry(nullptr), CsiFuncExit(nullptr), CsiBBEntry(nullptr),
-        CsiBBExit(nullptr), CsiBeforeCallsite(nullptr),
+        Options(Options), CsiFuncEntry(nullptr), CsiFuncExit(nullptr),
+        CsiBBEntry(nullptr), CsiBBExit(nullptr), CsiBeforeCallsite(nullptr),
         CsiAfterCallsite(nullptr), CsiBeforeRead(nullptr),
         CsiAfterRead(nullptr), CsiBeforeWrite(nullptr), CsiAfterWrite(nullptr),
         MemmoveFn(nullptr), MemcpyFn(nullptr), MemsetFn(nullptr),
-        InitCallsiteToFunction(nullptr), RTUnitInit(nullptr)
-  {}
+        InitCallsiteToFunction(nullptr), RTUnitInit(nullptr) {
+    loadConfiguration();
+  }
 
   bool run();
 
@@ -614,7 +584,7 @@ protected:
                                           PointerType *EntryPointerType);
   static Constant *sizeTableToUnitSizeTable(Module &M,
                                             StructType *UnitSizeTableType,
-                                            SizeTable &SzTable); 
+                                            SizeTable &SzTable);
   /// Initialize the front-end data table structures.
   void initializeFEDTables();
   /// Collect unit front-end data table structures for finalization.
@@ -635,9 +605,8 @@ protected:
   /// Compute CSI properties on the given ordered list of loads and stores.
   void computeLoadAndStoreProperties(
       SmallVectorImpl<std::pair<Instruction *, CsiLoadStoreProperty>>
-      &LoadAndStoreProperties,
-      SmallVectorImpl<Instruction *> &BBLoadsAndStores,
-      const DataLayout &DL);
+          &LoadAndStoreProperties,
+      SmallVectorImpl<Instruction *> &BBLoadsAndStores, const DataLayout &DL);
 
   /// Insert calls to the instrumentation hooks.
   /// @{
@@ -665,7 +634,7 @@ protected:
   /// Return true if the given function should not be instrumented.
   bool shouldNotInstrumentFunction(Function &F);
 
-  void linkInToolFromBitcode(const std::string & bitcodePath);
+  void linkInToolFromBitcode(const std::string &bitcodePath);
 
   void loadConfiguration();
 
@@ -676,8 +645,8 @@ protected:
   CSIOptions Options;
 
   FrontEndDataTable FunctionFED, FunctionExitFED, BasicBlockFED, CallsiteFED,
-    LoadFED, StoreFED, DetachFED, TaskFED, TaskExitFED, DetachContinueFED,
-    SyncFED;
+      LoadFED, StoreFED, DetachFED, TaskFED, TaskExitFED, DetachContinueFED,
+      SyncFED;
 
   SmallVector<Constant *, 11> UnitFedTables;
 
