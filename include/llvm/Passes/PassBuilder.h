@@ -513,6 +513,16 @@ public:
     TapirLateEPCallbacks.push_back(C);
   }
 
+  /// Register a callback for a default optimizer pipeline extension point.
+  ///
+  /// This extension point allows adding passes after optimizations have been
+  /// performed on the Tapir IR, but before Tapir constructs are lowered to a
+  /// target runtime.
+  void registerTapirLoopEndEPCallback(
+      const std::function<void(ModulePassManager &, OptimizationLevel)> &C) {
+    TapirLoopEndEPCallbacks.push_back(C);
+  }
+
   /// Register a callback for parsing an AliasAnalysis Name to populate
   /// the given AAManager \p AA
   void registerParseAACallback(
@@ -627,6 +637,8 @@ private:
       VectorizerStartEPCallbacks;
   SmallVector<std::function<void(ModulePassManager &, OptimizationLevel)>, 2>
       TapirLateEPCallbacks;
+  SmallVector<std::function<void(ModulePassManager &, OptimizationLevel)>, 2>
+      TapirLoopEndEPCallbacks;
   // Module callbacks
   SmallVector<std::function<void(ModulePassManager &)>, 2>
       PipelineStartEPCallbacks;
