@@ -417,6 +417,7 @@ void PassManagerBuilder::populateModulePassManager(
 
     // Add passes to run just before Tapir lowering.
     addExtensionsToPM(EP_TapirLate, MPM);
+    addExtensionsToPM(EP_TapirLoopEnd, MPM);
 
     if (TapirTargetID::None != TapirTarget) {
       // MPM.add(createAnalyzeTapirPass());
@@ -756,6 +757,7 @@ void PassManagerBuilder::populateModulePassManager(
       MPM.add(createMergeFunctionsPass());
     MPM.add(createBarrierNoopPass());
     // addFunctionSimplificationPasses(MPM);
+    addExtensionsToPM(EP_TapirLoopEnd, MPM);
 
     // Now lower Tapir to Target runtime calls.
     //

@@ -118,6 +118,10 @@ public:
     /// EP_TapirLate - This extension point allows adding passes just before
     /// Tapir instructions are lowered to calls into a parallel runtime system.
     EP_TapirLate,
+
+    /// EP_TapirLoopEnd - This extension point allows adding passes just before
+    /// Tapir loops are processed by lowering, but before additional lowering.
+    EP_TapirLoopEnd,
   };
 
 
