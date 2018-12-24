@@ -655,6 +655,16 @@ void CSIImpl::instrumentCallsite(Instruction *I, DominatorTree *DT) {
     IsInvoke = true;
   }
 
+  bool shouldInstrumentBefore =
+      config->DoesFunctionRequireInstrumentationForPoint(
+          Called->getName(), InstrumentationPoint::INSTR_BEFORE_CALL);
+  bool shouldInstrumentAfter =
+      config->DoesFunctionRequireInstrumentationForPoint(
+          Called->getName(), InstrumentationPoint::INSTR_AFTER_CALL);
+
+  if (!shouldInstrumentAfter && !shouldInstrumentBefore)
+    return;
+
   IRBuilder<> IRB(I);
   uint64_t LocalId = CallsiteFED.add(*I);
   Value *CallsiteId = CallsiteFED.localToGlobalId(LocalId, IRB);
@@ -678,49 +688,52 @@ void CSIImpl::instrumentCallsite(Instruction *I, DominatorTree *DT) {
   CsiCallProperty Prop;
   Prop.setIsIndirect(!Called);
   Value *PropVal = Prop.getValue(IRB);
-  insertConditionalHookCall(I, CsiBeforeCallsite,
-                            {CallsiteId, FuncId, PropVal});
+  if (shouldInstrumentBefore)
+    insertConditionalHookCall(I, CsiBeforeCallsite,
+                              {CallsiteId, FuncId, PropVal});
 
   BasicBlock::iterator Iter(I);
-  if (IsInvoke) {
-    // There are two "after" positions for invokes: the normal block and the
-    // exception block. This also means we have to recompute the callsite and
-    // function IDs in each basic block so that we can use it for the after
-    // hook.
+  if (shouldInstrumentAfter) {
+    if (IsInvoke) {
+      // There are two "after" positions for invokes: the normal block and the
+      // exception block. This also means we have to recompute the callsite
+      // and function IDs in each basic block so that we can use it for the
+      // after hook.
 
-    // The "after" hook for this callsite is inserted before the BB entry hook
-    // by running instrumentCallsite after instrumentBasicBlock.
-    InvokeInst *II = dyn_cast<InvokeInst>(I);
-    BasicBlock *NormalBB = II->getNormalDest();
-    IRB.SetInsertPoint(&*NormalBB->getFirstInsertionPt());
-    CallsiteId = CallsiteFED.localToGlobalId(LocalId, IRB);
-    if (FuncIdGV != NULL)
-      FuncId = IRB.CreateLoad(FuncIdGV);
-    PropVal = Prop.getValue(IRB);
-    insertConditionalHookCall(&*IRB.GetInsertPoint(), CsiAfterCallsite,
-                              {CallsiteId, FuncId, PropVal});
+      // The "after" hook for this callsite is inserted before the BB entry
+      // hook by running instrumentCallsite after instrumentBasicBlock.
+      InvokeInst *II = dyn_cast<InvokeInst>(I);
+      BasicBlock *NormalBB = II->getNormalDest();
+      IRB.SetInsertPoint(&*NormalBB->getFirstInsertionPt());
+      CallsiteId = CallsiteFED.localToGlobalId(LocalId, IRB);
+      if (FuncIdGV != NULL)
+        FuncId = IRB.CreateLoad(FuncIdGV);
+      PropVal = Prop.getValue(IRB);
+      insertConditionalHookCall(&*IRB.GetInsertPoint(), CsiAfterCallsite,
+                                {CallsiteId, FuncId, PropVal});
 
-    BasicBlock *UnwindBB = II->getUnwindDest();
-    // If this unwind destination is shared among multiple invokes, split the
-    // destination to provide a unique destination for this invoke.
-    if (!UnwindBB->getSinglePredecessor())
-      UnwindBB =
-          SplitBlockPredecessors(UnwindBB, {II->getParent()}, ".csi-split", DT);
+      BasicBlock *UnwindBB = II->getUnwindDest();
+      // If this unwind destination is shared among multiple invokes, split
+      // the destination to provide a unique destination for this invoke.
+      if (!UnwindBB->getSinglePredecessor())
+        UnwindBB = SplitBlockPredecessors(UnwindBB, {II->getParent()},
+                                          ".csi-split", DT);
 
-    IRB.SetInsertPoint(&*UnwindBB->getFirstInsertionPt());
-    CallsiteId = CallsiteFED.localToGlobalId(LocalId, IRB);
-    if (FuncIdGV != NULL)
-      FuncId = IRB.CreateLoad(FuncIdGV);
-    PropVal = Prop.getValue(IRB);
-    insertConditionalHookCall(&*IRB.GetInsertPoint(), CsiAfterCallsite,
-                              {CallsiteId, FuncId, PropVal});
-  } else {
-    // Simple call instruction; there is only one "after" position.
-    Iter++;
-    IRB.SetInsertPoint(&*Iter);
-    PropVal = Prop.getValue(IRB);
-    insertConditionalHookCall(&*Iter, CsiAfterCallsite,
-                              {CallsiteId, FuncId, PropVal});
+      IRB.SetInsertPoint(&*UnwindBB->getFirstInsertionPt());
+      CallsiteId = CallsiteFED.localToGlobalId(LocalId, IRB);
+      if (FuncIdGV != NULL)
+        FuncId = IRB.CreateLoad(FuncIdGV);
+      PropVal = Prop.getValue(IRB);
+      insertConditionalHookCall(&*IRB.GetInsertPoint(), CsiAfterCallsite,
+                                {CallsiteId, FuncId, PropVal});
+    } else {
+      // Simple call instruction; there is only one "after" position.
+      Iter++;
+      IRB.SetInsertPoint(&*Iter);
+      PropVal = Prop.getValue(IRB);
+      insertConditionalHookCall(&*Iter, CsiAfterCallsite,
+                                {CallsiteId, FuncId, PropVal});
+    }
   }
 }
 
@@ -1509,7 +1522,6 @@ bool ComprehensiveStaticInstrumentation::runOnModule(Module &M) {
 
   Options.InstrumentAtomics = false;
   Options.InstrumentBasicBlocks = false;
-  Options.InstrumentCalls = false;
   Options.InstrumentMemIntrinsics = false;
   Options.InstrumentMemoryAccesses = false;
   Options.InstrumentTapir = false;
