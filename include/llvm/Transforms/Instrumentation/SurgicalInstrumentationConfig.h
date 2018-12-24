@@ -12,6 +12,8 @@ enum InstrumentationPoint : int {
   INSTR_INVALID_POINT = 0x0,
   INSTR_FUNCTION_ENTRY = 0x1,
   INSTR_FUNCTION_EXIT = 0x2,
+  INSTR_BEFORE_CALL = 0x4,
+  INSTR_AFTER_CALL = 0x8
 };
 
 inline InstrumentationPoint operator|(const InstrumentationPoint &a,
@@ -40,6 +42,14 @@ static StringMap<InstrumentationPoint> SurgicalInstrumentationPoints = {
     {
         "FunctionExit",
         INSTR_FUNCTION_EXIT,
+    },
+    {
+        "BeforeCall",
+        INSTR_BEFORE_CALL,
+    },
+    {
+        "AfterCall",
+        INSTR_AFTER_CALL,
     },
 };
 

@@ -825,6 +825,16 @@ void CSIImpl::instrumentCallsite(Instruction *I, DominatorTree *DT) {
   else if (InvokeInst *II = dyn_cast<InvokeInst>(I))
     Called = II->getCalledFunction();
 
+  bool shouldInstrumentBefore =
+      config->DoesFunctionRequireInstrumentationForPoint(
+          Called->getName(), InstrumentationPoint::INSTR_BEFORE_CALL);
+  bool shouldInstrumentAfter =
+      config->DoesFunctionRequireInstrumentationForPoint(
+          Called->getName(), InstrumentationPoint::INSTR_AFTER_CALL);
+
+  if (!shouldInstrumentAfter && !shouldInstrumentBefore)
+    return;
+
   IRBuilder<> IRB(I);
   Value *DefaultID = getDefaultID(IRB);
   uint64_t LocalId = CallsiteFED.add(*I);
@@ -850,25 +860,28 @@ void CSIImpl::instrumentCallsite(Instruction *I, DominatorTree *DT) {
   Value *DefaultPropVal = Prop.getValue(IRB);
   Prop.setIsIndirect(!Called);
   Value *PropVal = Prop.getValue(IRB);
-  insertHookCall(I, CsiBeforeCallsite, {CallsiteId, FuncId, PropVal});
+  if (shouldInstrumentBefore)
+    insertHookCall(I, CsiBeforeCallsite, {CallsiteId, FuncId, PropVal});
 
   BasicBlock::iterator Iter(I);
-  if (IsInvoke) {
-    // There are two "after" positions for invokes: the normal block and the
-    // exception block.
-    InvokeInst *II = cast<InvokeInst>(I);
-    insertHookCallInSuccessorBB(II->getNormalDest(), II->getParent(),
-                                CsiAfterCallsite, {CallsiteId, FuncId, PropVal},
-                                {DefaultID, DefaultID, DefaultPropVal});
-    insertHookCallInSuccessorBB(II->getUnwindDest(), II->getParent(),
-                                CsiAfterCallsite, {CallsiteId, FuncId, PropVal},
-                                {DefaultID, DefaultID, DefaultPropVal});
-  } else {
-    // Simple call instruction; there is only one "after" position.
-    Iter++;
-    IRB.SetInsertPoint(&*Iter);
-    PropVal = Prop.getValue(IRB);
-    insertHookCall(&*Iter, CsiAfterCallsite, {CallsiteId, FuncId, PropVal});
+  if (shouldInstrumentAfter) {
+    if (IsInvoke) {
+      // There are two "after" positions for invokes: the normal block and the
+      // exception block.
+      InvokeInst *II = cast<InvokeInst>(I);
+      insertHookCallInSuccessorBB(II->getNormalDest(), II->getParent(),
+				  CsiAfterCallsite, {CallsiteId, FuncId, PropVal},
+				  {DefaultID, DefaultID, DefaultPropVal});
+      insertHookCallInSuccessorBB(II->getUnwindDest(), II->getParent(),
+				  CsiAfterCallsite, {CallsiteId, FuncId, PropVal},
+				  {DefaultID, DefaultID, DefaultPropVal});
+    } else {
+      // Simple call instruction; there is only one "after" position.
+      Iter++;
+      IRB.SetInsertPoint(&*Iter);
+      PropVal = Prop.getValue(IRB);
+      insertHookCall(&*Iter, CsiAfterCallsite, {CallsiteId, FuncId, PropVal});
+    }
   }
 }
 
@@ -1973,6 +1986,12 @@ bool ComprehensiveStaticInstrumentationLegacyPass::runOnModule(Module &M) {
   auto GetTaskInfo = [this](Function &F) -> TaskInfo & {
     return this->getAnalysis<TaskInfoWrapperPass>(F).getTaskInfo();
   };
+
+  Options.InstrumentAtomics = false;
+  Options.InstrumentBasicBlocks = false;
+  Options.InstrumentMemIntrinsics = false;
+  Options.InstrumentMemoryAccesses = false;
+  Options.InstrumentTapir = false;
 
   return CSIImpl(M, CG, GetDomTree, GetTaskInfo, TLI, Options).run();
 }
