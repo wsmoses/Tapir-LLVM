@@ -11,9 +11,11 @@ enum InstrumentationConfigMode { WHITELIST = 0, BLACKLIST = 1 };
 enum InstrumentationPoint : int {
   INSTR_INVALID_POINT = 0x0,
   INSTR_FUNCTION_ENTRY = 0x1,
-  INSTR_FUNCTION_EXIT = 0x2,
-  INSTR_BEFORE_CALL = 0x4,
-  INSTR_AFTER_CALL = 0x8
+  INSTR_FUNCTION_EXIT = 0x1 << 1,
+  INSTR_BEFORE_CALL = 0x1 << 2,
+  INSTR_AFTER_CALL = 0x1 << 3,
+  INSTR_TAPIR_DETACH = 0x1 << 4,
+  INSTR_TAPIR_SYNC = 0x1 << 5,
 };
 
 inline InstrumentationPoint operator|(const InstrumentationPoint &a,
@@ -50,6 +52,14 @@ static StringMap<InstrumentationPoint> SurgicalInstrumentationPoints = {
     {
         "AfterCall",
         INSTR_AFTER_CALL,
+    },
+    {
+        "TapirDetach",
+        INSTR_TAPIR_DETACH,
+    },
+    {
+        "TapirSync",
+        INSTR_TAPIR_SYNC,
     },
 };
 

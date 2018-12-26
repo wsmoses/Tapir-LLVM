@@ -1682,9 +1682,11 @@ bool CSIImpl::shouldNotInstrumentFunction(Function &F) {
   Module &M = *F.getParent();
 
   // Don't instrument standard library calls.
+#ifdef WIN32
   if (F.hasName() && F.getName().find("_") == 0) {
     return true;
   }
+#endif
 
   if (F.hasName() && F.getName().find("__csi") != std::string::npos)
     return true;
@@ -1825,6 +1827,7 @@ void CSIImpl::updateInstrumentedFnAttrs(Function &F) {
 void CSIImpl::instrumentFunction(Function &F) {
   // This is required to prevent instrumenting the call to
   // __csi_module_init from within the module constructor.
+
   if (F.empty() || shouldNotInstrumentFunction(F))
     return;
 
@@ -1895,10 +1898,16 @@ void CSIImpl::instrumentFunction(Function &F) {
 
   // Instrument Tapir constructs.
   if (Options.InstrumentTapir) {
-    for (DetachInst *DI : Detaches)
-      instrumentDetach(DI, DT, TI);
-    for (SyncInst *SI : Syncs)
-      instrumentSync(SI);
+    if (config->DoesFunctionRequireInstrumentationForPoint(
+            F.getName(), InstrumentationPoint::INSTR_TAPIR_DETACH)) {
+      for (DetachInst *DI : Detaches)
+	instrumentDetach(DI, DT, TI);
+    }
+    if (config->DoesFunctionRequireInstrumentationForPoint(
+            F.getName(), InstrumentationPoint::INSTR_TAPIR_SYNC)) {
+      for (SyncInst *SI : Syncs)
+	instrumentSync(SI);
+    }
   }
 
   // Do this work in a separate loop after copying the iterators so that we
@@ -1991,7 +2000,7 @@ bool ComprehensiveStaticInstrumentationLegacyPass::runOnModule(Module &M) {
   Options.InstrumentBasicBlocks = false;
   Options.InstrumentMemIntrinsics = false;
   Options.InstrumentMemoryAccesses = false;
-  Options.InstrumentTapir = false;
+  Options.InstrumentTapir = true;
 
   return CSIImpl(M, CG, GetDomTree, GetTaskInfo, TLI, Options).run();
 }
