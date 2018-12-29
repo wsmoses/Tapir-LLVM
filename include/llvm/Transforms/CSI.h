@@ -110,7 +110,7 @@ public:
 
   /// Add the given Instruction to this FED table.
   /// \returns The local ID of the Instruction.
-  uint64_t add(const Instruction &I);
+  uint64_t add(const Instruction &I, const StringRef& RealName = "");
 
   /// Get the Type for a pointer to a FED table entry.
   ///
@@ -145,7 +145,7 @@ private:
   ///
   /// \returns The local ID of the appended information.
   /// @{
-  void add(uint64_t ID, const DILocation *Loc);
+  void add(uint64_t ID, const DILocation *Loc, const StringRef &RealName = "");
   void add(uint64_t ID, const DISubprogram *Subprog);
   /// @}
 
