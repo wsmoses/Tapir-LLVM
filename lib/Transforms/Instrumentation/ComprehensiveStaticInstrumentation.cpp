@@ -360,9 +360,10 @@ uint64_t FrontEndDataTable::add(const BasicBlock &BB) {
   return ID;
 }
 
-uint64_t FrontEndDataTable::add(const Instruction &I) {
+uint64_t FrontEndDataTable::add(const Instruction &I,
+                                const StringRef &RealName) {
   uint64_t ID = getId(&I);
-  add(ID, I.getDebugLoc());
+  add(ID, I.getDebugLoc(), RealName);
   return ID;
 }
 
@@ -378,12 +379,14 @@ StructType *FrontEndDataTable::getSourceLocStructType(LLVMContext &C) {
       /* File */ PointerType::get(IntegerType::get(C, 8), 0));
 }
 
-void FrontEndDataTable::add(uint64_t ID, const DILocation *Loc) {
+void FrontEndDataTable::add(uint64_t ID, const DILocation *Loc,
+                            const StringRef &RealName) {
   if (Loc) {
     // TODO: Add location information for inlining
     const DISubprogram *Subprog = Loc->getScope()->getSubprogram();
     add(ID, (int32_t)Loc->getLine(), (int32_t)Loc->getColumn(),
-        Loc->getFilename(), Loc->getDirectory(), Subprog->getName());
+        Loc->getFilename(), Loc->getDirectory(),
+        RealName == "" ? Subprog->getName() : RealName);
   } else
     add(ID);
 }
@@ -837,7 +840,7 @@ void CSIImpl::instrumentCallsite(Instruction *I, DominatorTree *DT) {
 
   IRBuilder<> IRB(I);
   Value *DefaultID = getDefaultID(IRB);
-  uint64_t LocalId = CallsiteFED.add(*I);
+  uint64_t LocalId = CallsiteFED.add(*I, Called->getName());
   Value *CallsiteId = CallsiteFED.localToGlobalId(LocalId, IRB);
   Value *FuncId = nullptr;
   GlobalVariable *FuncIdGV = nullptr;
@@ -1654,8 +1657,6 @@ void llvm::CSIImpl::linkInToolFromBitcode(const std::string &bitcodePath) {
       if (var && !var->isDeclaration() && !var->hasComdat()) {
         var->setLinkage(
             llvm::GlobalValue::LinkageTypes::AvailableExternallyLinkage);
-        if (var && globalVariableName == "callCount")
-          llvm::errs() << "Var: " << *var << "\n";
       }
     }
     for (auto &functionName : functions) {
