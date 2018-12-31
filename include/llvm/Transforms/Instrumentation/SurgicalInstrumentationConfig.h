@@ -18,6 +18,8 @@ enum InstrumentationPoint : int {
   INSTR_TAPIR_SYNC = 0x1 << 5,
 };
 
+InstrumentationPoint INSTR_ALL_POINTS = InstrumentationPoint::INSTR_INVALID_POINT;
+
 inline InstrumentationPoint operator|(const InstrumentationPoint &a,
                                       const InstrumentationPoint &b) {
   return static_cast<InstrumentationPoint>(static_cast<int>(a) |
@@ -77,8 +79,15 @@ public:
   static std::unique_ptr<InstrumentationConfig>
   ReadFromConfigurationFile(const std::string &filename);
 
+  virtual bool DoesFunctionRequireInterposition(const StringRef &functionName) {
+    return interposedFunctions.find(functionName) != interposedFunctions.end();
+  }
+
   virtual bool DoesFunctionRequireInstrumentationForPoint(
       const StringRef &functionName, const InstrumentationPoint &point) {
+    if (targetFunctions.size() == 0)
+      return true;
+
     bool found = targetFunctions.find(functionName) != targetFunctions.end();
 
     if (found) // The function is in the configuration. Does it specify this
@@ -86,8 +95,7 @@ public:
     {
       InstrumentationPoint &functionPoints = targetFunctions[functionName];
 
-      // INVALID_POINT is interpreted as "all points".
-      if (functionPoints != INSTR_INVALID_POINT) {
+      if (functionPoints != INSTR_ALL_POINTS) {
         if ((targetFunctions[functionName] & point) != point)
           found = false;
       }
@@ -98,10 +106,14 @@ public:
 
 protected:
   InstrumentationConfig(){};
-  InstrumentationConfig(const StringMap<InstrumentationPoint> &targetFunctions)
-      : targetFunctions(targetFunctions) {}
+  InstrumentationConfig(const StringMap<InstrumentationPoint> &targetFunctions,
+                        const StringSet<> &interposedFunctions)
+      : targetFunctions(targetFunctions),
+        interposedFunctions(interposedFunctions) {}
 
   StringMap<InstrumentationPoint> targetFunctions;
+
+  StringSet<> interposedFunctions;
 
   InstrumentationConfigMode mode = InstrumentationConfigMode::WHITELIST;
 };
@@ -111,6 +123,10 @@ public:
   virtual bool DoesFunctionRequireInstrumentationForPoint(
       const StringRef &functionName, const InstrumentationPoint &point) {
     return true;
+  }
+
+  virtual bool DoesFunctionRequireInterposition(const StringRef &functionName) {
+    return false;
   }
 };
 } // namespace llvm

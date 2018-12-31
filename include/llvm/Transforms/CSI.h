@@ -625,6 +625,10 @@ protected:
   void instrumentFunction(Function &F);
   /// @}
 
+  /// Obtain the signature for the interposition function given the
+  /// original function that needs interpositioning.
+  Function *getInterpositionFunction(Function *function);
+
   /// Insert a conditional call to the given hook function before the
   /// given instruction. The condition is based on the value of
   /// __csi_disable_instrumentation.
@@ -674,6 +678,9 @@ protected:
   DenseMap<StringRef, uint64_t> FuncOffsetMap;
 
   std::unique_ptr<InstrumentationConfig> config;
+
+  // Declarations of interposition functions.
+  DenseMap<Function *, Function *> interpositionFunctions;
 };
 
 } // end namespace llvm
