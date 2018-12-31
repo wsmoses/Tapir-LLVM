@@ -782,6 +782,10 @@ protected:
   void instrumentFunction(Function &F);
   /// @}
 
+  /// Obtain the signature for the interposition function given the
+  /// original function that needs interpositioning.
+  Function *getInterpositionFunction(Function *function);
+
   /// Insert a call to the given hook function before the given instruction.
   void insertHookCall(Instruction *I, Function *HookFunction,
                       ArrayRef<Value *> HookArgs);
@@ -1001,6 +1005,9 @@ protected:
 
   DenseMap<BasicBlock *, SmallVector<PHINode *, 4>> ArgPHIs;
   std::unique_ptr<InstrumentationConfig> config;
+
+  // Declarations of interposition functions.
+  DenseMap<Function *, Function *> interpositionFunctions;
 };
 
 } // end namespace llvm

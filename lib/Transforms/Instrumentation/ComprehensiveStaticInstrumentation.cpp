@@ -828,6 +828,21 @@ void CSIImpl::instrumentCallsite(Instruction *I, DominatorTree *DT) {
   else if (InvokeInst *II = dyn_cast<InvokeInst>(I))
     Called = II->getCalledFunction();
 
+  // Should we interpose this call?
+  bool shouldInterpose =
+      config->DoesFunctionRequireInterposition(Called->getName());
+
+  if (shouldInterpose) {
+    if (CallInst *CI = dyn_cast<CallInst>(I)) {
+      CI->setCalledFunction(getInterpositionFunction(Called));
+    } else if (InvokeInst *II = dyn_cast<InvokeInst>(I)) {
+      II->setCalledFunction(getInterpositionFunction(Called));
+    }
+
+    return;
+  }
+
+  // Does this call require instrumentation before or after?
   bool shouldInstrumentBefore =
       config->DoesFunctionRequireInstrumentationForPoint(
           Called->getName(), InstrumentationPoint::INSTR_BEFORE_CALL);
@@ -1973,6 +1988,22 @@ void CSIImpl::instrumentFunction(Function &F) {
   }
 
   updateInstrumentedFnAttrs(F);
+}
+
+Function *llvm::CSIImpl::getInterpositionFunction(Function *function) {
+  if (interpositionFunctions.find(function) != interpositionFunctions.end()) {
+    return interpositionFunctions.lookup(function);
+  }
+
+  std::string interposedName =
+      (std::string) "__csi_interpose_" + function->getName().str();
+
+  Function *interpositionFunction = (Function *)M.getOrInsertFunction(
+      interposedName, function->getFunctionType());
+
+  interpositionFunctions.insert({function, interpositionFunction});
+
+  return interpositionFunction;
 }
 
 void ComprehensiveStaticInstrumentationLegacyPass::getAnalysisUsage(
