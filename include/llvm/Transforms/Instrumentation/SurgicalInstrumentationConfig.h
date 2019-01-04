@@ -18,7 +18,7 @@ enum InstrumentationPoint : int {
   INSTR_TAPIR_SYNC = 0x1 << 5,
 };
 
-InstrumentationPoint INSTR_ALL_POINTS = InstrumentationPoint::INSTR_INVALID_POINT;
+#define INSTR_ALL_POINTS InstrumentationPoint::INSTR_INVALID_POINT
 
 inline InstrumentationPoint operator|(const InstrumentationPoint &a,
                                       const InstrumentationPoint &b) {
