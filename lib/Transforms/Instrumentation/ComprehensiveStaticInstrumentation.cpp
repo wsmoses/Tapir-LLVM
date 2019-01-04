@@ -1,4 +1,5 @@
-//===-- ComprehensiveStaticInstrumentation.cpp - instrumentation hooks ----===//
+//===-- ComprehensiveStaticInstrumentation.cpp - instrumentation hooks
+//----===//comprehensive
 //
 //                     The LLVM Compiler Infrastructure
 //
@@ -24,6 +25,7 @@
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/Module.h"
+#include "llvm/IR/Verifier.h"
 #include "llvm/IRReader/IRReader.h"
 #include "llvm/Linker/Linker.h"
 #include "llvm/Support/SourceMgr.h"
@@ -34,6 +36,7 @@
 #include "llvm/Transforms/Utils/Local.h"
 #include "llvm/Transforms/Utils/ModuleUtils.h"
 #include "llvm/Transforms/Utils/TapirUtils.h"
+#include <cassert>
 
 using namespace llvm;
 
@@ -518,9 +521,9 @@ void CSIImpl::initializeTapirHooks() {
   Type *IDType = IRB.getInt64Ty();
   Type *RetType = IRB.getVoidTy();
 
-  CsiDetach =
-      checkCsiInterfaceFunction(M.getOrInsertFunction("__csi_detach", RetType,
-                                                      /* detach_id */ IDType));
+  CsiDetach = checkCsiInterfaceFunction(M.getOrInsertFunction(
+      "__csi_detach", RetType,
+      /* detach_id */ IDType, IntegerType::getInt32Ty(C)->getPointerTo()));
   CsiTaskEntry =
       checkCsiInterfaceFunction(M.getOrInsertFunction("__csi_task", RetType,
                                                       /* task_id */ IDType,
@@ -535,7 +538,8 @@ void CSIImpl::initializeTapirHooks() {
                             /* detach_continue_id */ IDType,
                             /* detach_id */ IDType));
   CsiSync = checkCsiInterfaceFunction(
-      M.getOrInsertFunction("__csi_sync", RetType, IDType));
+      M.getOrInsertFunction("__csi_sync", RetType, IDType,
+                            IntegerType::getInt32Ty(C)->getPointerTo()));
 }
 
 int CSIImpl::getNumBytesAccessed(Value *Addr, const DataLayout &DL) {
@@ -799,14 +803,24 @@ static void getTaskExits(DetachInst *DI,
   }
 }
 
-void CSIImpl::instrumentDetach(DetachInst *DI, DominatorTree *DT) {
+void CSIImpl::instrumentDetach(
+    DetachInst *DI, DominatorTree *DT,
+    const llvm::DenseMap<Value *, Value *> &trackVars) {
   // Instrument the detach instruction itself
   Value *DetachID;
   {
     IRBuilder<> IRB(DI);
     uint64_t LocalID = DetachFED.add(*DI);
     DetachID = DetachFED.localToGlobalId(LocalID, IRB);
-    Instruction *Call = IRB.CreateCall(CsiDetach, {DetachID});
+
+    Value *trackVar = trackVars.lookup(DI->getSyncRegion());
+
+    IRB.CreateStore(
+        llvm::Constant::getIntegerValue(
+            IntegerType::getInt32Ty(DI->getContext()), APInt(32, 1)),
+        trackVar);
+
+    Instruction *Call = IRB.CreateCall(CsiDetach, {DetachID, trackVar});
     setInstrumentationDebugLoc(DI, Call);
   }
 
@@ -877,14 +891,22 @@ void CSIImpl::instrumentDetach(DetachInst *DI, DominatorTree *DT) {
   }
 }
 
-void CSIImpl::instrumentSync(SyncInst *SI) {
+void CSIImpl::instrumentSync(
+    SyncInst *SI, const llvm::DenseMap<Value *, Value *> &trackVars) {
   IRBuilder<> IRB(SI);
   // Get the ID of this sync.
   uint64_t LocalID = SyncFED.add(*SI);
   Value *SyncID = SyncFED.localToGlobalId(LocalID, IRB);
+
+  Value *trackVar = trackVars.lookup(SI->getSyncRegion());
+
   // Insert instrumentation before the sync.
-  Instruction *Call = IRB.CreateCall(CsiSync, {SyncID});
+  Instruction *Call = IRB.CreateCall(CsiSync, {SyncID, trackVar});
   setInstrumentationDebugLoc(SI, Call);
+
+  IRB.CreateStore(llvm::Constant::getIntegerValue(
+                      IntegerType::getInt32Ty(SI->getContext()), APInt(32, 0)),
+                  trackVar);
   // TODO: Insert after-sync instrumentation.
 }
 
@@ -1463,15 +1485,21 @@ void CSIImpl::instrumentFunction(Function &F) {
 
   // Instrument Tapir constructs.
   if (Options.InstrumentTapir) {
+    // Allocate a local variable that will keep track of whether
+    // a spawn has occurred before a sync. It will be set to 1 after
+    // a spawn and reset to 0 after a sync.
+    auto trackVars = keepTrackOfSpawns(F, Detaches, Syncs);
+
     if (config->DoesFunctionRequireInstrumentationForPoint(
             F.getName(), InstrumentationPoint::INSTR_TAPIR_DETACH)) {
-      for (DetachInst *DI : Detaches)
-        instrumentDetach(DI, DT);
+      for (DetachInst *DI : Detaches) {
+        instrumentDetach(DI, DT, trackVars);
+      }
     }
     if (config->DoesFunctionRequireInstrumentationForPoint(
             F.getName(), InstrumentationPoint::INSTR_TAPIR_SYNC)) {
       for (SyncInst *SI : Syncs)
-        instrumentSync(SI);
+        instrumentSync(SI, trackVars);
     }
   }
 
@@ -1531,6 +1559,41 @@ void CSIImpl::instrumentFunction(Function &F) {
   updateInstrumentedFnAttrs(F);
 }
 
+llvm::DenseMap<Value *, Value *> llvm::CSIImpl::keepTrackOfSpawns(
+    Function &F, const llvm::SmallVector<DetachInst *, 8> &Detaches,
+    const llvm::SmallVector<SyncInst *, 8> &Syncs) {
+
+  llvm::DenseMap<Value *, Value *> trackVars;
+
+  llvm::SmallSet<Value *, 8> regions;
+  for (auto &Detach : Detaches) {
+    regions.insert(Detach->getSyncRegion());
+  }
+  for (auto &Sync : Syncs) {
+    regions.insert(Sync->getSyncRegion());
+  }
+
+  LLVMContext &C = F.getContext();
+
+  IRBuilder<> builder{&F.getEntryBlock(),
+                      F.getEntryBlock().getFirstInsertionPt()};
+
+  size_t regionIndex = 0;
+  for (auto region : regions) {
+    Value *trackVar = builder.CreateAlloca(IntegerType::getInt32Ty(C), nullptr,
+                                           "has_spawned_region_" +
+                                               std::to_string(regionIndex));
+    builder.CreateStore(llvm::Constant::getIntegerValue(
+                            IntegerType::getInt32Ty(C), APInt(32, 0)),
+                        trackVar);
+
+    trackVars.insert({region, trackVar});
+    regionIndex++;
+  }
+
+  return trackVars;
+}
+
 Function *llvm::CSIImpl::getInterpositionFunction(Function *function) {
   if (interpositionFunctions.find(function) != interpositionFunctions.end()) {
     return interpositionFunctions.lookup(function);
@@ -1570,6 +1633,8 @@ bool ComprehensiveStaticInstrumentation::runOnModule(Module &M) {
 
   llvm::errs() << "Inside CSI\n";
   bool res = CSIImpl(M, CG, GetDomTree, Options).run();
+
+  verifyModule(M, &llvm::errs());
 
   return res;
 }

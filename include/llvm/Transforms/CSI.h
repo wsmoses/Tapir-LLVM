@@ -20,6 +20,7 @@
 #include "llvm/IR/Dominators.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/Module.h"
+#include "llvm/IR/ValueMap.h"
 #include "llvm/Transforms/Instrumentation.h"
 #include "llvm/Transforms/Instrumentation/SurgicalInstrumentationConfig.h"
 
@@ -110,7 +111,7 @@ public:
 
   /// Add the given Instruction to this FED table.
   /// \returns The local ID of the Instruction.
-  uint64_t add(const Instruction &I, const StringRef& RealName = "");
+  uint64_t add(const Instruction &I, const StringRef &RealName = "");
 
   /// Get the Type for a pointer to a FED table entry.
   ///
@@ -620,10 +621,16 @@ protected:
   bool instrumentMemIntrinsic(Instruction *I);
   void instrumentCallsite(Instruction *I, DominatorTree *DT);
   void instrumentBasicBlock(BasicBlock &BB);
-  void instrumentDetach(DetachInst *DI, DominatorTree *DT);
-  void instrumentSync(SyncInst *SI);
+  void instrumentDetach(DetachInst *DI, DominatorTree *DT,
+                      const  llvm::DenseMap<Value *, Value *>&  trackVars);
+  void instrumentSync(SyncInst *SI, const llvm::DenseMap<Value *, Value *> &trackVars);
   void instrumentFunction(Function &F);
   /// @}
+
+  llvm::DenseMap<Value *, Value *>
+  keepTrackOfSpawns(Function &F,
+                    const llvm::SmallVector<DetachInst *, 8> &Detaches,
+                    const llvm::SmallVector<SyncInst *, 8> &Syncs);
 
   /// Obtain the signature for the interposition function given the
   /// original function that needs interpositioning.
