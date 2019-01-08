@@ -864,8 +864,8 @@ public:
     return Insert(new UnreachableInst(Context));
   }
 
-  /// \brief Create a detach instruction, 'detach within SyncRegion, Detached,
-  // Continue'.
+  /// \brief Create a detach instruction,
+  ///  'detach within SyncRegion, Detached, Continue'.
   DetachInst *CreateDetach(BasicBlock *Detached, BasicBlock *Continue,
                            Value *SyncRegion, MDNode *BranchWeights = nullptr) {
     return Insert(addBranchMetadata(
