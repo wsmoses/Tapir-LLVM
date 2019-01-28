@@ -1,5 +1,4 @@
-//===-- ComprehensiveStaticInstrumentation.cpp - instrumentation hooks
-//----===//comprehensive
+//===-- ComprehensiveStaticInstrumentation.cpp - CSI compiler pass --------===//
 //
 //                     The LLVM Compiler Infrastructure
 //
@@ -41,7 +40,6 @@
 #include "llvm/Transforms/Utils/Local.h"
 #include "llvm/Transforms/Utils/ModuleUtils.h"
 #include "llvm/Transforms/Utils/TapirUtils.h"
-#include <cassert>
 
 using namespace llvm;
 
@@ -773,6 +771,11 @@ void CSIImpl::instrumentAtomic(Instruction *I, const DataLayout &DL) {
       << "WARNING: Uninstrumented atomic operations in program-under-test!\n";
 }
 
+// TODO: This code for instrumenting memory intrinsics was borrowed
+// from TSan.  Different tools might have better ways to handle these
+// function calls.  Replace this logic with a more flexible solution,
+// possibly one based on interpositioning.
+//
 // If a memset intrinsic gets inlined by the code gen, we will miss it.
 // So, we either need to ensure the intrinsic is not inlined, or instrument it.
 // We do not instrument memset/memmove/memcpy intrinsics (too complicated),
@@ -835,7 +838,7 @@ void CSIImpl::instrumentCallsite(Instruction *I, DominatorTree *DT) {
 
   // Should we interpose this call?
   bool shouldInterpose =
-      config->DoesFunctionRequireInterposition(Called->getName());
+      Config->DoesFunctionRequireInterposition(Called->getName());
 
   if (shouldInterpose) {
     if (CallInst *CI = dyn_cast<CallInst>(I)) {
@@ -849,10 +852,10 @@ void CSIImpl::instrumentCallsite(Instruction *I, DominatorTree *DT) {
 
   // Does this call require instrumentation before or after?
   bool shouldInstrumentBefore =
-      config->DoesFunctionRequireInstrumentationForPoint(
+      Config->DoesFunctionRequireInstrumentationForPoint(
           Called->getName(), InstrumentationPoint::INSTR_BEFORE_CALL);
   bool shouldInstrumentAfter =
-      config->DoesFunctionRequireInstrumentationForPoint(
+      Config->DoesFunctionRequireInstrumentationForPoint(
           Called->getName(), InstrumentationPoint::INSTR_AFTER_CALL);
 
   if (!shouldInstrumentAfter && !shouldInstrumentBefore)
@@ -893,11 +896,11 @@ void CSIImpl::instrumentCallsite(Instruction *I, DominatorTree *DT) {
       // exception block.
       InvokeInst *II = cast<InvokeInst>(I);
       insertHookCallInSuccessorBB(II->getNormalDest(), II->getParent(),
-				  CsiAfterCallsite, {CallsiteId, FuncId, PropVal},
-				  {DefaultID, DefaultID, DefaultPropVal});
+                                  CsiAfterCallsite, {CallsiteId, FuncId, PropVal},
+                                  {DefaultID, DefaultID, DefaultPropVal});
       insertHookCallInSuccessorBB(II->getUnwindDest(), II->getParent(),
-				  CsiAfterCallsite, {CallsiteId, FuncId, PropVal},
-				  {DefaultID, DefaultID, DefaultPropVal});
+                                  CsiAfterCallsite, {CallsiteId, FuncId, PropVal},
+                                  {DefaultID, DefaultID, DefaultPropVal});
     } else {
       // Simple call instruction; there is only one "after" position.
       Iter++;
@@ -949,19 +952,19 @@ static void getTaskExits(DetachInst *DI,
 
 void CSIImpl::instrumentDetach(DetachInst *DI, DominatorTree *DT,
                                TaskInfo &TI,
-			       const llvm::DenseMap<Value *, Value *> &trackVars) {
+                               const DenseMap<Value *, Value *> &TrackVars) {
   // Instrument the detach instruction itself
   Value *DetachID;
   {
     IRBuilder<> IRB(DI);
     uint64_t LocalID = DetachFED.add(*DI);
     DetachID = DetachFED.localToGlobalId(LocalID, IRB);
-    Value *trackVar = trackVars.lookup(DI->getSyncRegion());
+    Value *TrackVar = TrackVars.lookup(DI->getSyncRegion());
     IRB.CreateStore(
-        llvm::Constant::getIntegerValue(
+        Constant::getIntegerValue(
             IntegerType::getInt32Ty(DI->getContext()), APInt(32, 1)),
-        trackVar);
-    insertHookCall(DI, CsiDetach, {DetachID, trackVar});
+        TrackVar);
+    insertHookCall(DI, CsiDetach, {DetachID, TrackVar});
   }
 
   // Find the detached block, continuation, and associated reattaches.
@@ -1033,22 +1036,23 @@ void CSIImpl::instrumentDetach(DetachInst *DI, DominatorTree *DT,
 }
 
 void CSIImpl::instrumentSync(
-    SyncInst *SI, const llvm::DenseMap<Value *, Value *> &trackVars) {
+    SyncInst *SI, const DenseMap<Value *, Value *> &TrackVars) {
   IRBuilder<> IRB(SI);
   Value *DefaultID = getDefaultID(IRB);
   // Get the ID of this sync.
   uint64_t LocalID = SyncFED.add(*SI);
   Value *SyncID = SyncFED.localToGlobalId(LocalID, IRB);
 
-  Value *trackVar = trackVars.lookup(SI->getSyncRegion());
+  Value *TrackVar = TrackVars.lookup(SI->getSyncRegion());
 
   // Insert instrumentation before the sync.
-  insertHookCall(SI, CsiBeforeSync, {SyncID, trackVar});
+  insertHookCall(SI, CsiBeforeSync, {SyncID, TrackVar});
   insertHookCallInSuccessorBB(SI->getSuccessor(0), SI->getParent(),
-                              CsiAfterSync, {SyncID, trackVar},
-			      {DefaultID,
-			       llvm::Constant::getIntegerValue(
-                                   IntegerType::getInt32Ty(SI->getContext()), APInt(32, 0))});
+                              CsiAfterSync, {SyncID, TrackVar},
+                              {DefaultID,
+                               Constant::getIntegerValue(
+                                   IntegerType::getInt32Ty(SI->getContext()),
+                                   APInt(32, 0))});
 }
 
 void CSIImpl::instrumentAlloca(Instruction *I) {
@@ -1704,12 +1708,12 @@ void llvm::CSIImpl::linkInToolFromBitcode(const std::string &bitcodePath) {
 
 void llvm::CSIImpl::loadConfiguration() {
   if (ClConfigurationFilename != "")
-    config = InstrumentationConfig::ReadFromConfigurationFile(
+    Config = InstrumentationConfig::ReadFromConfigurationFile(
         ClConfigurationFilename);
   else
-    config = InstrumentationConfig::GetDefault();
+    Config = InstrumentationConfig::GetDefault();
 
-  config->SetConfigMode(ClConfigurationMode);
+  Config->SetConfigMode(ClConfigurationMode);
 }
 
 bool CSIImpl::shouldNotInstrumentFunction(Function &F) {
@@ -1935,17 +1939,17 @@ void CSIImpl::instrumentFunction(Function &F) {
     // Allocate a local variable that will keep track of whether
     // a spawn has occurred before a sync. It will be set to 1 after
     // a spawn and reset to 0 after a sync.
-    auto trackVars = keepTrackOfSpawns(F, Detaches, Syncs);
+    auto TrackVars = keepTrackOfSpawns(F, Detaches, Syncs);
 
-    if (config->DoesFunctionRequireInstrumentationForPoint(
+    if (Config->DoesFunctionRequireInstrumentationForPoint(
             F.getName(), InstrumentationPoint::INSTR_TAPIR_DETACH)) {
       for (DetachInst *DI : Detaches)
-	instrumentDetach(DI, DT, TI, trackVars);
+        instrumentDetach(DI, DT, TI, TrackVars);
     }
-    if (config->DoesFunctionRequireInstrumentationForPoint(
+    if (Config->DoesFunctionRequireInstrumentationForPoint(
             F.getName(), InstrumentationPoint::INSTR_TAPIR_SYNC)) {
       for (SyncInst *SI : Syncs)
-        instrumentSync(SI, trackVars);
+        instrumentSync(SI, TrackVars);
     }
   }
 
@@ -1985,14 +1989,14 @@ void CSIImpl::instrumentFunction(Function &F) {
   if (Options.InstrumentFuncEntryExit) {
     IRBuilder<> IRB(&*F.getEntryBlock().getFirstInsertionPt());
     Value *FuncId = FunctionFED.localToGlobalId(LocalId, IRB);
-    if (config->DoesFunctionRequireInstrumentationForPoint(
+    if (Config->DoesFunctionRequireInstrumentationForPoint(
             F.getName(), InstrumentationPoint::INSTR_FUNCTION_ENTRY)) {
       CsiFuncProperty FuncEntryProp;
       FuncEntryProp.setMaySpawn(MaySpawn);
       Value *PropVal = FuncEntryProp.getValue(IRB);
       insertHookCall(&*IRB.GetInsertPoint(), CsiFuncEntry, {FuncId, PropVal});
     }
-    if (config->DoesFunctionRequireInstrumentationForPoint(
+    if (Config->DoesFunctionRequireInstrumentationForPoint(
             F.getName(), InstrumentationPoint::INSTR_FUNCTION_EXIT)) {
       EscapeEnumerator EE(F, "csi.cleanup", false);
       while (IRBuilder<> *AtExit = EE.Next()) {
@@ -2013,55 +2017,55 @@ void CSIImpl::instrumentFunction(Function &F) {
   updateInstrumentedFnAttrs(F);
 }
 
-llvm::DenseMap<Value *, Value *> llvm::CSIImpl::keepTrackOfSpawns(
-    Function &F, const llvm::SmallVector<DetachInst *, 8> &Detaches,
-    const llvm::SmallVector<SyncInst *, 8> &Syncs) {
+DenseMap<Value *, Value *> llvm::CSIImpl::keepTrackOfSpawns(
+    Function &F, const SmallVectorImpl<DetachInst *> &Detaches,
+    const SmallVectorImpl<SyncInst *> &Syncs) {
 
-  llvm::DenseMap<Value *, Value *> trackVars;
+  DenseMap<Value *, Value *> TrackVars;
 
-  llvm::SmallSet<Value *, 8> regions;
+  SmallPtrSet<Value *, 8> Regions;
   for (auto &Detach : Detaches) {
-    regions.insert(Detach->getSyncRegion());
+    Regions.insert(Detach->getSyncRegion());
   }
   for (auto &Sync : Syncs) {
-    regions.insert(Sync->getSyncRegion());
+    Regions.insert(Sync->getSyncRegion());
   }
 
   LLVMContext &C = F.getContext();
 
-  IRBuilder<> builder{&F.getEntryBlock(),
+  IRBuilder<> Builder{&F.getEntryBlock(),
                       F.getEntryBlock().getFirstInsertionPt()};
 
-  size_t regionIndex = 0;
-  for (auto region : regions) {
-    Value *trackVar = builder.CreateAlloca(IntegerType::getInt32Ty(C), nullptr,
+  size_t RegionIndex = 0;
+  for (auto Region : Regions) {
+    Value *TrackVar = Builder.CreateAlloca(IntegerType::getInt32Ty(C), nullptr,
                                            "has_spawned_region_" +
-                                               std::to_string(regionIndex));
-    builder.CreateStore(llvm::Constant::getIntegerValue(
+                                               std::to_string(RegionIndex));
+    Builder.CreateStore(Constant::getIntegerValue(
                             IntegerType::getInt32Ty(C), APInt(32, 0)),
-                        trackVar);
+                        TrackVar);
 
-    trackVars.insert({region, trackVar});
-    regionIndex++;
+    TrackVars.insert({Region, TrackVar});
+    RegionIndex++;
   }
 
-  return trackVars;
+  return TrackVars;
 }
 
-Function *llvm::CSIImpl::getInterpositionFunction(Function *function) {
-  if (interpositionFunctions.find(function) != interpositionFunctions.end()) {
-    return interpositionFunctions.lookup(function);
+Function *llvm::CSIImpl::getInterpositionFunction(Function *F) {
+  if (InterpositionFunctions.find(F) != InterpositionFunctions.end()) {
+    return InterpositionFunctions.lookup(F);
   }
 
-  std::string interposedName =
-      (std::string) "__csi_interpose_" + function->getName().str();
+  std::string InterposedName =
+      (std::string) "__csi_interpose_" + F->getName().str();
 
-  Function *interpositionFunction = (Function *)M.getOrInsertFunction(
-      interposedName, function->getFunctionType());
+  Function *InterpositionFunction = (Function *)M.getOrInsertFunction(
+      InterposedName, F->getFunctionType());
 
-  interpositionFunctions.insert({function, interpositionFunction});
+  InterpositionFunctions.insert({F, InterpositionFunction});
 
-  return interpositionFunction;
+  return InterpositionFunction;
 }
 
 void ComprehensiveStaticInstrumentationLegacyPass::getAnalysisUsage(
@@ -2085,12 +2089,6 @@ bool ComprehensiveStaticInstrumentationLegacyPass::runOnModule(Module &M) {
   auto GetTaskInfo = [this](Function &F) -> TaskInfo & {
     return this->getAnalysis<TaskInfoWrapperPass>(F).getTaskInfo();
   };
-
-  Options.InstrumentAtomics = false;
-  Options.InstrumentBasicBlocks = false;
-  Options.InstrumentMemIntrinsics = false;
-  Options.InstrumentMemoryAccesses = false;
-  Options.InstrumentTapir = true;
 
   bool res = CSIImpl(M, CG, GetDomTree, GetTaskInfo, TLI, Options).run();
   verifyModule(M, &llvm::errs());

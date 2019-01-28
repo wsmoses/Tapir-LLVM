@@ -1,7 +1,18 @@
+//===-- SurgicalInstrumentationConfig.cpp -- Surgical CSI -----------------===//
+//
+//                     The LLVM Compiler Infrastructure
+//
+// This file is distributed under the University of Illinois Open Source
+// License. See LICENSE.TXT for details.
+//
+//===----------------------------------------------------------------------===//
+//
+// This file is part of CSI, a framework that provides comprehensive static
+// instrumentation.
+//
+//===----------------------------------------------------------------------===//
+
 #include "llvm/Transforms/Instrumentation/SurgicalInstrumentationConfig.h"
-#include <memory>
-#include <sstream>
-#include <vector>
 
 namespace llvm {
 InstrumentationPoint

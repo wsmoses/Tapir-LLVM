@@ -1,9 +1,24 @@
-#pragma once
+//===-- SurgicalInstrumentationConfig.h -- Surgical CSI ------*- C++ -*----===//
+//
+//                     The LLVM Compiler Infrastructure
+//
+// This file is distributed under the University of Illinois Open Source
+// License. See LICENSE.TXT for details.
+//
+//===----------------------------------------------------------------------===//
+//
+// This file is part of CSI, a framework that provides comprehensive static
+// instrumentation.
+//
+//===----------------------------------------------------------------------===//
+
+#ifndef LLVM_TRANSFORMS_INSTRUMENTATION_SURGICALINSTRUMENTATIONCONFIG_H
+#define LLVM_TRANSFORMS_INSTRUMENTATION_SURGICALINSTRUMENTATIONCONFIG_H
+
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringSet.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/raw_ostream.h"
-#include <string>
 
 namespace llvm {
 enum InstrumentationConfigMode { WHITELIST = 0, BLACKLIST = 1 };
@@ -130,3 +145,5 @@ public:
   }
 };
 } // namespace llvm
+
+#endif // LLVM_TRANSFORMS_INSTRUMENTATION_SURGICALINSTRUMENTATIONCONFIG_H

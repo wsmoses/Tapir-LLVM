@@ -680,7 +680,9 @@ public:
           const TargetLibraryInfo *TLI,
           const CSIOptions &Options = CSIOptions())
       : M(M), DL(M.getDataLayout()), CG(CG), GetDomTree(GetDomTree),
-        GetTaskInfo(GetTaskInfo), TLI(TLI), Options(Options) {}
+        GetTaskInfo(GetTaskInfo), TLI(TLI), Options(Options) {
+    loadConfiguration();
+  }
 
   virtual ~CSIImpl() {}
 
@@ -776,9 +778,9 @@ protected:
   void instrumentBasicBlock(BasicBlock &BB);
 
   void instrumentDetach(DetachInst *DI, DominatorTree *DT, TaskInfo &TI,
-                        const llvm::DenseMap<Value *, Value *> &trackVars);
+                        const DenseMap<Value *, Value *> &TrackVars);
   void instrumentSync(SyncInst *SI,
-                      const llvm::DenseMap<Value *, Value *> &trackVars);
+                      const DenseMap<Value *, Value *> &TrackVars);
   void instrumentAlloca(Instruction *I);
   void instrumentAllocFn(Instruction *I, DominatorTree *DT);
   void instrumentFree(Instruction *I);
@@ -786,14 +788,14 @@ protected:
   void instrumentFunction(Function &F);
   /// @}
 
-  llvm::DenseMap<Value *, Value *>
+  DenseMap<Value *, Value *>
   keepTrackOfSpawns(Function &F,
-                    const llvm::SmallVector<DetachInst *, 8> &Detaches,
-                    const llvm::SmallVector<SyncInst *, 8> &Syncs);
+                    const SmallVectorImpl<DetachInst *> &Detaches,
+                    const SmallVectorImpl<SyncInst *> &Syncs);
 
   /// Obtain the signature for the interposition function given the
   /// original function that needs interpositioning.
-  Function *getInterpositionFunction(Function *function);
+  Function *getInterpositionFunction(Function *F);
 
   /// Insert a call to the given hook function before the given instruction.
   void insertHookCall(Instruction *I, Function *HookFunction,
@@ -1013,10 +1015,10 @@ protected:
   DenseMap<StringRef, uint64_t> FuncOffsetMap;
 
   DenseMap<BasicBlock *, SmallVector<PHINode *, 4>> ArgPHIs;
-  std::unique_ptr<InstrumentationConfig> config;
+  std::unique_ptr<InstrumentationConfig> Config;
 
   // Declarations of interposition functions.
-  DenseMap<Function *, Function *> interpositionFunctions;
+  DenseMap<Function *, Function *> InterpositionFunctions;
 };
 
 } // end namespace llvm
