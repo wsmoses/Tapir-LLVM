@@ -15,7 +15,6 @@
 #ifndef LLVM_TRANSFORMS_CSI_H
 #define LLVM_TRANSFORMS_CSI_H
 
-#include "llvm/Transforms/Instrumentation.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Analysis/CallGraph.h"
@@ -24,6 +23,7 @@
 #include "llvm/IR/Dominators.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/Module.h"
+#include "llvm/Transforms/Instrumentation.h"
 #include "llvm/Transforms/Instrumentation/SurgicalInstrumentationConfig.h"
 
 namespace llvm {
@@ -35,7 +35,8 @@ class TaskInfo;
 static const char *const CsiRtUnitInitName = "__csirt_unit_init";
 static const char *const CsiRtUnitCtorName = "csirt.unit_ctor";
 static const char *const CsiFunctionBaseIdName = "__csi_unit_func_base_id";
-static const char *const CsiFunctionExitBaseIdName = "__csi_unit_func_exit_base_id";
+static const char *const CsiFunctionExitBaseIdName =
+    "__csi_unit_func_exit_base_id";
 static const char *const CsiBasicBlockBaseIdName = "__csi_unit_bb_base_id";
 static const char *const CsiCallsiteBaseIdName = "__csi_unit_callsite_base_id";
 static const char *const CsiLoadBaseIdName = "__csi_unit_load_base_id";
@@ -43,10 +44,9 @@ static const char *const CsiStoreBaseIdName = "__csi_unit_store_base_id";
 static const char *const CsiAllocaBaseIdName = "__csi_unit_alloca_base_id";
 static const char *const CsiDetachBaseIdName = "__csi_unit_detach_base_id";
 static const char *const CsiTaskBaseIdName = "__csi_unit_task_base_id";
-static const char *const CsiTaskExitBaseIdName =
-  "__csi_unit_task_exit_base_id";
+static const char *const CsiTaskExitBaseIdName = "__csi_unit_task_exit_base_id";
 static const char *const CsiDetachContinueBaseIdName =
-  "__csi_unit_detach_continue_base_id";
+    "__csi_unit_detach_continue_base_id";
 static const char *const CsiSyncBaseIdName = "__csi_unit_sync_base_id";
 static const char *const CsiAllocFnBaseIdName = "__csi_unit_allocfn_base_id";
 static const char *const CsiFreeBaseIdName = "__csi_unit_free_base_id";
@@ -179,8 +179,7 @@ private:
 class SizeTable : public ForensicTable {
 public:
   SizeTable() : ForensicTable() {}
-  SizeTable(Module &M, StringRef BaseIdName)
-      : ForensicTable(M, BaseIdName) {}
+  SizeTable(Module &M, StringRef BaseIdName) : ForensicTable(M, BaseIdName) {}
 
   /// The number of entries in this table
   uint64_t size() const { return LocalIdToSizeMap.size(); }
@@ -253,9 +252,7 @@ public:
 
 class CsiFuncProperty : public CsiProperty {
 public:
-  CsiFuncProperty() {
-    PropValue.Bits = 0;
-  }
+  CsiFuncProperty() { PropValue.Bits = 0; }
 
   /// Return the Type of a property.
   static Type *getType(LLVMContext &C) {
@@ -277,9 +274,7 @@ public:
   }
 
   /// Set the value of the MaySpawn property.
-  void setMaySpawn(bool v) {
-    PropValue.Fields.MaySpawn = v;
-  }
+  void setMaySpawn(bool v) { PropValue.Fields.MaySpawn = v; }
 
 private:
   typedef union {
@@ -300,14 +295,12 @@ private:
   } PropertyBits;
 
   /// The number of bits representing each property.
-  static constexpr PropertyBits PropBits = { 1, (64-1) };
+  static constexpr PropertyBits PropBits = {1, (64 - 1)};
 };
 
 class CsiFuncExitProperty : public CsiProperty {
 public:
-  CsiFuncExitProperty() {
-      PropValue.Bits = 0;
-  }
+  CsiFuncExitProperty() { PropValue.Bits = 0; }
 
   /// Return the Type of a property.
   static Type *getType(LLVMContext &C) {
@@ -330,14 +323,10 @@ public:
   }
 
   /// Set the value of the MaySpawn property.
-  void setMaySpawn(bool v) {
-    PropValue.Fields.MaySpawn = v;
-  }
+  void setMaySpawn(bool v) { PropValue.Fields.MaySpawn = v; }
 
   /// Set the value of the EHReturn property.
-  void setEHReturn(bool v) {
-    PropValue.Fields.EHReturn = v;
-  }
+  void setEHReturn(bool v) { PropValue.Fields.EHReturn = v; }
 
 private:
   typedef union {
@@ -360,14 +349,12 @@ private:
   } PropertyBits;
 
   /// The number of bits representing each property.
-  static constexpr PropertyBits PropBits = { 1, 1, (64-1-1) };
+  static constexpr PropertyBits PropBits = {1, 1, (64 - 1 - 1)};
 };
 
 class CsiBBProperty : public CsiProperty {
 public:
-  CsiBBProperty() {
-    PropValue.Bits = 0;
-  }
+  CsiBBProperty() { PropValue.Bits = 0; }
 
   /// Return the Type of a property.
   static Type *getType(LLVMContext &C) {
@@ -391,14 +378,10 @@ public:
   }
 
   /// Set the value of the IsLandingPad property.
-  void setIsLandingPad(bool v) {
-    PropValue.Fields.IsLandingPad = v;
-  }
+  void setIsLandingPad(bool v) { PropValue.Fields.IsLandingPad = v; }
 
   /// Set the value of the IsEHPad property.
-  void setIsEHPad(bool v) {
-    PropValue.Fields.IsEHPad = v;
-  }
+  void setIsEHPad(bool v) { PropValue.Fields.IsEHPad = v; }
 
 private:
   typedef union {
@@ -421,14 +404,12 @@ private:
   } PropertyBits;
 
   /// The number of bits representing each property.
-  static constexpr PropertyBits PropBits = { 1, 1, (64-1-1) };
+  static constexpr PropertyBits PropBits = {1, 1, (64 - 1 - 1)};
 };
 
 class CsiCallProperty : public CsiProperty {
 public:
-  CsiCallProperty() {
-    PropValue.Bits = 0;
-  }
+  CsiCallProperty() { PropValue.Bits = 0; }
 
   /// Return the Type of a property.
   static Type *getType(LLVMContext &C) {
@@ -453,9 +434,7 @@ public:
   }
 
   /// Set the value of the IsIndirect property.
-  void setIsIndirect(bool v) {
-    PropValue.Fields.IsIndirect = v;
-  }
+  void setIsIndirect(bool v) { PropValue.Fields.IsIndirect = v; }
 
 private:
   typedef union {
@@ -476,25 +455,24 @@ private:
   } PropertyBits;
 
   /// The number of bits representing each property.
-  static constexpr PropertyBits PropBits = { 1, (64-1) };
+  static constexpr PropertyBits PropBits = {1, (64 - 1)};
 };
 
 class CsiLoadStoreProperty : public CsiProperty {
 public:
-  CsiLoadStoreProperty() {
-    PropValue.Bits = 0;
-  }
+  CsiLoadStoreProperty() { PropValue.Bits = 0; }
   /// Return the Type of a property.
   static Type *getType(LLVMContext &C) {
     // Must match the definition of property type in csi.h
     return CsiProperty::getCoercedType(
-        C, StructType::get(IntegerType::get(C, PropBits.Alignment),
-                           IntegerType::get(C, PropBits.IsVtableAccess),
-                           IntegerType::get(C, PropBits.IsConstant),
-                           IntegerType::get(C, PropBits.IsOnStack),
-                           IntegerType::get(C, PropBits.MayBeCaptured),
-                           IntegerType::get(C, PropBits.LoadReadBeforeWriteInBB),
-                           IntegerType::get(C, PropBits.Padding)));
+        C,
+        StructType::get(IntegerType::get(C, PropBits.Alignment),
+                        IntegerType::get(C, PropBits.IsVtableAccess),
+                        IntegerType::get(C, PropBits.IsConstant),
+                        IntegerType::get(C, PropBits.IsOnStack),
+                        IntegerType::get(C, PropBits.MayBeCaptured),
+                        IntegerType::get(C, PropBits.LoadReadBeforeWriteInBB),
+                        IntegerType::get(C, PropBits.Padding)));
   }
   /// Return a constant value holding this property.
   Constant *getValueImpl(LLVMContext &C) const override {
@@ -511,7 +489,8 @@ public:
     //                      PropValue.IsVtableAccess),
     //     ConstantInt::get(IntegerType::get(C, PropBits.MayBeCaptured),
     //                      PropValue.IsVtableAccess),
-    //     ConstantInt::get(IntegerType::get(C, PropBits.LoadReadBeforeWriteInBB),
+    //     ConstantInt::get(IntegerType::get(C,
+    //     PropBits.LoadReadBeforeWriteInBB),
     //                      PropValue.LoadReadBeforeWriteInBB),
     //     ConstantInt::get(IntegerType::get(C, PropBits.Padding), 0),
     //     nullptr);
@@ -519,25 +498,15 @@ public:
   }
 
   /// Set the value of the Alignment property.
-  void setAlignment(char v) {
-    PropValue.Fields.Alignment = v;
-  }
+  void setAlignment(char v) { PropValue.Fields.Alignment = v; }
   /// Set the value of the IsVtableAccess property.
-  void setIsVtableAccess(bool v) {
-    PropValue.Fields.IsVtableAccess = v;
-  }
+  void setIsVtableAccess(bool v) { PropValue.Fields.IsVtableAccess = v; }
   /// Set the value of the IsConstant property.
-  void setIsConstant(bool v) {
-    PropValue.Fields.IsConstant = v;
-  }
+  void setIsConstant(bool v) { PropValue.Fields.IsConstant = v; }
   /// Set the value of the IsOnStack property.
-  void setIsOnStack(bool v) {
-    PropValue.Fields.IsOnStack = v;
-  }
+  void setIsOnStack(bool v) { PropValue.Fields.IsOnStack = v; }
   /// Set the value of the MayBeCaptured property.
-  void setMayBeCaptured(bool v) {
-    PropValue.Fields.MayBeCaptured = v;
-  }
+  void setMayBeCaptured(bool v) { PropValue.Fields.MayBeCaptured = v; }
   /// Set the value of the LoadReadBeforeWriteInBB property.
   void setLoadReadBeforeWriteInBB(bool v) {
     PropValue.Fields.LoadReadBeforeWriteInBB = v;
@@ -572,14 +541,13 @@ private:
   } PropertyBits;
 
   /// The number of bits representing each property.
-  static constexpr PropertyBits PropBits = { 8, 1, 1, 1, 1, 1, (64-8-1-1-1-1-1) };
+  static constexpr PropertyBits PropBits = {
+      8, 1, 1, 1, 1, 1, (64 - 8 - 1 - 1 - 1 - 1 - 1)};
 };
 
 class CsiAllocaProperty : public CsiProperty {
 public:
-  CsiAllocaProperty() {
-    PropValue.Bits = 0;
-  }
+  CsiAllocaProperty() { PropValue.Bits = 0; }
 
   /// Return the Type of a property.
   static Type *getType(LLVMContext &C) {
@@ -597,9 +565,7 @@ public:
   }
 
   /// Set the value of the IsIndirect property.
-  void setIsStatic(bool v) {
-    PropValue.Fields.IsStatic = v;
-  }
+  void setIsStatic(bool v) { PropValue.Fields.IsStatic = v; }
 
 private:
   typedef union {
@@ -620,14 +586,12 @@ private:
   } PropertyBits;
 
   /// The number of bits representing each property.
-  static constexpr PropertyBits PropBits = { 1, (64-1) };
+  static constexpr PropertyBits PropBits = {1, (64 - 1)};
 };
 
 class CsiAllocFnProperty : public CsiProperty {
 public:
-  CsiAllocFnProperty() {
-    PropValue.Bits = 0;
-  }
+  CsiAllocFnProperty() { PropValue.Bits = 0; }
   /// Return the Type of a property.
   static Type *getType(LLVMContext &C) {
     // Must match the definition of property type in csi.h
@@ -642,9 +606,7 @@ public:
   }
 
   /// Set the value of the allocation function type (e.g., malloc, calloc, new).
-  void setAllocFnTy(unsigned v) {
-    PropValue.Fields.AllocFnTy = v;
-  }
+  void setAllocFnTy(unsigned v) { PropValue.Fields.AllocFnTy = v; }
 
 private:
   typedef union {
@@ -665,14 +627,12 @@ private:
   } PropertyBits;
 
   /// The number of bits representing each property.
-  static constexpr PropertyBits PropBits = { 8, (64-8) };
+  static constexpr PropertyBits PropBits = {8, (64 - 8)};
 };
 
 class CsiFreeProperty : public CsiProperty {
 public:
-  CsiFreeProperty() {
-    PropValue.Bits = 0;
-  }
+  CsiFreeProperty() { PropValue.Bits = 0; }
   /// Return the Type of a property.
   static Type *getType(LLVMContext &C) {
     // Must match the definition of property type in csi.h
@@ -687,9 +647,7 @@ public:
   }
 
   /// Set the value of the allocation function type (e.g., malloc, calloc, new).
-  void setFreeTy(unsigned v) {
-    PropValue.Fields.FreeTy = v;
-  }
+  void setFreeTy(unsigned v) { PropValue.Fields.FreeTy = v; }
 
 private:
   typedef union {
@@ -710,7 +668,7 @@ private:
   } PropertyBits;
 
   /// The number of bits representing each property.
-  static constexpr PropertyBits PropBits = { 8, (64-8) };
+  static constexpr PropertyBits PropBits = {8, (64 - 8)};
 };
 
 struct CSIImpl {
@@ -721,8 +679,7 @@ public:
           const TargetLibraryInfo *TLI,
           const CSIOptions &Options = CSIOptions())
       : M(M), DL(M.getDataLayout()), CG(CG), GetDomTree(GetDomTree),
-        GetTaskInfo(GetTaskInfo), TLI(TLI), Options(Options)
-  {}
+        GetTaskInfo(GetTaskInfo), TLI(TLI), Options(Options) {}
 
   virtual ~CSIImpl() {}
 
@@ -735,9 +692,10 @@ public:
   static bool isVtableAccess(Instruction *I);
   static bool addrPointsToConstantData(Value *Addr);
   static bool isAtomic(Instruction *I);
-  static void getAllocFnArgs(
-      const Instruction *I, SmallVectorImpl<Value*> &AllocFnArgs,
-      Type *SizeTy, Type *AddrTy, const TargetLibraryInfo &TLI);
+  static void getAllocFnArgs(const Instruction *I,
+                             SmallVectorImpl<Value *> &AllocFnArgs,
+                             Type *SizeTy, Type *AddrTy,
+                             const TargetLibraryInfo &TLI);
 
   /// Helper functions to deal with calls to functions that can throw.
   static void setupCalls(Function &F);
@@ -779,7 +737,7 @@ protected:
                                           PointerType *EntryPointerType);
   static Constant *sizeTableToUnitSizeTable(Module &M,
                                             StructType *UnitSizeTableType,
-                                            SizeTable &SzTable); 
+                                            SizeTable &SzTable);
   /// Initialize the front-end data table structures.
   void initializeFEDTables();
   /// Collect unit front-end data table structures for finalization.
@@ -800,9 +758,8 @@ protected:
   /// Compute CSI properties on the given ordered list of loads and stores.
   void computeLoadAndStoreProperties(
       SmallVectorImpl<std::pair<Instruction *, CsiLoadStoreProperty>>
-      &LoadAndStoreProperties,
-      SmallVectorImpl<Instruction *> &BBLoadsAndStores,
-      const DataLayout &DL);
+          &LoadAndStoreProperties,
+      SmallVectorImpl<Instruction *> &BBLoadsAndStores, const DataLayout &DL);
 
   /// Insert calls to the instrumentation hooks.
   /// @{
@@ -828,16 +785,18 @@ protected:
   /// Insert a call to the given hook function before the given instruction.
   void insertHookCall(Instruction *I, Function *HookFunction,
                       ArrayRef<Value *> HookArgs);
-  bool updateArgPHIs(
-      BasicBlock *Succ, BasicBlock *BB, ArrayRef<Value *> HookArgs,
-      ArrayRef<Value *> DefaultHookArgs);
-  void insertHookCallInSuccessorBB(
-      BasicBlock *Succ, BasicBlock *BB, Function *HookFunction,
-      ArrayRef<Value *> HookArgs, ArrayRef<Value *> DefaultHookArgs);
-  void insertHookCallAtSharedEHSpindleExits(
-      Spindle *SharedEHSpindle, Task *T, Function *HookFunction,
-      FrontEndDataTable &FED,
-      ArrayRef<Value *> HookArgs, ArrayRef<Value *> DefaultArgs);
+  bool updateArgPHIs(BasicBlock *Succ, BasicBlock *BB,
+                     ArrayRef<Value *> HookArgs,
+                     ArrayRef<Value *> DefaultHookArgs);
+  void insertHookCallInSuccessorBB(BasicBlock *Succ, BasicBlock *BB,
+                                   Function *HookFunction,
+                                   ArrayRef<Value *> HookArgs,
+                                   ArrayRef<Value *> DefaultHookArgs);
+  void insertHookCallAtSharedEHSpindleExits(Spindle *SharedEHSpindle, Task *T,
+                                            Function *HookFunction,
+                                            FrontEndDataTable &FED,
+                                            ArrayRef<Value *> HookArgs,
+                                            ArrayRef<Value *> DefaultArgs);
 
   /// Return true if the given function should not be instrumented.
   bool shouldNotInstrumentFunction(Function &F);
@@ -847,54 +806,71 @@ protected:
   void updateInstrumentedFnAttrs(Function &F);
   // List of all allocation function types.  This list needs to remain
   // consistent with TargetLibraryInfo and with csan.h.
-  enum class AllocFnTy
-    {
-     malloc = 0,
-     valloc,
-     calloc,
-     realloc,
-     reallocf,
-     Znwj,
-     ZnwjRKSt9nothrow_t,
-     Znwm,
-     ZnwmRKSt9nothrow_t,
-     Znaj,
-     ZnajRKSt9nothrow_t,
-     Znam,
-     ZnamRKSt9nothrow_t,
-     msvc_new_int,
-     msvc_new_int_nothrow,
-     msvc_new_longlong,
-     msvc_new_longlong_nothrow,
-     msvc_new_array_int,
-     msvc_new_array_int_nothrow,
-     msvc_new_array_longlong,
-     msvc_new_array_longlong_nothrow,
-     LAST_ALLOCFNTY
-    };
+  enum class AllocFnTy {
+    malloc = 0,
+    valloc,
+    calloc,
+    realloc,
+    reallocf,
+    Znwj,
+    ZnwjRKSt9nothrow_t,
+    Znwm,
+    ZnwmRKSt9nothrow_t,
+    Znaj,
+    ZnajRKSt9nothrow_t,
+    Znam,
+    ZnamRKSt9nothrow_t,
+    msvc_new_int,
+    msvc_new_int_nothrow,
+    msvc_new_longlong,
+    msvc_new_longlong_nothrow,
+    msvc_new_array_int,
+    msvc_new_array_int_nothrow,
+    msvc_new_array_longlong,
+    msvc_new_array_longlong_nothrow,
+    LAST_ALLOCFNTY
+  };
 
   static AllocFnTy getAllocFnTy(const LibFunc &F) {
     switch (F) {
-    default: return AllocFnTy::LAST_ALLOCFNTY;
-    case LibFunc_malloc: return AllocFnTy::malloc;
-    case LibFunc_valloc: return AllocFnTy::valloc;
-    case LibFunc_calloc: return AllocFnTy::calloc;
-    case LibFunc_realloc: return AllocFnTy::realloc;
-    case LibFunc_reallocf: return AllocFnTy::reallocf;
-    case LibFunc_Znwj: return AllocFnTy::Znwj;
-    case LibFunc_ZnwjRKSt9nothrow_t: return AllocFnTy::ZnwjRKSt9nothrow_t;
-    case LibFunc_Znwm: return AllocFnTy::Znwm;
-    case LibFunc_ZnwmRKSt9nothrow_t: return AllocFnTy::ZnwmRKSt9nothrow_t;
-    case LibFunc_Znaj: return AllocFnTy::Znaj;
-    case LibFunc_ZnajRKSt9nothrow_t: return AllocFnTy::ZnajRKSt9nothrow_t;
-    case LibFunc_Znam: return AllocFnTy::Znam;
-    case LibFunc_ZnamRKSt9nothrow_t: return AllocFnTy::ZnamRKSt9nothrow_t;
-    case LibFunc_msvc_new_int: return AllocFnTy::msvc_new_int;
-    case LibFunc_msvc_new_int_nothrow: return AllocFnTy::msvc_new_int_nothrow;
-    case LibFunc_msvc_new_longlong: return AllocFnTy::msvc_new_longlong;
+    default:
+      return AllocFnTy::LAST_ALLOCFNTY;
+    case LibFunc_malloc:
+      return AllocFnTy::malloc;
+    case LibFunc_valloc:
+      return AllocFnTy::valloc;
+    case LibFunc_calloc:
+      return AllocFnTy::calloc;
+    case LibFunc_realloc:
+      return AllocFnTy::realloc;
+    case LibFunc_reallocf:
+      return AllocFnTy::reallocf;
+    case LibFunc_Znwj:
+      return AllocFnTy::Znwj;
+    case LibFunc_ZnwjRKSt9nothrow_t:
+      return AllocFnTy::ZnwjRKSt9nothrow_t;
+    case LibFunc_Znwm:
+      return AllocFnTy::Znwm;
+    case LibFunc_ZnwmRKSt9nothrow_t:
+      return AllocFnTy::ZnwmRKSt9nothrow_t;
+    case LibFunc_Znaj:
+      return AllocFnTy::Znaj;
+    case LibFunc_ZnajRKSt9nothrow_t:
+      return AllocFnTy::ZnajRKSt9nothrow_t;
+    case LibFunc_Znam:
+      return AllocFnTy::Znam;
+    case LibFunc_ZnamRKSt9nothrow_t:
+      return AllocFnTy::ZnamRKSt9nothrow_t;
+    case LibFunc_msvc_new_int:
+      return AllocFnTy::msvc_new_int;
+    case LibFunc_msvc_new_int_nothrow:
+      return AllocFnTy::msvc_new_int_nothrow;
+    case LibFunc_msvc_new_longlong:
+      return AllocFnTy::msvc_new_longlong;
     case LibFunc_msvc_new_longlong_nothrow:
       return AllocFnTy::msvc_new_longlong_nothrow;
-    case LibFunc_msvc_new_array_int: return AllocFnTy::msvc_new_array_int;
+    case LibFunc_msvc_new_array_int:
+      return AllocFnTy::msvc_new_array_int;
     case LibFunc_msvc_new_array_int_nothrow:
       return AllocFnTy::msvc_new_array_int_nothrow;
     case LibFunc_msvc_new_array_longlong:
@@ -906,49 +882,61 @@ protected:
 
   // List of all free function types.  This list needs to remain consistent with
   // TargetLibraryInfo and with csi.h.
-  enum class FreeTy
-    {
-     free = 0,
-     ZdlPv,
-     ZdlPvRKSt9nothrow_t,
-     ZdlPvj,
-     ZdlPvm,
-     ZdaPv,
-     ZdaPvRKSt9nothrow_t,
-     ZdaPvj,
-     ZdaPvm,
-     msvc_delete_ptr32,
-     msvc_delete_ptr32_nothrow,
-     msvc_delete_ptr32_int,
-     msvc_delete_ptr64,
-     msvc_delete_ptr64_nothrow,
-     msvc_delete_ptr64_longlong,
-     msvc_delete_array_ptr32,
-     msvc_delete_array_ptr32_nothrow,
-     msvc_delete_array_ptr32_int,
-     msvc_delete_array_ptr64,
-     msvc_delete_array_ptr64_nothrow,
-     msvc_delete_array_ptr64_longlong,
-     LAST_FREETY
-    };
+  enum class FreeTy {
+    free = 0,
+    ZdlPv,
+    ZdlPvRKSt9nothrow_t,
+    ZdlPvj,
+    ZdlPvm,
+    ZdaPv,
+    ZdaPvRKSt9nothrow_t,
+    ZdaPvj,
+    ZdaPvm,
+    msvc_delete_ptr32,
+    msvc_delete_ptr32_nothrow,
+    msvc_delete_ptr32_int,
+    msvc_delete_ptr64,
+    msvc_delete_ptr64_nothrow,
+    msvc_delete_ptr64_longlong,
+    msvc_delete_array_ptr32,
+    msvc_delete_array_ptr32_nothrow,
+    msvc_delete_array_ptr32_int,
+    msvc_delete_array_ptr64,
+    msvc_delete_array_ptr64_nothrow,
+    msvc_delete_array_ptr64_longlong,
+    LAST_FREETY
+  };
 
   static FreeTy getFreeTy(const LibFunc &F) {
     switch (F) {
-    default: return FreeTy::LAST_FREETY;
-    case LibFunc_free: return FreeTy::free;
-    case LibFunc_ZdlPv: return FreeTy::ZdlPv;
-    case LibFunc_ZdlPvRKSt9nothrow_t: return FreeTy::ZdlPvRKSt9nothrow_t;
-    case LibFunc_ZdlPvj: return FreeTy::ZdlPvj;
-    case LibFunc_ZdlPvm: return FreeTy::ZdlPvm;
-    case LibFunc_ZdaPv: return FreeTy::ZdaPv;
-    case LibFunc_ZdaPvRKSt9nothrow_t: return FreeTy::ZdaPvRKSt9nothrow_t;
-    case LibFunc_ZdaPvj: return FreeTy::ZdaPvj;
-    case LibFunc_ZdaPvm: return FreeTy::ZdaPvm;
-    case LibFunc_msvc_delete_ptr32: return FreeTy::msvc_delete_ptr32;
+    default:
+      return FreeTy::LAST_FREETY;
+    case LibFunc_free:
+      return FreeTy::free;
+    case LibFunc_ZdlPv:
+      return FreeTy::ZdlPv;
+    case LibFunc_ZdlPvRKSt9nothrow_t:
+      return FreeTy::ZdlPvRKSt9nothrow_t;
+    case LibFunc_ZdlPvj:
+      return FreeTy::ZdlPvj;
+    case LibFunc_ZdlPvm:
+      return FreeTy::ZdlPvm;
+    case LibFunc_ZdaPv:
+      return FreeTy::ZdaPv;
+    case LibFunc_ZdaPvRKSt9nothrow_t:
+      return FreeTy::ZdaPvRKSt9nothrow_t;
+    case LibFunc_ZdaPvj:
+      return FreeTy::ZdaPvj;
+    case LibFunc_ZdaPvm:
+      return FreeTy::ZdaPvm;
+    case LibFunc_msvc_delete_ptr32:
+      return FreeTy::msvc_delete_ptr32;
     case LibFunc_msvc_delete_ptr32_nothrow:
       return FreeTy::msvc_delete_ptr32_nothrow;
-    case LibFunc_msvc_delete_ptr32_int: return FreeTy::msvc_delete_ptr32_int;
-    case LibFunc_msvc_delete_ptr64: return FreeTy::msvc_delete_ptr64;
+    case LibFunc_msvc_delete_ptr32_int:
+      return FreeTy::msvc_delete_ptr32_int;
+    case LibFunc_msvc_delete_ptr64:
+      return FreeTy::msvc_delete_ptr64;
     case LibFunc_msvc_delete_ptr64_nothrow:
       return FreeTy::msvc_delete_ptr64_nothrow;
     case LibFunc_msvc_delete_ptr64_longlong:
@@ -968,7 +956,7 @@ protected:
     }
   }
 
-  void linkInToolFromBitcode(const std::string & bitcodePath);
+  void linkInToolFromBitcode(const std::string &bitcodePath);
   void loadConfiguration();
 
   Module &M;
@@ -980,11 +968,8 @@ protected:
   CSIOptions Options;
 
   FrontEndDataTable FunctionFED, FunctionExitFED, BasicBlockFED, CallsiteFED,
-    LoadFED, StoreFED, 
-    AllocaFED, 
-    DetachFED, TaskFED, TaskExitFED, DetachContinueFED,
-    SyncFED,
-    AllocFnFED, FreeFED;
+      LoadFED, StoreFED, AllocaFED, DetachFED, TaskFED, TaskExitFED,
+      DetachContinueFED, SyncFED, AllocFnFED, FreeFED;
 
   SmallVector<Constant *, 12> UnitFedTables;
 
