@@ -1968,7 +1968,18 @@ static bool needsLFTR(Loop *L, DominatorTree *DT, TaskInfo *TI) {
 
   // Do LFTR if the exit condition's IV is *not* a simple counter.
   Value *IncV = Phi->getIncomingValue(Idx);
-  return Phi != getLoopPhiForCounter(IncV, L, DT);
+  if (Phi != getLoopPhiForCounter(IncV, L, DT))
+    return true;
+
+  // Tapir loops are particularly picky about having canonical induction
+  // variables that start at 0, so check if LFTR needs to create one.
+  if (getTaskIfTapirLoop(L, TI))
+    if (BasicBlock *Preheader = L->getLoopPreheader())
+      if (Constant *Start =
+          dyn_cast<Constant>(Phi->getIncomingValueForBlock(Preheader)))
+        return !(Start->isZeroValue());
+
+  return false;
 }
 
 /// Recursive helper for hasConcreteDef(). Unfortunately, this currently boils
@@ -2235,6 +2246,17 @@ linearFunctionTestReplace(Loop *L,
     // backedge branches to the loop header.  This is one less than the
     // number of times the loop executes, so use the incremented indvar.
     CmpIndVar = IndVar->getIncomingValueForBlock(L->getLoopLatch());
+  }
+
+  // See if we need to create a canonical IV that starts at 0.  Right now we
+  // only check for a Tapir loop, but this check might be generalized.
+  const SCEVAddRecExpr *AR = cast<SCEVAddRecExpr>(SE->getSCEV(IndVar));
+  if (getTaskIfTapirLoop(L, TI) && !AR->getStart()->isZero()) {
+    // Rewriter is not in canonical mode, which we need.  Get an new
+    // SCEVExpander that is in canonical mode.
+    SCEVExpander ARRewriter(*SE, DL, "indvars");
+    CmpIndVar = ARRewriter.expandCodeFor(AR, AR->getType(),
+                                         &L->getHeader()->front());
   }
 
   Value *ExitCnt = genLoopLimit(IndVar, IVCount, L, Rewriter, SE, TI);
