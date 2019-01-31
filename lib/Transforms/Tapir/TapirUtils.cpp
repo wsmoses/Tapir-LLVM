@@ -15,6 +15,7 @@
 #include "llvm/Transforms/Tapir/CilkABI.h"
 #include "llvm/Transforms/Tapir/OpenMPABI.h"
 #include "llvm/Transforms/Tapir/QthreadsABI.h"
+#include "llvm/Transforms/Tapir/SerialABI.h"
 #include "llvm/Transforms/Tapir/Outline.h"
 #include "llvm/Transforms/Utils/EscapeEnumerator.h"
 #include "llvm/Transforms/Utils/Local.h"
@@ -32,8 +33,9 @@ TapirTarget *llvm::getTapirTargetFromType(TapirTargetType Type) {
     return new OpenMPABI();
   case TapirTargetType::Qthreads:
     return new QthreadsABI();
-  case TapirTargetType::None:
   case TapirTargetType::Serial:
+    return new SerialABI();
+  case TapirTargetType::None:
   default:
     return nullptr;
   }
