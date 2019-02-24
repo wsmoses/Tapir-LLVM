@@ -1904,7 +1904,6 @@ void CSIImpl::instrumentFunction(Function &F) {
   if (F.empty() || shouldNotInstrumentFunction(F))
     return;
 
-  // TODO: This needs to be fixed.
   setupCalls(F);
 
   setupBlocks(F, TLI);
@@ -2138,7 +2137,6 @@ bool ComprehensiveStaticInstrumentationLegacyPass::runOnModule(Module &M) {
 
   bool res = CSIImpl(M, CG, GetDomTree, GetTaskInfo, TLI, Options).run();
 
-  llvm::errs() << "Verifying module\n";
   verifyModule(M, &llvm::errs());
 
   return res;
