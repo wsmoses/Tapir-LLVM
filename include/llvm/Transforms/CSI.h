@@ -51,12 +51,16 @@ static const char *const CsiDetachContinueBaseIdName =
 static const char *const CsiSyncBaseIdName = "__csi_unit_sync_base_id";
 static const char *const CsiAllocFnBaseIdName = "__csi_unit_allocfn_base_id";
 static const char *const CsiFreeBaseIdName = "__csi_unit_free_base_id";
+static const char *const CsiArithmeticBaseIdName = "__csi_unit_arithmetic_base_id";
+static const char *const CsiParameterBaseIdName = "__csi_unit_parameter_base_id";
+static const char *const CsiGlobalBaseIdName = "__csi_unit_global_base_id";
 
 static const char *const CsiDefaultDebugNamePrefix = "__csi_unit_function_name_";
 
 static const char *const CsiUnitSizeTableName = "__csi_unit_size_table";
 static const char *const CsiUnitFedTableName = "__csi_unit_fed_table";
 static const char *const CsiFuncIdVariablePrefix = "__csi_func_id_";
+static const char *const CsiGlobalIdVariablePrefix = "__csi_global_id_";
 static const char *const CsiUnitFedTableArrayName = "__csi_unit_fed_tables";
 static const char *const CsiUnitSizeTableArrayName = "__csi_unit_size_tables";
 static const char *const CsiInitCallsiteToFunctionName =
@@ -725,6 +729,106 @@ private:
   static constexpr PropertyBits PropBits = {8, (64 - 8)};
 };
 
+class CsiArithmeticFlags : public CsiProperty {
+public:
+  CsiArithmeticFlags() { PropValue.Bits = 0; }
+
+  /// Return the Type of a property.
+  static StructType *getStructType(LLVMContext &C) {
+    // Must match the definition of property type in csi.h
+    return StructType::get(IntegerType::get(C, PropBits.NoSignedWrap),
+                           IntegerType::get(C, PropBits.NoUnsignedWrap),
+                           IntegerType::get(C, PropBits.IsExact),
+                           IntegerType::get(C, PropBits.NoNaNs),
+                           IntegerType::get(C, PropBits.NoInfs),
+                           IntegerType::get(C, PropBits.NoSignedZeros),
+                           IntegerType::get(C, PropBits.AllowReciprocal),
+                           IntegerType::get(C, PropBits.AllowContract),
+                           IntegerType::get(C, PropBits.ApproxFunc),
+                           IntegerType::get(C, PropBits.IsInBounds),
+                           IntegerType::get(C, PropBits.Padding));
+  }
+  static Type *getType(LLVMContext &C) {
+    return getCoercedType(C, getStructType(C));
+  }
+
+  /// Return a constant value holding this property.
+  Constant *getValueImpl(LLVMContext &C) const override {
+    // Must match the definition of property type in csi.h
+    // TODO: This solution works for x86, but should be generalized to support
+    // other architectures in the future.
+    return ConstantInt::get(getType(C), PropValue.Bits);
+  }
+
+  // Set the property based on the IR flags of the given Value.
+  void copyIRFlags(const Value *V) {
+    if (auto *OB = dyn_cast<OverflowingBinaryOperator>(V)) {
+      PropValue.Fields.NoSignedWrap = OB->hasNoSignedWrap();
+      PropValue.Fields.NoUnsignedWrap = OB->hasNoUnsignedWrap();
+    }
+
+    if (auto *PE = dyn_cast<PossiblyExactOperator>(V)) {
+      PropValue.Fields.IsExact = PE->isExact();
+    }
+
+    if (auto *FP = dyn_cast<FPMathOperator>(V)) {
+      PropValue.Fields.AllowReassoc = FP->hasAllowReassoc();
+      PropValue.Fields.NoNaNs = FP->hasNoNaNs();
+      PropValue.Fields.NoInfs = FP->hasNoInfs();
+      PropValue.Fields.NoSignedZeros = FP->hasNoSignedZeros();
+      PropValue.Fields.AllowReciprocal = FP->hasAllowReciprocal();
+      PropValue.Fields.ApproxFunc = FP->hasApproxFunc();
+    }
+
+    if (auto *GEP = dyn_cast<GetElementPtrInst>(V)) {
+      PropValue.Fields.IsInBounds = GEP->isInBounds();
+    }
+  }
+
+private:
+  typedef union {
+    // Must match the definition of property type in csi.h
+    struct {
+      unsigned NoSignedWrap : 1;
+      unsigned NoUnsignedWrap : 1;
+      unsigned IsExact : 1;
+      unsigned AllowReassoc : 1;
+      unsigned NoNaNs : 1;
+      unsigned NoInfs : 1;
+      unsigned NoSignedZeros : 1;
+      unsigned AllowReciprocal : 1;
+      unsigned AllowContract : 1;
+      unsigned ApproxFunc : 1;
+      unsigned IsInBounds : 1;
+      uint64_t Padding : 53;
+    } Fields;
+    uint64_t Bits;
+  } Property;
+
+  /// The underlying values of the properties.
+  Property PropValue;
+
+  typedef struct {
+    int NoSignedWrap;
+    int NoUnsignedWrap;
+    int IsExact;
+    int AllowReassoc;
+    int NoNaNs;
+    int NoInfs;
+    int NoSignedZeros;
+    int AllowReciprocal;
+    int AllowContract;
+    int ApproxFunc;
+    int IsInBounds;
+    int Padding;
+  } PropertyBits;
+
+  /// The number of bits representing each property.
+  static constexpr PropertyBits PropBits =
+    {1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+     (64 - 1 - 1 - 1 - 1 - 1 - 1 - 1 - 1 - 1 - 1 - 1)};
+};
+
 struct CSIImpl {
 public:
   CSIImpl(Module &M, CallGraph *CG,
@@ -782,6 +886,7 @@ protected:
   void initializeMemIntrinsicsHooks();
   void initializeTapirHooks();
   void initializeAllocFnHooks();
+  void initializeArithmeticHooks();
   /// @}
 
   static StructType *getUnitFedTableType(LLVMContext &C,
@@ -822,6 +927,7 @@ protected:
   void addLoadStoreInstrumentation(Instruction *I, Function *BeforeFn,
                                    Function *AfterFn, Value *CsiId,
                                    Type *AddrType, Value *Addr, int NumBytes,
+                                   Value *StoreValCat, Value *StoreValID,
                                    CsiLoadStoreProperty &Prop);
   void instrumentLoadOrStore(Instruction *I, CsiLoadStoreProperty &Prop,
                              const DataLayout &DL);
@@ -837,6 +943,8 @@ protected:
   void instrumentAlloca(Instruction *I);
   void instrumentAllocFn(Instruction *I, DominatorTree *DT);
   void instrumentFree(Instruction *I);
+  void assignArithmeticID(Instruction *I);
+  void instrumentArithmetic(Instruction *I);
 
   void interposeCall(Instruction *I);
 
@@ -1026,7 +1134,134 @@ protected:
       return FreeTy::msvc_delete_array_ptr64_longlong;
     }
   }
+  enum class CSIOpcode
+    {
+     Add = 0,
+     FAdd,
+     Sub,
+     FSub,
+     Mul,
+     FMul,
+     UDiv,
+     SDiv,
+     FDiv,
+     URem,
+     SRem,
+     FRem,
+     Shl,
+     LShr,
+     AShr,
+     And,
+     Or,
+     Xor,
+     LAST_CSIOpcode
+    };
+  Value *getOpcodeID(unsigned Opcode, IRBuilder<> &IRB) const {
+    switch(Opcode) {
+    case Instruction::Add:
+      return IRB.getInt8(static_cast<unsigned>(CSIOpcode::Add));
+    case Instruction::FAdd:
+      return IRB.getInt8(static_cast<unsigned>(CSIOpcode::FAdd));
+    case Instruction::Sub:
+      return IRB.getInt8(static_cast<unsigned>(CSIOpcode::Sub));
+    case Instruction::FSub:
+      return IRB.getInt8(static_cast<unsigned>(CSIOpcode::FSub));
+    case Instruction::Mul:
+      return IRB.getInt8(static_cast<unsigned>(CSIOpcode::Mul));
+    case Instruction::FMul:
+      return IRB.getInt8(static_cast<unsigned>(CSIOpcode::FMul));
+    case Instruction::UDiv:
+      return IRB.getInt8(static_cast<unsigned>(CSIOpcode::UDiv));
+    case Instruction::SDiv:
+      return IRB.getInt8(static_cast<unsigned>(CSIOpcode::SDiv));
+    case Instruction::FDiv:
+      return IRB.getInt8(static_cast<unsigned>(CSIOpcode::FDiv));
+    case Instruction::URem:
+      return IRB.getInt8(static_cast<unsigned>(CSIOpcode::URem));
+    case Instruction::SRem:
+      return IRB.getInt8(static_cast<unsigned>(CSIOpcode::SRem));
+    case Instruction::FRem:
+      return IRB.getInt8(static_cast<unsigned>(CSIOpcode::FRem));
+    case Instruction::Shl:
+      return IRB.getInt8(static_cast<unsigned>(CSIOpcode::Shl));
+    case Instruction::LShr:
+      return IRB.getInt8(static_cast<unsigned>(CSIOpcode::LShr));
+    case Instruction::AShr:
+      return IRB.getInt8(static_cast<unsigned>(CSIOpcode::AShr));
+    case Instruction::And:
+      return IRB.getInt8(static_cast<unsigned>(CSIOpcode::And));
+    case Instruction::Or:
+      return IRB.getInt8(static_cast<unsigned>(CSIOpcode::Or));
+    case Instruction::Xor:
+      return IRB.getInt8(static_cast<unsigned>(CSIOpcode::Xor));
+    default:
+      llvm_unreachable("Invalid opcode");
+      break;
+    }
+  }
 
+  enum class CSIOperandCategory
+    {
+     Constant = 0,
+     Parameter,
+     Global,
+     // Relevant types of IR objects to appear as arguments
+     Callsite,
+     Load,
+     Alloca,
+     AllocFn,
+     Arithmetic,
+     LAST_CSIOperandCategory
+    };
+  std::pair<Value *, Value *> getOperandID(const Value *Operand,
+                                           IRBuilder<> &IRB) const {
+    std::pair<Value *, Value *> OperandID;
+    if (isa<Constant>(Operand)) {
+      OperandID.first = IRB.getInt8(
+          static_cast<unsigned>(CSIOperandCategory::Constant));
+      OperandID.second = IRB.getInt64(CsiUnknownId);
+    } else if (isa<Argument>(Operand)) {
+      OperandID.first = IRB.getInt8(
+          static_cast<unsigned>(CSIOperandCategory::Parameter));
+      OperandID.second = ParameterFED.localToGlobalId(
+          ParameterFED.lookupId(Operand), IRB);
+    } else if (auto *GV = dyn_cast<GlobalValue>(Operand)) {
+      OperandID.first = IRB.getInt8(
+          static_cast<unsigned>(CSIOperandCategory::Global));
+      std::string GVName = CsiGlobalIdVariablePrefix + GV->getName().str();
+      // GlobalVariable *GlobalIdGV = dyn_cast<GlobalVariable>(
+      //     M.getOrInsertGlobal(GVName, IRB.getInt64Ty()));
+      M.getOrInsertGlobal(GVName, IRB.getInt64Ty());
+      // OperandID.second = GlobalFED.localToGlobalId(
+      //     GlobalFED.lookupId(Operand), IRB);
+    } else if (isa<CallInst>(Operand) || isa<InvokeInst>(Operand)) {
+      OperandID.first = IRB.getInt8(
+          static_cast<unsigned>(CSIOperandCategory::Callsite));
+      OperandID.second = CallsiteFED.localToGlobalId(
+          CallsiteFED.lookupId(Operand),IRB);
+    } else if (isa<LoadInst>(Operand)) {
+      OperandID.first = IRB.getInt8(
+          static_cast<unsigned>(CSIOperandCategory::Load));
+      OperandID.second = LoadFED.localToGlobalId(LoadFED.lookupId(Operand),
+                                                 IRB);
+    } else if (isa<AllocaInst>(Operand)) {
+      OperandID.first = IRB.getInt8(
+          static_cast<unsigned>(CSIOperandCategory::Alloca));
+      OperandID.second = AllocaFED.localToGlobalId(AllocaFED.lookupId(Operand),
+                                                   IRB);
+    } else if (isAllocationFn(Operand, TLI)) {
+      OperandID.first = IRB.getInt8(
+          static_cast<unsigned>(CSIOperandCategory::AllocFn));
+      OperandID.second = AllocFnFED.localToGlobalId(
+          AllocFnFED.lookupId(Operand), IRB);
+    } else {
+      OperandID.first = IRB.getInt8(
+          static_cast<unsigned>(CSIOperandCategory::Arithmetic));
+      OperandID.second = ArithmeticFED.localToGlobalId(
+          ArithmeticFED.lookupId(Operand), IRB);
+    }
+    return OperandID;
+  }
   void linkInToolFromBitcode(const std::string &bitcodePath);
   void loadConfiguration();
 
@@ -1040,9 +1275,10 @@ protected:
 
   FrontEndDataTable FunctionFED, FunctionExitFED, BasicBlockFED, CallsiteFED,
       LoadFED, StoreFED, AllocaFED, DetachFED, TaskFED, TaskExitFED,
-      DetachContinueFED, SyncFED, AllocFnFED, FreeFED;
+      DetachContinueFED, SyncFED, AllocFnFED, FreeFED, ArithmeticFED,
+      ParameterFED, GlobalFED;
 
-  SmallVector<Constant *, 12> UnitFedTables;
+  SmallVector<Constant *, 17> UnitFedTables;
 
   SizeTable BBSize;
   SmallVector<Constant *, 1> UnitSizeTables;
@@ -1060,6 +1296,151 @@ protected:
   Function *CsiBeforeAllocFn = nullptr, *CsiAfterAllocFn = nullptr;
   Function *CsiBeforeFree = nullptr, *CsiAfterFree = nullptr;
 
+  // Function *CsiBeforeArithmeticH = nullptr, *CsiAfterArithmeticH = nullptr;
+  Function *CsiBeforeArithmeticF = nullptr, *CsiAfterArithmeticF = nullptr;
+  Function *CsiBeforeArithmeticD = nullptr, *CsiAfterArithmeticD = nullptr;
+  Function *CsiBeforeArithmeticI8 = nullptr, *CsiAfterArithmeticI8 = nullptr;
+  Function *CsiBeforeArithmeticI16 = nullptr, *CsiAfterArithmeticI16 = nullptr;
+  Function *CsiBeforeArithmeticI32 = nullptr, *CsiAfterArithmeticI32 = nullptr;
+  Function *CsiBeforeArithmeticI64 = nullptr, *CsiAfterArithmeticI64 = nullptr;
+  Function *CsiBeforeArithmeticI128 = nullptr,
+    *CsiAfterArithmeticI128 = nullptr;
+
+  // Function *CsiBeforeExtendHF = nullptr, *CsiAfterExtendHF = nullptr;
+  // Function *CsiBeforeExtendHD = nullptr, *CsiAfterExtendHD = nullptr;
+  Function *CsiBeforeExtendFD = nullptr, *CsiAfterExtendFD = nullptr;
+  Function *CsiBeforeTruncateDF = nullptr, *CsiAfterTruncateDF = nullptr;
+  // Function *CsiBeforeTruncateDH = nullptr, *CsiAfterTruncateDH = nullptr;
+  // Function *CsiBeforeTruncateFH = nullptr, *CsiAfterTruncateFH = nullptr;
+
+  Function *CsiBeforeTruncateI128I8 = nullptr,
+    *CsiAfterTruncateI128I8 = nullptr;
+  Function *CsiBeforeTruncateI128I16 = nullptr,
+    *CsiAfterTruncateI128I16 = nullptr;
+  Function *CsiBeforeTruncateI128I32 = nullptr,
+    *CsiAfterTruncateI128I32 = nullptr;
+  Function *CsiBeforeTruncateI128I64 = nullptr,
+    *CsiAfterTruncateI128I64 = nullptr;
+  Function *CsiBeforeTruncateI64I8 = nullptr, *CsiAfterTruncateI64I8 = nullptr;
+  Function *CsiBeforeTruncateI64I16 = nullptr,
+    *CsiAfterTruncateI64I16 = nullptr;
+  Function *CsiBeforeTruncateI64I32 = nullptr,
+    *CsiAfterTruncateI64I32 = nullptr;
+  Function *CsiBeforeTruncateI32I8 = nullptr, *CsiAfterTruncateI32I8 = nullptr;
+  Function *CsiBeforeTruncateI32I16 = nullptr,
+    *CsiAfterTruncateI32I16 = nullptr;
+  Function *CsiBeforeTruncateI16I8 = nullptr, *CsiAfterTruncateI16I8 = nullptr;
+
+  Function *CsiBeforeZeroExtendI8I16 = nullptr,
+    *CsiAfterZeroExtendI8I16 = nullptr;
+  Function *CsiBeforeZeroExtendI8I32 = nullptr,
+    *CsiAfterZeroExtendI8I32 = nullptr;
+  Function *CsiBeforeZeroExtendI8I64 = nullptr,
+    *CsiAfterZeroExtendI8I64 = nullptr;
+  Function *CsiBeforeZeroExtendI8I128 = nullptr,
+    *CsiAfterZeroExtendI8I128 = nullptr;
+  Function *CsiBeforeZeroExtendI16I32 = nullptr,
+    *CsiAfterZeroExtendI16I32 = nullptr;
+  Function *CsiBeforeZeroExtendI16I64 = nullptr,
+    *CsiAfterZeroExtendI16I64 = nullptr;
+  Function *CsiBeforeZeroExtendI16I128 = nullptr,
+    *CsiAfterZeroExtendI16I128 = nullptr;
+  Function *CsiBeforeZeroExtendI32I64 = nullptr,
+    *CsiAfterZeroExtendI32I64 = nullptr;
+  Function *CsiBeforeZeroExtendI32I128 = nullptr,
+    *CsiAfterZeroExtendI32I128 = nullptr;
+  Function *CsiBeforeZeroExtendI64I128 = nullptr,
+    *CsiAfterZeroExtendI64I128 = nullptr;
+
+  Function *CsiBeforeSignExtendI8I16 = nullptr,
+    *CsiAfterSignExtendI8I16 = nullptr;
+  Function *CsiBeforeSignExtendI8I32 = nullptr,
+    *CsiAfterSignExtendI8I32 = nullptr;
+  Function *CsiBeforeSignExtendI8I64 = nullptr,
+    *CsiAfterSignExtendI8I64 = nullptr;
+  Function *CsiBeforeSignExtendI8I128 = nullptr,
+    *CsiAfterSignExtendI8I128 = nullptr;
+  Function *CsiBeforeSignExtendI16I32 = nullptr,
+    *CsiAfterSignExtendI16I32 = nullptr;
+  Function *CsiBeforeSignExtendI16I64 = nullptr,
+    *CsiAfterSignExtendI16I64 = nullptr;
+  Function *CsiBeforeSignExtendI16I128 = nullptr,
+    *CsiAfterSignExtendI16I128 = nullptr;
+  Function *CsiBeforeSignExtendI32I64 = nullptr,
+    *CsiAfterSignExtendI32I64 = nullptr;
+  Function *CsiBeforeSignExtendI32I128 = nullptr,
+    *CsiAfterSignExtendI32I128 = nullptr;
+  Function *CsiBeforeSignExtendI64I128 = nullptr,
+    *CsiAfterSignExtendI64I128 = nullptr;
+
+  // Function *CsiBeforeConvertHUI8 = nullptr, *CsiAfterConvertHUI8 = nullptr;
+  // Function *CsiBeforeConvertHUI16 = nullptr, *CsiAfterConvertHUI16 = nullptr;
+  // Function *CsiBeforeConvertHUI32 = nullptr, *CsiAfterConvertHUI32 = nullptr;
+  // Function *CsiBeforeConvertHUI64 = nullptr, *CsiAfterConvertHUI64 = nullptr;
+  // Function *CsiBeforeConvertHUI128 = nullptr, *CsiAfterConvertHUI128 = nullptr;
+  Function *CsiBeforeConvertFUI8 = nullptr, *CsiAfterConvertFUI8 = nullptr;
+  Function *CsiBeforeConvertFUI16 = nullptr, *CsiAfterConvertFUI16 = nullptr;
+  Function *CsiBeforeConvertFUI32 = nullptr, *CsiAfterConvertFUI32 = nullptr;
+  Function *CsiBeforeConvertFUI64 = nullptr, *CsiAfterConvertFUI64 = nullptr;
+  Function *CsiBeforeConvertFUI128 = nullptr, *CsiAfterConvertFUI128 = nullptr;
+  Function *CsiBeforeConvertDUI8 = nullptr, *CsiAfterConvertDUI8 = nullptr;
+  Function *CsiBeforeConvertDUI16 = nullptr, *CsiAfterConvertDUI16 = nullptr;
+  Function *CsiBeforeConvertDUI32 = nullptr, *CsiAfterConvertDUI32 = nullptr;
+  Function *CsiBeforeConvertDUI64 = nullptr, *CsiAfterConvertDUI64 = nullptr;
+  Function *CsiBeforeConvertDUI128 = nullptr, *CsiAfterConvertDUI128 = nullptr;
+
+  // Function *CsiBeforeConvertHSI8 = nullptr, *CsiAfterConvertHSI8 = nullptr;
+  // Function *CsiBeforeConvertHSI16 = nullptr, *CsiAfterConvertHSI16 = nullptr;
+  // Function *CsiBeforeConvertHSI32 = nullptr, *CsiAfterConvertHSI32 = nullptr;
+  // Function *CsiBeforeConvertHSI64 = nullptr, *CsiAfterConvertHSI64 = nullptr;
+  // Function *CsiBeforeConvertHSI128 = nullptr, *CsiAfterConvertHSI128 = nullptr;
+  Function *CsiBeforeConvertFSI8 = nullptr, *CsiAfterConvertFSI8 = nullptr;
+  Function *CsiBeforeConvertFSI16 = nullptr, *CsiAfterConvertFSI16 = nullptr;
+  Function *CsiBeforeConvertFSI32 = nullptr, *CsiAfterConvertFSI32 = nullptr;
+  Function *CsiBeforeConvertFSI64 = nullptr, *CsiAfterConvertFSI64 = nullptr;
+  Function *CsiBeforeConvertFSI128 = nullptr, *CsiAfterConvertFSI128 = nullptr;
+  Function *CsiBeforeConvertDSI8 = nullptr, *CsiAfterConvertDSI8 = nullptr;
+  Function *CsiBeforeConvertDSI16 = nullptr, *CsiAfterConvertDSI16 = nullptr;
+  Function *CsiBeforeConvertDSI32 = nullptr, *CsiAfterConvertDSI32 = nullptr;
+  Function *CsiBeforeConvertDSI64 = nullptr, *CsiAfterConvertDSI64 = nullptr;
+  Function *CsiBeforeConvertDSI128 = nullptr, *CsiAfterConvertDSI128 = nullptr;
+
+  // Function *CsiBeforeConvertUI8H = nullptr, *CsiAfterConvertUI8H = nullptr;
+  // Function *CsiBeforeConvertUI16H = nullptr, *CsiAfterConvertUI16H = nullptr;
+  // Function *CsiBeforeConvertUI32H = nullptr, *CsiAfterConvertUI32H = nullptr;
+  // Function *CsiBeforeConvertUI64H = nullptr, *CsiAfterConvertUI64H = nullptr;
+  // Function *CsiBeforeConvertUI128H = nullptr, *CsiAfterConvertUI128H = nullptr;
+  Function *CsiBeforeConvertUI8F = nullptr, *CsiAfterConvertUI8F = nullptr;
+  Function *CsiBeforeConvertUI16F = nullptr, *CsiAfterConvertUI16F = nullptr;
+  Function *CsiBeforeConvertUI32F = nullptr, *CsiAfterConvertUI32F = nullptr;
+  Function *CsiBeforeConvertUI64F = nullptr, *CsiAfterConvertUI64F = nullptr;
+  Function *CsiBeforeConvertUI128F = nullptr, *CsiAfterConvertUI128F = nullptr;
+  Function *CsiBeforeConvertUI8D = nullptr, *CsiAfterConvertUI8D = nullptr;
+  Function *CsiBeforeConvertUI16D = nullptr, *CsiAfterConvertUI16D = nullptr;
+  Function *CsiBeforeConvertUI32D = nullptr, *CsiAfterConvertUI32D = nullptr;
+  Function *CsiBeforeConvertUI64D = nullptr, *CsiAfterConvertUI64D = nullptr;
+  Function *CsiBeforeConvertUI128D = nullptr, *CsiAfterConvertUI128D = nullptr;
+
+  // Function *CsiBeforeConvertSI8H = nullptr, *CsiAfterConvertSI8H = nullptr;
+  // Function *CsiBeforeConvertSI16H = nullptr, *CsiAfterConvertSI16H = nullptr;
+  // Function *CsiBeforeConvertSI32H = nullptr, *CsiAfterConvertSI32H = nullptr;
+  // Function *CsiBeforeConvertSI64H = nullptr, *CsiAfterConvertSI64H = nullptr;
+  // Function *CsiBeforeConvertSI128H = nullptr, *CsiAfterConvertSI128H = nullptr;
+  Function *CsiBeforeConvertSI8F = nullptr, *CsiAfterConvertSI8F = nullptr;
+  Function *CsiBeforeConvertSI16F = nullptr, *CsiAfterConvertSI16F = nullptr;
+  Function *CsiBeforeConvertSI32F = nullptr, *CsiAfterConvertSI32F = nullptr;
+  Function *CsiBeforeConvertSI64F = nullptr, *CsiAfterConvertSI64F = nullptr;
+  Function *CsiBeforeConvertSI128F = nullptr, *CsiAfterConvertSI128F = nullptr;
+  Function *CsiBeforeConvertSI8D = nullptr, *CsiAfterConvertSI8D = nullptr;
+  Function *CsiBeforeConvertSI16D = nullptr, *CsiAfterConvertSI16D = nullptr;
+  Function *CsiBeforeConvertSI32D = nullptr, *CsiAfterConvertSI32D = nullptr;
+  Function *CsiBeforeConvertSI64D = nullptr, *CsiAfterConvertSI64D = nullptr;
+  Function *CsiBeforeConvertSI128D = nullptr, *CsiAfterConvertSI128D = nullptr;
+
+  Function /**CsiPhiH = nullptr,*/ *CsiPhiF = nullptr, *CsiPhiD = nullptr;
+  Function *CsiPhiI8 = nullptr, *CsiPhiI16 = nullptr, *CsiPhiI32 = nullptr;
+  Function *CsiPhiI64 = nullptr, *CsiPhiI128 = nullptr;
+
   Function *MemmoveFn = nullptr, *MemcpyFn = nullptr, *MemsetFn = nullptr;
   Function *InitCallsiteToFunction = nullptr;
   // GlobalVariable *DisableInstrGV;
@@ -1068,7 +1449,7 @@ protected:
   Function *RTUnitInit = nullptr;
 
   Type *IntptrTy;
-  DenseMap<StringRef, uint64_t> FuncOffsetMap;
+  DenseMap<StringRef, csi_id_t> FuncOffsetMap, GlobalOffsetMap;
 
   DenseMap<std::pair<Value *, BasicBlock *>, SmallVector<PHINode *, 4>> ArgPHIs;
   DenseMap<BasicBlock *, CallInst *> callsAfterSync;

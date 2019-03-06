@@ -79,6 +79,11 @@ static cl::opt<bool>
                          cl::desc("Instrument allocation functions"),
                          cl::Hidden);
 
+static cl::opt<bool>
+    ClInstrumentArithmetic("csi-instrument-arithmetic", cl::init(true),
+                           cl::desc("Instrument arithmetic operations"),
+                           cl::Hidden);
+
 static cl::opt<bool> ClInterpose("csi-interpose", cl::init(true),
                                  cl::desc("Enable function interpositioning"),
                                  cl::Hidden);
@@ -119,6 +124,7 @@ static CSIOptions OverrideFromCL(CSIOptions Options) {
   Options.InstrumentTapir = ClInstrumentTapir;
   Options.InstrumentAllocas = ClInstrumentAllocas;
   Options.InstrumentAllocFns = ClInstrumentAllocFns;
+  Options.InstrumentArithmetic = ClInstrumentArithmetic;
   return Options;
 }
 
@@ -229,6 +235,15 @@ bool CSIImpl::callsPlaceholderFunction(const Instruction &I) {
 
 bool CSIImpl::run() {
   initializeCsi();
+
+  for (GlobalValue &G : M.globals()) {
+    if (isa<Function>(G)) continue;
+    if (G.isDeclaration()) continue;
+    if (G.getName().startswith("__csi")) continue;
+    // Assign an ID for this global.
+    csi_id_t LocalId = GlobalFED.add(G);
+    GlobalOffsetMap[G.getName()] = LocalId;
+  }
 
   for (Function &F : M)
     instrumentFunction(F);
@@ -568,6 +583,521 @@ void CSIImpl::initializeCallsiteHooks() {
                             IRB.getInt64Ty(), IRB.getInt64Ty(), PropertyTy));
 }
 
+// Non-local-variable allocation/free hook initialization
+void CSIImpl::initializeArithmeticHooks() {
+  LLVMContext &C = M.getContext();
+  IRBuilder<> IRB(C);
+  Type *RetType = IRB.getVoidTy();
+  Type *IDType = IRB.getInt64Ty();
+  Type *OpcodeType = IRB.getInt8Ty();
+  // Single-type opcodes: Add, FAdd, Sub, FSub, Mul, FMul, UDiv, SDiv, FDiv,
+  // URem, SRem, FRem, Shl, LShr, AShr, And, Or, Xor
+  Type *ValCatType = IRB.getInt8Ty();
+  Type *FlagsType = CsiArithmeticFlags::getType(C);
+
+  // Single-type floating-point operations
+  // CsiBeforeArithmeticH = checkCsiInterfaceFunction(
+  //     M.getOrInsertFunction(
+  //         "__csi_before_arithmetic_half", RetType, IDType,
+  //         OpcodeType,
+  //         ValCatType, IDType, IRB.getHalfTy(),
+  //         ValCatType, IDType, IRB.getHalfTy(), FlagsType));
+  CsiBeforeArithmeticF = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_arithmetic_float", RetType, IDType,
+          OpcodeType,
+          ValCatType, IDType, IRB.getFloatTy(),
+          ValCatType, IDType, IRB.getFloatTy(), FlagsType));
+  CsiBeforeArithmeticD = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_arithmetic_double", RetType, IDType,
+          OpcodeType,
+          ValCatType, IDType, IRB.getDoubleTy(),
+          ValCatType, IDType, IRB.getDoubleTy(), FlagsType));
+
+  // TODO: Consider passing integer precision as an extra argument.
+
+  // Single-type integer operations
+  CsiBeforeArithmeticI8 = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_arithmetic_i8", RetType, IDType,
+          OpcodeType,
+          ValCatType, IDType, IRB.getInt8Ty(),
+          ValCatType, IDType, IRB.getInt8Ty(), FlagsType));
+  CsiBeforeArithmeticI16 = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_arithmetic_i16", RetType, IDType,
+          OpcodeType,
+          ValCatType, IDType, IRB.getInt16Ty(),
+          ValCatType, IDType, IRB.getInt16Ty(), FlagsType));
+  CsiBeforeArithmeticI32 = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_arithmetic_i32", RetType, IDType,
+          OpcodeType,
+          ValCatType, IDType, IRB.getInt32Ty(),
+          ValCatType, IDType, IRB.getInt32Ty(), FlagsType));
+  CsiBeforeArithmeticI64 = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_arithmetic_i64", RetType, IDType,
+          OpcodeType,
+          ValCatType, IDType, IRB.getInt64Ty(),
+          ValCatType, IDType, IRB.getInt64Ty(), FlagsType));
+  CsiBeforeArithmeticI128 = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_arithmetic_i128", RetType, IDType,
+          OpcodeType,
+          ValCatType, IDType, IRB.getInt128Ty(),
+          ValCatType, IDType, IRB.getInt128Ty(), FlagsType));
+
+  // Floating-point type conversions
+  // CsiBeforeExtendHF = checkCsiInterfaceFunction(
+  //     M.getOrInsertFunction(
+  //         "__csi_before_extend_half_float", RetType, IDType,
+  //         ValCatType, IDType, IRB.getHalfTy()));
+  // CsiBeforeExtendHD = checkCsiInterfaceFunction(
+  //     M.getOrInsertFunction(
+  //         "__csi_before_extend_half_double", RetType, IDType,
+  //         ValCatType, IDType, IRB.getHalfTy()));
+  CsiBeforeExtendFD = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_extend_float_double", RetType, IDType,
+          ValCatType, IDType, IRB.getFloatTy()));
+
+  CsiBeforeTruncateDF = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_truncate_double_float", RetType, IDType,
+          ValCatType, IDType, IRB.getDoubleTy()));
+  // CsiBeforeTruncateDH = checkCsiInterfaceFunction(
+  //     M.getOrInsertFunction(
+  //         "__csi_before_truncate_double_half", RetType, IDType,
+  //         ValCatType, IDType, IRB.getDoubleTy()));
+  // CsiBeforeTruncateFH = checkCsiInterfaceFunction(
+  //     M.getOrInsertFunction(
+  //         "__csi_before_truncate_float_half", RetType, IDType,
+  //         ValCatType, IDType, IRB.getFloatTy()));
+
+  // Integer type truncation
+  CsiBeforeTruncateI128I8 = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_truncate_i128_i8", RetType, IDType,
+          ValCatType, IDType, IRB.getInt128Ty()));
+  CsiBeforeTruncateI128I16 = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_truncate_i128_i16", RetType, IDType,
+          ValCatType, IDType, IRB.getInt128Ty()));
+  CsiBeforeTruncateI128I32 = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_truncate_i128_i32", RetType, IDType,
+          ValCatType, IDType, IRB.getInt128Ty()));
+  CsiBeforeTruncateI128I64 = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_truncate_i128_i64", RetType, IDType,
+          ValCatType, IDType, IRB.getInt128Ty()));
+  CsiBeforeTruncateI64I8 = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_truncate_i64_i8", RetType, IDType,
+          ValCatType, IDType, IRB.getInt64Ty()));
+  CsiBeforeTruncateI64I16 = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_truncate_i64_i16", RetType, IDType,
+          ValCatType, IDType, IRB.getInt64Ty()));
+  CsiBeforeTruncateI64I32 = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_truncate_i64_i32", RetType, IDType,
+          ValCatType, IDType, IRB.getInt64Ty()));
+  CsiBeforeTruncateI32I8 = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_truncate_i32_i8", RetType, IDType,
+          ValCatType, IDType, IRB.getInt32Ty()));
+  CsiBeforeTruncateI32I16 = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_truncate_i32_i16", RetType, IDType,
+          ValCatType, IDType, IRB.getInt32Ty()));
+  CsiBeforeTruncateI16I8 = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_truncate_i16_i8", RetType, IDType,
+          ValCatType, IDType, IRB.getInt16Ty()));
+
+  // Integer type zero extension
+  CsiBeforeZeroExtendI8I16 = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_zero_extend_i8_i16", RetType, IDType,
+          ValCatType, IDType, IRB.getInt8Ty()));
+  CsiBeforeZeroExtendI8I32 = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_zero_extend_i8_i32", RetType, IDType,
+          ValCatType, IDType, IRB.getInt8Ty()));
+  CsiBeforeZeroExtendI8I64 = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_zero_extend_i8_i64", RetType, IDType,
+          ValCatType, IDType, IRB.getInt8Ty()));
+  CsiBeforeZeroExtendI8I128 = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_zero_extend_i8_i128", RetType, IDType,
+          ValCatType, IDType, IRB.getInt8Ty()));
+  CsiBeforeZeroExtendI16I32 = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_zero_extend_i16_i32", RetType, IDType,
+          ValCatType, IDType, IRB.getInt16Ty()));
+  CsiBeforeZeroExtendI16I64 = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_zero_extend_i16_i64", RetType, IDType,
+          ValCatType, IDType, IRB.getInt16Ty()));
+  CsiBeforeZeroExtendI16I128 = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_zero_extend_i16_i128", RetType, IDType,
+          ValCatType, IDType, IRB.getInt16Ty()));
+  CsiBeforeZeroExtendI32I64 = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_zero_extend_i32_i64", RetType, IDType,
+          ValCatType, IDType, IRB.getInt32Ty()));
+  CsiBeforeZeroExtendI32I128 = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_zero_extend_i32_i128", RetType, IDType,
+          ValCatType, IDType, IRB.getInt32Ty()));
+  CsiBeforeZeroExtendI64I128 = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_zero_extend_i64_i128", RetType, IDType,
+          ValCatType, IDType, IRB.getInt64Ty()));
+
+  // Integer type sign extension
+  CsiBeforeSignExtendI8I16 = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_sign_extend_i8_i16", RetType, IDType,
+          ValCatType, IDType, IRB.getInt8Ty()));
+  CsiBeforeSignExtendI8I32 = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_sign_extend_i8_i32", RetType, IDType,
+          ValCatType, IDType, IRB.getInt8Ty()));
+  CsiBeforeSignExtendI8I64 = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_sign_extend_i8_i64", RetType, IDType,
+          ValCatType, IDType, IRB.getInt8Ty()));
+  CsiBeforeSignExtendI8I128 = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_sign_extend_i8_i128", RetType, IDType,
+          ValCatType, IDType, IRB.getInt8Ty()));
+  CsiBeforeSignExtendI16I32 = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_sign_extend_i16_i32", RetType, IDType,
+          ValCatType, IDType, IRB.getInt16Ty()));
+  CsiBeforeSignExtendI16I64 = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_sign_extend_i16_i64", RetType, IDType,
+          ValCatType, IDType, IRB.getInt16Ty()));
+  CsiBeforeSignExtendI16I128 = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_sign_extend_i16_i128", RetType, IDType,
+          ValCatType, IDType, IRB.getInt16Ty()));
+  CsiBeforeSignExtendI32I64 = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_sign_extend_i32_i64", RetType, IDType,
+          ValCatType, IDType, IRB.getInt32Ty()));
+  CsiBeforeSignExtendI32I128 = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_sign_extend_i32_i128", RetType, IDType,
+          ValCatType, IDType, IRB.getInt32Ty()));
+  CsiBeforeSignExtendI64I128 = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_sign_extend_i64_i128", RetType, IDType,
+          ValCatType, IDType, IRB.getInt64Ty()));
+
+  // Floating-point-to-integer unsigned type conversions
+  // CsiBeforeConvertHUI8 = checkCsiInterfaceFunction(
+  //     M.getOrInsertFunction(
+  //         "__csi_before_convert_half_unsigned_i8", RetType, IDType,
+  //         ValCatType, IDType, IRB.getHalfTy()));
+  // CsiBeforeConvertHUI16 = checkCsiInterfaceFunction(
+  //     M.getOrInsertFunction(
+  //         "__csi_before_convert_half_unsigned_i16", RetType, IDType,
+  //         ValCatType, IDType, IRB.getHalfTy()));
+  // CsiBeforeConvertHUI32 = checkCsiInterfaceFunction(
+  //     M.getOrInsertFunction(
+  //         "__csi_before_convert_half_unsigned_i32", RetType, IDType,
+  //         ValCatType, IDType, IRB.getHalfTy()));
+  // CsiBeforeConvertHUI64 = checkCsiInterfaceFunction(
+  //     M.getOrInsertFunction(
+  //         "__csi_before_convert_half_unsigned_i64", RetType, IDType,
+  //         ValCatType, IDType, IRB.getHalfTy()));
+  // CsiBeforeConvertHUI128 = checkCsiInterfaceFunction(
+  //     M.getOrInsertFunction(
+  //         "__csi_before_convert_half_unsigned_i128", RetType, IDType,
+  //         ValCatType, IDType, IRB.getHalfTy()));
+
+  CsiBeforeConvertFUI8 = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_convert_float_unsigned_i8", RetType, IDType,
+          ValCatType, IDType, IRB.getFloatTy()));
+  CsiBeforeConvertFUI16 = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_convert_float_unsigned_i16", RetType, IDType,
+          ValCatType, IDType, IRB.getFloatTy()));
+  CsiBeforeConvertFUI32 = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_convert_float_unsigned_i32", RetType, IDType,
+          ValCatType, IDType, IRB.getFloatTy()));
+  CsiBeforeConvertFUI64 = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_convert_float_unsigned_i64", RetType, IDType,
+          ValCatType, IDType, IRB.getFloatTy()));
+  CsiBeforeConvertFUI128 = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_convert_float_unsigned_i128", RetType, IDType,
+          ValCatType, IDType, IRB.getFloatTy()));
+
+  CsiBeforeConvertDUI8 = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_convert_double_unsigned_i8", RetType, IDType,
+          ValCatType, IDType, IRB.getDoubleTy()));
+  CsiBeforeConvertDUI16 = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_convert_double_unsigned_i16", RetType, IDType,
+          ValCatType, IDType, IRB.getDoubleTy()));
+  CsiBeforeConvertDUI32 = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_convert_double_unsigned_i32", RetType, IDType,
+          ValCatType, IDType, IRB.getDoubleTy()));
+  CsiBeforeConvertDUI64 = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_convert_double_unsigned_i64", RetType, IDType,
+          ValCatType, IDType, IRB.getDoubleTy()));
+  CsiBeforeConvertDUI128 = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_convert_double_unsigned_i128", RetType, IDType,
+          ValCatType, IDType, IRB.getDoubleTy()));
+
+  // Floating-point-to-integer signed type conversions
+  // CsiBeforeConvertHSI8 = checkCsiInterfaceFunction(
+  //     M.getOrInsertFunction(
+  //         "__csi_before_convert_half_signed_i8", RetType, IDType,
+  //         ValCatType, IDType, IRB.getHalfTy()));
+  // CsiBeforeConvertHSI16 = checkCsiInterfaceFunction(
+  //     M.getOrInsertFunction(
+  //         "__csi_before_convert_half_signed_i16", RetType, IDType,
+  //         ValCatType, IDType, IRB.getHalfTy()));
+  // CsiBeforeConvertHSI32 = checkCsiInterfaceFunction(
+  //     M.getOrInsertFunction(
+  //         "__csi_before_convert_half_signed_i32", RetType, IDType,
+  //         ValCatType, IDType, IRB.getHalfTy()));
+  // CsiBeforeConvertHSI64 = checkCsiInterfaceFunction(
+  //     M.getOrInsertFunction(
+  //         "__csi_before_convert_half_signed_i64", RetType, IDType,
+  //         ValCatType, IDType, IRB.getHalfTy()));
+  // CsiBeforeConvertHSI128 = checkCsiInterfaceFunction(
+  //     M.getOrInsertFunction(
+  //         "__csi_before_convert_half_signed_i128", RetType, IDType,
+  //         ValCatType, IDType, IRB.getHalfTy()));
+
+  CsiBeforeConvertFSI8 = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_convert_float_signed_i8", RetType, IDType,
+          ValCatType, IDType, IRB.getFloatTy()));
+  CsiBeforeConvertFSI16 = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_convert_float_signed_i16", RetType, IDType,
+          ValCatType, IDType, IRB.getFloatTy()));
+  CsiBeforeConvertFSI32 = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_convert_float_signed_i32", RetType, IDType,
+          ValCatType, IDType, IRB.getFloatTy()));
+  CsiBeforeConvertFSI64 = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_convert_float_signed_i64", RetType, IDType,
+          ValCatType, IDType, IRB.getFloatTy()));
+  CsiBeforeConvertFSI128 = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_convert_float_signed_i128", RetType, IDType,
+          ValCatType, IDType, IRB.getFloatTy()));
+
+  CsiBeforeConvertDSI8 = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_convert_double_signed_i8", RetType, IDType,
+          ValCatType, IDType, IRB.getDoubleTy()));
+  CsiBeforeConvertDSI16 = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_convert_double_signed_i16", RetType, IDType,
+          ValCatType, IDType, IRB.getDoubleTy()));
+  CsiBeforeConvertDSI32 = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_convert_double_signed_i32", RetType, IDType,
+          ValCatType, IDType, IRB.getDoubleTy()));
+  CsiBeforeConvertDSI64 = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_convert_double_signed_i64", RetType, IDType,
+          ValCatType, IDType, IRB.getDoubleTy()));
+  CsiBeforeConvertDSI128 = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_convert_double_signed_i128", RetType, IDType,
+          ValCatType, IDType, IRB.getDoubleTy()));
+
+  // Integer-to-floating-point unsigned type conversions
+  // CsiBeforeConvertUI8H = checkCsiInterfaceFunction(
+  //     M.getOrInsertFunction(
+  //         "__csi_before_convert_unsigned_i8_half", RetType, IDType,
+  //         ValCatType, IDType, IRB.getInt8Ty()));
+  CsiBeforeConvertUI8F = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_convert_unsigned_i8_float", RetType, IDType,
+          ValCatType, IDType, IRB.getInt8Ty()));
+  CsiBeforeConvertUI8D = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_convert_unsigned_i8_double", RetType, IDType,
+          ValCatType, IDType, IRB.getInt8Ty()));
+
+  // CsiBeforeConvertUI16H = checkCsiInterfaceFunction(
+  //     M.getOrInsertFunction(
+  //         "__csi_before_convert_unsigned_i16_half", RetType, IDType,
+  //         ValCatType, IDType, IRB.getInt16Ty()));
+  CsiBeforeConvertUI16F = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_convert_unsigned_i16_float", RetType, IDType,
+          ValCatType, IDType, IRB.getInt16Ty()));
+  CsiBeforeConvertUI16D = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_convert_unsigned_i16_double", RetType, IDType,
+          ValCatType, IDType, IRB.getInt16Ty()));
+
+  // CsiBeforeConvertUI32H = checkCsiInterfaceFunction(
+  //     M.getOrInsertFunction(
+  //         "__csi_before_convert_unsigned_i32_half", RetType, IDType,
+  //         ValCatType, IDType, IRB.getInt32Ty()));
+  CsiBeforeConvertUI32F = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_convert_unsigned_i32_float", RetType, IDType,
+          ValCatType, IDType, IRB.getInt32Ty()));
+  CsiBeforeConvertUI32D = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_convert_unsigned_i32_double", RetType, IDType,
+          ValCatType, IDType, IRB.getInt32Ty()));
+
+  // CsiBeforeConvertUI64H = checkCsiInterfaceFunction(
+  //     M.getOrInsertFunction(
+  //         "__csi_before_convert_unsigned_i64_half", RetType, IDType,
+  //         ValCatType, IDType, IRB.getInt64Ty()));
+  CsiBeforeConvertUI64F = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_convert_unsigned_i64_float", RetType, IDType,
+          ValCatType, IDType, IRB.getInt64Ty()));
+  CsiBeforeConvertUI64D = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_convert_unsigned_i64_double", RetType, IDType,
+          ValCatType, IDType, IRB.getInt64Ty()));
+
+  // CsiBeforeConvertUI128H = checkCsiInterfaceFunction(
+  //     M.getOrInsertFunction(
+  //         "__csi_before_convert_unsigned_i128_half", RetType, IDType,
+  //         ValCatType, IDType, IRB.getInt128Ty()));
+  CsiBeforeConvertUI128F = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_convert_unsigned_i128_float", RetType, IDType,
+          ValCatType, IDType, IRB.getInt128Ty()));
+  CsiBeforeConvertUI128D = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_convert_unsigned_i128_double", RetType, IDType,
+          ValCatType, IDType, IRB.getInt128Ty()));
+
+  // Integer-to-floating-point signed type conversions
+  // CsiBeforeConvertSI8H = checkCsiInterfaceFunction(
+  //     M.getOrInsertFunction(
+  //         "__csi_before_convert_signed_i8_half", RetType, IDType,
+  //         ValCatType, IDType, IRB.getInt8Ty()));
+  CsiBeforeConvertSI8F = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_convert_signed_i8_float", RetType, IDType,
+          ValCatType, IDType, IRB.getInt8Ty()));
+  CsiBeforeConvertSI8D = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_convert_signed_i8_double", RetType, IDType,
+          ValCatType, IDType, IRB.getInt8Ty()));
+
+  // CsiBeforeConvertSI16H = checkCsiInterfaceFunction(
+  //     M.getOrInsertFunction(
+  //         "__csi_before_convert_signed_i16_half", RetType, IDType,
+  //         ValCatType, IDType, IRB.getInt16Ty()));
+  CsiBeforeConvertSI16F = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_convert_signed_i16_float", RetType, IDType,
+          ValCatType, IDType, IRB.getInt16Ty()));
+  CsiBeforeConvertSI16D = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_convert_signed_i16_double", RetType, IDType,
+          ValCatType, IDType, IRB.getInt16Ty()));
+
+  // CsiBeforeConvertSI32H = checkCsiInterfaceFunction(
+  //     M.getOrInsertFunction(
+  //         "__csi_before_convert_signed_i32_half", RetType, IDType,
+  //         ValCatType, IDType, IRB.getInt32Ty()));
+  CsiBeforeConvertSI32F = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_convert_signed_i32_float", RetType, IDType,
+          ValCatType, IDType, IRB.getInt32Ty()));
+  CsiBeforeConvertSI32D = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_convert_signed_i32_double", RetType, IDType,
+          ValCatType, IDType, IRB.getInt32Ty()));
+
+  // CsiBeforeConvertSI64H = checkCsiInterfaceFunction(
+  //     M.getOrInsertFunction(
+  //         "__csi_before_convert_signed_i64_half", RetType, IDType,
+  //         ValCatType, IDType, IRB.getInt64Ty()));
+  CsiBeforeConvertSI64F = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_convert_signed_i64_float", RetType, IDType,
+          ValCatType, IDType, IRB.getInt64Ty()));
+  CsiBeforeConvertSI64D = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_convert_signed_i64_double", RetType, IDType,
+          ValCatType, IDType, IRB.getInt64Ty()));
+
+  // CsiBeforeConvertSI128H = checkCsiInterfaceFunction(
+  //     M.getOrInsertFunction(
+  //         "__csi_before_convert_signed_i128_half", RetType, IDType,
+  //         ValCatType, IDType, IRB.getInt128Ty()));
+  CsiBeforeConvertSI128F = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_convert_signed_i128_float", RetType, IDType,
+          ValCatType, IDType, IRB.getInt128Ty()));
+  CsiBeforeConvertSI128D = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_convert_signed_i128_double", RetType, IDType,
+          ValCatType, IDType, IRB.getInt128Ty()));
+
+  // Phi nodes for scalar types
+  CsiPhiI8 = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_phi_i8", RetType, IDType, ValCatType, IDType,
+          IRB.getInt8Ty()));
+  CsiPhiI16 = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_phi_i16", RetType, IDType, ValCatType, IDType,
+          IRB.getInt16Ty()));
+  CsiPhiI32 = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_phi_i32", RetType, IDType, ValCatType, IDType,
+          IRB.getInt32Ty()));
+  CsiPhiI64 = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_phi_i64", RetType, IDType, ValCatType, IDType,
+          IRB.getInt64Ty()));
+  CsiPhiI128 = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_phi_i128", RetType, IDType, ValCatType, IDType,
+          IRB.getInt128Ty()));
+
+  // CsiPhiH = checkCsiInterfaceFunction(
+  //     M.getOrInsertFunction(
+  //         "__csi_phi_half", RetType, IDType, ValCatType, IDType,
+  //         IRB.getHalfTy()));
+  CsiPhiF = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_phi_float", RetType, IDType, ValCatType, IDType,
+          IRB.getFloatTy()));
+  CsiPhiD = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_phi_double", RetType, IDType, ValCatType, IDType,
+          IRB.getDoubleTy()));
+}
+
 // Alloca (local variable) hook initialization
 void CSIImpl::initializeAllocaHooks() {
   LLVMContext &C = M.getContext();
@@ -616,6 +1146,8 @@ void CSIImpl::initializeAllocFnHooks() {
 void CSIImpl::initializeLoadStoreHooks() {
   LLVMContext &C = M.getContext();
   IRBuilder<> IRB(C);
+  Type *IDType = IRB.getInt64Ty();
+  Type *ValCatType = IRB.getInt8Ty();
   Type *LoadPropertyTy = CsiLoadStoreProperty::getType(C);
   Type *StorePropertyTy = CsiLoadStoreProperty::getType(C);
   Type *RetType = IRB.getVoidTy();
@@ -623,18 +1155,20 @@ void CSIImpl::initializeLoadStoreHooks() {
   Type *NumBytesType = IRB.getInt32Ty();
 
   CsiBeforeRead = checkCsiInterfaceFunction(
-      M.getOrInsertFunction("__csi_before_load", RetType, IRB.getInt64Ty(),
+      M.getOrInsertFunction("__csi_before_load", RetType, IDType,
                             AddrType, NumBytesType, LoadPropertyTy));
   CsiAfterRead = checkCsiInterfaceFunction(
-      M.getOrInsertFunction("__csi_after_load", RetType, IRB.getInt64Ty(),
+      M.getOrInsertFunction("__csi_after_load", RetType, IDType,
                             AddrType, NumBytesType, LoadPropertyTy));
 
   CsiBeforeWrite = checkCsiInterfaceFunction(
-      M.getOrInsertFunction("__csi_before_store", RetType, IRB.getInt64Ty(),
-                            AddrType, NumBytesType, StorePropertyTy));
+      M.getOrInsertFunction("__csi_before_store", RetType, IDType,
+                            AddrType, NumBytesType, ValCatType, IDType,
+                            StorePropertyTy));
   CsiAfterWrite = checkCsiInterfaceFunction(
-      M.getOrInsertFunction("__csi_after_store", RetType, IRB.getInt64Ty(),
-                            AddrType, NumBytesType, StorePropertyTy));
+      M.getOrInsertFunction("__csi_after_store", RetType, IDType,
+                            AddrType, NumBytesType, ValCatType, IDType,
+                            StorePropertyTy));
 }
 
 // Initialization of hooks for LLVM memory intrinsics
@@ -809,19 +1343,30 @@ int CSIImpl::getNumBytesAccessed(Value *Addr, const DataLayout &DL) {
 void CSIImpl::addLoadStoreInstrumentation(Instruction *I, Function *BeforeFn,
                                           Function *AfterFn, Value *CsiId,
                                           Type *AddrType, Value *Addr,
-                                          int NumBytes,
+                                          int NumBytes, Value *StoreValCat,
+                                          Value *StoreValID,
                                           CsiLoadStoreProperty &Prop) {
   IRBuilder<> IRB(I);
   Value *PropVal = Prop.getValue(IRB);
-  insertHookCall(I, BeforeFn,
-                 {CsiId, IRB.CreatePointerCast(Addr, AddrType),
-                  IRB.getInt32(NumBytes), PropVal});
+  if (StoreValCat && StoreValID)
+    insertHookCall(I, BeforeFn,
+                   {CsiId, IRB.CreatePointerCast(Addr, AddrType),
+                    IRB.getInt32(NumBytes), StoreValCat, StoreValID, PropVal});
+  else
+    insertHookCall(I, BeforeFn,
+                   {CsiId, IRB.CreatePointerCast(Addr, AddrType),
+                    IRB.getInt32(NumBytes), PropVal});
 
   BasicBlock::iterator Iter = ++I->getIterator();
   IRB.SetInsertPoint(&*Iter);
-  insertHookCall(&*Iter, AfterFn,
-                 {CsiId, IRB.CreatePointerCast(Addr, AddrType),
-                  IRB.getInt32(NumBytes), PropVal});
+  if (StoreValCat && StoreValID)
+    insertHookCall(&*Iter, AfterFn,
+                   {CsiId, IRB.CreatePointerCast(Addr, AddrType),
+                    IRB.getInt32(NumBytes), StoreValCat, StoreValID, PropVal});
+  else
+    insertHookCall(&*Iter, AfterFn,
+                   {CsiId, IRB.CreatePointerCast(Addr, AddrType),
+                    IRB.getInt32(NumBytes), PropVal});
 }
 
 void CSIImpl::instrumentLoadOrStore(Instruction *I, CsiLoadStoreProperty &Prop,
@@ -837,15 +1382,20 @@ void CSIImpl::instrumentLoadOrStore(Instruction *I, CsiLoadStoreProperty &Prop,
     return; // size that we don't recognize
 
   if (IsWrite) {
-    uint64_t LocalId = StoreFED.add(*I);
+    csi_id_t LocalId = StoreFED.add(*I);
     Value *CsiId = StoreFED.localToGlobalId(LocalId, IRB);
+    StoreInst *SI = cast<StoreInst>(I);
+    Value *Operand = SI->getValueOperand();
+    std::pair<Value *, Value *> OperandID = getOperandID(Operand, IRB);
     addLoadStoreInstrumentation(I, CsiBeforeWrite, CsiAfterWrite, CsiId,
-                                AddrType, Addr, NumBytes, Prop);
+                                AddrType, Addr, NumBytes, OperandID.first,
+                                OperandID.second, Prop);
   } else { // is read
-    uint64_t LocalId = LoadFED.add(*I);
+    csi_id_t LocalId = LoadFED.add(*I);
     Value *CsiId = LoadFED.localToGlobalId(LocalId, IRB);
+
     addLoadStoreInstrumentation(I, CsiBeforeRead, CsiAfterRead, CsiId, AddrType,
-                                Addr, NumBytes, Prop);
+                                Addr, NumBytes, nullptr, nullptr, Prop);
   }
 }
 
@@ -1168,6 +1718,391 @@ void CSIImpl::instrumentSync(SyncInst *SI,
         TrackVar);
   } else {
     assert(callsAfterSync.find(SI->getSuccessor(0)) != callsAfterSync.end());
+  }
+}
+
+void CSIImpl::assignArithmeticID(Instruction *I) {
+  /*csi_id_t LocalId =*/ArithmeticFED.add(*I);
+}
+
+void CSIImpl::instrumentArithmetic(Instruction *I) {
+  IRBuilder<> IRB(I);
+  // We have to make sure not to disrupt the block of PHIs in the block.
+  if (isa<PHINode>(I))
+    IRB.SetInsertPoint(&*I->getParent()->getFirstInsertionPt());
+
+  if (!ArithmeticFED.hasId(I))
+    llvm_unreachable("Missing local ID for arithmetic instruction");
+
+  csi_id_t LocalId = ArithmeticFED.lookupId(I);
+  Value *CsiId = ArithmeticFED.localToGlobalId(LocalId, IRB);
+  CsiArithmeticFlags Flags;
+
+  if (BinaryOperator *BO = dyn_cast<BinaryOperator>(I)) {
+    // Value *Opcode = ConstantInt::get(IRB.getInt8Ty(), BO->getOpcode());
+    Value *Opcode = getOpcodeID(BO->getOpcode(), IRB);
+    Value *Operand0 = BO->getOperand(0);
+    Value *Operand1 = BO->getOperand(1);
+    std::pair<Value *, Value *> Operand0ID = getOperandID(Operand0, IRB);
+    std::pair<Value *, Value *> Operand1ID = getOperandID(Operand1, IRB);
+    Type *OpTy = BO->getType();
+    Type *OperandCastTy = OpTy;
+    Function *ArithmeticHook = nullptr;
+    switch (OpTy->getTypeID()) {
+    // case Type::HalfTyID:
+    //   ArithmeticHook = CsiBeforeArithmeticH;
+    //   break;
+    case Type::FloatTyID:
+      ArithmeticHook = CsiBeforeArithmeticF;
+      break;
+    case Type::DoubleTyID:
+      ArithmeticHook = CsiBeforeArithmeticD;
+      break;
+    case Type::IntegerTyID: {
+      unsigned Width = OpTy->getIntegerBitWidth();
+      if (Width <= 8) {
+        ArithmeticHook = CsiBeforeArithmeticI8;
+        OperandCastTy = IRB.getInt8Ty();
+      } else if (Width <= 16) {
+        ArithmeticHook = CsiBeforeArithmeticI16;
+        OperandCastTy = IRB.getInt16Ty();
+      } else if (Width <= 32) {
+        ArithmeticHook = CsiBeforeArithmeticI32;
+        OperandCastTy = IRB.getInt32Ty();
+      } else if (Width <= 64) {
+        ArithmeticHook = CsiBeforeArithmeticI64;
+        OperandCastTy = IRB.getInt64Ty();
+      } else { // Assume width == 128
+        ArithmeticHook = CsiBeforeArithmeticI128;
+        OperandCastTy = IRB.getInt128Ty();
+      }
+      break;
+    }
+    default:
+      dbgs() << "Uninstrumented binary operator " << *BO << "\n";
+      break;
+    }
+    Value *CastOperand0 = Operand0;
+    Value *CastOperand1 = Operand1;
+    if (OpTy->isIntegerTy()) {
+      CastOperand0 = IRB.CreateZExtOrBitCast(Operand0, OperandCastTy);
+      CastOperand1 = IRB.CreateZExtOrBitCast(Operand1, OperandCastTy);
+    }
+    Flags.copyIRFlags(BO);
+    Value *FlagsVal = Flags.getValue(IRB);
+    insertHookCall(I, ArithmeticHook,
+                   {CsiId, Opcode, Operand0ID.first, Operand0ID.second,
+                    CastOperand0, Operand1ID.first, Operand1ID.second,
+                    CastOperand1, FlagsVal});
+    // TODO: Insert CsiAfterArithmetic hooks
+    // BasicBlock::iterator Iter(I);
+    // Iter++;
+    // IRB.SetInsertPoint(&*Iter);
+
+    // Type *AddrType = IRB.getInt8PtrTy();
+    // insertHookCall(&*Iter, CsiAfterArithmetic, {CsiId, });
+  } else if (TruncInst *TI = dyn_cast<TruncInst>(I)) {
+
+  } else if (FPTruncInst *TI = dyn_cast<FPTruncInst>(I)) {
+    Value *Operand = TI->getOperand(0);
+    std::pair<Value *, Value *> OperandID = getOperandID(Operand, IRB);
+
+    Type *OpTy = TI->getType();
+    Type *OperandTy = Operand->getType();
+    Function *ArithmeticHook = nullptr;
+    switch (OperandTy->getTypeID()) {
+    case Type::DoubleTyID:
+      switch (OpTy->getTypeID()) {
+      case Type::FloatTyID:
+        ArithmeticHook = CsiBeforeTruncateDF;
+        break;
+      // case Type::HalfTyID:
+      //   ArithmeticHook = CsiBeforeTruncateDH;
+      //   break;
+      default:
+        llvm_unreachable("Invalid FPTrunc types?");
+        break;
+      }
+      break;
+    case Type::FloatTyID:
+      switch (OpTy->getTypeID()) {
+      // case Type::HalfTyID:
+      //   ArithmeticHook = CsiBeforeTruncateFH;
+      //   break;
+      default:
+        llvm_unreachable("Invalid FPTrunc types?");
+        break;
+      }
+      break;
+    default:
+      llvm_unreachable("Invalid FPTrunc types?");
+      break;
+    }
+    insertHookCall(I, ArithmeticHook, {CsiId, OperandID.first, OperandID.second,
+                                       Operand});
+  } else if (ZExtInst *EI = dyn_cast<ZExtInst>(I)) {
+
+  } else if (SExtInst *EI = dyn_cast<SExtInst>(I)) {
+
+  } else if (FPExtInst *EI = dyn_cast<FPExtInst>(I)) {
+    Value *Operand = EI->getOperand(0);
+    std::pair<Value *, Value *> OperandID = getOperandID(Operand, IRB);
+
+    Type *OpTy = EI->getType();
+    Type *OperandTy = Operand->getType();
+    Function *ArithmeticHook = nullptr;
+    switch (OperandTy->getTypeID()) {
+    // case Type::HalfTyID:
+    //   switch (OpTy->getTypeID()) {
+    //   case Type::FloatTyID:
+    //     ArithmeticHook = CsiBeforeExtendHF;
+    //     break;
+    //   case Type::DoubleTyID:
+    //     ArithmeticHook = CsiBeforeExtendHD;
+    //     break;
+    //   default:
+    //     llvm_unreachable("Invalid FPExt types?");
+    //     break;
+    //   }
+    //   break;
+    case Type::FloatTyID:
+      switch (OpTy->getTypeID()) {
+      case Type::DoubleTyID:
+        ArithmeticHook = CsiBeforeExtendFD;
+        break;
+      default:
+        llvm_unreachable("Invalid FPExt types?");
+        break;
+      }
+      break;
+    default:
+      llvm_unreachable("Invalid FPExt types?");
+      break;
+    }
+    insertHookCall(I, ArithmeticHook, {CsiId, OperandID.first, OperandID.second,
+                                       Operand});
+  } else if (FPToUIInst *CI = dyn_cast<FPToUIInst>(I)) {
+
+  } else if (FPToSIInst *CI = dyn_cast<FPToSIInst>(I)) {
+
+  } else if (UIToFPInst *CI = dyn_cast<UIToFPInst>(I)) {
+    Value *Operand = CI->getOperand(0);
+    std::pair<Value *, Value *> OperandID = getOperandID(Operand, IRB);
+    Type *OpTy = CI->getType();
+    Type *OperandTy = Operand->getType();
+    assert(OperandTy->isIntegerTy() && "Operand of UIToFP is not an int");
+    unsigned Width = OperandTy->getIntegerBitWidth();
+
+    Function *ArithmeticHook = nullptr;
+    Type *OperandCastTy = nullptr;
+    switch (OpTy->getTypeID()) {
+    // case Type::HalfTyID:
+    //   if (Width <= 8) {
+    //     ArithmeticHook = CsiBeforeConvertUI8H;
+    //     OperandCastTy = IRB.getInt8Ty();
+    //   } else if (Width <= 16) {
+    //     ArithmeticHook = CsiBeforeConvertUI16H;
+    //     OperandCastTy = IRB.getInt16Ty();
+    //   } else if (Width <= 32) {
+    //     ArithmeticHook = CsiBeforeConvertUI32H;
+    //     OperandCastTy = IRB.getInt32Ty();
+    //   } else if (Width <= 64) {
+    //     ArithmeticHook = CsiBeforeConvertUI64H;
+    //     OperandCastTy = IRB.getInt64Ty();
+    //   } else { // Assume width == 128
+    //     ArithmeticHook = CsiBeforeConvertUI128H;
+    //     OperandCastTy = IRB.getInt128Ty();
+    //   }
+    //   break;
+    case Type::FloatTyID:
+      if (Width <= 8) {
+        ArithmeticHook = CsiBeforeConvertUI8F;
+        OperandCastTy = IRB.getInt8Ty();
+      } else if (Width <= 16) {
+        ArithmeticHook = CsiBeforeConvertUI16F;
+        OperandCastTy = IRB.getInt16Ty();
+      } else if (Width <= 32) {
+        ArithmeticHook = CsiBeforeConvertUI32F;
+        OperandCastTy = IRB.getInt32Ty();
+      } else if (Width <= 64) {
+        ArithmeticHook = CsiBeforeConvertUI64F;
+        OperandCastTy = IRB.getInt64Ty();
+      } else { // Assume width == 128
+        ArithmeticHook = CsiBeforeConvertUI128F;
+        OperandCastTy = IRB.getInt128Ty();
+      }
+      break;
+    case Type::DoubleTyID:
+      if (Width <= 8) {
+        ArithmeticHook = CsiBeforeConvertUI8D;
+        OperandCastTy = IRB.getInt8Ty();
+      } else if (Width <= 16) {
+        ArithmeticHook = CsiBeforeConvertUI16D;
+        OperandCastTy = IRB.getInt16Ty();
+      } else if (Width <= 32) {
+        ArithmeticHook = CsiBeforeConvertUI32D;
+        OperandCastTy = IRB.getInt32Ty();
+      } else if (Width <= 64) {
+        ArithmeticHook = CsiBeforeConvertUI64D;
+        OperandCastTy = IRB.getInt64Ty();
+      } else { // Assume width == 128
+        ArithmeticHook = CsiBeforeConvertUI128D;
+        OperandCastTy = IRB.getInt128Ty();
+      }
+      break;
+    default:
+      llvm_unreachable("Invalid type for UIToFP");
+      break;
+    }
+    assert(OperandCastTy && "No type found for operand.");
+    Value *CastOperand = IRB.CreateZExtOrBitCast(Operand, OperandCastTy);
+    insertHookCall(I, ArithmeticHook, {CsiId, OperandID.first, OperandID.second,
+                                       CastOperand});
+
+  } else if (SIToFPInst *CI = dyn_cast<SIToFPInst>(I)) {
+    Value *Operand = CI->getOperand(0);
+    std::pair<Value *, Value *> OperandID = getOperandID(Operand, IRB);
+    Type *OpTy = CI->getType();
+    Type *OperandTy = Operand->getType();
+    assert(OperandTy->isIntegerTy() && "Operand of UIToFP is not an int");
+    unsigned Width = OperandTy->getIntegerBitWidth();
+
+    Function *ArithmeticHook = nullptr;
+    Type *OperandCastTy = nullptr;
+    switch (OpTy->getTypeID()) {
+    // case Type::HalfTyID:
+    //   if (Width <= 8) {
+    //     ArithmeticHook = CsiBeforeConvertSI8H;
+    //     OperandCastTy = IRB.getInt8Ty();
+    //   } else if (Width <= 16) {
+    //     ArithmeticHook = CsiBeforeConvertSI16H;
+    //     OperandCastTy = IRB.getInt16Ty();
+    //   } else if (Width <= 32) {
+    //     ArithmeticHook = CsiBeforeConvertSI32H;
+    //     OperandCastTy = IRB.getInt32Ty();
+    //   } else if (Width <= 64) {
+    //     ArithmeticHook = CsiBeforeConvertSI64H;
+    //     OperandCastTy = IRB.getInt64Ty();
+    //   } else { // Assume width == 128
+    //     ArithmeticHook = CsiBeforeConvertSI128H;
+    //     OperandCastTy = IRB.getInt128Ty();
+    //   }
+    //   break;
+    case Type::FloatTyID:
+      if (Width <= 8) {
+        ArithmeticHook = CsiBeforeConvertSI8F;
+        OperandCastTy = IRB.getInt8Ty();
+      } else if (Width <= 16) {
+        ArithmeticHook = CsiBeforeConvertSI16F;
+        OperandCastTy = IRB.getInt16Ty();
+      } else if (Width <= 32) {
+        ArithmeticHook = CsiBeforeConvertSI32F;
+        OperandCastTy = IRB.getInt32Ty();
+      } else if (Width <= 64) {
+        ArithmeticHook = CsiBeforeConvertSI64F;
+        OperandCastTy = IRB.getInt64Ty();
+      } else { // Assume width == 128
+        ArithmeticHook = CsiBeforeConvertSI128F;
+        OperandCastTy = IRB.getInt128Ty();
+      }
+      break;
+    case Type::DoubleTyID:
+      if (Width <= 8) {
+        ArithmeticHook = CsiBeforeConvertSI8D;
+        OperandCastTy = IRB.getInt8Ty();
+      } else if (Width <= 16) {
+        ArithmeticHook = CsiBeforeConvertSI16D;
+        OperandCastTy = IRB.getInt16Ty();
+      } else if (Width <= 32) {
+        ArithmeticHook = CsiBeforeConvertSI32D;
+        OperandCastTy = IRB.getInt32Ty();
+      } else if (Width <= 64) {
+        ArithmeticHook = CsiBeforeConvertSI64D;
+        OperandCastTy = IRB.getInt64Ty();
+      } else { // Assume width == 128
+        ArithmeticHook = CsiBeforeConvertSI128D;
+        OperandCastTy = IRB.getInt128Ty();
+      }
+      break;
+    default:
+      llvm_unreachable("Invalid type for SIToFP");
+      break;
+    }
+    assert(OperandCastTy && "No type found for operand.");
+    Value *CastOperand = IRB.CreateSExtOrBitCast(Operand, OperandCastTy);
+    insertHookCall(I, ArithmeticHook, {CsiId, OperandID.first, OperandID.second,
+                                       CastOperand});
+
+  } else if (PHINode *PN = dyn_cast<PHINode>(I)) {
+    Type *OpTy = PN->getType();
+    Function *CsiPhiHook = nullptr;
+
+    Type *OperandCastTy = OpTy;
+    switch (OpTy->getTypeID()) {
+      // case Type::HalfTyID:
+      //   CsiPhiHook = CsiPhiH;
+      //   break;
+    case Type::FloatTyID:
+      CsiPhiHook = CsiPhiF;
+      break;
+    case Type::DoubleTyID:
+      CsiPhiHook = CsiPhiD;
+      break;
+    case Type::IntegerTyID: {
+      unsigned Width = OpTy->getIntegerBitWidth();
+      if (Width <= 8) {
+        CsiPhiHook = CsiPhiI8;
+        OperandCastTy = IRB.getInt8Ty();
+      } else if (Width <= 16) {
+        CsiPhiHook = CsiPhiI16;
+        OperandCastTy = IRB.getInt16Ty();
+      } else if (Width <= 32) {
+        CsiPhiHook = CsiPhiI32;
+        OperandCastTy = IRB.getInt32Ty();
+      } else if (Width <= 64) {
+        CsiPhiHook = CsiPhiI64;
+        OperandCastTy = IRB.getInt64Ty();
+      } else { // Assume width == 128
+        CsiPhiHook = CsiPhiI128;
+        OperandCastTy = IRB.getInt128Ty();
+      }
+      break;
+    }
+    default:
+      // TODO: Add support for more types of PHI nodes.
+      dbgs() << "Uninstrumented PHI node:" << *PN << "\n";
+      break;
+    }
+    if (CsiPhiHook) {
+      PHINode *PHIArgs[2];
+      {
+        // Make sure these PHI nodes are inserted at the beginning of the block.
+        IRBuilder<> ArgB(&PN->getParent()->front());
+        // OperandID.first type
+        PHIArgs[0] = ArgB.CreatePHI(ArgB.getInt8Ty(), PN->getNumIncomingValues());
+        // OperandID.second type
+        PHIArgs[1] = ArgB.CreatePHI(ArgB.getInt64Ty(),
+                                    PN->getNumIncomingValues());
+      }
+
+      for (BasicBlock *Pred : predecessors(PN->getParent())) {
+        IRBuilder<> PredB(Pred->getTerminator());
+        Value *Operand = PN->getIncomingValueForBlock(Pred);
+        std::pair<Value *, Value *> OperandID = getOperandID(Operand, PredB);
+        PHIArgs[0]->addIncoming(OperandID.first, Pred);
+        PHIArgs[1]->addIncoming(OperandID.second, Pred);
+      }
+
+      Value *CastPN = PN;
+      if (OperandCastTy != OpTy)
+        CastPN = IRB.CreateZExtOrBitCast(PN, OperandCastTy);
+
+      // Don't use insertHookCall for PHI instrumentation, because we must make
+      // sure not to disrupt the PHIs in the block.
+      CallInst *Call = IRB.CreateCall(CsiPhiHook, {CsiId, PHIArgs[0],
+                                                   PHIArgs[1], CastPN});
+      setInstrumentationDebugLoc(I, (Instruction *)Call);
+    }
   }
 }
 
@@ -1550,6 +2485,14 @@ void CSIImpl::initializeFEDTables() {
                                  "__csi_unit_variable_name_");
   FreeFED = FrontEndDataTable(M, CsiFreeBaseIdName,
                               "__csi_unit_fed_free");
+  ArithmeticFED = FrontEndDataTable(M, CsiArithmeticBaseIdName,
+                                    "__csi_unit_fed_arithmetic");
+  ParameterFED = FrontEndDataTable(M, CsiParameterBaseIdName,
+                                   "__csi_unit_fed_parameter",
+                                   "__csi_unit_argument_name_");
+  GlobalFED = FrontEndDataTable(M, CsiGlobalBaseIdName,
+                                "__csi_unit_fed_global",
+                                "__csi_unit_global_name_");
 }
 
 void CSIImpl::initializeSizeTables() {
@@ -1583,6 +2526,20 @@ void CSIImpl::generateInitCallsiteToFunction() {
     assert(GV);
     IRB.CreateStore(IRB.CreateAdd(LI, IRB.getInt64(it.second)), GV);
   }
+
+  GlobalVariable *GlobalBase = GlobalFED.baseId();
+  LI = IRB.CreateLoad(GlobalBase);
+  for (const auto &it : GlobalOffsetMap) {
+    std::string GVName = CsiGlobalIdVariablePrefix + it.first.str();
+    GlobalVariable *GV = nullptr;
+    if ((GV = M.getGlobalVariable(GVName)) == nullptr) {
+      GV = new GlobalVariable(M, IRB.getInt64Ty(), false,
+                              GlobalValue::WeakAnyLinkage,
+                              IRB.getInt64(CsiUnknownId), GVName);
+    }
+    assert(GV);
+    IRB.CreateStore(IRB.CreateAdd(LI, IRB.getInt64(it.second)), GV);
+  }
 }
 
 void CSIImpl::initializeCsi() {
@@ -1606,6 +2563,8 @@ void CSIImpl::initializeCsi() {
     initializeAllocaHooks();
   if (Options.InstrumentAllocFns)
     initializeAllocFnHooks();
+  if (Options.InstrumentArithmetic)
+    initializeArithmeticHooks();
 
   FunctionType *FnType =
       FunctionType::get(Type::getVoidTy(M.getContext()), {}, false);
@@ -1674,6 +2633,12 @@ void CSIImpl::collectUnitFEDTables() {
   UnitFedTables.push_back(
       fedTableToUnitFedTable(M, UnitFedTableType, AllocFnFED));
   UnitFedTables.push_back(fedTableToUnitFedTable(M, UnitFedTableType, FreeFED));
+  UnitFedTables.push_back(
+      fedTableToUnitFedTable(M, UnitFedTableType, ArithmeticFED));
+  UnitFedTables.push_back(
+      fedTableToUnitFedTable(M, UnitFedTableType, ParameterFED));
+  UnitFedTables.push_back(
+      fedTableToUnitFedTable(M, UnitFedTableType, GlobalFED));
 }
 
 // Create a struct type to match the unit_obj_entry_t type in csirt.c.
@@ -2026,10 +2991,15 @@ void CSIImpl::instrumentFunction(Function &F) {
   SmallVector<SyncInst *, 8> Syncs;
   SmallVector<Instruction *, 8> Allocas;
   SmallVector<Instruction *, 8> AllCalls;
+  SmallVector<Instruction *, 32> Arithmetic;
   bool MaySpawn = false;
 
   DominatorTree *DT = &GetDomTree(F);
   TaskInfo &TI = GetTaskInfo(F);
+
+  for (Argument &Arg : F.args())
+    // Add an ID for this function argument.
+    /*csi_id_t LocalId =*/ParameterFED.add(Arg);
 
   // Compile lists of all instrumentation points before anything is modified.
   for (BasicBlock &BB : F) {
@@ -2064,6 +3034,18 @@ void CSIImpl::instrumentFunction(Function &F) {
                                       DL);
       } else if (isa<AllocaInst>(I)) {
         Allocas.push_back(&I);
+      } else {
+        if (isa<BinaryOperator>(I) || isa<TruncInst>(I) || isa<ZExtInst>(I) ||
+            isa<SExtInst>(I) || isa<FPToUIInst>(I) || isa<FPToSIInst>(I) ||
+            isa<UIToFPInst>(I) || isa<SIToFPInst>(I) || isa<FPTruncInst>(I) ||
+            isa<FPExtInst>(I) || isa<PHINode>(I))
+          Arithmetic.push_back(&I);
+
+        // TODO: Handle GetElementPtr, PtrToInt, IntToPtr, BitCast,
+        // AddrSpaceCast
+
+        // TODO: Handle ExtractElement, InsertElement, ShuffleVector,
+        // ExtractValue, InsertValue
       }
     }
     computeLoadAndStoreProperties(LoadAndStoreProperties, BBLoadsAndStores, DL);
@@ -2071,6 +3053,10 @@ void CSIImpl::instrumentFunction(Function &F) {
   }
 
   csi_id_t LocalId = getLocalFunctionID(F);
+  // First assign local ID's to all arithmetic ops in the function, so that
+  // these IDs can be supplied as arguments to other hooks.
+  for (Instruction *I : Arithmetic)
+    assignArithmeticID(I);
 
   // Instrument basic blocks.  Note that we do this before other instrumentation
   // so that we put this at the beginning of the basic block, and then the
@@ -2130,6 +3116,10 @@ void CSIImpl::instrumentFunction(Function &F) {
       instrumentFree(I);
   }
 
+  if (Options.InstrumentArithmetic)
+    for (Instruction *I : Arithmetic)
+      instrumentArithmetic(I);
+
   if (Options.Interpose) {
     for (Instruction *I : AllCalls)
       interposeCall(I);
@@ -2183,7 +3173,6 @@ llvm::CSIImpl::keepTrackOfSpawns(Function &F,
   }
 
   LLVMContext &C = F.getContext();
-
 
   size_t RegionIndex = 0;
   for (auto Region : Regions) {
