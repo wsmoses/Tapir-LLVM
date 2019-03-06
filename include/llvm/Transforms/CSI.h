@@ -52,6 +52,8 @@ static const char *const CsiSyncBaseIdName = "__csi_unit_sync_base_id";
 static const char *const CsiAllocFnBaseIdName = "__csi_unit_allocfn_base_id";
 static const char *const CsiFreeBaseIdName = "__csi_unit_free_base_id";
 
+static const char *const CsiDefaultDebugNamePrefix = "__csi_unit_function_name_";
+
 static const char *const CsiUnitSizeTableName = "__csi_unit_size_table";
 static const char *const CsiUnitFedTableName = "__csi_unit_fed_table";
 static const char *const CsiFuncIdVariablePrefix = "__csi_func_id_";
@@ -72,13 +74,26 @@ static const int CsiUnitCtorPriority = 0;
 class ForensicTable {
 public:
   ForensicTable() : BaseId(nullptr), IdCounter(0) {}
-  ForensicTable(Module &M, StringRef BaseIdName);
+  ForensicTable(Module &M, StringRef BaseIdName,
+                StringRef TableName = "");
 
   /// The number of entries in this forensic table
   uint64_t size() const { return IdCounter; }
 
-  /// Get the local ID of the given Value.
-  uint64_t getId(const Value *V);
+  /// Return true if this FED has an ID associated with the given Value.
+  bool hasId(const Value *V) const {
+    return ValueToLocalIdMap.count(V);
+  }
+
+  /// Lookup the local ID of the given Value.
+  csi_id_t lookupId(const Value *V) const {
+    if (!hasId(V))
+      return CsiUnknownId;
+    return ValueToLocalIdMap.lookup(V);
+  }
+
+  /// Get the local ID of the given Value, creating an ID if necessary.
+  csi_id_t getId(const Value *V);
 
   /// The GlobalVariable holding the base ID for this forensic table.
   GlobalVariable *baseId() const { return BaseId; }
@@ -90,7 +105,7 @@ public:
   ///
   /// \returns A Value holding the global ID corresponding to the
   /// given local ID.
-  Value *localToGlobalId(uint64_t LocalId, IRBuilder<> &IRB) const;
+  Value *localToGlobalId(csi_id_t LocalId, IRBuilder<> &IRB) const;
 
   /// Helper function to get or create a string for a forensic-table entry.
   static Constant *getObjectStrGV(Module &M, StringRef Str, const Twine GVName);
@@ -99,9 +114,10 @@ protected:
   /// The GlobalVariable holding the base ID for this FED table.
   GlobalVariable *BaseId;
   /// Counter of local IDs used so far.
-  uint64_t IdCounter;
+  csi_id_t IdCounter;
   /// Map of Value to Local ID.
-  DenseMap<const Value *, uint64_t> ValueToLocalIdMap;
+  DenseMap<const Value *, csi_id_t> ValueToLocalIdMap;
+  StringRef TableName;
 };
 
 /// Maintains a mapping from CSI ID to front-end data for that ID.
@@ -111,23 +127,34 @@ protected:
 class FrontEndDataTable : public ForensicTable {
 public:
   FrontEndDataTable() : ForensicTable() {}
-  FrontEndDataTable(Module &M, StringRef BaseIdName)
-      : ForensicTable(M, BaseIdName) {}
+  FrontEndDataTable(Module &M, StringRef BaseIdName,
+                    StringRef TableName = CsiUnitFedTableName,
+                    StringRef DebugNamePrefix = CsiDefaultDebugNamePrefix)
+      : ForensicTable(M, BaseIdName, TableName),
+        DebugNamePrefix(DebugNamePrefix) {}
 
   /// The number of entries in this FED table
   uint64_t size() const { return LocalIdToSourceLocationMap.size(); }
 
   /// Add the given Function to this FED table.
   /// \returns The local ID of the Function.
-  uint64_t add(const Function &F);
+  csi_id_t add(const Function &F);
 
   /// Add the given BasicBlock to this FED table.
   /// \returns The local ID of the BasicBlock.
-  uint64_t add(const BasicBlock &BB);
+  csi_id_t add(const BasicBlock &BB);
 
   /// Add the given Instruction to this FED table.
   /// \returns The local ID of the Instruction.
-  uint64_t add(const Instruction &I, const StringRef &RealName = "");
+  csi_id_t add(const Instruction &I, const StringRef &RealName = "");
+
+  /// Add the given Value to this FED table.
+  /// \returns The local ID of the Value.
+  csi_id_t add(Value &V);
+
+  /// Add the given Global Value to this FED table.
+  /// \returns The local ID of the Global.
+  csi_id_t add(const GlobalValue &Val);
 
   /// Get the Type for a pointer to a FED table entry.
   ///
@@ -149,9 +176,10 @@ private:
     StringRef Filename;
     StringRef Directory;
   };
+  StringRef DebugNamePrefix;
 
   /// Map of local ID to SourceLocation.
-  DenseMap<uint64_t, SourceLocation> LocalIdToSourceLocationMap;
+  DenseMap<csi_id_t, SourceLocation> LocalIdToSourceLocationMap;
 
   /// Create a struct type to match the "struct SourceLocation" type.
   /// (and the source_loc_t type in csi.h).
@@ -162,15 +190,15 @@ private:
   ///
   /// \returns The local ID of the appended information.
   /// @{
-  void add(uint64_t ID, const DILocation *Loc, const StringRef &RealName = "");
-  void add(uint64_t ID, const DISubprogram *Subprog);
+  void add(csi_id_t ID, const DILocation *Loc, const StringRef &RealName = "");
+  void add(csi_id_t ID, const DISubprogram *Subprog);
   /// @}
 
   /// Append the line and file information to the table, assigning it
   /// the next available ID.
   ///
   /// \returns The new local ID of the DILocation.
-  void add(uint64_t ID, int32_t Line = -1, int32_t Column = -1,
+  void add(csi_id_t ID, int32_t Line = -1, int32_t Column = -1,
            StringRef Filename = "", StringRef Directory = "",
            StringRef Name = "");
 };
@@ -180,14 +208,16 @@ private:
 class SizeTable : public ForensicTable {
 public:
   SizeTable() : ForensicTable() {}
-  SizeTable(Module &M, StringRef BaseIdName) : ForensicTable(M, BaseIdName) {}
+  SizeTable(Module &M, StringRef BaseIdName,
+            StringRef TableName = CsiUnitSizeTableName)
+      : ForensicTable(M, BaseIdName, TableName) {}
 
   /// The number of entries in this table
   uint64_t size() const { return LocalIdToSizeMap.size(); }
 
   /// Add the given basic block  to this table.
   /// \returns The local ID of the basic block.
-  uint64_t add(const BasicBlock &BB);
+  csi_id_t add(const BasicBlock &BB);
 
   /// Get the Type for a pointer to a table entry.
   ///
@@ -212,14 +242,14 @@ private:
   };
 
   /// Map of local ID to size.
-  DenseMap<uint64_t, SizeInformation> LocalIdToSizeMap;
+  DenseMap<csi_id_t, SizeInformation> LocalIdToSizeMap;
 
   /// Create a struct type to match the "struct SourceLocation" type.
   /// (and the source_loc_t type in csi.h).
   static StructType *getSizeStructType(LLVMContext &C);
 
   /// Append the size information to the table.
-  void add(uint64_t ID, int32_t FullIRSize = 0, int32_t NonEmptyIRSize = 0);
+  void add(csi_id_t ID, int32_t FullIRSize = 0, int32_t NonEmptyIRSize = 0);
 };
 
 /// Represents a property value passed to hooks.
@@ -256,12 +286,15 @@ public:
   CsiFuncProperty() { PropValue.Bits = 0; }
 
   /// Return the Type of a property.
-  static Type *getType(LLVMContext &C) {
+  static StructType *getStructType(LLVMContext &C) {
     // Must match the definition of property type in csi.h
-    return CsiProperty::getCoercedType(
-        C, StructType::get(IntegerType::get(C, PropBits.MaySpawn),
-                           IntegerType::get(C, PropBits.Padding)));
+    return StructType::get(IntegerType::get(C, PropBits.MaySpawn),
+                           IntegerType::get(C, PropBits.Padding));
   }
+  static Type *getType(LLVMContext &C) {
+    return getCoercedType(C, getStructType(C));
+  }
+
   /// Return a constant value holding this property.
   Constant *getValueImpl(LLVMContext &C) const override {
     // Must match the definition of property type in csi.h
@@ -304,13 +337,16 @@ public:
   CsiFuncExitProperty() { PropValue.Bits = 0; }
 
   /// Return the Type of a property.
-  static Type *getType(LLVMContext &C) {
+  static StructType *getStructType(LLVMContext &C) {
     // Must match the definition of property type in csi.h
-    return CsiProperty::getCoercedType(
-        C, StructType::get(IntegerType::get(C, PropBits.MaySpawn),
+    return StructType::get(IntegerType::get(C, PropBits.MaySpawn),
                            IntegerType::get(C, PropBits.EHReturn),
-                           IntegerType::get(C, PropBits.Padding)));
+                           IntegerType::get(C, PropBits.Padding));
   }
+  static Type *getType(LLVMContext &C) {
+    return getCoercedType(C, getStructType(C));
+  }
+
   /// Return a constant value holding this property.
   Constant *getValueImpl(LLVMContext &C) const override {
     // Must match the definition of property type in csi.h
@@ -358,12 +394,14 @@ public:
   CsiBBProperty() { PropValue.Bits = 0; }
 
   /// Return the Type of a property.
-  static Type *getType(LLVMContext &C) {
+  static StructType *getStructType(LLVMContext &C) {
     // Must match the definition of property type in csi.h
-    return CsiProperty::getCoercedType(
-        C, StructType::get(IntegerType::get(C, PropBits.IsLandingPad),
+    return StructType::get(IntegerType::get(C, PropBits.IsLandingPad),
                            IntegerType::get(C, PropBits.IsEHPad),
-                           IntegerType::get(C, PropBits.Padding)));
+                           IntegerType::get(C, PropBits.Padding));
+  }
+  static Type *getType(LLVMContext &C) {
+    return getCoercedType(C, getStructType(C));
   }
 
   /// Return a constant value holding this property.
@@ -413,12 +451,15 @@ public:
   CsiCallProperty() { PropValue.Bits = 0; }
 
   /// Return the Type of a property.
-  static Type *getType(LLVMContext &C) {
+  static StructType *getStructType(LLVMContext &C) {
     // Must match the definition of property type in csi.h
-    return CsiProperty::getCoercedType(
-        C, StructType::get(IntegerType::get(C, PropBits.IsIndirect),
-                           IntegerType::get(C, PropBits.Padding)));
+    return StructType::get(IntegerType::get(C, PropBits.IsIndirect),
+                           IntegerType::get(C, PropBits.Padding));
   }
+  static Type *getType(LLVMContext &C) {
+    return getCoercedType(C, getStructType(C));
+  }
+
   /// Return a constant value holding this property.
   Constant *getValueImpl(LLVMContext &C) const override {
     // Must match the definition of property type in csi.h
@@ -463,18 +504,21 @@ class CsiLoadStoreProperty : public CsiProperty {
 public:
   CsiLoadStoreProperty() { PropValue.Bits = 0; }
   /// Return the Type of a property.
-  static Type *getType(LLVMContext &C) {
+  static StructType *getStructType(LLVMContext &C) {
     // Must match the definition of property type in csi.h
-    return CsiProperty::getCoercedType(
-        C,
-        StructType::get(IntegerType::get(C, PropBits.Alignment),
-                        IntegerType::get(C, PropBits.IsVtableAccess),
-                        IntegerType::get(C, PropBits.IsConstant),
-                        IntegerType::get(C, PropBits.IsOnStack),
-                        IntegerType::get(C, PropBits.MayBeCaptured),
-                        IntegerType::get(C, PropBits.LoadReadBeforeWriteInBB),
-                        IntegerType::get(C, PropBits.Padding)));
+    return StructType::get(
+        IntegerType::get(C, PropBits.Alignment),
+        IntegerType::get(C, PropBits.IsVtableAccess),
+        IntegerType::get(C, PropBits.IsConstant),
+        IntegerType::get(C, PropBits.IsOnStack),
+        IntegerType::get(C, PropBits.MayBeCaptured),
+        IntegerType::get(C, PropBits.LoadReadBeforeWriteInBB),
+        IntegerType::get(C, PropBits.Padding));
   }
+  static Type *getType(LLVMContext &C) {
+    return getCoercedType(C, getStructType(C));
+  }
+
   /// Return a constant value holding this property.
   Constant *getValueImpl(LLVMContext &C) const override {
     // Must match the definition of property type in csi.h
@@ -551,12 +595,15 @@ public:
   CsiAllocaProperty() { PropValue.Bits = 0; }
 
   /// Return the Type of a property.
-  static Type *getType(LLVMContext &C) {
+  static StructType *getStructType(LLVMContext &C) {
     // Must match the definition of property type in csi.h
-    return CsiProperty::getCoercedType(
-        C, StructType::get(IntegerType::get(C, PropBits.IsStatic),
-                           IntegerType::get(C, PropBits.Padding)));
+    return StructType::get(IntegerType::get(C, PropBits.IsStatic),
+                           IntegerType::get(C, PropBits.Padding));
   }
+  static Type *getType(LLVMContext &C) {
+    return getCoercedType(C, getStructType(C));
+  }
+
   /// Return a constant value holding this property.
   Constant *getValueImpl(LLVMContext &C) const override {
     // Must match the definition of property type in csi.h
@@ -594,12 +641,15 @@ class CsiAllocFnProperty : public CsiProperty {
 public:
   CsiAllocFnProperty() { PropValue.Bits = 0; }
   /// Return the Type of a property.
-  static Type *getType(LLVMContext &C) {
+  static StructType *getStructType(LLVMContext &C) {
     // Must match the definition of property type in csi.h
-    return CsiProperty::getCoercedType(
-        C, StructType::get(IntegerType::get(C, PropBits.AllocFnTy),
-                           IntegerType::get(C, PropBits.Padding)));
+    return StructType::get(IntegerType::get(C, PropBits.AllocFnTy),
+                           IntegerType::get(C, PropBits.Padding));
   }
+  static Type *getType(LLVMContext &C) {
+    return getCoercedType(C, getStructType(C));
+  }
+
   /// Return a constant value holding this property.
   Constant *getValueImpl(LLVMContext &C) const override {
     // Must match the definition of property type in csan.h
@@ -635,12 +685,15 @@ class CsiFreeProperty : public CsiProperty {
 public:
   CsiFreeProperty() { PropValue.Bits = 0; }
   /// Return the Type of a property.
-  static Type *getType(LLVMContext &C) {
+  static StructType *getStructType(LLVMContext &C) {
     // Must match the definition of property type in csi.h
-    return CsiProperty::getCoercedType(
-        C, StructType::get(IntegerType::get(C, PropBits.FreeTy),
-                           IntegerType::get(C, PropBits.Padding)));
+    return StructType::get(IntegerType::get(C, PropBits.FreeTy),
+                           IntegerType::get(C, PropBits.Padding));
   }
+  static Type *getType(LLVMContext &C) {
+    return getCoercedType(C, getStructType(C));
+  }
+
   /// Return a constant value holding this property.
   Constant *getValueImpl(LLVMContext &C) const override {
     // Must match the definition of property type in csan.h
@@ -745,15 +798,15 @@ protected:
   void initializeFEDTables();
   /// Collect unit front-end data table structures for finalization.
   void collectUnitFEDTables();
-  /// Initialize the front-end data table structures.
+  /// Initialize the size table structures.
   void initializeSizeTables();
-  /// Collect unit front-end data table structures for finalization.
+  /// Collect unit size table structures for finalization.
   void collectUnitSizeTables();
 
   virtual CallInst *createRTUnitInitCall(IRBuilder<> &IRB);
 
   // Get the local ID of the given function.
-  uint64_t getLocalFunctionID(Function &F);
+  csi_id_t getLocalFunctionID(Function &F);
   /// Generate a function that stores global function IDs into a set
   /// of externally-visible global variables.
   void generateInitCallsiteToFunction();
@@ -802,14 +855,15 @@ protected:
   /// Insert a call to the given hook function before the given instruction.
   CallInst* insertHookCall(Instruction *I, Function *HookFunction,
                       ArrayRef<Value *> HookArgs);
-  bool updateArgPHIs(BasicBlock *Succ, BasicBlock *BB,
+  bool updateArgPHIs(Instruction *I, BasicBlock *Succ, BasicBlock *BB,
                      ArrayRef<Value *> HookArgs,
                      ArrayRef<Value *> DefaultHookArgs);
-  CallInst *insertHookCallInSuccessorBB(BasicBlock *Succ, BasicBlock *BB,
-                                   Function *HookFunction,
-                                   ArrayRef<Value *> HookArgs,
-                                   ArrayRef<Value *> DefaultHookArgs);
-  void insertHookCallAtSharedEHSpindleExits(Spindle *SharedEHSpindle, Task *T,
+  CallInst *insertHookCallInSuccessorBB(Instruction *I, BasicBlock *Succ,
+                                        BasicBlock *BB, Function *HookFunction,
+                                        ArrayRef<Value *> HookArgs,
+                                        ArrayRef<Value *> DefaultHookArgs);
+  void insertHookCallAtSharedEHSpindleExits(Instruction *I,
+                                            Spindle *SharedEHSpindle, Task *T,
                                             Function *HookFunction,
                                             FrontEndDataTable &FED,
                                             ArrayRef<Value *> HookArgs,
@@ -1016,7 +1070,7 @@ protected:
   Type *IntptrTy;
   DenseMap<StringRef, uint64_t> FuncOffsetMap;
 
-  DenseMap<BasicBlock *, SmallVector<PHINode *, 4>> ArgPHIs;
+  DenseMap<std::pair<Value *, BasicBlock *>, SmallVector<PHINode *, 4>> ArgPHIs;
   DenseMap<BasicBlock *, CallInst *> callsAfterSync;
   std::unique_ptr<InstrumentationConfig> Config;
 

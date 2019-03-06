@@ -93,8 +93,9 @@ static const char *const CsiUnitObjTableArrayName = "__csi_unit_obj_tables";
 class ObjectTable : public ForensicTable {
 public:
   ObjectTable() : ForensicTable() {}
-  ObjectTable(Module &M, StringRef BaseIdName)
-      : ForensicTable(M, BaseIdName) {}
+  ObjectTable(Module &M, StringRef BaseIdName,
+              StringRef TableName = CsiUnitObjTableName)
+      : ForensicTable(M, BaseIdName, TableName) {}
 
   /// The number of entries in this table
   uint64_t size() const { return LocalIdToSourceLocationMap.size(); }
@@ -577,7 +578,7 @@ Constant *ObjectTable::insertIntoModule(Module &M) const {
   SmallVector<Constant *, 6> TableEntries;
 
   // Get the object-table entries for each ID.
-  for (uint64_t LocalID = 0; LocalID < IdCounter; ++LocalID) {
+  for (csi_id_t LocalID = 0; LocalID < IdCounter; ++LocalID) {
     const SourceLocation &E = LocalIdToSourceLocationMap.find(LocalID)->second;
     // Source line
     Constant *Line = ConstantInt::get(Int32Ty, E.Line);
@@ -600,7 +601,7 @@ Constant *ObjectTable::insertIntoModule(Module &M) const {
   Constant *Table = ConstantArray::get(TableArrayType, TableEntries);
   GlobalVariable *GV =
     new GlobalVariable(M, TableArrayType, false, GlobalValue::InternalLinkage,
-                       Table, CsiUnitObjTableName);
+                       Table, TableName);
   return ConstantExpr::getGetElementPtr(GV->getValueType(), GV, GepArgs);
 }
 
@@ -647,10 +648,13 @@ bool CilkSanitizerImpl::run() {
 }
 
 void CilkSanitizerImpl::initializeCsanObjectTables() {
-  LoadObj = ObjectTable(M, CsiLoadBaseIdName);
-  StoreObj = ObjectTable(M, CsiStoreBaseIdName);
-  AllocaObj = ObjectTable(M, CsiAllocaBaseIdName);
-  AllocFnObj = ObjectTable(M, CsiAllocFnBaseIdName);
+  LoadObj = ObjectTable(M, CsiLoadBaseIdName, "__csi_unit_object_table_load");
+  StoreObj = ObjectTable(M, CsiStoreBaseIdName,
+                         "__csi_unit_object_table_store");
+  AllocaObj = ObjectTable(M, CsiAllocaBaseIdName,
+                          "__csi_unit_object_table_alloca");
+  AllocFnObj = ObjectTable(M, CsiAllocFnBaseIdName,
+                           "__csi_unit_object_table_allocfn");
 }
 
 // Create a struct type to match the unit_obj_entry_t type in csanrt.c.
@@ -2348,10 +2352,10 @@ bool CilkSanitizerImpl::instrumentCallsite(Instruction *I) {
     // exception block.
     InvokeInst *II = cast<InvokeInst>(I);
     insertHookCallInSuccessorBB(
-        II->getNormalDest(), II->getParent(), CsiAfterCallsite,
+        II, II->getNormalDest(), II->getParent(), CsiAfterCallsite,
         {CallsiteId, FuncId, PropVal}, {DefaultID, DefaultID, DefaultPropVal});
     insertHookCallInSuccessorBB(
-        II->getUnwindDest(), II->getParent(), CsiAfterCallsite,
+        II, II->getUnwindDest(), II->getParent(), CsiAfterCallsite,
         {CallsiteId, FuncId, PropVal}, {DefaultID, DefaultID, DefaultPropVal});
   } else {
     // Simple call instruction; there is only one "after" position.
@@ -2379,9 +2383,9 @@ bool CilkSanitizerImpl::suppressCallsite(Instruction *I) {
     // exception block.
     InvokeInst *II = cast<InvokeInst>(I);
     insertHookCallInSuccessorBB(
-        II->getNormalDest(), II->getParent(), CsanEnableChecking, {}, {});
+        II, II->getNormalDest(), II->getParent(), CsanEnableChecking, {}, {});
     insertHookCallInSuccessorBB(
-        II->getUnwindDest(), II->getParent(), CsanEnableChecking, {}, {});
+        II, II->getUnwindDest(), II->getParent(), CsanEnableChecking, {}, {});
   } else {
     // Simple call instruction; there is only one "after" position.
     Iter++;
@@ -2495,7 +2499,7 @@ bool CilkSanitizerImpl::instrumentDetach(DetachInst *DI,
     Value *DefaultID = getDefaultID(IRB);
     for (Spindle *SharedEH : SharedEHExits)
       insertHookCallAtSharedEHSpindleExits(
-          SharedEH, T, CsanTaskExit, TaskExitFED, {TaskID, DetachID},
+          DI, SharedEH, T, CsanTaskExit, TaskExitFED, {TaskID, DetachID},
           {DefaultID, DefaultID});
   }
 
@@ -2520,7 +2524,7 @@ bool CilkSanitizerImpl::instrumentDetach(DetachInst *DI,
     Value *DefaultID = getDefaultID(IRB);
     uint64_t LocalID = DetachContinueFED.add(*UnwindBlock);
     Value *ContinueID = DetachContinueFED.localToGlobalId(LocalID, IRB);
-    insertHookCallInSuccessorBB(UnwindBlock, DI->getParent(),
+    insertHookCallInSuccessorBB(DI, UnwindBlock, DI->getParent(),
                                 CsanDetachContinue, {ContinueID, DetachID},
                                 {DefaultID, DefaultID});
   }
@@ -2746,7 +2750,7 @@ bool CilkSanitizerImpl::instrumentAllocationFn(Instruction *I,
       DefaultAfterAllocFnArgs.append(DefaultAllocFnArgs.begin(),
                                      DefaultAllocFnArgs.end());
       insertHookCallInSuccessorBB(
-          II->getUnwindDest(), II->getParent(), CsanAfterAllocFn,
+          II, II->getUnwindDest(), II->getParent(), CsanAfterAllocFn,
           AfterAllocFnArgs, DefaultAfterAllocFnArgs);
     }
   } else {

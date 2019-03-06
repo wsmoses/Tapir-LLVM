@@ -128,8 +128,8 @@ struct ComprehensiveStaticInstrumentationLegacyPass : public ModulePass {
   static char ID; // Pass identification, replacement for typeid.
 
   ComprehensiveStaticInstrumentationLegacyPass(
-      const CSIOptions &Options = CSIOptions())
-      : ModulePass(ID), Options(OverrideFromCL(Options)) {
+      const CSIOptions &Options = OverrideFromCL(CSIOptions()))
+      : ModulePass(ID), Options(Options) {
     initializeComprehensiveStaticInstrumentationLegacyPassPass(
         *PassRegistry::getPassRegistry());
   }
@@ -266,7 +266,9 @@ Constant *ForensicTable::getObjectStrGV(Module &M, StringRef Str,
   return ConstantExpr::getGetElementPtr(GV->getValueType(), GV, GepArgs);
 }
 
-ForensicTable::ForensicTable(Module &M, StringRef BaseIdName) {
+ForensicTable::ForensicTable(Module &M, StringRef BaseIdName,
+                             StringRef TableName)
+    : TableName(TableName) {
   LLVMContext &C = M.getContext();
   IntegerType *Int64Ty = IntegerType::get(C, 64);
   IdCounter = 0;
@@ -277,15 +279,18 @@ ForensicTable::ForensicTable(Module &M, StringRef BaseIdName) {
   assert(BaseId);
 }
 
-uint64_t ForensicTable::getId(const Value *V) {
+csi_id_t ForensicTable::getId(const Value *V) {
   if (!ValueToLocalIdMap.count(V))
     ValueToLocalIdMap[V] = IdCounter++;
   assert(ValueToLocalIdMap.count(V) && "Value not in ID map.");
   return ValueToLocalIdMap[V];
 }
 
-Value *ForensicTable::localToGlobalId(uint64_t LocalId,
+Value *ForensicTable::localToGlobalId(csi_id_t LocalId,
                                       IRBuilder<> &IRB) const {
+  if (CsiUnknownId == LocalId)
+    return IRB.getInt64(CsiUnknownId);
+
   assert(BaseId);
   LLVMContext &C = IRB.getContext();
   LoadInst *Base = IRB.CreateLoad(BaseId);
@@ -295,8 +300,8 @@ Value *ForensicTable::localToGlobalId(uint64_t LocalId,
   return IRB.CreateAdd(Base, Offset);
 }
 
-uint64_t SizeTable::add(const BasicBlock &BB) {
-  uint64_t ID = getId(&BB);
+csi_id_t SizeTable::add(const BasicBlock &BB) {
+  csi_id_t ID = getId(&BB);
   // Count the LLVM IR instructions
   int32_t NonEmptyIRSize = 0;
   for (const Instruction &I : BB) {
@@ -320,7 +325,7 @@ StructType *SizeTable::getSizeStructType(LLVMContext &C) {
       /* NonEmptyIRSize */ IntegerType::get(C, 32));
 }
 
-void SizeTable::add(uint64_t ID, int32_t FullIRSize, int32_t NonEmptyIRSize) {
+void SizeTable::add(csi_id_t ID, int32_t FullIRSize, int32_t NonEmptyIRSize) {
   assert(NonEmptyIRSize <= FullIRSize && "Broken basic block IR sizes");
   assert(LocalIdToSizeMap.find(ID) == LocalIdToSizeMap.end() &&
          "ID already exists in FED table.");
@@ -335,7 +340,7 @@ Constant *SizeTable::insertIntoModule(Module &M) const {
   Value *GepArgs[] = {Zero, Zero};
   SmallVector<Constant *, 1> TableEntries;
 
-  for (uint64_t LocalID = 0; LocalID < IdCounter; ++LocalID) {
+  for (csi_id_t LocalID = 0; LocalID < IdCounter; ++LocalID) {
     const SizeInformation &E = LocalIdToSizeMap.find(LocalID)->second;
     Constant *FullIRSize = ConstantInt::get(Int32Ty, E.FullIRSize);
     Constant *NonEmptyIRSize = ConstantInt::get(Int32Ty, E.NonEmptyIRSize);
@@ -349,26 +354,96 @@ Constant *SizeTable::insertIntoModule(Module &M) const {
   Constant *Table = ConstantArray::get(TableArrayType, TableEntries);
   GlobalVariable *GV =
       new GlobalVariable(M, TableArrayType, false, GlobalValue::InternalLinkage,
-                         Table, CsiUnitSizeTableName);
+                         Table, TableName);
   return ConstantExpr::getGetElementPtr(GV->getValueType(), GV, GepArgs);
 }
 
-uint64_t FrontEndDataTable::add(const Function &F) {
-  uint64_t ID = getId(&F);
+csi_id_t FrontEndDataTable::add(const Function &F) {
+  csi_id_t ID = getId(&F);
   add(ID, F.getSubprogram());
   return ID;
 }
 
-uint64_t FrontEndDataTable::add(const BasicBlock &BB) {
-  uint64_t ID = getId(&BB);
+csi_id_t FrontEndDataTable::add(const BasicBlock &BB) {
+  csi_id_t ID = getId(&BB);
   add(ID, getFirstDebugLoc(BB));
   return ID;
 }
 
-uint64_t FrontEndDataTable::add(const Instruction &I,
+csi_id_t FrontEndDataTable::add(const Instruction &I,
                                 const StringRef &RealName) {
-  uint64_t ID = getId(&I);
-  add(ID, I.getDebugLoc(), RealName);
+  csi_id_t ID = getId(&I);
+  StringRef Name = RealName;
+  if (Name == "") {
+    // Look for a llvm.dbg.declare intrinsic.
+    TinyPtrVector<DbgInfoIntrinsic *> DbgDeclares =
+      FindDbgAddrUses(const_cast<Instruction *>(&I));
+    if (!DbgDeclares.empty()) {
+      auto *LV = DbgDeclares.front()->getVariable();
+      add(ID, (int32_t)LV->getLine(), -1,
+          LV->getFilename(), LV->getDirectory(), LV->getName());
+      return ID;
+    }
+
+    // Examine the llvm.dbg.value intrinsics for this object.
+    SmallVector<DbgValueInst *, 1> DbgValues;
+    findDbgValues(DbgValues, const_cast<Instruction *>(&I));
+    for (auto *DVI : DbgValues) {
+      auto *LV = DVI->getVariable();
+      if (LV->getName() != "") {
+        Name = LV->getName();
+        break;
+      }
+    }
+  }
+  add(ID, I.getDebugLoc(), Name);
+  return ID;
+}
+
+csi_id_t FrontEndDataTable::add(Value &V) {
+  csi_id_t ID = getId(&V);
+  // Look for a llvm.dbg.declare intrinsic.
+  TinyPtrVector<DbgInfoIntrinsic *> DbgDeclares = FindDbgAddrUses(&V);
+  if (!DbgDeclares.empty()) {
+    auto *LV = DbgDeclares.front()->getVariable();
+    add(ID, (int32_t)LV->getLine(), -1,
+        LV->getFilename(), LV->getDirectory(), LV->getName());
+    return ID;
+  }
+
+  // Examine the llvm.dbg.value intrinsics for this object.
+  SmallVector<DbgValueInst *, 1> DbgValues;
+  findDbgValues(DbgValues, &V);
+  for (auto *DVI : DbgValues) {
+    auto *LV = DVI->getVariable();
+    if (LV->getName() != "") {
+      add(ID, (int32_t)LV->getLine(), -1,
+          LV->getFilename(), LV->getDirectory(), LV->getName());
+      return ID;
+    }
+  }
+
+  add(ID);
+  return ID;
+}
+
+csi_id_t FrontEndDataTable::add(const GlobalValue &Val) {
+  csi_id_t ID = getId(&Val);
+  // If the underlying object is a global variable, get that variable's
+  // debug information.
+  if (const GlobalVariable *GV = dyn_cast<GlobalVariable>(&Val)) {
+    SmallVector<DIGlobalVariableExpression *, 1> DbgGVExprs;
+    GV->getDebugInfo(DbgGVExprs);
+    for (auto *GVE : DbgGVExprs) {
+      auto *DGV = GVE->getVariable();
+      if (DGV->getName() != "") {
+        add(ID, (int32_t)DGV->getLine(), -1,
+            DGV->getFilename(), DGV->getDirectory(), DGV->getName());
+        return ID;
+      }
+    }
+  }
+  add(ID);
   return ID;
 }
 
@@ -384,7 +459,7 @@ StructType *FrontEndDataTable::getSourceLocStructType(LLVMContext &C) {
       /* File */ PointerType::get(IntegerType::get(C, 8), 0));
 }
 
-void FrontEndDataTable::add(uint64_t ID, const DILocation *Loc,
+void FrontEndDataTable::add(csi_id_t ID, const DILocation *Loc,
                             const StringRef &RealName) {
   if (Loc) {
     // TODO: Add location information for inlining
@@ -396,7 +471,7 @@ void FrontEndDataTable::add(uint64_t ID, const DILocation *Loc,
     add(ID);
 }
 
-void FrontEndDataTable::add(uint64_t ID, const DISubprogram *Subprog) {
+void FrontEndDataTable::add(csi_id_t ID, const DISubprogram *Subprog) {
   if (Subprog)
     add(ID, (int32_t)Subprog->getLine(), -1, Subprog->getFilename(),
         Subprog->getDirectory(), Subprog->getName());
@@ -404,7 +479,7 @@ void FrontEndDataTable::add(uint64_t ID, const DISubprogram *Subprog) {
     add(ID);
 }
 
-void FrontEndDataTable::add(uint64_t ID, int32_t Line, int32_t Column,
+void FrontEndDataTable::add(csi_id_t ID, int32_t Line, int32_t Column,
                             StringRef Filename, StringRef Directory,
                             StringRef Name) {
   // TODO: This assert is too strong for unwind basic blocks' FED.
@@ -431,7 +506,7 @@ Constant *FrontEndDataTable::insertIntoModule(Module &M) const {
   Value *GepArgs[] = {Zero, Zero};
   SmallVector<Constant *, 11> FEDEntries;
 
-  for (uint64_t LocalID = 0; LocalID < IdCounter; ++LocalID) {
+  for (csi_id_t LocalID = 0; LocalID < IdCounter; ++LocalID) {
     const SourceLocation &E = LocalIdToSourceLocationMap.find(LocalID)->second;
     Constant *Line = ConstantInt::get(Int32Ty, E.Line);
     Constant *Column = ConstantInt::get(Int32Ty, E.Column);
@@ -442,7 +517,7 @@ Constant *FrontEndDataTable::insertIntoModule(Module &M) const {
         Filename = E.Directory.str() + "/" + Filename;
       File = getObjectStrGV(M, Filename, "__csi_unit_filename_");
     }
-    Constant *Name = getObjectStrGV(M, E.Name, "__csi_unit_function_name_");
+    Constant *Name = getObjectStrGV(M, E.Name, DebugNamePrefix);
     addFEDTableEntries(FEDEntries, FedType, Name, Line, Column, File);
   }
 
@@ -450,7 +525,7 @@ Constant *FrontEndDataTable::insertIntoModule(Module &M) const {
   Constant *Table = ConstantArray::get(FedArrayType, FEDEntries);
   GlobalVariable *GV =
       new GlobalVariable(M, FedArrayType, false, GlobalValue::InternalLinkage,
-                         Table, CsiUnitFedTableName + BaseId->getName());
+                         Table, TableName);
   return ConstantExpr::getGetElementPtr(GV->getValueType(), GV, GepArgs);
 }
 
@@ -584,6 +659,10 @@ void CSIImpl::initializeTapirHooks() {
   IRBuilder<> IRB(C);
   Type *IDType = IRB.getInt64Ty();
   Type *RetType = IRB.getVoidTy();
+
+  // TODO: Can we change the type of the TrackVars variable to be a simple i32?
+  // That would allow the optimizer to more generally optimize away the
+  // TrackVars stack allocation.
 
   CsiDetach = checkCsiInterfaceFunction(M.getOrInsertFunction(
       "__csi_detach", RetType,
@@ -815,8 +894,8 @@ bool CSIImpl::instrumentMemIntrinsic(Instruction *I) {
 
 void CSIImpl::instrumentBasicBlock(BasicBlock &BB) {
   IRBuilder<> IRB(&*BB.getFirstInsertionPt());
-  uint64_t LocalId = BasicBlockFED.add(BB);
-  uint64_t BBSizeId = BBSize.add(BB);
+  csi_id_t LocalId = BasicBlockFED.add(BB);
+  csi_id_t BBSizeId = BBSize.add(BB);
   assert(LocalId == BBSizeId &&
          "BB recieved different ID's in FED and sizeinfo tables.");
   Value *CsiId = BasicBlockFED.localToGlobalId(LocalId, IRB);
@@ -857,8 +936,9 @@ void CSIImpl::instrumentCallsite(Instruction *I, DominatorTree *DT) {
 
   IRBuilder<> IRB(I);
   Value *DefaultID = getDefaultID(IRB);
-  uint64_t LocalId = CallsiteFED.add(*I, Called ? Called->getName() : "");
+  csi_id_t LocalId = CallsiteFED.add(*I, Called ? Called->getName() : "");
   Value *CallsiteId = CallsiteFED.localToGlobalId(LocalId, IRB);
+
   Value *FuncId = nullptr;
   GlobalVariable *FuncIdGV = nullptr;
   if (Called) {
@@ -889,11 +969,11 @@ void CSIImpl::instrumentCallsite(Instruction *I, DominatorTree *DT) {
       // There are two "after" positions for invokes: the normal block and the
       // exception block.
       InvokeInst *II = cast<InvokeInst>(I);
-      insertHookCallInSuccessorBB(II->getNormalDest(), II->getParent(),
+      insertHookCallInSuccessorBB(II, II->getNormalDest(), II->getParent(),
                                   CsiAfterCallsite,
                                   {CallsiteId, FuncId, PropVal},
                                   {DefaultID, DefaultID, DefaultPropVal});
-      insertHookCallInSuccessorBB(II->getUnwindDest(), II->getParent(),
+      insertHookCallInSuccessorBB(II, II->getUnwindDest(), II->getParent(),
                                   CsiAfterCallsite,
                                   {CallsiteId, FuncId, PropVal},
                                   {DefaultID, DefaultID, DefaultPropVal});
@@ -977,9 +1057,12 @@ void CSIImpl::instrumentDetach(DetachInst *DI, DominatorTree *DT, TaskInfo &TI,
   Value *DetachID;
   {
     IRBuilder<> IRB(DI);
-    uint64_t LocalID = DetachFED.add(*DI);
+    csi_id_t LocalID = DetachFED.add(*DI);
     DetachID = DetachFED.localToGlobalId(LocalID, IRB);
     Value *TrackVar = TrackVars.lookup(DI->getSyncRegion());
+    // TODO? Rather than use TrackVars to record the boolean of whether or not a
+    // detach in this sync region has happened, we can count the number of such
+    // detaches.
     IRB.CreateStore(
         Constant::getIntegerValue(IntegerType::getInt32Ty(DI->getContext()),
                                   APInt(32, 1)),
@@ -998,7 +1081,7 @@ void CSIImpl::instrumentDetach(DetachInst *DI, DominatorTree *DT, TaskInfo &TI,
   {
     // Instrument the entry point of the detached task.
     IRBuilder<> IRB(&*DetachedBlock->getFirstInsertionPt());
-    uint64_t LocalID = TaskFED.add(*DetachedBlock);
+    csi_id_t LocalID = TaskFED.add(*DetachedBlock);
     Value *TaskID = TaskFED.localToGlobalId(LocalID, IRB);
     // Value *StackSave = IRB.CreateCall(
     //     Intrinsic::getDeclaration(&M, Intrinsic::stacksave));
@@ -1008,7 +1091,7 @@ void CSIImpl::instrumentDetach(DetachInst *DI, DominatorTree *DT, TaskInfo &TI,
     // Instrument the exit points of the detached tasks.
     for (BasicBlock *Exit : TaskExits) {
       IRBuilder<> IRB(Exit->getTerminator());
-      uint64_t LocalID = TaskExitFED.add(*Exit->getTerminator());
+      csi_id_t LocalID = TaskExitFED.add(*Exit->getTerminator());
       Value *ExitID = TaskExitFED.localToGlobalId(LocalID, IRB);
       insertHookCall(Exit->getTerminator(), CsiTaskExit,
                      {ExitID, TaskID, DetachID});
@@ -1016,7 +1099,7 @@ void CSIImpl::instrumentDetach(DetachInst *DI, DominatorTree *DT, TaskInfo &TI,
     // Instrument the EH exits of the detached task.
     for (BasicBlock *Exit : TaskResumes) {
       IRBuilder<> IRB(Exit->getTerminator());
-      uint64_t LocalID = TaskExitFED.add(*Exit->getTerminator());
+      csi_id_t LocalID = TaskExitFED.add(*Exit->getTerminator());
       Value *ExitID = TaskExitFED.localToGlobalId(LocalID, IRB);
       insertHookCall(Exit->getTerminator(), CsiTaskExit,
                      {ExitID, TaskID, DetachID});
@@ -1025,7 +1108,7 @@ void CSIImpl::instrumentDetach(DetachInst *DI, DominatorTree *DT, TaskInfo &TI,
     Task *T = TI.getTaskFor(DetachedBlock);
     Value *DefaultID = getDefaultID(IRB);
     for (Spindle *SharedEH : SharedEHExits)
-      insertHookCallAtSharedEHSpindleExits(SharedEH, T, CsiTaskExit,
+      insertHookCallAtSharedEHSpindleExits(DI, SharedEH, T, CsiTaskExit,
                                            TaskExitFED, {TaskID, DetachID},
                                            {DefaultID, DefaultID});
   }
@@ -1037,7 +1120,7 @@ void CSIImpl::instrumentDetach(DetachInst *DI, DominatorTree *DT, TaskInfo &TI,
           DI, 1, CriticalEdgeSplittingOptions(DT).setSplitDetachContinue());
 
     IRBuilder<> IRB(&*ContinueBlock->getFirstInsertionPt());
-    uint64_t LocalID = DetachContinueFED.add(*ContinueBlock);
+    csi_id_t LocalID = DetachContinueFED.add(*ContinueBlock);
     Value *ContinueID = DetachContinueFED.localToGlobalId(LocalID, IRB);
     Instruction *Call =
         IRB.CreateCall(CsiDetachContinue, {ContinueID, DetachID});
@@ -1048,9 +1131,10 @@ void CSIImpl::instrumentDetach(DetachInst *DI, DominatorTree *DT, TaskInfo &TI,
     BasicBlock *UnwindBlock = DI->getUnwindDest();
     IRBuilder<> IRB(DI);
     Value *DefaultID = getDefaultID(IRB);
-    uint64_t LocalID = DetachContinueFED.add(*UnwindBlock);
+    csi_id_t LocalID = DetachContinueFED.add(*UnwindBlock);
     Value *ContinueID = DetachContinueFED.localToGlobalId(LocalID, IRB);
-    insertHookCallInSuccessorBB(UnwindBlock, DI->getParent(), CsiDetachContinue,
+    insertHookCallInSuccessorBB(DI, UnwindBlock, DI->getParent(),
+                                CsiDetachContinue,
                                 {ContinueID, DetachID}, {DefaultID, DefaultID});
   }
 }
@@ -1060,7 +1144,7 @@ void CSIImpl::instrumentSync(SyncInst *SI,
   IRBuilder<> IRB(SI);
   Value *DefaultID = getDefaultID(IRB);
   // Get the ID of this sync.
-  uint64_t LocalID = SyncFED.add(*SI);
+  csi_id_t LocalID = SyncFED.add(*SI);
   Value *SyncID = SyncFED.localToGlobalId(LocalID, IRB);
 
   Value *TrackVar = TrackVars.lookup(SI->getSyncRegion());
@@ -1068,7 +1152,8 @@ void CSIImpl::instrumentSync(SyncInst *SI,
   // Insert instrumentation before the sync.
   insertHookCall(SI, CsiBeforeSync, {SyncID, TrackVar});
   CallInst *call = insertHookCallInSuccessorBB(
-      SI->getSuccessor(0), SI->getParent(), CsiAfterSync, {SyncID, TrackVar},
+      SI, SI->getSuccessor(0), SI->getParent(), CsiAfterSync,
+      {SyncID, TrackVar},
       {DefaultID,
        ConstantPointerNull::get(
            IntegerType::getInt32Ty(SI->getContext())->getPointerTo())});
@@ -1090,7 +1175,7 @@ void CSIImpl::instrumentAlloca(Instruction *I) {
   IRBuilder<> IRB(I);
   AllocaInst *AI = cast<AllocaInst>(I);
 
-  uint64_t LocalId = AllocaFED.add(*I);
+  csi_id_t LocalId = AllocaFED.add(*I);
   Value *CsiId = AllocaFED.localToGlobalId(LocalId, IRB);
 
   CsiAllocaProperty Prop;
@@ -1098,7 +1183,7 @@ void CSIImpl::instrumentAlloca(Instruction *I) {
   Value *PropVal = Prop.getValue(IRB);
 
   // Get size of allocation.
-  uint64_t Size = DL.getTypeAllocSize(AI->getAllocatedType());
+  csi_id_t Size = DL.getTypeAllocSize(AI->getAllocatedType());
   Value *SizeVal = IRB.getInt64(Size);
   if (AI->isArrayAllocation())
     SizeVal = IRB.CreateMul(SizeVal, AI->getArraySize());
@@ -1204,7 +1289,7 @@ void CSIImpl::instrumentAllocFn(Instruction *I, DominatorTree *DT) {
 
   IRBuilder<> IRB(I);
   Value *DefaultID = getDefaultID(IRB);
-  uint64_t LocalId = AllocFnFED.add(*I);
+  csi_id_t LocalId = AllocFnFED.add(*I);
   Value *AllocFnId = AllocFnFED.localToGlobalId(LocalId, IRB);
 
   SmallVector<Value *, 4> AllocFnArgs;
@@ -1257,7 +1342,7 @@ void CSIImpl::instrumentAllocFn(Instruction *I, DominatorTree *DT) {
           Constant::getNullValue(IRB.getInt8PtrTy()));
       DefaultAfterAllocFnArgs.append(DefaultAllocFnArgs.begin(),
                                      DefaultAllocFnArgs.end());
-      insertHookCallInSuccessorBB(II->getUnwindDest(), II->getParent(),
+      insertHookCallInSuccessorBB(II, II->getUnwindDest(), II->getParent(),
                                   CsiAfterAllocFn, AfterAllocFnArgs,
                                   DefaultAfterAllocFnArgs);
     }
@@ -1282,7 +1367,7 @@ void CSIImpl::instrumentFree(Instruction *I) {
   assert(Called && "Could not get called function for free.");
 
   IRBuilder<> IRB(I);
-  uint64_t LocalId = FreeFED.add(*I);
+  csi_id_t LocalId = FreeFED.add(*I);
   Value *FreeId = FreeFED.localToGlobalId(LocalId, IRB);
 
   Value *Addr = FC->getArgOperand(0);
@@ -1305,14 +1390,15 @@ CallInst *CSIImpl::insertHookCall(Instruction *I, Function *HookFunction,
   return Call;
 }
 
-bool CSIImpl::updateArgPHIs(BasicBlock *Succ, BasicBlock *BB,
+bool CSIImpl::updateArgPHIs(Instruction *I, BasicBlock *Succ, BasicBlock *BB,
                             ArrayRef<Value *> HookArgs,
                             ArrayRef<Value *> DefaultArgs) {
+  auto Key = std::make_pair(I, Succ);
   // If we've already created a PHI node in this block for the hook arguments,
   // just add the incoming arguments to the PHIs.
-  if (ArgPHIs.count(Succ)) {
+  if (ArgPHIs.count(Key)) {
     unsigned HookArgNum = 0;
-    for (PHINode *ArgPHI : ArgPHIs[Succ]) {
+    for (PHINode *ArgPHI : ArgPHIs[Key]) {
       ArgPHI->setIncomingValue(ArgPHI->getBasicBlockIndex(BB),
                                HookArgs[HookArgNum]);
       ++HookArgNum;
@@ -1331,13 +1417,14 @@ bool CSIImpl::updateArgPHIs(BasicBlock *Succ, BasicBlock *BB,
       else
         ArgPHI->addIncoming(DefaultArgs[HookArgNum], Pred);
     }
-    ArgPHIs[Succ].push_back(ArgPHI);
+    ArgPHIs[Key].push_back(ArgPHI);
     ++HookArgNum;
   }
   return false;
 }
 
-CallInst *CSIImpl::insertHookCallInSuccessorBB(BasicBlock *Succ, BasicBlock *BB,
+CallInst *CSIImpl::insertHookCallInSuccessorBB(Instruction *I, BasicBlock *Succ,
+                                               BasicBlock *BB,
                                                Function *HookFunction,
                                                ArrayRef<Value *> HookArgs,
                                                ArrayRef<Value *> DefaultArgs) {
@@ -1351,11 +1438,11 @@ CallInst *CSIImpl::insertHookCallInSuccessorBB(BasicBlock *Succ, BasicBlock *BB,
                           HookArgs);
   }
 
-  if (updateArgPHIs(Succ, BB, HookArgs, DefaultArgs))
+  if (updateArgPHIs(I, Succ, BB, HookArgs, DefaultArgs))
     return nullptr;
 
   SmallVector<Value *, 2> SuccessorHookArgs;
-  for (PHINode *ArgPHI : ArgPHIs[Succ])
+  for (PHINode *ArgPHI : ArgPHIs[std::make_pair(I, Succ)])
     SuccessorHookArgs.push_back(ArgPHI);
 
   IRBuilder<> IRB(&*Succ->getFirstInsertionPt());
@@ -1367,7 +1454,7 @@ CallInst *CSIImpl::insertHookCallInSuccessorBB(BasicBlock *Succ, BasicBlock *BB,
 }
 
 void CSIImpl::insertHookCallAtSharedEHSpindleExits(
-    Spindle *SharedEHSpindle, Task *T, Function *HookFunction,
+    Instruction *I, Spindle *SharedEHSpindle, Task *T, Function *HookFunction,
     FrontEndDataTable &FED, ArrayRef<Value *> HookArgs,
     ArrayRef<Value *> DefaultArgs) {
   // Get the set of shared EH spindles to examine.  Store them in post order, so
@@ -1389,7 +1476,7 @@ void CSIImpl::insertHookCallAtSharedEHSpindleExits(
         BasicBlock *Pred = InEdge.second;
         if (T->contains(SPred))
           NewPHINode |=
-              updateArgPHIs(S->getEntry(), Pred, HookArgs, DefaultArgs);
+              updateArgPHIs(I, S->getEntry(), Pred, HookArgs, DefaultArgs);
       }
     } else {
       // Otherwise update the PHI node based on the predecessor shared-eh
@@ -1398,11 +1485,11 @@ void CSIImpl::insertHookCallAtSharedEHSpindleExits(
         Spindle *SPred = InEdge.first;
         BasicBlock *Pred = InEdge.second;
         if (Visited.count(SPred)) {
+          auto Key = std::make_pair(I, SPred->getEntry());
           SmallVector<Value *, 4> NewHookArgs(
-              ArgPHIs[SPred->getEntry()].begin(),
-              ArgPHIs[SPred->getEntry()].end());
+              ArgPHIs[Key].begin(), ArgPHIs[Key].end());
           NewPHINode |=
-              updateArgPHIs(S->getEntry(), Pred, NewHookArgs, DefaultArgs);
+              updateArgPHIs(I, S->getEntry(), Pred, NewHookArgs, DefaultArgs);
         }
       }
     }
@@ -1417,11 +1504,11 @@ void CSIImpl::insertHookCallAtSharedEHSpindleExits(
     for (BasicBlock *B : S->blocks()) {
       if (isDetachedRethrow(B->getTerminator())) {
         IRBuilder<> IRB(B->getTerminator());
-        uint64_t LocalID = FED.add(*B->getTerminator());
+        csi_id_t LocalID = FED.add(*B->getTerminator());
         Value *HookID = FED.localToGlobalId(LocalID, IRB);
         SmallVector<Value *, 4> Args({HookID});
-        Args.append(ArgPHIs[S->getEntry()].begin(),
-                    ArgPHIs[S->getEntry()].end());
+        auto Key = std::make_pair(I, S->getEntry());
+        Args.append(ArgPHIs[Key].begin(), ArgPHIs[Key].end());
         Instruction *Call = IRB.CreateCall(HookFunction, Args);
         setInstrumentationDebugLoc(*B, Call);
       }
@@ -1430,28 +1517,47 @@ void CSIImpl::insertHookCallAtSharedEHSpindleExits(
 }
 
 void CSIImpl::initializeFEDTables() {
-  FunctionFED = FrontEndDataTable(M, CsiFunctionBaseIdName);
-  FunctionExitFED = FrontEndDataTable(M, CsiFunctionExitBaseIdName);
-  BasicBlockFED = FrontEndDataTable(M, CsiBasicBlockBaseIdName);
-  CallsiteFED = FrontEndDataTable(M, CsiCallsiteBaseIdName);
-  LoadFED = FrontEndDataTable(M, CsiLoadBaseIdName);
-  StoreFED = FrontEndDataTable(M, CsiStoreBaseIdName);
-  AllocaFED = FrontEndDataTable(M, CsiAllocaBaseIdName);
-  DetachFED = FrontEndDataTable(M, CsiDetachBaseIdName);
-  TaskFED = FrontEndDataTable(M, CsiTaskBaseIdName);
-  TaskExitFED = FrontEndDataTable(M, CsiTaskExitBaseIdName);
-  DetachContinueFED = FrontEndDataTable(M, CsiDetachContinueBaseIdName);
-  SyncFED = FrontEndDataTable(M, CsiSyncBaseIdName);
-  AllocFnFED = FrontEndDataTable(M, CsiAllocFnBaseIdName);
-  FreeFED = FrontEndDataTable(M, CsiFreeBaseIdName);
+  FunctionFED = FrontEndDataTable(M, CsiFunctionBaseIdName,
+                                  "__csi_unit_fed_table_function",
+                                  "__csi_unit_function_name_");
+  FunctionExitFED = FrontEndDataTable(M, CsiFunctionExitBaseIdName,
+                                      "__csi_unit_fed_table_function_exit",
+                                      "__csi_unit_function_name_");
+  BasicBlockFED = FrontEndDataTable(M, CsiBasicBlockBaseIdName,
+                                    "__csi_unit_fed_table_basic_block");
+  CallsiteFED = FrontEndDataTable(M, CsiCallsiteBaseIdName,
+                                  "__csi_unit_fed_table_callsite",
+                                  "__csi_unit_function_name_");
+  LoadFED = FrontEndDataTable(M, CsiLoadBaseIdName,
+                              "__csi_unit_fed_table_load");
+  StoreFED = FrontEndDataTable(M, CsiStoreBaseIdName,
+                               "__csi_unit_fed_table_store");
+  AllocaFED = FrontEndDataTable(M, CsiAllocaBaseIdName,
+                                "__csi_unit_fed_table_alloca",
+                                "__csi_unit_variable_name_");
+  DetachFED = FrontEndDataTable(M, CsiDetachBaseIdName,
+                                "__csi_unit_fed_table_detach");
+  TaskFED = FrontEndDataTable(M, CsiTaskBaseIdName,
+                              "__csi_unit_fed_table_task");
+  TaskExitFED = FrontEndDataTable(M, CsiTaskExitBaseIdName,
+                                  "__csi_unit_fed_table_task_exit");
+  DetachContinueFED = FrontEndDataTable(M, CsiDetachContinueBaseIdName,
+                                        "__csi_unit_fed_table_detach_continue");
+  SyncFED = FrontEndDataTable(M, CsiSyncBaseIdName,
+                              "__csi_unit_fed_table_sync");
+  AllocFnFED = FrontEndDataTable(M, CsiAllocFnBaseIdName,
+                                 "__csi_unit_fed_allocfn",
+                                 "__csi_unit_variable_name_");
+  FreeFED = FrontEndDataTable(M, CsiFreeBaseIdName,
+                              "__csi_unit_fed_free");
 }
 
 void CSIImpl::initializeSizeTables() {
   BBSize = SizeTable(M, CsiBasicBlockBaseIdName);
 }
 
-uint64_t CSIImpl::getLocalFunctionID(Function &F) {
-  uint64_t LocalId = FunctionFED.add(F);
+csi_id_t CSIImpl::getLocalFunctionID(Function &F) {
+  csi_id_t LocalId = FunctionFED.add(F);
   FuncOffsetMap[F.getName()] = LocalId;
   return LocalId;
 }
@@ -1761,7 +1867,7 @@ bool CSIImpl::shouldNotInstrumentFunction(Function &F) {
   }
 #endif
 
-  if (F.hasName() && F.getName().find("__csi") != std::string::npos)
+  if (F.hasName() && F.getName().startswith("__csi"))
     return true;
 
   // Never instrument the CSI ctor.
@@ -1964,7 +2070,7 @@ void CSIImpl::instrumentFunction(Function &F) {
     BasicBlocks.push_back(&BB);
   }
 
-  uint64_t LocalId = getLocalFunctionID(F);
+  csi_id_t LocalId = getLocalFunctionID(F);
 
   // Instrument basic blocks.  Note that we do this before other instrumentation
   // so that we put this at the beginning of the basic block, and then the
@@ -2044,8 +2150,8 @@ void CSIImpl::instrumentFunction(Function &F) {
             F.getName(), InstrumentationPoint::INSTR_FUNCTION_EXIT)) {
       EscapeEnumerator EE(F, "csi.cleanup", false);
       while (IRBuilder<> *AtExit = EE.Next()) {
-        // uint64_t ExitLocalId = FunctionExitFED.add(F);
-        uint64_t ExitLocalId = FunctionExitFED.add(*AtExit->GetInsertPoint());
+        // csi_id_t ExitLocalId = FunctionExitFED.add(F);
+        csi_id_t ExitLocalId = FunctionExitFED.add(*AtExit->GetInsertPoint());
         Value *ExitCsiId =
             FunctionExitFED.localToGlobalId(ExitLocalId, *AtExit);
         CsiFuncExitProperty FuncExitProp;
@@ -2065,24 +2171,25 @@ DenseMap<Value *, Value *>
 llvm::CSIImpl::keepTrackOfSpawns(Function &F,
                                  const SmallVectorImpl<DetachInst *> &Detaches,
                                  const SmallVectorImpl<SyncInst *> &Syncs) {
-
   DenseMap<Value *, Value *> TrackVars;
-
-  SmallPtrSet<Value *, 8> Regions;
+  // SyncRegions are created using an LLVM instrinsic within the task where the
+  // region is used.  Store each sync region as an LLVM instruction.
+  SmallPtrSet<Instruction *, 8> Regions;
   for (auto &Detach : Detaches) {
-    Regions.insert(Detach->getSyncRegion());
+    Regions.insert(cast<Instruction>(Detach->getSyncRegion()));
   }
   for (auto &Sync : Syncs) {
-    Regions.insert(Sync->getSyncRegion());
+    Regions.insert(cast<Instruction>(Sync->getSyncRegion()));
   }
 
   LLVMContext &C = F.getContext();
 
-  IRBuilder<> Builder{&F.getEntryBlock(),
-                      F.getEntryBlock().getFirstInsertionPt()};
 
   size_t RegionIndex = 0;
   for (auto Region : Regions) {
+    // Build a local variable for the sync region within the task where it is
+    // used.
+    IRBuilder<> Builder(Region);
     Value *TrackVar = Builder.CreateAlloca(IntegerType::getInt32Ty(C), nullptr,
                                            "has_spawned_region_" +
                                                std::to_string(RegionIndex));
