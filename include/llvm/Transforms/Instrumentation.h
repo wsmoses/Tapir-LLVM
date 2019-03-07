@@ -207,8 +207,9 @@ struct CSIOptions {
 };
 
 // Insert comprehensive static instrumentation
+ModulePass *createComprehensiveStaticInstrumentationLegacyPass();
 ModulePass *createComprehensiveStaticInstrumentationLegacyPass(
-    const CSIOptions &Options = CSIOptions());
+    const CSIOptions &Options);
 
 /// \brief Calculate what to divide by to scale counts.
 ///

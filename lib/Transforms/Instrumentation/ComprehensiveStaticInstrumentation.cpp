@@ -161,6 +161,9 @@ INITIALIZE_PASS_DEPENDENCY(TargetLibraryInfoWrapperPass)
 INITIALIZE_PASS_END(ComprehensiveStaticInstrumentationLegacyPass, "csi",
                     "ComprehensiveStaticInstrumentation pass", false, false)
 
+ModulePass *llvm::createComprehensiveStaticInstrumentationLegacyPass() {
+  return new ComprehensiveStaticInstrumentationLegacyPass();
+}
 ModulePass *llvm::createComprehensiveStaticInstrumentationLegacyPass(
     const CSIOptions &Options) {
   return new ComprehensiveStaticInstrumentationLegacyPass(Options);
