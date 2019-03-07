@@ -1228,12 +1228,17 @@ protected:
     } else if (auto *GV = dyn_cast<GlobalValue>(Operand)) {
       OperandID.first = IRB.getInt8(
           static_cast<unsigned>(CSIOperandCategory::Global));
+      // Because we're referencing this global variable in the
+      // program-under-test, we must ensure that the CSI global storing the CSI
+      // ID of the program's global is available.  Create the CSI global in this
+      // module if necessary.
       std::string GVName = CsiGlobalIdVariablePrefix + GV->getName().str();
-      // GlobalVariable *GlobalIdGV = dyn_cast<GlobalVariable>(
-      //     M.getOrInsertGlobal(GVName, IRB.getInt64Ty()));
-      M.getOrInsertGlobal(GVName, IRB.getInt64Ty());
-      // OperandID.second = GlobalFED.localToGlobalId(
-      //     GlobalFED.lookupId(Operand), IRB);
+      GlobalVariable *GlobIdGV = dyn_cast<GlobalVariable>(
+          M.getOrInsertGlobal(GVName, IRB.getInt64Ty()));
+      GlobIdGV->setConstant(false);
+      GlobIdGV->setLinkage(GlobalValue::WeakAnyLinkage);
+      GlobIdGV->setInitializer(IRB.getInt64(CsiUnknownId));
+      OperandID.second = IRB.CreateLoad(GlobIdGV);
     } else if (isa<CallInst>(Operand) || isa<InvokeInst>(Operand)) {
       OperandID.first = IRB.getInt8(
           static_cast<unsigned>(CSIOperandCategory::Callsite));

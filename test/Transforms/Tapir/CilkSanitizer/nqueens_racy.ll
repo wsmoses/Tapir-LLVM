@@ -171,9 +171,9 @@ det.achd:                                         ; preds = %if.then11
   store i32 %call15, i32* %arrayidx13, align 4, !dbg !129, !tbaa !130
   reattach within %syncreg, label %for.inc, !dbg !129
 ; CHECK-LABEL: det.achd:
-; CHECK: @__csi_before_call
+; CHECK: @__csan_before_call
 ; CHECK-NEXT: call i32 @nqueens(
-; CHECK-NEXT: @__csi_after_call
+; CHECK-NEXT: @__csan_after_call
 
 for.inc:                                          ; preds = %for.body, %det.achd, %if.then11
   %indvars.iv.next65 = add nuw nsw i64 %indvars.iv64, 1, !dbg !132

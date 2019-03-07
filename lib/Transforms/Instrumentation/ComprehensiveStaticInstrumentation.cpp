@@ -551,14 +551,16 @@ Constant *FrontEndDataTable::insertIntoModule(Module &M) const {
 void CSIImpl::initializeFuncHooks() {
   LLVMContext &C = M.getContext();
   IRBuilder<> IRB(C);
+  Type *IDType = IRB.getInt64Ty();
   // Initialize function entry hooks
   Type *FuncPropertyTy = CsiFuncProperty::getType(C);
   CsiFuncEntry = checkCsiInterfaceFunction(M.getOrInsertFunction(
-      "__csi_func_entry", IRB.getVoidTy(), IRB.getInt64Ty(), FuncPropertyTy));
+      "__csi_func_entry", IRB.getVoidTy(), IDType, IDType, IRB.getInt32Ty(),
+      FuncPropertyTy));
   // Initialize function exit hooks
   Type *FuncExitPropertyTy = CsiFuncExitProperty::getType(C);
   CsiFuncExit = checkCsiInterfaceFunction(M.getOrInsertFunction(
-      "__csi_func_exit", IRB.getVoidTy(), IRB.getInt64Ty(), IRB.getInt64Ty(),
+      "__csi_func_exit", IRB.getVoidTy(), IDType, IRB.getInt64Ty(),
       FuncExitPropertyTy));
 }
 
@@ -577,10 +579,13 @@ void CSIImpl::initializeBasicBlockHooks() {
 void CSIImpl::initializeCallsiteHooks() {
   LLVMContext &C = M.getContext();
   IRBuilder<> IRB(C);
+  Type *OperandIDType = StructType::get(IRB.getInt8Ty(), IRB.getInt64Ty());
   Type *PropertyTy = CsiCallProperty::getType(C);
   CsiBeforeCallsite = checkCsiInterfaceFunction(
       M.getOrInsertFunction("__csi_before_call", IRB.getVoidTy(),
-                            IRB.getInt64Ty(), IRB.getInt64Ty(), PropertyTy));
+                            IRB.getInt64Ty(), IRB.getInt64Ty(),
+                            PointerType::get(OperandIDType, 0), IRB.getInt32Ty(),
+                            PropertyTy));
   CsiAfterCallsite = checkCsiInterfaceFunction(
       M.getOrInsertFunction("__csi_after_call", IRB.getVoidTy(),
                             IRB.getInt64Ty(), IRB.getInt64Ty(), PropertyTy));
@@ -1468,11 +1473,14 @@ void CSIImpl::instrumentCallsite(Instruction *I, DominatorTree *DT) {
 
   bool IsInvoke = isa<InvokeInst>(I);
   Function *Called = nullptr;
-  if (CallInst *CI = dyn_cast<CallInst>(I))
+  unsigned NumArgs = 0;
+  if (CallInst *CI = dyn_cast<CallInst>(I)) {
     Called = CI->getCalledFunction();
-  else if (InvokeInst *II = dyn_cast<InvokeInst>(I))
+    NumArgs = CI->getNumArgOperands();
+  } else if (InvokeInst *II = dyn_cast<InvokeInst>(I)) {
     Called = II->getCalledFunction();
-
+    NumArgs = II->getNumArgOperands();
+  }
   bool shouldInstrumentBefore = true;
   bool shouldInstrumentAfter = true;
 
@@ -1488,17 +1496,22 @@ void CSIImpl::instrumentCallsite(Instruction *I, DominatorTree *DT) {
     return;
 
   IRBuilder<> IRB(I);
+  // Get the CSI ID of this callsite, along with a default value for handling
+  // invokes.
   Value *DefaultID = getDefaultID(IRB);
   csi_id_t LocalId = CallsiteFED.add(*I, Called ? Called->getName() : "");
   Value *CallsiteId = CallsiteFED.localToGlobalId(LocalId, IRB);
 
+  // Get the CSI ID of the called function.
   Value *FuncId = nullptr;
   GlobalVariable *FuncIdGV = nullptr;
   if (Called) {
-    Module *M = I->getParent()->getParent()->getParent();
+    // Because we're calling this function, we must ensure that the CSI global
+    // storing the CSI ID of the callee is available.  Create the CSI global in
+    // this module if necessary.
     std::string GVName = CsiFuncIdVariablePrefix + Called->getName().str();
-    FuncIdGV = dyn_cast<GlobalVariable>(
-        M->getOrInsertGlobal(GVName, IRB.getInt64Ty()));
+    FuncIdGV = dyn_cast<GlobalVariable>(M.getOrInsertGlobal(GVName,
+                                                            IRB.getInt64Ty()));
     assert(FuncIdGV);
     FuncIdGV->setConstant(false);
     FuncIdGV->setLinkage(GlobalValue::WeakAnyLinkage);
@@ -1509,12 +1522,59 @@ void CSIImpl::instrumentCallsite(Instruction *I, DominatorTree *DT) {
     FuncId = IRB.getInt64(CsiCallsiteUnknownTargetId);
   }
   assert(FuncId != NULL);
+  Type *OperandIDType = StructType::get(IRB.getInt8Ty(), IRB.getInt64Ty());
+  // Save the stack for proper deallocation of this allocated array later.
+  Value *StackAddr = IRB.CreateCall(
+      Intrinsic::getDeclaration(&M, Intrinsic::stacksave));
+  // Create an array to store operand ID information for the call.
+  AllocaInst *ArgArray = IRB.CreateAlloca(OperandIDType, IRB.getInt32(NumArgs));
+  IRB.CreateLifetimeStart(
+      ArgArray, IRB.getInt64(DL.getTypeAllocSize(
+                                 ArgArray->getAllocatedType()) * NumArgs));
+
+  // Store operand ID information into the array.
+  if (CallInst *CI = dyn_cast<CallInst>(I)) {
+    unsigned ArgNum = 0;
+    for (Value *Operand : CI->arg_operands()) {
+      std::pair<Value *, Value *> OperandID = getOperandID(Operand, IRB);
+      IRB.CreateStore(OperandID.first,
+                      IRB.CreateInBoundsGEP(ArgArray, {IRB.getInt32(ArgNum),
+                                                       IRB.getInt32(0)}));
+      IRB.CreateStore(OperandID.second,
+                      IRB.CreateInBoundsGEP(ArgArray, {IRB.getInt32(ArgNum),
+                                                       IRB.getInt32(1)}));
+      ArgNum++;
+    }
+  } else if (InvokeInst *II = dyn_cast<InvokeInst>(I)) {
+    unsigned ArgNum = 0;
+    for (Value *Operand : II->arg_operands()) {
+      std::pair<Value *, Value *> OperandID = getOperandID(Operand, IRB);
+      IRB.CreateStore(OperandID.first,
+                      IRB.CreateInBoundsGEP(ArgArray, {IRB.getInt32(ArgNum),
+                                                       IRB.getInt32(0)}));
+      IRB.CreateStore(OperandID.second,
+                      IRB.CreateInBoundsGEP(ArgArray, {IRB.getInt32(ArgNum),
+                                                       IRB.getInt32(1)}));
+      ArgNum++;
+    }
+  }
+
+  // Get properties of this call.
   CsiCallProperty Prop;
   Value *DefaultPropVal = Prop.getValue(IRB);
   Prop.setIsIndirect(!Called);
   Value *PropVal = Prop.getValue(IRB);
+
+  // Instrument the call
   if (shouldInstrumentBefore)
-    insertHookCall(I, CsiBeforeCallsite, {CallsiteId, FuncId, PropVal});
+    insertHookCall(I, CsiBeforeCallsite, {CallsiteId, FuncId, ArgArray,
+                                          IRB.getInt32(NumArgs), PropVal});
+  // Clean up the array of operand args
+  IRB.CreateLifetimeEnd(
+      ArgArray, IRB.getInt64(DL.getTypeAllocSize(
+                                 ArgArray->getAllocatedType()) * NumArgs));
+  IRB.CreateCall(Intrinsic::getDeclaration(&M, Intrinsic::stackrestore),
+                 {StackAddr});
 
   BasicBlock::iterator Iter(I);
   if (shouldInstrumentAfter) {
@@ -1785,6 +1845,9 @@ void CSIImpl::instrumentArithmetic(Instruction *I) {
       dbgs() << "Uninstrumented binary operator " << *BO << "\n";
       break;
     }
+    // Exit early if we don't have a hook for this op.
+    if (!ArithmeticHook)
+      return;
     Value *CastOperand0 = Operand0;
     Value *CastOperand1 = Operand1;
     if (OpTy->isIntegerTy()) {
@@ -1811,6 +1874,10 @@ void CSIImpl::instrumentArithmetic(Instruction *I) {
     std::pair<Value *, Value *> OperandID = getOperandID(Operand, IRB);
 
     Type *OpTy = TI->getType();
+    if (OpTy->isVectorTy()) {
+      dbgs() << "Uninstrumented operation " << *TI << "\n";
+      return;
+    }
     Type *OperandTy = Operand->getType();
     Function *ArithmeticHook = nullptr;
     switch (OperandTy->getTypeID()) {
@@ -1833,13 +1900,17 @@ void CSIImpl::instrumentArithmetic(Instruction *I) {
       //   ArithmeticHook = CsiBeforeTruncateFH;
       //   break;
       default:
-        llvm_unreachable("Invalid FPTrunc types?");
+        // llvm_unreachable("Invalid FPTrunc types?");
         break;
       }
       break;
     default:
-      llvm_unreachable("Invalid FPTrunc types?");
+      // llvm_unreachable("Invalid FPTrunc types?");
       break;
+    }
+    if (!ArithmeticHook) {
+      dbgs() << "Uninstrumented operation " << *TI << "\n";
+      return;
     }
     insertHookCall(I, ArithmeticHook, {CsiId, OperandID.first, OperandID.second,
                                        Operand});
@@ -1852,6 +1923,11 @@ void CSIImpl::instrumentArithmetic(Instruction *I) {
     std::pair<Value *, Value *> OperandID = getOperandID(Operand, IRB);
 
     Type *OpTy = EI->getType();
+    if (OpTy->isVectorTy()) {
+      dbgs() << "Uninstrumented operation " << *EI << "\n";
+      return;
+    }
+
     Type *OperandTy = Operand->getType();
     Function *ArithmeticHook = nullptr;
     switch (OperandTy->getTypeID()) {
@@ -1874,13 +1950,17 @@ void CSIImpl::instrumentArithmetic(Instruction *I) {
         ArithmeticHook = CsiBeforeExtendFD;
         break;
       default:
-        llvm_unreachable("Invalid FPExt types?");
+        // llvm_unreachable("Invalid FPExt types?");
         break;
       }
       break;
     default:
-      llvm_unreachable("Invalid FPExt types?");
+      // llvm_unreachable("Invalid FPExt types?");
       break;
+    }
+    if (!ArithmeticHook) {
+      dbgs() << "Uninstrumented operation " << *EI << "\n";
+      return;
     }
     insertHookCall(I, ArithmeticHook, {CsiId, OperandID.first, OperandID.second,
                                        Operand});
@@ -1893,6 +1973,10 @@ void CSIImpl::instrumentArithmetic(Instruction *I) {
     std::pair<Value *, Value *> OperandID = getOperandID(Operand, IRB);
     Type *OpTy = CI->getType();
     Type *OperandTy = Operand->getType();
+    if (OpTy->isVectorTy()) {
+      dbgs() << "Uninstrumented operation " << *CI << "\n";
+      return;
+    }
     assert(OperandTy->isIntegerTy() && "Operand of UIToFP is not an int");
     unsigned Width = OperandTy->getIntegerBitWidth();
 
@@ -1954,9 +2038,14 @@ void CSIImpl::instrumentArithmetic(Instruction *I) {
       }
       break;
     default:
-      llvm_unreachable("Invalid type for UIToFP");
+      // llvm_unreachable("Invalid type for UIToFP");
       break;
     }
+    if (!ArithmeticHook) {
+      dbgs() << "Uninstrumented operation " << *CI << "\n";
+      return;
+    }
+
     assert(OperandCastTy && "No type found for operand.");
     Value *CastOperand = IRB.CreateZExtOrBitCast(Operand, OperandCastTy);
     insertHookCall(I, ArithmeticHook, {CsiId, OperandID.first, OperandID.second,
@@ -1967,6 +2056,10 @@ void CSIImpl::instrumentArithmetic(Instruction *I) {
     std::pair<Value *, Value *> OperandID = getOperandID(Operand, IRB);
     Type *OpTy = CI->getType();
     Type *OperandTy = Operand->getType();
+    if (OpTy->isVectorTy()) {
+      dbgs() << "Uninstrumented operation " << *CI << "\n";
+      return;
+    }
     assert(OperandTy->isIntegerTy() && "Operand of UIToFP is not an int");
     unsigned Width = OperandTy->getIntegerBitWidth();
 
@@ -2028,8 +2121,12 @@ void CSIImpl::instrumentArithmetic(Instruction *I) {
       }
       break;
     default:
-      llvm_unreachable("Invalid type for SIToFP");
+      // llvm_unreachable("Invalid type for SIToFP");
       break;
+    }
+    if (!ArithmeticHook) {
+      dbgs() << "Uninstrumented operation " << *CI << "\n";
+      return;
     }
     assert(OperandCastTy && "No type found for operand.");
     Value *CastOperand = IRB.CreateSExtOrBitCast(Operand, OperandCastTy);
@@ -2121,7 +2218,7 @@ void CSIImpl::instrumentAlloca(Instruction *I) {
   Value *PropVal = Prop.getValue(IRB);
 
   // Get size of allocation.
-  csi_id_t Size = DL.getTypeAllocSize(AI->getAllocatedType());
+  uint64_t Size = DL.getTypeAllocSize(AI->getAllocatedType());
   Value *SizeVal = IRB.getInt64(Size);
   if (AI->isArrayAllocation())
     SizeVal = IRB.CreateMul(SizeVal, AI->getArraySize());
@@ -2826,8 +2923,6 @@ void llvm::CSIImpl::loadConfiguration() {
 }
 
 bool CSIImpl::shouldNotInstrumentFunction(Function &F) {
-  Module &M = *F.getParent();
-
   // Don't instrument standard library calls.
 #ifdef WIN32
   if (F.hasName() && F.getName().find("_") == 0) {
@@ -3031,7 +3126,10 @@ void CSIImpl::instrumentFunction(Function &F) {
         else
           Callsites.push_back(&I);
 
-        AllCalls.push_back(&I);
+        // All calls are candidates for interpositioning except for calls to
+        // placeholder functions.
+        if (!callsPlaceholderFunction(I))
+          AllCalls.push_back(&I);
 
         computeLoadAndStoreProperties(LoadAndStoreProperties, BBLoadsAndStores,
                                       DL);
@@ -3134,10 +3232,16 @@ void CSIImpl::instrumentFunction(Function &F) {
     Value *FuncId = FunctionFED.localToGlobalId(LocalId, IRB);
     if (Config->DoesFunctionRequireInstrumentationForPoint(
             F.getName(), InstrumentationPoint::INSTR_FUNCTION_ENTRY)) {
+      // Get the ID of the first function argument
+      Value *FirstArgID = ParameterFED.localToGlobalId(
+          ParameterFED.lookupId(&*F.arg_begin()), IRB);
+      // Get the number of function arguments
+      Value *NumArgs = IRB.getInt32(F.arg_size());
       CsiFuncProperty FuncEntryProp;
       FuncEntryProp.setMaySpawn(MaySpawn);
       Value *PropVal = FuncEntryProp.getValue(IRB);
-      insertHookCall(&*IRB.GetInsertPoint(), CsiFuncEntry, {FuncId, PropVal});
+      insertHookCall(&*IRB.GetInsertPoint(), CsiFuncEntry,
+                     {FuncId, FirstArgID, NumArgs, PropVal});
     }
     if (Config->DoesFunctionRequireInstrumentationForPoint(
             F.getName(), InstrumentationPoint::INSTR_FUNCTION_EXIT)) {

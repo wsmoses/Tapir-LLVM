@@ -200,9 +200,10 @@ struct CilkSanitizerImpl : public CSIImpl {
     // loads and stores), atomics, memory intrinsics.  We also want call sites,
     // for extracting debug information.
     Options.InstrumentBasicBlocks = false;
-    // Cilksan defines its own hooks for instrumenting memory accesses, memory
-    // intrinsics, and Tapir instructions, so we disable the default CSI
-    // instrumentation hooks for these IR objects.
+    // Cilksan defines its own hooks for instrumenting call sites, memory
+    // accesses, memory intrinsics, and Tapir instructions, so we disable the
+    // default CSI instrumentation hooks for these IR objects.
+    Options.InstrumentCalls = false;
     Options.InstrumentMemoryAccesses = false;
     Options.InstrumentMemIntrinsics = false;
     Options.InstrumentTapir = false;
@@ -412,6 +413,8 @@ private:
   // Instrumentation hooks
   Function *CsanFuncEntry = nullptr;
   Function *CsanFuncExit = nullptr;
+  Function *CsanBeforeCallsite = nullptr;
+  Function *CsanAfterCallsite = nullptr;
   Function *CsanRead = nullptr;
   Function *CsanWrite = nullptr;
   Function *CsanLargeRead = nullptr;
@@ -740,6 +743,7 @@ void CilkSanitizerImpl::initializeCsanHooks() {
   LLVMContext &C = M.getContext();
   IRBuilder<> IRB(C);
   Type *FuncPropertyTy = CsiFuncProperty::getType(C);
+  Type *CallPropertyTy = CsiCallProperty::getType(C);
   Type *FuncExitPropertyTy = CsiFuncExitProperty::getType(C);
   Type *LoadPropertyTy = CsiLoadStoreProperty::getType(C);
   Type *StorePropertyTy = CsiLoadStoreProperty::getType(C);
@@ -761,6 +765,17 @@ void CilkSanitizerImpl::initializeCsanHooks() {
                             /* func_exit_id */ IDType,
                             /* func_id */ IDType,
                             FuncExitPropertyTy));
+
+  CsanBeforeCallsite = checkCsiInterfaceFunction(
+      M.getOrInsertFunction("__csan_before_call", RetType,
+                            /* call_id */ IDType,
+                            /* func_id */ IDType,
+                            CallPropertyTy));
+  CsanAfterCallsite = checkCsiInterfaceFunction(
+      M.getOrInsertFunction("__csan_after_call", RetType,
+                            /* call_id */ IDType,
+                            /* func_id */ IDType,
+                            CallPropertyTy));
 
   CsanRead = checkCsiInterfaceFunction(
       M.getOrInsertFunction("__csan_load", RetType, IDType,
@@ -2325,11 +2340,10 @@ bool CilkSanitizerImpl::instrumentCallsite(Instruction *I) {
   Value *FuncId = NULL;
   GlobalVariable *FuncIdGV = NULL;
   if (Called) {
-    Module *M = I->getParent()->getParent()->getParent();
     std::string GVName =
       CsiFuncIdVariablePrefix + Called->getName().str();
-    FuncIdGV = dyn_cast<GlobalVariable>(M->getOrInsertGlobal(GVName,
-                                                             IRB.getInt64Ty()));
+    FuncIdGV = dyn_cast<GlobalVariable>(M.getOrInsertGlobal(GVName,
+                                                            IRB.getInt64Ty()));
     assert(FuncIdGV);
     FuncIdGV->setConstant(false);
     FuncIdGV->setLinkage(GlobalValue::WeakAnyLinkage);
@@ -2344,7 +2358,7 @@ bool CilkSanitizerImpl::instrumentCallsite(Instruction *I) {
   Value *DefaultPropVal = Prop.getValue(IRB);
   Prop.setIsIndirect(!Called);
   Value *PropVal = Prop.getValue(IRB);
-  insertHookCall(I, CsiBeforeCallsite, {CallsiteId, FuncId, PropVal});
+  insertHookCall(I, CsanBeforeCallsite, {CallsiteId, FuncId, PropVal});
 
   BasicBlock::iterator Iter(I);
   if (IsInvoke) {
@@ -2352,17 +2366,17 @@ bool CilkSanitizerImpl::instrumentCallsite(Instruction *I) {
     // exception block.
     InvokeInst *II = cast<InvokeInst>(I);
     insertHookCallInSuccessorBB(
-        II, II->getNormalDest(), II->getParent(), CsiAfterCallsite,
+        II, II->getNormalDest(), II->getParent(), CsanAfterCallsite,
         {CallsiteId, FuncId, PropVal}, {DefaultID, DefaultID, DefaultPropVal});
     insertHookCallInSuccessorBB(
-        II, II->getUnwindDest(), II->getParent(), CsiAfterCallsite,
+        II, II->getUnwindDest(), II->getParent(), CsanAfterCallsite,
         {CallsiteId, FuncId, PropVal}, {DefaultID, DefaultID, DefaultPropVal});
   } else {
     // Simple call instruction; there is only one "after" position.
     Iter++;
     IRB.SetInsertPoint(&*Iter);
     PropVal = Prop.getValue(IRB);
-    insertHookCall(&*Iter, CsiAfterCallsite, {CallsiteId, FuncId, PropVal});
+    insertHookCall(&*Iter, CsanAfterCallsite, {CallsiteId, FuncId, PropVal});
   }
 
   return true;
