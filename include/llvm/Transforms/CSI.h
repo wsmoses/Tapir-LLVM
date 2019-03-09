@@ -1202,7 +1202,8 @@ protected:
 
   enum class CSIOperandCategory
     {
-     Constant = 0,
+     None = 0,
+     Constant,
      Parameter,
      Global,
      // Relevant types of IR objects to appear as arguments
@@ -1216,7 +1217,11 @@ protected:
   std::pair<Value *, Value *> getOperandID(const Value *Operand,
                                            IRBuilder<> &IRB) const {
     std::pair<Value *, Value *> OperandID;
-    if (isa<Constant>(Operand)) {
+    if (!Operand) {
+      OperandID.first = IRB.getInt8(
+          static_cast<unsigned>(CSIOperandCategory::None));
+      OperandID.second = IRB.getInt64(CsiUnknownId);
+    } else if (isa<Constant>(Operand)) {
       OperandID.first = IRB.getInt8(
           static_cast<unsigned>(CSIOperandCategory::Constant));
       OperandID.second = IRB.getInt64(CsiUnknownId);

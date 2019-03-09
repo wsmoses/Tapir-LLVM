@@ -552,6 +552,7 @@ void CSIImpl::initializeFuncHooks() {
   LLVMContext &C = M.getContext();
   IRBuilder<> IRB(C);
   Type *IDType = IRB.getInt64Ty();
+  Type *ValCatType = IRB.getInt8Ty();
   // Initialize function entry hooks
   Type *FuncPropertyTy = CsiFuncProperty::getType(C);
   CsiFuncEntry = checkCsiInterfaceFunction(M.getOrInsertFunction(
@@ -560,8 +561,8 @@ void CSIImpl::initializeFuncHooks() {
   // Initialize function exit hooks
   Type *FuncExitPropertyTy = CsiFuncExitProperty::getType(C);
   CsiFuncExit = checkCsiInterfaceFunction(M.getOrInsertFunction(
-      "__csi_func_exit", IRB.getVoidTy(), IDType, IRB.getInt64Ty(),
-      FuncExitPropertyTy));
+      "__csi_func_exit", IRB.getVoidTy(), IDType, IDType,
+      ValCatType, IDType, FuncExitPropertyTy));
 }
 
 /// Basic-block hook initialization
@@ -586,6 +587,7 @@ void CSIImpl::initializeCallsiteHooks() {
                             IRB.getInt64Ty(), IRB.getInt64Ty(),
                             PointerType::get(OperandIDType, 0), IRB.getInt32Ty(),
                             PropertyTy));
+  CsiBeforeCallsite->addParamAttr(2, Attribute::ReadOnly);
   CsiAfterCallsite = checkCsiInterfaceFunction(
       M.getOrInsertFunction("__csi_after_call", IRB.getVoidTy(),
                             IRB.getInt64Ty(), IRB.getInt64Ty(), PropertyTy));
@@ -1119,6 +1121,7 @@ void CSIImpl::initializeAllocaHooks() {
   CsiAfterAlloca = checkCsiInterfaceFunction(
       M.getOrInsertFunction("__csi_after_alloca", IRB.getVoidTy(), IDType,
                             AddrType, IntptrTy, PropType));
+  CsiAfterAlloca->addParamAttr(1, Attribute::ReadOnly);
 }
 
 // Non-local-variable allocation/free hook initialization
@@ -1135,6 +1138,7 @@ void CSIImpl::initializeAllocFnHooks() {
   CsiBeforeAllocFn = checkCsiInterfaceFunction(M.getOrInsertFunction(
       "__csi_before_allocfn", RetType, IDType, LargeNumBytesType,
       LargeNumBytesType, LargeNumBytesType, AddrType, AllocFnPropType));
+  CsiBeforeAllocFn->addParamAttr(4, Attribute::ReadOnly);
   CsiAfterAllocFn = checkCsiInterfaceFunction(
       M.getOrInsertFunction("__csi_after_allocfn", RetType, IDType,
                             /* new ptr */ AddrType,
@@ -1143,11 +1147,15 @@ void CSIImpl::initializeAllocFnHooks() {
                             /* alignment */ LargeNumBytesType,
                             /* old ptr */ AddrType,
                             /* property */ AllocFnPropType));
+  CsiAfterAllocFn->addParamAttr(1, Attribute::ReadOnly);
+  CsiAfterAllocFn->addParamAttr(5, Attribute::ReadOnly);
 
   CsiBeforeFree = checkCsiInterfaceFunction(M.getOrInsertFunction(
       "__csi_before_free", RetType, IDType, AddrType, FreePropType));
+  CsiBeforeFree->addParamAttr(1, Attribute::ReadOnly);
   CsiAfterFree = checkCsiInterfaceFunction(M.getOrInsertFunction(
       "__csi_after_free", RetType, IDType, AddrType, FreePropType));
+  CsiAfterFree->addParamAttr(1, Attribute::ReadOnly);
 }
 
 // Load and store hook initialization
@@ -1165,18 +1173,22 @@ void CSIImpl::initializeLoadStoreHooks() {
   CsiBeforeRead = checkCsiInterfaceFunction(
       M.getOrInsertFunction("__csi_before_load", RetType, IDType,
                             AddrType, NumBytesType, LoadPropertyTy));
+  CsiBeforeRead->addParamAttr(1, Attribute::ReadOnly);
   CsiAfterRead = checkCsiInterfaceFunction(
       M.getOrInsertFunction("__csi_after_load", RetType, IDType,
                             AddrType, NumBytesType, LoadPropertyTy));
+  CsiAfterRead->addParamAttr(1, Attribute::ReadOnly);
 
   CsiBeforeWrite = checkCsiInterfaceFunction(
       M.getOrInsertFunction("__csi_before_store", RetType, IDType,
                             AddrType, NumBytesType, ValCatType, IDType,
                             StorePropertyTy));
+  CsiBeforeWrite->addParamAttr(1, Attribute::ReadOnly);
   CsiAfterWrite = checkCsiInterfaceFunction(
       M.getOrInsertFunction("__csi_after_store", RetType, IDType,
                             AddrType, NumBytesType, ValCatType, IDType,
                             StorePropertyTy));
+  CsiAfterWrite->addParamAttr(1, Attribute::ReadOnly);
 }
 
 // Initialization of hooks for LLVM memory intrinsics
@@ -1209,6 +1221,7 @@ void CSIImpl::initializeTapirHooks() {
   CsiDetach = checkCsiInterfaceFunction(M.getOrInsertFunction(
       "__csi_detach", RetType,
       /* detach_id */ IDType, IntegerType::getInt32Ty(C)->getPointerTo()));
+  CsiDetach->addParamAttr(1, Attribute::ReadOnly);
   CsiTaskEntry =
       checkCsiInterfaceFunction(M.getOrInsertFunction("__csi_task", RetType,
                                                       /* task_id */ IDType,
@@ -1225,9 +1238,11 @@ void CSIImpl::initializeTapirHooks() {
   CsiBeforeSync = checkCsiInterfaceFunction(
       M.getOrInsertFunction("__csi_before_sync", RetType, IDType,
                             IntegerType::getInt32Ty(C)->getPointerTo()));
+  CsiBeforeSync->addParamAttr(1, Attribute::ReadOnly);
   CsiAfterSync = checkCsiInterfaceFunction(
       M.getOrInsertFunction("__csi_after_sync", RetType, IDType,
                             IntegerType::getInt32Ty(C)->getPointerTo()));
+  CsiAfterSync->addParamAttr(1, Attribute::ReadOnly);
 }
 
 // Prepare any calls in the CFG for instrumentation, e.g., by making sure any
@@ -2581,17 +2596,17 @@ void CSIImpl::initializeFEDTables() {
   SyncFED = FrontEndDataTable(M, CsiSyncBaseIdName,
                               "__csi_unit_fed_table_sync");
   AllocFnFED = FrontEndDataTable(M, CsiAllocFnBaseIdName,
-                                 "__csi_unit_fed_allocfn",
+                                 "__csi_unit_fed_table_allocfn",
                                  "__csi_unit_variable_name_");
   FreeFED = FrontEndDataTable(M, CsiFreeBaseIdName,
                               "__csi_unit_fed_free");
   ArithmeticFED = FrontEndDataTable(M, CsiArithmeticBaseIdName,
-                                    "__csi_unit_fed_arithmetic");
+                                    "__csi_unit_fed_table_arithmetic");
   ParameterFED = FrontEndDataTable(M, CsiParameterBaseIdName,
                                    "__csi_unit_fed_parameter",
                                    "__csi_unit_argument_name_");
   GlobalFED = FrontEndDataTable(M, CsiGlobalBaseIdName,
-                                "__csi_unit_fed_global",
+                                "__csi_unit_fed_table_global",
                                 "__csi_unit_global_name_");
 }
 
@@ -3248,15 +3263,20 @@ void CSIImpl::instrumentFunction(Function &F) {
       EscapeEnumerator EE(F, "csi.cleanup", false);
       while (IRBuilder<> *AtExit = EE.Next()) {
         // csi_id_t ExitLocalId = FunctionExitFED.add(F);
-        csi_id_t ExitLocalId = FunctionExitFED.add(*AtExit->GetInsertPoint());
+        Instruction *ExitInst = cast<Instruction>(AtExit->GetInsertPoint());
+        csi_id_t ExitLocalId = FunctionExitFED.add(*ExitInst);
         Value *ExitCsiId =
             FunctionExitFED.localToGlobalId(ExitLocalId, *AtExit);
+        Value *ReturnOp = (ExitInst->getNumOperands() == 0) ? nullptr :
+          ExitInst->getOperand(0);
+        std::pair<Value *, Value *> OperandID = getOperandID(ReturnOp, *AtExit);
         CsiFuncExitProperty FuncExitProp;
         FuncExitProp.setMaySpawn(MaySpawn);
-        FuncExitProp.setEHReturn(isa<ResumeInst>(AtExit->GetInsertPoint()));
+        FuncExitProp.setEHReturn(isa<ResumeInst>(ExitInst));
         Value *PropVal = FuncExitProp.getValue(*AtExit);
         insertHookCall(&*AtExit->GetInsertPoint(), CsiFuncExit,
-                       {ExitCsiId, FuncId, PropVal});
+                       {ExitCsiId, FuncId, OperandID.first, OperandID.second,
+                        PropVal});
       }
     }
   }
