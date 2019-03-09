@@ -197,9 +197,10 @@ struct CilkSanitizerImpl : public CSIImpl {
         GetLoopInfo(GetLoopInfo), GetDepInfo(GetDepInfo) {
     // Even though we're doing our own instrumentation, we want the CSI setup
     // for the instrumentation of function entry/exit, memory accesses (i.e.,
-    // loads and stores), atomics, memory intrinsics.  We also want call sites,
-    // for extracting debug information.
+    // loads and stores), and atomics.
+    Options.InstrumentFuncEntryExit = false;
     Options.InstrumentBasicBlocks = false;
+    Options.InstrumentArithmetic = false;
     // Cilksan defines its own hooks for instrumenting call sites, memory
     // accesses, memory intrinsics, and Tapir instructions, so we disable the
     // default CSI instrumentation hooks for these IR objects.
@@ -424,8 +425,6 @@ private:
   Function *CsanTaskEntry = nullptr;
   Function *CsanTaskExit = nullptr;
   Function *CsanSync = nullptr;
-  Function *CsanAfterAllocFn = nullptr;
-  Function *CsanAfterFree = nullptr;
 
   // Hooks for suppressing instrumentation, e.g., around callsites that cannot
   // expose a race.
@@ -747,8 +746,6 @@ void CilkSanitizerImpl::initializeCsanHooks() {
   Type *FuncExitPropertyTy = CsiFuncExitProperty::getType(C);
   Type *LoadPropertyTy = CsiLoadStoreProperty::getType(C);
   Type *StorePropertyTy = CsiLoadStoreProperty::getType(C);
-  Type *AllocFnPropertyTy = CsiAllocFnProperty::getType(C);
-  Type *FreePropertyTy = CsiFreeProperty::getType(C);
   Type *RetType = IRB.getVoidTy();
   Type *AddrType = IRB.getInt8PtrTy();
   Type *NumBytesType = IRB.getInt32Ty();
@@ -760,81 +757,109 @@ void CilkSanitizerImpl::initializeCsanHooks() {
                             /* func_id */ IDType,
                             /* stack_ptr */ AddrType,
                             FuncPropertyTy));
+  CsanFuncEntry->addParamAttr(1, Attribute::ReadNone);
+  CsanFuncEntry->addParamAttr(1, Attribute::NoCapture);
+  CsanFuncEntry->addFnAttr(Attribute::InaccessibleMemOnly);
   CsanFuncExit = checkCsiInterfaceFunction(
       M.getOrInsertFunction("__csan_func_exit", RetType,
                             /* func_exit_id */ IDType,
                             /* func_id */ IDType,
                             FuncExitPropertyTy));
+  CsanFuncExit->addFnAttr(Attribute::InaccessibleMemOnly);
 
   CsanBeforeCallsite = checkCsiInterfaceFunction(
       M.getOrInsertFunction("__csan_before_call", RetType,
                             /* call_id */ IDType,
                             /* func_id */ IDType,
                             CallPropertyTy));
+  CsanBeforeCallsite->addFnAttr(Attribute::InaccessibleMemOnly);
   CsanAfterCallsite = checkCsiInterfaceFunction(
       M.getOrInsertFunction("__csan_after_call", RetType,
                             /* call_id */ IDType,
                             /* func_id */ IDType,
                             CallPropertyTy));
+  CsanAfterCallsite->addFnAttr(Attribute::InaccessibleMemOnly);
 
   CsanRead = checkCsiInterfaceFunction(
       M.getOrInsertFunction("__csan_load", RetType, IDType,
                             AddrType, NumBytesType, LoadPropertyTy));
+  CsanRead->addParamAttr(1, Attribute::ReadNone);
+  CsanRead->addParamAttr(1, Attribute::NoCapture);
+  CsanRead->addFnAttr(Attribute::InaccessibleMemOnly);
   CsanWrite = checkCsiInterfaceFunction(
       M.getOrInsertFunction("__csan_store", RetType, IDType,
                             AddrType, NumBytesType, StorePropertyTy));
+  CsanWrite->addParamAttr(1, Attribute::ReadNone);
+  CsanWrite->addParamAttr(1, Attribute::NoCapture);
+  CsanWrite->addFnAttr(Attribute::InaccessibleMemOnly);
   CsanLargeRead = checkCsiInterfaceFunction(
       M.getOrInsertFunction("__csan_large_load", RetType, IDType,
                             AddrType, LargeNumBytesType, LoadPropertyTy));
+  CsanLargeRead->addParamAttr(1, Attribute::ReadNone);
+  CsanLargeRead->addParamAttr(1, Attribute::NoCapture);
+  CsanLargeRead->addFnAttr(Attribute::InaccessibleMemOnly);
   CsanLargeWrite = checkCsiInterfaceFunction(
       M.getOrInsertFunction("__csan_large_store", RetType, IDType,
                             AddrType, LargeNumBytesType, StorePropertyTy));
+  CsanLargeWrite->addParamAttr(1, Attribute::ReadNone);
+  CsanLargeWrite->addParamAttr(1, Attribute::NoCapture);
   // CsanWrite = checkCsiInterfaceFunction(
   //     M.getOrInsertFunction("__csan_atomic_exchange", RetType, IDType,
   //                           AddrType, NumBytesType, StorePropertyTy));
+  CsanLargeWrite->addFnAttr(Attribute::InaccessibleMemOnly);
 
   CsanDetach = checkCsiInterfaceFunction(
       M.getOrInsertFunction("__csan_detach", RetType,
                             /* detach_id */ IDType));
+  CsanDetach->addFnAttr(Attribute::InaccessibleMemOnly);
   CsanTaskEntry = checkCsiInterfaceFunction(
       M.getOrInsertFunction("__csan_task", RetType,
                             /* task_id */ IDType,
                             /* detach_id */ IDType,
                             /* stack_ptr */ AddrType));
+  CsanTaskEntry->addParamAttr(2, Attribute::ReadNone);
+  CsanTaskEntry->addParamAttr(2, Attribute::NoCapture);
+  CsanTaskEntry->addFnAttr(Attribute::InaccessibleMemOnly);
   CsanTaskExit = checkCsiInterfaceFunction(
       M.getOrInsertFunction("__csan_task_exit", RetType,
                             /* task_exit_id */ IDType,
                             /* task_id */ IDType,
                             /* detach_id */ IDType));
+  CsanTaskExit->addFnAttr(Attribute::InaccessibleMemOnly);
   CsanDetachContinue = checkCsiInterfaceFunction(
       M.getOrInsertFunction("__csan_detach_continue", RetType,
                             /* detach_continue_id */ IDType,
                             /* detach_id */ IDType));
+  CsanDetachContinue->addFnAttr(Attribute::InaccessibleMemOnly);
   CsanSync = checkCsiInterfaceFunction(
       M.getOrInsertFunction("__csan_sync", RetType, IDType));
-  // CsanBeforeAllocFn = checkCsiInterfaceFunction(
-  //     M.getOrInsertFunction("__csan_before_allocfn", RetType, IDType,
-  //                           LargeNumBytesType, LargeNumBytesType,
-  //                           LargeNumBytesType, AddrType));
-  CsanAfterAllocFn = checkCsiInterfaceFunction(
-      M.getOrInsertFunction("__csan_after_allocfn", RetType, IDType,
-                            /* new ptr */ AddrType,
-                            /* size */ LargeNumBytesType,
-                            /* num elements */ LargeNumBytesType,
-                            /* alignment */ LargeNumBytesType,
-                            /* old ptr */ AddrType,
-                            /* property */ AllocFnPropertyTy));
-  // CsanBeforeFree = checkCsiInterfaceFunction(
-  //     M.getOrInsertFunction("__csan_before_free", RetType, IDType,
-  //                           AddrType));
-  CsanAfterFree = checkCsiInterfaceFunction(
-      M.getOrInsertFunction("__csan_after_free", RetType, IDType, AddrType,
-                            /* property */ FreePropertyTy));
+  CsanSync->addFnAttr(Attribute::InaccessibleMemOnly);
 
   CsanDisableChecking = checkCsiInterfaceFunction(
       M.getOrInsertFunction("__cilksan_disable_checking", RetType));
+  CsanDisableChecking->addFnAttr(Attribute::InaccessibleMemOnly);
   CsanEnableChecking = checkCsiInterfaceFunction(
       M.getOrInsertFunction("__cilksan_enable_checking", RetType));
+  CsanEnableChecking->addFnAttr(Attribute::InaccessibleMemOnly);
+
+  // Custom attributes on ordinary CSI hooks that Cilksan uses.
+  CsiAfterAlloca->removeParamAttr(1, Attribute::ReadOnly);
+  CsiAfterAlloca->addParamAttr(1, Attribute::ReadNone);
+  CsiAfterAlloca->addParamAttr(1, Attribute::NoCapture);
+  CsiAfterAlloca->addFnAttr(Attribute::InaccessibleMemOnly);
+
+  CsiAfterAllocFn->removeParamAttr(1, Attribute::ReadOnly);
+  CsiAfterAllocFn->addParamAttr(1, Attribute::ReadNone);
+  CsiAfterAllocFn->addParamAttr(1, Attribute::NoCapture);
+  CsiAfterAllocFn->removeParamAttr(5, Attribute::ReadOnly);
+  CsiAfterAllocFn->addParamAttr(5, Attribute::ReadNone);
+  CsiAfterAllocFn->addParamAttr(5, Attribute::NoCapture);
+  CsiAfterAllocFn->addFnAttr(Attribute::InaccessibleMemOnly);
+
+  CsiAfterFree->removeParamAttr(1, Attribute::ReadOnly);
+  CsiAfterFree->addParamAttr(1, Attribute::ReadNone);
+  CsiAfterFree->addParamAttr(1, Attribute::NoCapture);
+  CsiAfterFree->addFnAttr(Attribute::InaccessibleMemOnly);
 }
 
 static BasicBlock *SplitOffPreds(
@@ -2747,7 +2772,7 @@ bool CilkSanitizerImpl::instrumentAllocationFn(Instruction *I,
       AfterAllocFnArgs.push_back(AllocFnId);
       AfterAllocFnArgs.push_back(IRB.CreatePointerCast(I, IRB.getInt8PtrTy()));
       AfterAllocFnArgs.append(AllocFnArgs.begin(), AllocFnArgs.end());
-      insertHookCall(&*IRB.GetInsertPoint(), CsanAfterAllocFn,
+      insertHookCall(&*IRB.GetInsertPoint(), CsiAfterAllocFn,
                      AfterAllocFnArgs);
     }
     // Insert hook into unwind destination.
@@ -2764,7 +2789,7 @@ bool CilkSanitizerImpl::instrumentAllocationFn(Instruction *I,
       DefaultAfterAllocFnArgs.append(DefaultAllocFnArgs.begin(),
                                      DefaultAllocFnArgs.end());
       insertHookCallInSuccessorBB(
-          II, II->getUnwindDest(), II->getParent(), CsanAfterAllocFn,
+          II, II->getUnwindDest(), II->getParent(), CsiAfterAllocFn,
           AfterAllocFnArgs, DefaultAfterAllocFnArgs);
     }
   } else {
@@ -2775,7 +2800,7 @@ bool CilkSanitizerImpl::instrumentAllocationFn(Instruction *I,
     AfterAllocFnArgs.push_back(AllocFnId);
     AfterAllocFnArgs.push_back(IRB.CreatePointerCast(I, IRB.getInt8PtrTy()));
     AfterAllocFnArgs.append(AllocFnArgs.begin(), AllocFnArgs.end());
-    insertHookCall(&*Iter, CsanAfterAllocFn, AfterAllocFnArgs);
+    insertHookCall(&*Iter, CsiAfterAllocFn, AfterAllocFnArgs);
   }
 
   NumInstrumentedAllocFns++;
@@ -2806,7 +2831,7 @@ bool CilkSanitizerImpl::instrumentFree(Instruction *I) {
   BasicBlock::iterator Iter(I);
   Iter++;
   IRB.SetInsertPoint(&*Iter);
-  insertHookCall(&*Iter, CsanAfterFree, {FreeId, Addr, Prop.getValue(IRB)});
+  insertHookCall(&*Iter, CsiAfterFree, {FreeId, Addr, Prop.getValue(IRB)});
 
   NumInstrumentedFrees++;
   return true;
