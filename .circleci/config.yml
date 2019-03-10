@@ -58,7 +58,6 @@ jobs:
       - checkout
       - run: |
         docker run -it --caps-add SYS_PTRACE wsmoses/tapir:1604 /bin/bash
-
       - run:
           name: submodules
           command: |
