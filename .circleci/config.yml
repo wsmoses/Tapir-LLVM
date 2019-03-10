@@ -51,8 +51,6 @@ jobs:
   
   "build-1604":
     resource_class: xlarge
-    # docker:
-    #   - image: wsmoses/tapir:1604
     machine: true
     steps:
       - checkout
