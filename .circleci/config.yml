@@ -4,6 +4,7 @@ jobs:
     resource_class: xlarge
     docker:
       - image: wsmoses/tapir:1404
+      - command: [--cap-add SYS_PTRACE]
 
     steps:
       - checkout
@@ -53,6 +54,7 @@ jobs:
     resource_class: xlarge
     docker:
       - image: wsmoses/tapir:1604
+      - command: [--cap-add SYS_PTRACE]
 
     steps:
       - checkout
