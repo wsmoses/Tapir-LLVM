@@ -312,6 +312,12 @@ namespace llvm {
   ///
   FunctionPass *createMachineVerifierPass(const std::string& Banner);
 
+  /// createTapirCleanupPass - This pass serializes any remaining Tapir
+  /// instructions before code generation.  Typically this pass should have no
+  /// effect, because Tapir instructions should have been lowered already to a
+  /// particular parallel runtime.
+  FunctionPass *createTapirCleanupPass();
+
   /// createDwarfEHPass - This pass mulches exception handling code into a form
   /// adapted to code generation.  Required if using dwarf exception handling.
   FunctionPass *createDwarfEHPass();

@@ -376,6 +376,7 @@ void initializeStructurizeCFGPass(PassRegistry&);
 void initializeHWAddressSanitizerPass(PassRegistry&);
 void initializeTailCallElimPass(PassRegistry&);
 void initializeTailDuplicatePassPass(PassRegistry&);
+void initializeTapirCleanupPass(PassRegistry&);
 void initializeTargetLibraryInfoWrapperPassPass(PassRegistry&);
 void initializeTargetPassConfigPass(PassRegistry&);
 void initializeTargetTransformInfoWrapperPassPass(PassRegistry&);

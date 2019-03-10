@@ -639,6 +639,7 @@ void TargetPassConfig::addIRPasses() {
 /// Turn exception handling constructs into something the code generators can
 /// handle.
 void TargetPassConfig::addPassesToHandleExceptions() {
+  addPass(createTapirCleanupPass());
   const MCAsmInfo *MCAI = TM->getMCAsmInfo();
   assert(MCAI && "No MCAsmInfo");
   switch (MCAI->getExceptionHandlingType()) {

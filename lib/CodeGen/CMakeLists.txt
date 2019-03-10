@@ -141,6 +141,7 @@ add_llvm_library(LLVMCodeGen
   StackSlotColoring.cpp
   TailDuplication.cpp
   TailDuplicator.cpp
+  TapirCleanup.cpp
   TargetFrameLoweringImpl.cpp
   TargetInstrInfo.cpp
   TargetLoweringBase.cpp

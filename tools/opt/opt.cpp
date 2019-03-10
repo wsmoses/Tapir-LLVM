@@ -410,6 +410,7 @@ int main(int argc, char **argv) {
   initializeUnreachableBlockElimLegacyPassPass(Registry);
   initializeExpandReductionsPass(Registry);
   initializeWriteBitcodePassPass(Registry);
+  initializeTapirCleanupPass(Registry);
 
 #ifdef LINK_POLLY_INTO_TOOLS
   polly::initializePollyPasses(Registry);
