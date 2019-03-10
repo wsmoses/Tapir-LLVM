@@ -4,7 +4,6 @@ jobs:
     resource_class: xlarge
     docker:
       - image: wsmoses/tapir:1404
-        command: [--cap-add SYS_PTRACE]
 
     steps:
       - checkout
@@ -52,12 +51,14 @@ jobs:
   
   "build-1604":
     resource_class: xlarge
-    docker:
-      - image: wsmoses/tapir:1604
-        command: [--cap-add SYS_PTRACE]
-
+    # docker:
+    #   - image: wsmoses/tapir:1604
+    machine: true
     steps:
       - checkout
+      - run: |
+        docker run -it --caps-add SYS_PTRACE wsmoses/tapir:1604 /bin/bash
+
       - run:
           name: submodules
           command: |
