@@ -50,7 +50,6 @@ jobs:
             make -j2
   
   "build-1604":
-    resource_class: xlarge
     machine: true
     steps:
       - checkout
