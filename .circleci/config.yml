@@ -37,7 +37,7 @@ jobs:
           command: |
             cd build
             ls lib
-            make check-all -j2
+            setarch x86_64 -R make check-all -j2
       - run:
           name: cilkrts-build-test
           command: |
@@ -86,7 +86,7 @@ jobs:
           command: |
             cd build
             ls lib
-            make check-all -j2
+            setarch x86_64 -R make check-all -j2
       - run:
           name: cilkrts-build-test
           command: |
