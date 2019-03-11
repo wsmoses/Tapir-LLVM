@@ -1392,6 +1392,13 @@ void CSIImpl::addLoadStoreInstrumentation(Instruction *I, Function *BeforeFn,
                     IRB.getInt32(NumBytes), PropVal});
 }
 
+void CSIImpl::assignLoadOrStoreID(Instruction *I) {
+  if (isa<StoreInst>(I))
+    StoreFED.add(*I);
+  else
+    LoadFED.add(*I);
+}
+
 void CSIImpl::instrumentLoadOrStore(Instruction *I, CsiLoadStoreProperty &Prop,
                                     const DataLayout &DL) {
   IRBuilder<> IRB(I);
@@ -1405,7 +1412,7 @@ void CSIImpl::instrumentLoadOrStore(Instruction *I, CsiLoadStoreProperty &Prop,
     return; // size that we don't recognize
 
   if (IsWrite) {
-    csi_id_t LocalId = StoreFED.add(*I);
+    csi_id_t LocalId = StoreFED.lookupId(I);
     Value *CsiId = StoreFED.localToGlobalId(LocalId, IRB);
     StoreInst *SI = cast<StoreInst>(I);
     Value *Operand = SI->getValueOperand();
@@ -1414,7 +1421,7 @@ void CSIImpl::instrumentLoadOrStore(Instruction *I, CsiLoadStoreProperty &Prop,
                                 AddrType, Addr, NumBytes, OperandID.first,
                                 OperandID.second, Prop);
   } else { // is read
-    csi_id_t LocalId = LoadFED.add(*I);
+    csi_id_t LocalId = LoadFED.lookupId(I);
     Value *CsiId = LoadFED.localToGlobalId(LocalId, IRB);
 
     addLoadStoreInstrumentation(I, CsiBeforeRead, CsiAfterRead, CsiId, AddrType,
@@ -1422,7 +1429,13 @@ void CSIImpl::instrumentLoadOrStore(Instruction *I, CsiLoadStoreProperty &Prop,
   }
 }
 
+void CSIImpl::assignAtomicID(Instruction *I) {
+  // TODO: Instrument atomics.
+}
+
 void CSIImpl::instrumentAtomic(Instruction *I, const DataLayout &DL) {
+  // TODO: Instrument atomics.
+
   // For now, print a message that this code contains atomics.
   dbgs()
       << "WARNING: Uninstrumented atomic operations in program-under-test!\n";
@@ -1482,6 +1495,15 @@ void CSIImpl::instrumentBasicBlock(BasicBlock &BB) {
   insertHookCall(TI, CsiBBExit, {CsiId, PropVal});
 }
 
+void CSIImpl::assignCallsiteID(Instruction *I) {
+  Function *Called = nullptr;
+  if (CallInst *CI = dyn_cast<CallInst>(I))
+    Called = CI->getCalledFunction();
+  else if (InvokeInst *II = dyn_cast<InvokeInst>(I))
+    Called = II->getCalledFunction();
+  /*csi_id_t LocalId =*/CallsiteFED.add(*I, Called ? Called->getName() : "");
+}
+
 void CSIImpl::instrumentCallsite(Instruction *I, DominatorTree *DT) {
   if (callsPlaceholderFunction(*I))
     return;
@@ -1514,7 +1536,7 @@ void CSIImpl::instrumentCallsite(Instruction *I, DominatorTree *DT) {
   // Get the CSI ID of this callsite, along with a default value for handling
   // invokes.
   Value *DefaultID = getDefaultID(IRB);
-  csi_id_t LocalId = CallsiteFED.add(*I, Called ? Called->getName() : "");
+  csi_id_t LocalId = CallsiteFED.lookupId(I);
   Value *CallsiteId = CallsiteFED.localToGlobalId(LocalId, IRB);
 
   // Get the CSI ID of the called function.
@@ -2221,11 +2243,15 @@ void CSIImpl::instrumentArithmetic(Instruction *I) {
   }
 }
 
+void CSIImpl::assignAllocaID(Instruction *I) {
+  AllocaFED.add(*I);
+}
+
 void CSIImpl::instrumentAlloca(Instruction *I) {
   IRBuilder<> IRB(I);
   AllocaInst *AI = cast<AllocaInst>(I);
 
-  csi_id_t LocalId = AllocaFED.add(*I);
+  csi_id_t LocalId = AllocaFED.lookupId(I);
   Value *CsiId = AllocaFED.localToGlobalId(LocalId, IRB);
 
   CsiAllocaProperty Prop;
@@ -2327,6 +2353,10 @@ void CSIImpl::getAllocFnArgs(const Instruction *I,
   }
 }
 
+void CSIImpl::assignAllocFnID(Instruction *I) {
+  AllocFnFED.add(*I);
+}
+
 void CSIImpl::instrumentAllocFn(Instruction *I, DominatorTree *DT) {
   bool IsInvoke = isa<InvokeInst>(I);
   Function *Called = nullptr;
@@ -2339,7 +2369,7 @@ void CSIImpl::instrumentAllocFn(Instruction *I, DominatorTree *DT) {
 
   IRBuilder<> IRB(I);
   Value *DefaultID = getDefaultID(IRB);
-  csi_id_t LocalId = AllocFnFED.add(*I);
+  csi_id_t LocalId = AllocFnFED.lookupId(I);
   Value *AllocFnId = AllocFnFED.localToGlobalId(LocalId, IRB);
 
   SmallVector<Value *, 4> AllocFnArgs;
@@ -3169,8 +3199,19 @@ void CSIImpl::instrumentFunction(Function &F) {
   }
 
   csi_id_t LocalId = getLocalFunctionID(F);
-  // First assign local ID's to all arithmetic ops in the function, so that
-  // these IDs can be supplied as arguments to other hooks.
+  // First assign local ID's to all ops in the function that are involved in
+  // data flow, so that these IDs can be supplied as arguments to other hooks.
+  for (std::pair<Instruction *, CsiLoadStoreProperty> p :
+         LoadAndStoreProperties)
+    assignLoadOrStoreID(p.first);
+  for (Instruction *I : AtomicAccesses)
+    assignAtomicID(I);
+  for (Instruction *I : Callsites)
+    assignCallsiteID(I);
+  for (Instruction *I : Allocas)
+    assignAllocaID(I);
+  for (Instruction *I : AllocationFnCalls)
+    assignAllocFnID(I);
   for (Instruction *I : Arithmetic)
     assignArithmeticID(I);
 

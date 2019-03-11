@@ -929,10 +929,13 @@ protected:
                                    Type *AddrType, Value *Addr, int NumBytes,
                                    Value *StoreValCat, Value *StoreValID,
                                    CsiLoadStoreProperty &Prop);
+  void assignLoadOrStoreID(Instruction *I);
   void instrumentLoadOrStore(Instruction *I, CsiLoadStoreProperty &Prop,
                              const DataLayout &DL);
+  void assignAtomicID(Instruction *I);
   void instrumentAtomic(Instruction *I, const DataLayout &DL);
   bool instrumentMemIntrinsic(Instruction *I);
+  void assignCallsiteID(Instruction *I);
   void instrumentCallsite(Instruction *I, DominatorTree *DT);
   void instrumentBasicBlock(BasicBlock &BB);
 
@@ -940,7 +943,9 @@ protected:
                         const DenseMap<Value *, Value *> &TrackVars);
   void instrumentSync(SyncInst *SI,
                       const DenseMap<Value *, Value *> &TrackVars);
+  void assignAllocaID(Instruction *I);
   void instrumentAlloca(Instruction *I);
+  void assignAllocFnID(Instruction *I);
   void instrumentAllocFn(Instruction *I, DominatorTree *DT);
   void instrumentFree(Instruction *I);
   void assignArithmeticID(Instruction *I);
