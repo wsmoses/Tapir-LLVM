@@ -936,6 +936,7 @@ protected:
   void instrumentAtomic(Instruction *I, const DataLayout &DL);
   bool instrumentMemIntrinsic(Instruction *I);
   void assignCallsiteID(Instruction *I);
+  bool handleFPBuiltinCall(CallInst *I, Function *F);
   void instrumentCallsite(Instruction *I, DominatorTree *DT);
   void instrumentBasicBlock(BasicBlock &BB);
 
@@ -1277,6 +1278,56 @@ protected:
     }
     return OperandID;
   }
+
+  // TODO: Determine how to handle the "finite" variants of some operations.
+  enum class CSIBuiltinFuncOp
+    {
+     F_Fma = 0,
+     F_Sqrt,
+     F_Cbrt,
+     F_Sin,
+     F_Cos,
+     F_Tan,
+     F_SinPi,
+     F_CosPi,
+     F_SinCosPi,
+     F_ASin,
+     F_ACos,
+     F_ATan,
+     F_ATan2,
+     F_Sinh,
+     F_Cosh,
+     F_Tanh,
+     F_ASinh,
+     F_ACosh,
+     F_ATanh,
+     F_Log,
+     F_Log2,
+     F_Log10,
+     F_Logb,
+     F_Log1p,
+     F_Exp,
+     F_Exp2,
+     F_Exp10,
+     F_Expm1,
+     F_Fabs,
+     F_Floor,
+     F_Ceil,
+     F_Fmod,
+     F_Trunc,
+     F_Rint,
+     F_NearbyInt,
+     F_Round,
+     F_Canonicalize,
+     F_Pow,
+     F_CopySign,
+     F_MinNum,  // Same as FMin
+     F_MaxNum,  // Same as FMax
+     F_Ldexp,
+     LAST_CSIBuiltinFuncOp
+    };
+  CSIBuiltinFuncOp getBuiltinFuncOp(CallSite &CS);
+
   void linkInToolFromBitcode(const std::string &bitcodePath);
   void loadConfiguration();
 
@@ -1455,6 +1506,17 @@ protected:
   Function /**CsiPhiH = nullptr,*/ *CsiPhiF = nullptr, *CsiPhiD = nullptr;
   Function *CsiPhiI8 = nullptr, *CsiPhiI16 = nullptr, *CsiPhiI32 = nullptr;
   Function *CsiPhiI64 = nullptr, *CsiPhiI128 = nullptr;
+
+  // Hooks for builtins
+  Function *CsiBeforeBuiltinFF = nullptr, *CsiBeforeBuiltinDD = nullptr;
+  Function *CsiBeforeBuiltinFFF = nullptr, *CsiBeforeBuiltinDDD = nullptr;
+  Function *CsiBeforeBuiltinFFI = nullptr, *CsiBeforeBuiltinDDI = nullptr;
+  Function *CsiBeforeBuiltinFFFF = nullptr, *CsiBeforeBuiltinDDDD = nullptr;
+
+  Function *CsiAfterBuiltinFF = nullptr, *CsiAfterBuiltinDD = nullptr;
+  Function *CsiAfterBuiltinFFF = nullptr, *CsiAfterBuiltinDDD = nullptr;
+  Function *CsiAfterBuiltinFFI = nullptr, *CsiAfterBuiltinDDI = nullptr;
+  Function *CsiAfterBuiltinFFFF = nullptr, *CsiAfterBuiltinDDDD = nullptr;
 
   Function *MemmoveFn = nullptr, *MemcpyFn = nullptr, *MemsetFn = nullptr;
   Function *InitCallsiteToFunction = nullptr;

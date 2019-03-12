@@ -580,17 +580,104 @@ void CSIImpl::initializeBasicBlockHooks() {
 void CSIImpl::initializeCallsiteHooks() {
   LLVMContext &C = M.getContext();
   IRBuilder<> IRB(C);
+  Type *IDType = IRB.getInt64Ty();
+  Type *FuncOpType = IRB.getInt8Ty();
+  Type *ValCatType = IRB.getInt8Ty();
   Type *OperandIDType = StructType::get(IRB.getInt8Ty(), IRB.getInt64Ty());
   Type *PropertyTy = CsiCallProperty::getType(C);
   CsiBeforeCallsite = checkCsiInterfaceFunction(
-      M.getOrInsertFunction("__csi_before_call", IRB.getVoidTy(),
-                            IRB.getInt64Ty(), IRB.getInt64Ty(),
-                            PointerType::get(OperandIDType, 0), IRB.getInt32Ty(),
-                            PropertyTy));
+      M.getOrInsertFunction("__csi_before_call", IRB.getVoidTy(), IDType,
+                            IDType, PointerType::get(OperandIDType, 0),
+                            IRB.getInt32Ty(), PropertyTy));
   CsiBeforeCallsite->addParamAttr(2, Attribute::ReadOnly);
   CsiAfterCallsite = checkCsiInterfaceFunction(
-      M.getOrInsertFunction("__csi_after_call", IRB.getVoidTy(),
-                            IRB.getInt64Ty(), IRB.getInt64Ty(), PropertyTy));
+      M.getOrInsertFunction("__csi_after_call", IRB.getVoidTy(), IDType,
+                            IDType, PropertyTy));
+
+  // Special callsite hooks for builtins.
+  CsiBeforeBuiltinFF = checkCsiInterfaceFunction(
+      M.getOrInsertFunction("__csi_before_builtin_float_float",
+                            IRB.getVoidTy(), IDType, FuncOpType,
+                            ValCatType, IDType, IRB.getFloatTy()));
+  CsiAfterBuiltinFF = checkCsiInterfaceFunction(
+      M.getOrInsertFunction("__csi_after_builtin_float_float",
+                            IRB.getVoidTy(), IDType, FuncOpType,
+                            ValCatType, IDType, IRB.getFloatTy()));
+  CsiBeforeBuiltinDD = checkCsiInterfaceFunction(
+      M.getOrInsertFunction("__csi_before_builtin_double_double",
+                            IRB.getVoidTy(), IDType, FuncOpType,
+                            ValCatType, IDType, IRB.getDoubleTy()));
+  CsiAfterBuiltinDD = checkCsiInterfaceFunction(
+      M.getOrInsertFunction("__csi_after_builtin_double_double",
+                            IRB.getVoidTy(), IDType, FuncOpType,
+                            ValCatType, IDType, IRB.getDoubleTy()));
+
+  CsiBeforeBuiltinFFF = checkCsiInterfaceFunction(
+      M.getOrInsertFunction("__csi_before_builtin_float_float_float",
+                            IRB.getVoidTy(), IDType, FuncOpType,
+                            ValCatType, IDType, IRB.getFloatTy(),
+                            ValCatType, IDType, IRB.getFloatTy()));
+  CsiAfterBuiltinFFF = checkCsiInterfaceFunction(
+      M.getOrInsertFunction("__csi_after_builtin_float_float_float",
+                            IRB.getVoidTy(), IDType, FuncOpType,
+                            ValCatType, IDType, IRB.getFloatTy(),
+                            ValCatType, IDType, IRB.getFloatTy()));
+  CsiBeforeBuiltinDDD = checkCsiInterfaceFunction(
+      M.getOrInsertFunction("__csi_before_builtin_double_double_double",
+                            IRB.getVoidTy(), IDType, FuncOpType,
+                            ValCatType, IDType, IRB.getDoubleTy(),
+                            ValCatType, IDType, IRB.getDoubleTy()));
+  CsiAfterBuiltinDDD = checkCsiInterfaceFunction(
+      M.getOrInsertFunction("__csi_after_builtin_double_double_double",
+                            IRB.getVoidTy(), IDType, FuncOpType,
+                            ValCatType, IDType, IRB.getDoubleTy(),
+                            ValCatType, IDType, IRB.getDoubleTy()));
+
+  CsiBeforeBuiltinFFI = checkCsiInterfaceFunction(
+      M.getOrInsertFunction("__csi_before_builtin_float_float_i32",
+                            IRB.getVoidTy(), IDType, FuncOpType,
+                            ValCatType, IDType, IRB.getFloatTy(),
+                            ValCatType, IDType, IRB.getInt32Ty()));
+  CsiAfterBuiltinFFI = checkCsiInterfaceFunction(
+      M.getOrInsertFunction("__csi_after_builtin_float_float_i32",
+                            IRB.getVoidTy(), IDType, FuncOpType,
+                            ValCatType, IDType, IRB.getFloatTy(),
+                            ValCatType, IDType, IRB.getInt32Ty()));
+  CsiBeforeBuiltinDDI = checkCsiInterfaceFunction(
+      M.getOrInsertFunction("__csi_before_builtin_double_double_i32",
+                            IRB.getVoidTy(), IDType, FuncOpType,
+                            ValCatType, IDType, IRB.getDoubleTy(),
+                            ValCatType, IDType, IRB.getInt32Ty()));
+  CsiAfterBuiltinDDI = checkCsiInterfaceFunction(
+      M.getOrInsertFunction("__csi_after_builtin_double_double_i32",
+                            IRB.getVoidTy(), IDType, FuncOpType,
+                            ValCatType, IDType, IRB.getDoubleTy(),
+                            ValCatType, IDType, IRB.getInt32Ty()));
+
+  CsiBeforeBuiltinFFFF = checkCsiInterfaceFunction(
+      M.getOrInsertFunction("__csi_before_builtin_float_float_float_float",
+                            IRB.getVoidTy(), IDType, FuncOpType,
+                            ValCatType, IDType, IRB.getFloatTy(),
+                            ValCatType, IDType, IRB.getFloatTy(),
+                            ValCatType, IDType, IRB.getFloatTy()));
+  CsiAfterBuiltinFFFF = checkCsiInterfaceFunction(
+      M.getOrInsertFunction("__csi_after_builtin_float_float_float_float",
+                            IRB.getVoidTy(), IDType, FuncOpType,
+                            ValCatType, IDType, IRB.getFloatTy(),
+                            ValCatType, IDType, IRB.getFloatTy(),
+                            ValCatType, IDType, IRB.getFloatTy()));
+  CsiBeforeBuiltinDDDD = checkCsiInterfaceFunction(
+      M.getOrInsertFunction("__csi_before_builtin_double_double_double_double",
+                            IRB.getVoidTy(), IDType, FuncOpType,
+                            ValCatType, IDType, IRB.getDoubleTy(),
+                            ValCatType, IDType, IRB.getDoubleTy(),
+                            ValCatType, IDType, IRB.getDoubleTy()));
+  CsiAfterBuiltinDDDD = checkCsiInterfaceFunction(
+      M.getOrInsertFunction("__csi_after_builtin_double_double_double_double",
+                            IRB.getVoidTy(), IDType, FuncOpType,
+                            ValCatType, IDType, IRB.getDoubleTy(),
+                            ValCatType, IDType, IRB.getDoubleTy(),
+                            ValCatType, IDType, IRB.getDoubleTy()));
 }
 
 // Non-local-variable allocation/free hook initialization
@@ -1504,6 +1591,354 @@ void CSIImpl::assignCallsiteID(Instruction *I) {
   /*csi_id_t LocalId =*/CallsiteFED.add(*I, Called ? Called->getName() : "");
 }
 
+CSIImpl::CSIBuiltinFuncOp CSIImpl::getBuiltinFuncOp(CallSite &CS) {
+  const Function *F = CS.getCalledFunction();
+  switch (F->getIntrinsicID()) {
+  default: break;
+  case Intrinsic::fma:
+  case Intrinsic::fmuladd:
+    return CSIBuiltinFuncOp::F_Fma;
+  case Intrinsic::sqrt:
+    return CSIBuiltinFuncOp::F_Sqrt;
+  case Intrinsic::sin:
+    return CSIBuiltinFuncOp::F_Sin;
+  case Intrinsic::cos:
+    return CSIBuiltinFuncOp::F_Cos;
+  case Intrinsic::log:
+    return CSIBuiltinFuncOp::F_Log;
+  case Intrinsic::log10:
+    return CSIBuiltinFuncOp::F_Log10;
+  case Intrinsic::log2:
+    return CSIBuiltinFuncOp::F_Log2;
+  case Intrinsic::exp:
+    return CSIBuiltinFuncOp::F_Exp;
+  case Intrinsic::exp2:
+    return CSIBuiltinFuncOp::F_Exp2;
+  case Intrinsic::fabs:
+    return CSIBuiltinFuncOp::F_Fabs;
+  case Intrinsic::floor:
+    return CSIBuiltinFuncOp::F_Floor;
+  case Intrinsic::ceil:
+    return CSIBuiltinFuncOp::F_Ceil;
+  case Intrinsic::trunc:
+    return CSIBuiltinFuncOp::F_Trunc;
+  case Intrinsic::rint:
+    return CSIBuiltinFuncOp::F_Rint;
+  case Intrinsic::nearbyint:
+    return CSIBuiltinFuncOp::F_NearbyInt;
+  case Intrinsic::round:
+    return CSIBuiltinFuncOp::F_Round;
+  case Intrinsic::canonicalize:
+    return CSIBuiltinFuncOp::F_Canonicalize;
+  case Intrinsic::pow:
+  case Intrinsic::powi:
+    return CSIBuiltinFuncOp::F_Pow;
+  case Intrinsic::copysign:
+    return CSIBuiltinFuncOp::F_CopySign;
+  case Intrinsic::minnum:
+    return CSIBuiltinFuncOp::F_MinNum;
+  case Intrinsic::maxnum:
+    return CSIBuiltinFuncOp::F_MaxNum;
+  }
+
+  // Called function is not an intrinsic.  Try to handle it as a library call.
+  LibFunc Func;
+  if (!TLI || !TLI->getLibFunc(*F, Func))
+    return CSIBuiltinFuncOp::LAST_CSIBuiltinFuncOp;
+
+  // TODO: Handle frexp, frexpf, modf, modff
+  switch (Func) {
+  case LibFunc_log:
+  case LibFunc_log_finite:
+  case LibFunc_logf:
+  case LibFunc_logf_finite:
+    return CSIBuiltinFuncOp::F_Log;
+  case LibFunc_log2:
+  case LibFunc_log2_finite:
+  case LibFunc_log2f:
+  case LibFunc_log2f_finite:
+    return CSIBuiltinFuncOp::F_Log2;
+  case LibFunc_logb:
+  case LibFunc_logbf:
+    return CSIBuiltinFuncOp::F_Logb;
+  case LibFunc_log10:
+  case LibFunc_log10_finite:
+  case LibFunc_log10f:
+  case LibFunc_log10f_finite:
+    return CSIBuiltinFuncOp::F_Log10;
+  case LibFunc_log1p:
+  case LibFunc_log1pf:
+    return CSIBuiltinFuncOp::F_Log1p;
+  case LibFunc_exp:
+  case LibFunc_exp_finite:
+  case LibFunc_expf:
+  case LibFunc_expf_finite:
+    return CSIBuiltinFuncOp::F_Exp;
+  case LibFunc_exp2:
+  case LibFunc_exp2_finite:
+  case LibFunc_exp2f:
+  case LibFunc_exp2f_finite:
+    return CSIBuiltinFuncOp::F_Exp2;
+  case LibFunc_exp10:
+  case LibFunc_exp10_finite:
+  case LibFunc_exp10f:
+  case LibFunc_exp10f_finite:
+    return CSIBuiltinFuncOp::F_Exp10;
+  case LibFunc_expm1:
+  case LibFunc_expm1f:
+    return CSIBuiltinFuncOp::F_Expm1;
+  case LibFunc_sin:
+  case LibFunc_sinf:
+    return CSIBuiltinFuncOp::F_Sin;
+  case LibFunc_cos:
+  case LibFunc_cosf:
+    return CSIBuiltinFuncOp::F_Cos;
+  case LibFunc_sinpi:
+  case LibFunc_sinpif:
+    return CSIBuiltinFuncOp::F_SinPi;
+  case LibFunc_cospi:
+  case LibFunc_cospif:
+    return CSIBuiltinFuncOp::F_CosPi;
+  case LibFunc_sincospi_stret:
+  case LibFunc_sincospif_stret:
+    return CSIBuiltinFuncOp::F_SinCosPi;
+  case LibFunc_tan:
+  case LibFunc_tanf:
+    return CSIBuiltinFuncOp::F_Tan;
+  case LibFunc_asin:
+  case LibFunc_asin_finite:
+  case LibFunc_asinf:
+  case LibFunc_asinf_finite:
+    return CSIBuiltinFuncOp::F_ASin;
+  case LibFunc_acos:
+  case LibFunc_acos_finite:
+  case LibFunc_acosf:
+  case LibFunc_acosf_finite:
+    return CSIBuiltinFuncOp::F_ACos;
+  case LibFunc_atan:
+  case LibFunc_atanf:
+    return CSIBuiltinFuncOp::F_ATan;
+  case LibFunc_sinh:
+  case LibFunc_sinh_finite:
+  case LibFunc_sinhf:
+  case LibFunc_sinhf_finite:
+    return CSIBuiltinFuncOp::F_Sinh;
+  case LibFunc_cosh:
+  case LibFunc_cosh_finite:
+  case LibFunc_coshf:
+  case LibFunc_coshf_finite:
+    return CSIBuiltinFuncOp::F_Cosh;
+  case LibFunc_tanh:
+  case LibFunc_tanhf:
+    return CSIBuiltinFuncOp::F_Tanh;
+  case LibFunc_asinh:
+  case LibFunc_asinhf:
+    return CSIBuiltinFuncOp::F_ASinh;
+  case LibFunc_acosh:
+  case LibFunc_acosh_finite:
+  case LibFunc_acoshf:
+  case LibFunc_acoshf_finite:
+    return CSIBuiltinFuncOp::F_ACosh;
+  case LibFunc_atanh:
+  case LibFunc_atanh_finite:
+  case LibFunc_atanhf:
+  case LibFunc_atanhf_finite:
+    return CSIBuiltinFuncOp::F_ATanh;
+  case LibFunc_sqrt:
+  case LibFunc_sqrt_finite:
+  case LibFunc_sqrtf:
+  case LibFunc_sqrtf_finite:
+    return CSIBuiltinFuncOp::F_Sqrt;
+  case LibFunc_cbrt:
+  case LibFunc_cbrtf:
+    return CSIBuiltinFuncOp::F_Cbrt;
+  case LibFunc_ceil:
+  case LibFunc_ceilf:
+    return CSIBuiltinFuncOp::F_Ceil;
+  case LibFunc_fabs:
+  case LibFunc_fabsf:
+    return CSIBuiltinFuncOp::F_Fabs;
+  case LibFunc_floor:
+  case LibFunc_floorf:
+    return CSIBuiltinFuncOp::F_Floor;
+  case LibFunc_nearbyint:
+  case LibFunc_nearbyintf:
+    return CSIBuiltinFuncOp::F_NearbyInt;
+  case LibFunc_rint:
+  case LibFunc_rintf:
+    return CSIBuiltinFuncOp::F_Rint;
+  case LibFunc_round:
+  case LibFunc_roundf:
+    return CSIBuiltinFuncOp::F_Round;
+  case LibFunc_trunc:
+  case LibFunc_truncf:
+    return CSIBuiltinFuncOp::F_Trunc;
+  case LibFunc_atan2:
+  case LibFunc_atan2_finite:
+  case LibFunc_atan2f:
+  case LibFunc_atan2f_finite:
+    return CSIBuiltinFuncOp::F_ATan2;
+  case LibFunc_copysign:
+  case LibFunc_copysignf:
+    return CSIBuiltinFuncOp::F_CopySign;
+  case LibFunc_pow:
+  case LibFunc_pow_finite:
+  case LibFunc_powf:
+  case LibFunc_powf_finite:
+    return CSIBuiltinFuncOp::F_Pow;
+  case LibFunc_fmod:
+  case LibFunc_fmodf:
+    return CSIBuiltinFuncOp::F_Fmod;
+  case LibFunc_fmin:
+  case LibFunc_fminf:
+    return CSIBuiltinFuncOp::F_MinNum;
+  case LibFunc_fmax:
+  case LibFunc_fmaxf:
+    return CSIBuiltinFuncOp::F_MaxNum;
+  case LibFunc_ldexp:
+  case LibFunc_ldexpf:
+    return CSIBuiltinFuncOp::F_Ldexp;
+  default: break;
+  }
+
+  return CSIBuiltinFuncOp::LAST_CSIBuiltinFuncOp;
+}
+
+bool CSIImpl::handleFPBuiltinCall(CallInst *I, Function *F) {
+  CallSite CS(I);
+
+  CSIBuiltinFuncOp Op = getBuiltinFuncOp(CS);
+  if (CSIBuiltinFuncOp::LAST_CSIBuiltinFuncOp == Op)
+    // Unrecognized builtin; just instrument it like any other call.
+    return false;
+
+  IRBuilder<> IRB(I);
+  csi_id_t LocalId = CallsiteFED.lookupId(I);
+  Type *Ty = F->getReturnType();
+  if (CS.getNumArgOperands() == 1) {
+    Value *Operand = CS.getArgOperand(0);
+    Function *BeforeHook = nullptr, *AfterHook = nullptr;
+    // Determine the correct hooks to use
+    if (Ty->isFloatTy()) {
+      if (!Operand->getType()->isFloatTy())
+        return false;
+      BeforeHook = CsiBeforeBuiltinFF;
+      AfterHook = CsiAfterBuiltinFF;
+    } else if (Ty->isDoubleTy()) {
+      if (!Operand->getType()->isDoubleTy())
+        return false;
+      BeforeHook = CsiBeforeBuiltinDD;
+      AfterHook = CsiAfterBuiltinDD;
+    } else {
+      return false;
+    }
+    // Emit the hooks
+    Value *CallsiteId = CallsiteFED.localToGlobalId(LocalId, IRB);
+    Value *OpArg = IRB.getInt8(static_cast<unsigned>(Op));
+    std::pair<Value *, Value *> OperandID = getOperandID(Operand, IRB);
+    insertHookCall(I, BeforeHook, {CallsiteId, OpArg, OperandID.first,
+                                   OperandID.second, Operand});
+
+    BasicBlock::iterator Iter(I);
+    Iter++;
+    IRB.SetInsertPoint(&*Iter);
+    insertHookCall(&*Iter, AfterHook, {CallsiteId, OpArg, OperandID.first,
+                                       OperandID.second, Operand});
+    return true;
+  } else if (CS.getNumArgOperands() == 2) {
+    Value *Operand0 = CS.getArgOperand(0);
+    Value *Operand1 = CS.getArgOperand(1);
+    // Determine the correct hooks to use
+    Function *BeforeHook = nullptr, *AfterHook = nullptr;
+    if (Ty->isFloatTy()) {
+      if (!Operand0->getType()->isFloatTy())
+        return false;
+      if (Operand1->getType()->isIntegerTy()) {
+        BeforeHook = CsiBeforeBuiltinFFI;
+        AfterHook = CsiAfterBuiltinFFI;
+      } else if (Operand1->getType()->isFloatTy()) {
+        BeforeHook = CsiBeforeBuiltinFFF;
+        AfterHook = CsiAfterBuiltinFFF;
+      } else {
+        return false;
+      }
+    } else if (Ty->isDoubleTy()) {
+      if (!Operand0->getType()->isDoubleTy())
+        return false;
+      if (Operand1->getType()->isIntegerTy()) {
+        BeforeHook = CsiBeforeBuiltinDDI;
+        AfterHook = CsiAfterBuiltinDDI;
+      } else if (Operand1->getType()->isFloatTy()) {
+        BeforeHook = CsiBeforeBuiltinDDD;
+        AfterHook = CsiAfterBuiltinDDD;
+      } else {
+        return false;
+      }
+    }
+    // Emit the hooks
+    Value *CallsiteId = CallsiteFED.localToGlobalId(LocalId, IRB);
+    Value *OpArg = IRB.getInt8(static_cast<unsigned>(Op));
+    std::pair<Value *, Value *> Operand0ID = getOperandID(Operand0, IRB);
+    std::pair<Value *, Value *> Operand1ID = getOperandID(Operand1, IRB);
+    insertHookCall(I, BeforeHook, {CallsiteId, OpArg, Operand0ID.first,
+                                   Operand0ID.second, Operand0,
+                                   Operand1ID.first, Operand1ID.second,
+                                   Operand1});
+    BasicBlock::iterator Iter(I);
+    Iter++;
+    IRB.SetInsertPoint(&*Iter);
+    insertHookCall(&*Iter, AfterHook, {CallsiteId, OpArg, Operand0ID.first,
+                                       Operand0ID.second, Operand0,
+                                       Operand1ID.first, Operand1ID.second,
+                                       Operand1});
+    return true;
+  } else {
+    if (CS.getNumArgOperands() != 3)
+      return false;
+    Value *Operand0 = CS.getArgOperand(0);
+    Value *Operand1 = CS.getArgOperand(1);
+    Value *Operand2 = CS.getArgOperand(2);
+    // Determine the correct hooks to use
+    Function *BeforeHook = nullptr, *AfterHook = nullptr;
+    if (Ty->isFloatTy()) {
+      if (!Operand0->getType()->isFloatTy() ||
+          !Operand1->getType()->isFloatTy() ||
+          !Operand2->getType()->isFloatTy())
+        return false;
+      BeforeHook = CsiBeforeBuiltinFFFF;
+      AfterHook = CsiAfterBuiltinFFFF;
+    } else if (Ty->isDoubleTy()) {
+      if (!Operand0->getType()->isDoubleTy() ||
+          !Operand1->getType()->isDoubleTy() ||
+          !Operand2->getType()->isDoubleTy())
+        return false;
+      BeforeHook = CsiBeforeBuiltinDDDD;
+      AfterHook = CsiAfterBuiltinDDDD;
+    }
+
+    Value *CallsiteId = CallsiteFED.localToGlobalId(LocalId, IRB);
+    Value *OpArg = IRB.getInt8(static_cast<unsigned>(Op));
+    std::pair<Value *, Value *> Operand0ID = getOperandID(Operand0, IRB);
+    std::pair<Value *, Value *> Operand1ID = getOperandID(Operand1, IRB);
+    std::pair<Value *, Value *> Operand2ID = getOperandID(Operand2, IRB);
+    insertHookCall(I, BeforeHook, {CallsiteId, OpArg, Operand0ID.first,
+                                   Operand0ID.second, Operand0,
+                                   Operand1ID.first, Operand1ID.second,
+                                   Operand1, Operand2ID.first,
+                                   Operand2ID.second, Operand2});
+    BasicBlock::iterator Iter(I);
+    Iter++;
+    IRB.SetInsertPoint(&*Iter);
+    insertHookCall(&*Iter, AfterHook, {CallsiteId, OpArg, Operand0ID.first,
+                                       Operand0ID.second, Operand0,
+                                       Operand1ID.first, Operand1ID.second,
+                                       Operand1, Operand2ID.first,
+                                       Operand2ID.second, Operand2});
+    return true;
+  }
+  return false;
+}
+
 void CSIImpl::instrumentCallsite(Instruction *I, DominatorTree *DT) {
   if (callsPlaceholderFunction(*I))
     return;
@@ -1518,6 +1953,12 @@ void CSIImpl::instrumentCallsite(Instruction *I, DominatorTree *DT) {
     Called = II->getCalledFunction();
     NumArgs = II->getNumArgOperands();
   }
+
+  // Handle calls to builtins
+  if (!IsInvoke && Called &&
+      handleFPBuiltinCall(cast<CallInst>(I), Called))
+    return;
+
   bool shouldInstrumentBefore = true;
   bool shouldInstrumentAfter = true;
 
