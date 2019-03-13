@@ -932,6 +932,7 @@ protected:
   void assignLoadOrStoreID(Instruction *I);
   void instrumentLoadOrStore(Instruction *I, CsiLoadStoreProperty &Prop,
                              const DataLayout &DL);
+  void instrumentVectorMemBuiltin(Instruction *I);
   void assignAtomicID(Instruction *I);
   void instrumentAtomic(Instruction *I, const DataLayout &DL);
   bool instrumentMemIntrinsic(Instruction *I);
@@ -1372,6 +1373,13 @@ protected:
   Function *CsiBeforeArithmeticI128 = nullptr,
     *CsiAfterArithmeticI128 = nullptr;
 
+  Function *CsiBeforeArithmetic4F = nullptr, *CsiAfterArithmetic4F = nullptr;
+  Function *CsiBeforeArithmetic8F = nullptr, *CsiAfterArithmetic8F = nullptr;
+  Function *CsiBeforeArithmetic16F = nullptr, *CsiAfterArithmetic16F = nullptr;
+  Function *CsiBeforeArithmetic2D = nullptr, *CsiAfterArithmetic2D = nullptr;
+  Function *CsiBeforeArithmetic4D = nullptr, *CsiAfterArithmetic4D = nullptr;
+  Function *CsiBeforeArithmetic8D = nullptr, *CsiAfterArithmetic8D = nullptr;
+
   // Function *CsiBeforeExtendHF = nullptr, *CsiAfterExtendHF = nullptr;
   // Function *CsiBeforeExtendHD = nullptr, *CsiAfterExtendHD = nullptr;
   Function *CsiBeforeExtendFD = nullptr, *CsiAfterExtendFD = nullptr;
@@ -1455,6 +1463,46 @@ protected:
   Function *CsiBeforeConvertDUI64 = nullptr, *CsiAfterConvertDUI64 = nullptr;
   Function *CsiBeforeConvertDUI128 = nullptr, *CsiAfterConvertDUI128 = nullptr;
 
+  Function *CsiBeforeConvert4FUI8 = nullptr, *CsiAfterConvert4FUI8 = nullptr;
+  Function *CsiBeforeConvert4FUI16 = nullptr, *CsiAfterConvert4FUI16 = nullptr;
+  Function *CsiBeforeConvert4FUI32 = nullptr, *CsiAfterConvert4FUI32 = nullptr;
+  Function *CsiBeforeConvert4FUI64 = nullptr, *CsiAfterConvert4FUI64 = nullptr;
+  Function *CsiBeforeConvert4FUI128 = nullptr,
+    *CsiAfterConvert4FUI128 = nullptr;
+  Function *CsiBeforeConvert8FUI8 = nullptr, *CsiAfterConvert8FUI8 = nullptr;
+  Function *CsiBeforeConvert8FUI16 = nullptr, *CsiAfterConvert8FUI16 = nullptr;
+  Function *CsiBeforeConvert8FUI32 = nullptr, *CsiAfterConvert8FUI32 = nullptr;
+  Function *CsiBeforeConvert8FUI64 = nullptr, *CsiAfterConvert8FUI64 = nullptr;
+  Function *CsiBeforeConvert8FUI128 = nullptr,
+    *CsiAfterConvert8FUI128 = nullptr;
+  Function *CsiBeforeConvert16FUI8 = nullptr, *CsiAfterConvert16FUI8 = nullptr;
+  Function *CsiBeforeConvert16FUI16 = nullptr,
+    *CsiAfterConvert16FUI16 = nullptr;
+  Function *CsiBeforeConvert16FUI32 = nullptr,
+    *CsiAfterConvert16FUI32 = nullptr;
+  Function *CsiBeforeConvert16FUI64 = nullptr,
+    *CsiAfterConvert16FUI64 = nullptr;
+  Function *CsiBeforeConvert16FUI128 = nullptr,
+    *CsiAfterConvert16FUI128 = nullptr;
+  Function *CsiBeforeConvert2DUI8 = nullptr, *CsiAfterConvert2DUI8 = nullptr;
+  Function *CsiBeforeConvert2DUI16 = nullptr, *CsiAfterConvert2DUI16 = nullptr;
+  Function *CsiBeforeConvert2DUI32 = nullptr, *CsiAfterConvert2DUI32 = nullptr;
+  Function *CsiBeforeConvert2DUI64 = nullptr, *CsiAfterConvert2DUI64 = nullptr;
+  Function *CsiBeforeConvert2DUI128 = nullptr,
+    *CsiAfterConvert2DUI128 = nullptr;
+  Function *CsiBeforeConvert4DUI8 = nullptr, *CsiAfterConvert4DUI8 = nullptr;
+  Function *CsiBeforeConvert4DUI16 = nullptr, *CsiAfterConvert4DUI16 = nullptr;
+  Function *CsiBeforeConvert4DUI32 = nullptr, *CsiAfterConvert4DUI32 = nullptr;
+  Function *CsiBeforeConvert4DUI64 = nullptr, *CsiAfterConvert4DUI64 = nullptr;
+  Function *CsiBeforeConvert4DUI128 = nullptr,
+    *CsiAfterConvert4DUI128 = nullptr;
+  Function *CsiBeforeConvert8DUI8 = nullptr, *CsiAfterConvert8DUI8 = nullptr;
+  Function *CsiBeforeConvert8DUI16 = nullptr, *CsiAfterConvert8DUI16 = nullptr;
+  Function *CsiBeforeConvert8DUI32 = nullptr, *CsiAfterConvert8DUI32 = nullptr;
+  Function *CsiBeforeConvert8DUI64 = nullptr, *CsiAfterConvert8DUI64 = nullptr;
+  Function *CsiBeforeConvert8DUI128 = nullptr,
+    *CsiAfterConvert8DUI128 = nullptr;
+
   // Function *CsiBeforeConvertHSI8 = nullptr, *CsiAfterConvertHSI8 = nullptr;
   // Function *CsiBeforeConvertHSI16 = nullptr, *CsiAfterConvertHSI16 = nullptr;
   // Function *CsiBeforeConvertHSI32 = nullptr, *CsiAfterConvertHSI32 = nullptr;
@@ -1470,6 +1518,38 @@ protected:
   Function *CsiBeforeConvertDSI32 = nullptr, *CsiAfterConvertDSI32 = nullptr;
   Function *CsiBeforeConvertDSI64 = nullptr, *CsiAfterConvertDSI64 = nullptr;
   Function *CsiBeforeConvertDSI128 = nullptr, *CsiAfterConvertDSI128 = nullptr;
+
+  Function *CsiBeforeConvert4FSI8 = nullptr, *CsiAfterConvert4FSI8 = nullptr;
+  Function *CsiBeforeConvert4FSI16 = nullptr, *CsiAfterConvert4FSI16 = nullptr;
+  Function *CsiBeforeConvert4FSI32 = nullptr, *CsiAfterConvert4FSI32 = nullptr;
+  Function *CsiBeforeConvert4FSI64 = nullptr, *CsiAfterConvert4FSI64 = nullptr;
+  Function *CsiBeforeConvert4FSI128 = nullptr,
+    *CsiAfterConvert4FSI128 = nullptr;
+  Function *CsiBeforeConvert8FSI8 = nullptr, *CsiAfterConvert8FSI8 = nullptr;
+  Function *CsiBeforeConvert8FSI16 = nullptr, *CsiAfterConvert8FSI16 = nullptr;
+  Function *CsiBeforeConvert8FSI32 = nullptr, *CsiAfterConvert8FSI32 = nullptr;
+  Function *CsiBeforeConvert8FSI64 = nullptr, *CsiAfterConvert8FSI64 = nullptr;
+  Function *CsiBeforeConvert16FSI8 = nullptr, *CsiAfterConvert16FSI8 = nullptr;
+  Function *CsiBeforeConvert16FSI16 = nullptr,
+    *CsiAfterConvert16FSI16 = nullptr;
+  Function *CsiBeforeConvert16FSI32 = nullptr,
+    *CsiAfterConvert16FSI32 = nullptr;
+  Function *CsiBeforeConvert2DSI8 = nullptr, *CsiAfterConvert2DSI8 = nullptr;
+  Function *CsiBeforeConvert2DSI16 = nullptr, *CsiAfterConvert2DSI16 = nullptr;
+  Function *CsiBeforeConvert2DSI32 = nullptr, *CsiAfterConvert2DSI32 = nullptr;
+  Function *CsiBeforeConvert2DSI64 = nullptr, *CsiAfterConvert2DSI64 = nullptr;
+  Function *CsiBeforeConvert2DSI128 = nullptr,
+    *CsiAfterConvert2DSI128 = nullptr;
+  Function *CsiBeforeConvert4DSI8 = nullptr, *CsiAfterConvert4DSI8 = nullptr;
+  Function *CsiBeforeConvert4DSI16 = nullptr, *CsiAfterConvert4DSI16 = nullptr;
+  Function *CsiBeforeConvert4DSI32 = nullptr, *CsiAfterConvert4DSI32 = nullptr;
+  Function *CsiBeforeConvert4DSI64 = nullptr, *CsiAfterConvert4DSI64 = nullptr;
+  Function *CsiBeforeConvert4DSI128 = nullptr,
+    *CsiAfterConvert4DSI128 = nullptr;
+  Function *CsiBeforeConvert8DSI8 = nullptr, *CsiAfterConvert8DSI8 = nullptr;
+  Function *CsiBeforeConvert8DSI16 = nullptr, *CsiAfterConvert8DSI16 = nullptr;
+  Function *CsiBeforeConvert8DSI32 = nullptr, *CsiAfterConvert8DSI32 = nullptr;
+  Function *CsiBeforeConvert8DSI64 = nullptr, *CsiAfterConvert8DSI64 = nullptr;
 
   // Function *CsiBeforeConvertUI8H = nullptr, *CsiAfterConvertUI8H = nullptr;
   // Function *CsiBeforeConvertUI16H = nullptr, *CsiAfterConvertUI16H = nullptr;
@@ -1487,6 +1567,38 @@ protected:
   Function *CsiBeforeConvertUI64D = nullptr, *CsiAfterConvertUI64D = nullptr;
   Function *CsiBeforeConvertUI128D = nullptr, *CsiAfterConvertUI128D = nullptr;
 
+  Function *CsiBeforeConvert4UI8F = nullptr, *CsiAfterConvert4UI8F = nullptr;
+  Function *CsiBeforeConvert4UI16F = nullptr, *CsiAfterConvert4UI16F = nullptr;
+  Function *CsiBeforeConvert4UI32F = nullptr, *CsiAfterConvert4UI32F = nullptr;
+  Function *CsiBeforeConvert4UI64F = nullptr, *CsiAfterConvert4UI64F = nullptr;
+  Function *CsiBeforeConvert4UI128F = nullptr,
+    *CsiAfterConvert4UI128F = nullptr;
+  Function *CsiBeforeConvert8UI8F = nullptr, *CsiAfterConvert8UI8F = nullptr;
+  Function *CsiBeforeConvert8UI16F = nullptr, *CsiAfterConvert8UI16F = nullptr;
+  Function *CsiBeforeConvert8UI32F = nullptr, *CsiAfterConvert8UI32F = nullptr;
+  Function *CsiBeforeConvert8UI64F = nullptr, *CsiAfterConvert8UI64F = nullptr;
+  Function *CsiBeforeConvert16UI8F = nullptr, *CsiAfterConvert16UI8F = nullptr;
+  Function *CsiBeforeConvert16UI16F = nullptr,
+    *CsiAfterConvert16UI16F = nullptr;
+  Function *CsiBeforeConvert16UI32F = nullptr,
+    *CsiAfterConvert16UI32F = nullptr;
+  Function *CsiBeforeConvert2UI8D = nullptr, *CsiAfterConvert2UI8D = nullptr;
+  Function *CsiBeforeConvert2UI16D = nullptr, *CsiAfterConvert2UI16D = nullptr;
+  Function *CsiBeforeConvert2UI32D = nullptr, *CsiAfterConvert2UI32D = nullptr;
+  Function *CsiBeforeConvert2UI64D = nullptr, *CsiAfterConvert2UI64D = nullptr;
+  Function *CsiBeforeConvert2UI128D = nullptr,
+    *CsiAfterConvert2UI128D = nullptr;
+  Function *CsiBeforeConvert4UI8D = nullptr, *CsiAfterConvert4UI8D = nullptr;
+  Function *CsiBeforeConvert4UI16D = nullptr, *CsiAfterConvert4UI16D = nullptr;
+  Function *CsiBeforeConvert4UI32D = nullptr, *CsiAfterConvert4UI32D = nullptr;
+  Function *CsiBeforeConvert4UI64D = nullptr, *CsiAfterConvert4UI64D = nullptr;
+  Function *CsiBeforeConvert4UI128D = nullptr,
+    *CsiAfterConvert4UI128D = nullptr;
+  Function *CsiBeforeConvert8UI8D = nullptr, *CsiAfterConvert8UI8D = nullptr;
+  Function *CsiBeforeConvert8UI16D = nullptr, *CsiAfterConvert8UI16D = nullptr;
+  Function *CsiBeforeConvert8UI32D = nullptr, *CsiAfterConvert8UI32D = nullptr;
+  Function *CsiBeforeConvert8UI64D = nullptr, *CsiAfterConvert8UI64D = nullptr;
+
   // Function *CsiBeforeConvertSI8H = nullptr, *CsiAfterConvertSI8H = nullptr;
   // Function *CsiBeforeConvertSI16H = nullptr, *CsiAfterConvertSI16H = nullptr;
   // Function *CsiBeforeConvertSI32H = nullptr, *CsiAfterConvertSI32H = nullptr;
@@ -1503,9 +1615,126 @@ protected:
   Function *CsiBeforeConvertSI64D = nullptr, *CsiAfterConvertSI64D = nullptr;
   Function *CsiBeforeConvertSI128D = nullptr, *CsiAfterConvertSI128D = nullptr;
 
+  Function *CsiBeforeConvert4SI8F = nullptr, *CsiAfterConvert4SI8F = nullptr;
+  Function *CsiBeforeConvert4SI16F = nullptr, *CsiAfterConvert4SI16F = nullptr;
+  Function *CsiBeforeConvert4SI32F = nullptr, *CsiAfterConvert4SI32F = nullptr;
+  Function *CsiBeforeConvert4SI64F = nullptr, *CsiAfterConvert4SI64F = nullptr;
+  Function *CsiBeforeConvert4SI128F = nullptr,
+    *CsiAfterConvert4SI128F = nullptr;
+  Function *CsiBeforeConvert8SI8F = nullptr, *CsiAfterConvert8SI8F = nullptr;
+  Function *CsiBeforeConvert8SI16F = nullptr, *CsiAfterConvert8SI16F = nullptr;
+  Function *CsiBeforeConvert8SI32F = nullptr, *CsiAfterConvert8SI32F = nullptr;
+  Function *CsiBeforeConvert8SI64F = nullptr, *CsiAfterConvert8SI64F = nullptr;
+  Function *CsiBeforeConvert16SI8F = nullptr, *CsiAfterConvert16SI8F = nullptr;
+  Function *CsiBeforeConvert16SI16F = nullptr,
+    *CsiAfterConvert16SI16F = nullptr;
+  Function *CsiBeforeConvert16SI32F = nullptr,
+    *CsiAfterConvert16SI32F = nullptr;
+  Function *CsiBeforeConvert2SI8D = nullptr, *CsiAfterConvert2SI8D = nullptr;
+  Function *CsiBeforeConvert2SI16D = nullptr, *CsiAfterConvert2SI16D = nullptr;
+  Function *CsiBeforeConvert2SI32D = nullptr, *CsiAfterConvert2SI32D = nullptr;
+  Function *CsiBeforeConvert2SI64D = nullptr, *CsiAfterConvert2SI64D = nullptr;
+  Function *CsiBeforeConvert2SI128D = nullptr,
+    *CsiAfterConvert2SI128D = nullptr;
+  Function *CsiBeforeConvert4SI8D = nullptr, *CsiAfterConvert4SI8D = nullptr;
+  Function *CsiBeforeConvert4SI16D = nullptr, *CsiAfterConvert4SI16D = nullptr;
+  Function *CsiBeforeConvert4SI32D = nullptr, *CsiAfterConvert4SI32D = nullptr;
+  Function *CsiBeforeConvert4SI64D = nullptr, *CsiAfterConvert4SI64D = nullptr;
+  Function *CsiBeforeConvert4SI128D = nullptr,
+    *CsiAfterConvert4SI128D = nullptr;
+  Function *CsiBeforeConvert8SI8D = nullptr, *CsiAfterConvert8SI8D = nullptr;
+  Function *CsiBeforeConvert8SI16D = nullptr, *CsiAfterConvert8SI16D = nullptr;
+  Function *CsiBeforeConvert8SI32D = nullptr, *CsiAfterConvert8SI32D = nullptr;
+  Function *CsiBeforeConvert8SI64D = nullptr, *CsiAfterConvert8SI64D = nullptr;
+
   Function /**CsiPhiH = nullptr,*/ *CsiPhiF = nullptr, *CsiPhiD = nullptr;
   Function *CsiPhiI8 = nullptr, *CsiPhiI16 = nullptr, *CsiPhiI32 = nullptr;
-  Function *CsiPhiI64 = nullptr, *CsiPhiI128 = nullptr;
+  Function *CsiPhiI64 = nullptr, *CsiPhiI128 = nullptr, *CsiPhi4F = nullptr;
+  Function *CsiPhi8F = nullptr, *CsiPhi16F = nullptr, *CsiPhi2D = nullptr;
+  Function *CsiPhi4D = nullptr, *CsiPhi8D = nullptr;
+
+  // Vector operations
+  Function *CsiBeforeInsertEl4F = nullptr, *CsiAfterInsertEl4F = nullptr;
+  Function *CsiBeforeInsertEl8F = nullptr, *CsiAfterInsertEl8F = nullptr;
+  Function *CsiBeforeInsertEl16F = nullptr, *CsiAfterInsertEl16F = nullptr;
+  Function *CsiBeforeInsertEl2D = nullptr, *CsiAfterInsertEl2D = nullptr;
+  Function *CsiBeforeInsertEl4D = nullptr, *CsiAfterInsertEl4D = nullptr;
+  Function *CsiBeforeInsertEl8D = nullptr, *CsiAfterInsertEl8D = nullptr;
+
+  Function *CsiBeforeExtractEl4F = nullptr, *CsiAfterExtractEl4F = nullptr;
+  Function *CsiBeforeExtractEl8F = nullptr, *CsiAfterExtractEl8F = nullptr;
+  Function *CsiBeforeExtractEl16F = nullptr, *CsiAfterExtractEl16F = nullptr;
+  Function *CsiBeforeExtractEl2D = nullptr, *CsiAfterExtractEl2D = nullptr;
+  Function *CsiBeforeExtractEl4D = nullptr, *CsiAfterExtractEl4D = nullptr;
+  Function *CsiBeforeExtractEl8D = nullptr, *CsiAfterExtractEl8D = nullptr;
+
+  Function *CsiBeforeShuffle4F4F = nullptr, *CsiAfterShuffle4F4F = nullptr;
+  Function *CsiBeforeShuffle4F8F = nullptr, *CsiAfterShuffle4F8F = nullptr;
+  Function *CsiBeforeShuffle4F16F = nullptr, *CsiAfterShuffle4F16F = nullptr;
+  Function *CsiBeforeShuffle8F4F = nullptr, *CsiAfterShuffle8F4F = nullptr;
+  Function *CsiBeforeShuffle8F8F = nullptr, *CsiAfterShuffle8F8F = nullptr;
+  Function *CsiBeforeShuffle8F16F = nullptr, *CsiAfterShuffle8F16F = nullptr;
+  Function *CsiBeforeShuffle16F4F = nullptr, *CsiAfterShuffle16F4F = nullptr;
+  Function *CsiBeforeShuffle16F8F = nullptr, *CsiAfterShuffle16F8F = nullptr;
+  Function *CsiBeforeShuffle16F16F = nullptr, *CsiAfterShuffle16F16F = nullptr;
+
+  Function *CsiBeforeShuffle2D2D = nullptr, *CsiAfterShuffle2D2D = nullptr;
+  Function *CsiBeforeShuffle2D4D = nullptr, *CsiAfterShuffle2D4D = nullptr;
+  Function *CsiBeforeShuffle2D8D = nullptr, *CsiAfterShuffle2D8D = nullptr;
+  Function *CsiBeforeShuffle4D2D = nullptr, *CsiAfterShuffle4D2D = nullptr;
+  Function *CsiBeforeShuffle4D4D = nullptr, *CsiAfterShuffle4D4D = nullptr;
+  Function *CsiBeforeShuffle4D8D = nullptr, *CsiAfterShuffle4D8D = nullptr;
+  Function *CsiBeforeShuffle8D2D = nullptr, *CsiAfterShuffle8D2D = nullptr;
+  Function *CsiBeforeShuffle8D4D = nullptr, *CsiAfterShuffle8D4D = nullptr;
+  Function *CsiBeforeShuffle8D8D = nullptr, *CsiAfterShuffle8D8D = nullptr;
+
+  // Built-in vector loads, stores, gathers, scatters
+  Function *CsiBeforeVMaskedLoad4F = nullptr, *CsiAfterVMaskedLoad4F = nullptr;
+  Function *CsiBeforeVMaskedLoad8F = nullptr, *CsiAfterVMaskedLoad8F = nullptr;
+  Function *CsiBeforeVMaskedLoad16F = nullptr,
+    *CsiAfterVMaskedLoad16F = nullptr;
+  Function *CsiBeforeVMaskedLoad2D = nullptr, *CsiAfterVMaskedLoad2D = nullptr;
+  Function *CsiBeforeVMaskedLoad4D = nullptr, *CsiAfterVMaskedLoad4D = nullptr;
+  Function *CsiBeforeVMaskedLoad8D = nullptr, *CsiAfterVMaskedLoad8D = nullptr;
+
+  Function *CsiBeforeVMaskedStore4F = nullptr,
+    *CsiAfterVMaskedStore4F = nullptr;
+  Function *CsiBeforeVMaskedStore8F = nullptr,
+    *CsiAfterVMaskedStore8F = nullptr;
+  Function *CsiBeforeVMaskedStore16F = nullptr,
+    *CsiAfterVMaskedStore16F = nullptr;
+  Function *CsiBeforeVMaskedStore2D = nullptr,
+    *CsiAfterVMaskedStore2D = nullptr;
+  Function *CsiBeforeVMaskedStore4D = nullptr,
+    *CsiAfterVMaskedStore4D = nullptr;
+  Function *CsiBeforeVMaskedStore8D = nullptr,
+    *CsiAfterVMaskedStore8D = nullptr;
+
+  Function *CsiBeforeVMaskedGather4F = nullptr,
+    *CsiAfterVMaskedGather4F = nullptr;
+  Function *CsiBeforeVMaskedGather8F = nullptr,
+    *CsiAfterVMaskedGather8F = nullptr;
+  Function *CsiBeforeVMaskedGather16F = nullptr,
+    *CsiAfterVMaskedGather16F = nullptr;
+  Function *CsiBeforeVMaskedGather2D = nullptr,
+    *CsiAfterVMaskedGather2D = nullptr;
+  Function *CsiBeforeVMaskedGather4D = nullptr,
+    *CsiAfterVMaskedGather4D = nullptr;
+  Function *CsiBeforeVMaskedGather8D = nullptr,
+    *CsiAfterVMaskedGather8D = nullptr;
+
+  Function *CsiBeforeVMaskedScatter4F = nullptr,
+    *CsiAfterVMaskedScatter4F = nullptr;
+  Function *CsiBeforeVMaskedScatter8F = nullptr,
+    *CsiAfterVMaskedScatter8F = nullptr;
+  Function *CsiBeforeVMaskedScatter16F = nullptr,
+    *CsiAfterVMaskedScatter16F = nullptr;
+  Function *CsiBeforeVMaskedScatter2D = nullptr,
+    *CsiAfterVMaskedScatter2D = nullptr;
+  Function *CsiBeforeVMaskedScatter4D = nullptr,
+    *CsiAfterVMaskedScatter4D = nullptr;
+  Function *CsiBeforeVMaskedScatter8D = nullptr,
+    *CsiAfterVMaskedScatter8D = nullptr;
 
   // Hooks for builtins
   Function *CsiBeforeBuiltinFF = nullptr, *CsiBeforeBuiltinDD = nullptr;

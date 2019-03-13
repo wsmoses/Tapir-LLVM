@@ -746,6 +746,47 @@ void CSIImpl::initializeArithmeticHooks() {
           ValCatType, IDType, IRB.getInt128Ty(),
           ValCatType, IDType, IRB.getInt128Ty(), FlagsType));
 
+  CsiBeforeArithmetic4F = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_arithmetic_v4float", RetType, IDType,
+          OpcodeType,
+          ValCatType, IDType, VectorType::get(IRB.getFloatTy(), 4),
+          ValCatType, IDType, VectorType::get(IRB.getFloatTy(), 4), FlagsType));
+  CsiBeforeArithmetic8F = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_arithmetic_v8float", RetType, IDType,
+          OpcodeType,
+          ValCatType, IDType, VectorType::get(IRB.getFloatTy(), 8),
+          ValCatType, IDType, VectorType::get(IRB.getFloatTy(), 8), FlagsType));
+  CsiBeforeArithmetic16F = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_arithmetic_v16float", RetType, IDType,
+          OpcodeType,
+          ValCatType, IDType, VectorType::get(IRB.getFloatTy(), 16),
+          ValCatType, IDType, VectorType::get(IRB.getFloatTy(), 16),
+          FlagsType));
+  CsiBeforeArithmetic2D = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_arithmetic_v2double", RetType, IDType,
+          OpcodeType,
+          ValCatType, IDType, VectorType::get(IRB.getDoubleTy(), 2),
+          ValCatType, IDType, VectorType::get(IRB.getDoubleTy(), 2),
+          FlagsType));
+  CsiBeforeArithmetic4D = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_arithmetic_v4double", RetType, IDType,
+          OpcodeType,
+          ValCatType, IDType, VectorType::get(IRB.getDoubleTy(), 4),
+          ValCatType, IDType, VectorType::get(IRB.getDoubleTy(), 4),
+          FlagsType));
+  CsiBeforeArithmetic8D = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_arithmetic_v8double", RetType, IDType,
+          OpcodeType,
+          ValCatType, IDType, VectorType::get(IRB.getDoubleTy(), 8),
+          ValCatType, IDType, VectorType::get(IRB.getDoubleTy(), 8),
+          FlagsType));
+
   // Floating-point type conversions
   // CsiBeforeExtendHF = checkCsiInterfaceFunction(
   //     M.getOrInsertFunction(
@@ -963,6 +1004,128 @@ void CSIImpl::initializeArithmeticHooks() {
           "__csi_before_convert_double_unsigned_i128", RetType, IDType,
           ValCatType, IDType, IRB.getDoubleTy()));
 
+  CsiBeforeConvert4FUI8 = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_convert_v4float_unsigned_i8", RetType, IDType,
+          ValCatType, IDType, VectorType::get(IRB.getFloatTy(), 4)));
+  CsiBeforeConvert4FUI16 = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_convert_v4float_unsigned_i16", RetType, IDType,
+          ValCatType, IDType, VectorType::get(IRB.getFloatTy(), 4)));
+  CsiBeforeConvert4FUI32 = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_convert_v4float_unsigned_i32", RetType, IDType,
+          ValCatType, IDType, VectorType::get(IRB.getFloatTy(), 4)));
+  CsiBeforeConvert4FUI64 = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_convert_v4float_unsigned_i64", RetType, IDType,
+          ValCatType, IDType, VectorType::get(IRB.getFloatTy(), 4)));
+  CsiBeforeConvert4FUI128 = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_convert_v4float_unsigned_i128", RetType, IDType,
+          ValCatType, IDType, VectorType::get(IRB.getFloatTy(), 4)));
+  CsiBeforeConvert8FUI8 = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_convert_v8float_unsigned_i8", RetType, IDType,
+          ValCatType, IDType, VectorType::get(IRB.getFloatTy(), 8)));
+  CsiBeforeConvert8FUI16 = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_convert_v8float_unsigned_i16", RetType, IDType,
+          ValCatType, IDType, VectorType::get(IRB.getFloatTy(), 8)));
+  CsiBeforeConvert8FUI32 = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_convert_v8float_unsigned_i32", RetType, IDType,
+          ValCatType, IDType, VectorType::get(IRB.getFloatTy(), 8)));
+  CsiBeforeConvert8FUI64 = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_convert_v8float_unsigned_i64", RetType, IDType,
+          ValCatType, IDType, VectorType::get(IRB.getFloatTy(), 8)));
+  CsiBeforeConvert8FUI128 = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_convert_v8float_unsigned_i128", RetType, IDType,
+          ValCatType, IDType, VectorType::get(IRB.getFloatTy(), 8)));
+  CsiBeforeConvert16FUI8 = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_convert_v16float_unsigned_i8", RetType, IDType,
+          ValCatType, IDType, VectorType::get(IRB.getFloatTy(), 16)));
+  CsiBeforeConvert16FUI16 = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_convert_v16float_unsigned_i16", RetType, IDType,
+          ValCatType, IDType, VectorType::get(IRB.getFloatTy(), 16)));
+  CsiBeforeConvert16FUI32 = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_convert_v16float_unsigned_i32", RetType, IDType,
+          ValCatType, IDType, VectorType::get(IRB.getFloatTy(), 16)));
+  CsiBeforeConvert16FUI64 = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_convert_v16float_unsigned_i64", RetType, IDType,
+          ValCatType, IDType, VectorType::get(IRB.getFloatTy(), 16)));
+  CsiBeforeConvert16FUI128 = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_convert_v16float_unsigned_i128", RetType, IDType,
+          ValCatType, IDType, VectorType::get(IRB.getFloatTy(), 16)));
+
+  CsiBeforeConvert2DUI8 = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_convert_v2double_unsigned_i8", RetType, IDType,
+          ValCatType, IDType, VectorType::get(IRB.getDoubleTy(), 2)));
+  CsiBeforeConvert2DUI16 = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_convert_v2double_unsigned_i16", RetType, IDType,
+          ValCatType, IDType, VectorType::get(IRB.getDoubleTy(), 2)));
+  CsiBeforeConvert2DUI32 = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_convert_v2double_unsigned_i32", RetType, IDType,
+          ValCatType, IDType, VectorType::get(IRB.getDoubleTy(), 2)));
+  CsiBeforeConvert2DUI64 = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_convert_v2double_unsigned_i64", RetType, IDType,
+          ValCatType, IDType, VectorType::get(IRB.getDoubleTy(), 2)));
+  CsiBeforeConvert2DUI128 = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_convert_v2double_unsigned_i128", RetType, IDType,
+          ValCatType, IDType, VectorType::get(IRB.getDoubleTy(), 2)));
+  CsiBeforeConvert4DUI8 = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_convert_v4double_unsigned_i8", RetType, IDType,
+          ValCatType, IDType, VectorType::get(IRB.getDoubleTy(), 4)));
+  CsiBeforeConvert4DUI16 = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_convert_v4double_unsigned_i16", RetType, IDType,
+          ValCatType, IDType, VectorType::get(IRB.getDoubleTy(), 4)));
+  CsiBeforeConvert4DUI32 = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_convert_v4double_unsigned_i32", RetType, IDType,
+          ValCatType, IDType, VectorType::get(IRB.getDoubleTy(), 4)));
+  CsiBeforeConvert4DUI64 = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_convert_v4double_unsigned_i64", RetType, IDType,
+          ValCatType, IDType, VectorType::get(IRB.getDoubleTy(), 4)));
+  CsiBeforeConvert4DUI128 = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_convert_v4double_unsigned_i128", RetType, IDType,
+          ValCatType, IDType, VectorType::get(IRB.getDoubleTy(), 4)));
+  CsiBeforeConvert8DUI8 = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_convert_v8double_unsigned_i8", RetType, IDType,
+          ValCatType, IDType, VectorType::get(IRB.getDoubleTy(), 8)));
+  CsiBeforeConvert8DUI16 = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_convert_v8double_unsigned_i16", RetType, IDType,
+          ValCatType, IDType, VectorType::get(IRB.getDoubleTy(), 8)));
+  CsiBeforeConvert8DUI32 = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_convert_v8double_unsigned_i32", RetType, IDType,
+          ValCatType, IDType, VectorType::get(IRB.getDoubleTy(), 8)));
+  CsiBeforeConvert8DUI64 = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_convert_v8double_unsigned_i64", RetType, IDType,
+          ValCatType, IDType, VectorType::get(IRB.getDoubleTy(), 8)));
+  CsiBeforeConvert8DUI128 = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_convert_v8double_unsigned_i128", RetType, IDType,
+          ValCatType, IDType, VectorType::get(IRB.getDoubleTy(), 8)));
+
   // Floating-point-to-integer signed type conversions
   // CsiBeforeConvertHSI8 = checkCsiInterfaceFunction(
   //     M.getOrInsertFunction(
@@ -1027,137 +1190,451 @@ void CSIImpl::initializeArithmeticHooks() {
           "__csi_before_convert_double_signed_i128", RetType, IDType,
           ValCatType, IDType, IRB.getDoubleTy()));
 
+  CsiBeforeConvert4FSI8 = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_convert_v4float_signed_i8", RetType, IDType,
+          ValCatType, IDType, VectorType::get(IRB.getFloatTy(), 4)));
+  CsiBeforeConvert4FSI16 = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_convert_v4float_signed_i16", RetType, IDType,
+          ValCatType, IDType, VectorType::get(IRB.getFloatTy(), 4)));
+  CsiBeforeConvert4FSI32 = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_convert_v4float_signed_i32", RetType, IDType,
+          ValCatType, IDType, VectorType::get(IRB.getFloatTy(), 4)));
+  CsiBeforeConvert4FSI64 = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_convert_v4float_signed_i64", RetType, IDType,
+          ValCatType, IDType, VectorType::get(IRB.getFloatTy(), 4)));
+  CsiBeforeConvert4FSI128 = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_convert_v4float_signed_i128", RetType, IDType,
+          ValCatType, IDType, VectorType::get(IRB.getFloatTy(), 4)));
+  CsiBeforeConvert8FSI8 = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_convert_v8float_signed_i8", RetType, IDType,
+          ValCatType, IDType, VectorType::get(IRB.getFloatTy(), 8)));
+  CsiBeforeConvert8FSI16 = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_convert_v8float_signed_i16", RetType, IDType,
+          ValCatType, IDType, VectorType::get(IRB.getFloatTy(), 8)));
+  CsiBeforeConvert8FSI32 = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_convert_v8float_signed_i32", RetType, IDType,
+          ValCatType, IDType, VectorType::get(IRB.getFloatTy(), 8)));
+  CsiBeforeConvert8FSI64 = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_convert_v8float_signed_i64", RetType, IDType,
+          ValCatType, IDType, VectorType::get(IRB.getFloatTy(), 8)));
+  CsiBeforeConvert16FSI8 = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_convert_v16float_signed_i8", RetType, IDType,
+          ValCatType, IDType, VectorType::get(IRB.getFloatTy(), 16)));
+  CsiBeforeConvert16FSI16 = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_convert_v16float_signed_i16", RetType, IDType,
+          ValCatType, IDType, VectorType::get(IRB.getFloatTy(), 16)));
+  CsiBeforeConvert16FSI32 = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_convert_v16float_signed_i32", RetType, IDType,
+          ValCatType, IDType, VectorType::get(IRB.getFloatTy(), 16)));
+
+  CsiBeforeConvert2DSI8 = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_convert_v2double_signed_i8", RetType, IDType,
+          ValCatType, IDType, VectorType::get(IRB.getDoubleTy(), 2)));
+  CsiBeforeConvert2DSI16 = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_convert_v2double_signed_i16", RetType, IDType,
+          ValCatType, IDType, VectorType::get(IRB.getDoubleTy(), 2)));
+  CsiBeforeConvert2DSI32 = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_convert_v2double_signed_i32", RetType, IDType,
+          ValCatType, IDType, VectorType::get(IRB.getDoubleTy(), 2)));
+  CsiBeforeConvert2DSI64 = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_convert_v2double_signed_i64", RetType, IDType,
+          ValCatType, IDType, VectorType::get(IRB.getDoubleTy(), 2)));
+  CsiBeforeConvert2DSI128 = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_convert_v2double_signed_i128", RetType, IDType,
+          ValCatType, IDType, VectorType::get(IRB.getDoubleTy(), 2)));
+  CsiBeforeConvert4DSI8 = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_convert_v4double_signed_i8", RetType, IDType,
+          ValCatType, IDType, VectorType::get(IRB.getDoubleTy(), 4)));
+  CsiBeforeConvert4DSI16 = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_convert_v4double_signed_i16", RetType, IDType,
+          ValCatType, IDType, VectorType::get(IRB.getDoubleTy(), 4)));
+  CsiBeforeConvert4DSI32 = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_convert_v4double_signed_i32", RetType, IDType,
+          ValCatType, IDType, VectorType::get(IRB.getDoubleTy(), 4)));
+  CsiBeforeConvert4DSI64 = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_convert_v4double_signed_i64", RetType, IDType,
+          ValCatType, IDType, VectorType::get(IRB.getDoubleTy(), 4)));
+  CsiBeforeConvert4DSI128 = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_convert_v4double_signed_i128", RetType, IDType,
+          ValCatType, IDType, VectorType::get(IRB.getDoubleTy(), 4)));
+  CsiBeforeConvert8DSI8 = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_convert_v8double_signed_i8", RetType, IDType,
+          ValCatType, IDType, VectorType::get(IRB.getDoubleTy(), 8)));
+  CsiBeforeConvert8DSI16 = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_convert_v8double_signed_i16", RetType, IDType,
+          ValCatType, IDType, VectorType::get(IRB.getDoubleTy(), 8)));
+  CsiBeforeConvert8DSI32 = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_convert_v8double_signed_i32", RetType, IDType,
+          ValCatType, IDType, VectorType::get(IRB.getDoubleTy(), 8)));
+  CsiBeforeConvert8DSI64 = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_convert_v8double_signed_i64", RetType, IDType,
+          ValCatType, IDType, VectorType::get(IRB.getDoubleTy(), 8)));
+
   // Integer-to-floating-point unsigned type conversions
   // CsiBeforeConvertUI8H = checkCsiInterfaceFunction(
   //     M.getOrInsertFunction(
   //         "__csi_before_convert_unsigned_i8_half", RetType, IDType,
   //         ValCatType, IDType, IRB.getInt8Ty()));
-  CsiBeforeConvertUI8F = checkCsiInterfaceFunction(
-      M.getOrInsertFunction(
-          "__csi_before_convert_unsigned_i8_float", RetType, IDType,
-          ValCatType, IDType, IRB.getInt8Ty()));
-  CsiBeforeConvertUI8D = checkCsiInterfaceFunction(
-      M.getOrInsertFunction(
-          "__csi_before_convert_unsigned_i8_double", RetType, IDType,
-          ValCatType, IDType, IRB.getInt8Ty()));
-
   // CsiBeforeConvertUI16H = checkCsiInterfaceFunction(
   //     M.getOrInsertFunction(
   //         "__csi_before_convert_unsigned_i16_half", RetType, IDType,
   //         ValCatType, IDType, IRB.getInt16Ty()));
-  CsiBeforeConvertUI16F = checkCsiInterfaceFunction(
-      M.getOrInsertFunction(
-          "__csi_before_convert_unsigned_i16_float", RetType, IDType,
-          ValCatType, IDType, IRB.getInt16Ty()));
-  CsiBeforeConvertUI16D = checkCsiInterfaceFunction(
-      M.getOrInsertFunction(
-          "__csi_before_convert_unsigned_i16_double", RetType, IDType,
-          ValCatType, IDType, IRB.getInt16Ty()));
-
   // CsiBeforeConvertUI32H = checkCsiInterfaceFunction(
   //     M.getOrInsertFunction(
   //         "__csi_before_convert_unsigned_i32_half", RetType, IDType,
   //         ValCatType, IDType, IRB.getInt32Ty()));
-  CsiBeforeConvertUI32F = checkCsiInterfaceFunction(
-      M.getOrInsertFunction(
-          "__csi_before_convert_unsigned_i32_float", RetType, IDType,
-          ValCatType, IDType, IRB.getInt32Ty()));
-  CsiBeforeConvertUI32D = checkCsiInterfaceFunction(
-      M.getOrInsertFunction(
-          "__csi_before_convert_unsigned_i32_double", RetType, IDType,
-          ValCatType, IDType, IRB.getInt32Ty()));
-
   // CsiBeforeConvertUI64H = checkCsiInterfaceFunction(
   //     M.getOrInsertFunction(
   //         "__csi_before_convert_unsigned_i64_half", RetType, IDType,
   //         ValCatType, IDType, IRB.getInt64Ty()));
-  CsiBeforeConvertUI64F = checkCsiInterfaceFunction(
-      M.getOrInsertFunction(
-          "__csi_before_convert_unsigned_i64_float", RetType, IDType,
-          ValCatType, IDType, IRB.getInt64Ty()));
-  CsiBeforeConvertUI64D = checkCsiInterfaceFunction(
-      M.getOrInsertFunction(
-          "__csi_before_convert_unsigned_i64_double", RetType, IDType,
-          ValCatType, IDType, IRB.getInt64Ty()));
-
   // CsiBeforeConvertUI128H = checkCsiInterfaceFunction(
   //     M.getOrInsertFunction(
   //         "__csi_before_convert_unsigned_i128_half", RetType, IDType,
   //         ValCatType, IDType, IRB.getInt128Ty()));
+
+  CsiBeforeConvertUI8F = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_convert_unsigned_i8_float", RetType, IDType,
+          ValCatType, IDType, IRB.getInt8Ty()));
+  CsiBeforeConvertUI16F = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_convert_unsigned_i16_float", RetType, IDType,
+          ValCatType, IDType, IRB.getInt16Ty()));
+  CsiBeforeConvertUI32F = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_convert_unsigned_i32_float", RetType, IDType,
+          ValCatType, IDType, IRB.getInt32Ty()));
+  CsiBeforeConvertUI64F = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_convert_unsigned_i64_float", RetType, IDType,
+          ValCatType, IDType, IRB.getInt64Ty()));
   CsiBeforeConvertUI128F = checkCsiInterfaceFunction(
       M.getOrInsertFunction(
           "__csi_before_convert_unsigned_i128_float", RetType, IDType,
           ValCatType, IDType, IRB.getInt128Ty()));
+
+  CsiBeforeConvertUI8D = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_convert_unsigned_i8_double", RetType, IDType,
+          ValCatType, IDType, IRB.getInt8Ty()));
+  CsiBeforeConvertUI16D = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_convert_unsigned_i16_double", RetType, IDType,
+          ValCatType, IDType, IRB.getInt16Ty()));
+  CsiBeforeConvertUI32D = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_convert_unsigned_i32_double", RetType, IDType,
+          ValCatType, IDType, IRB.getInt32Ty()));
+  CsiBeforeConvertUI64D = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_convert_unsigned_i64_double", RetType, IDType,
+          ValCatType, IDType, IRB.getInt64Ty()));
   CsiBeforeConvertUI128D = checkCsiInterfaceFunction(
       M.getOrInsertFunction(
           "__csi_before_convert_unsigned_i128_double", RetType, IDType,
           ValCatType, IDType, IRB.getInt128Ty()));
+
+  CsiBeforeConvert4UI8F = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_convert_unsigned_v4i8_float", RetType, IDType,
+          ValCatType, IDType, VectorType::get(IRB.getInt8Ty(), 4)));
+  CsiBeforeConvert4UI16F = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_convert_unsigned_v4i16_float", RetType, IDType,
+          ValCatType, IDType, VectorType::get(IRB.getInt16Ty(), 4)));
+  CsiBeforeConvert4UI32F = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_convert_unsigned_v4i32_float", RetType, IDType,
+          ValCatType, IDType, VectorType::get(IRB.getInt32Ty(), 4)));
+  CsiBeforeConvert4UI64F = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_convert_unsigned_v4i64_float", RetType, IDType,
+          ValCatType, IDType, VectorType::get(IRB.getInt64Ty(), 4)));
+  CsiBeforeConvert4UI128F = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_convert_unsigned_v4i128_float", RetType, IDType,
+          ValCatType, IDType, VectorType::get(IRB.getInt128Ty(), 4)));
+  CsiBeforeConvert8UI8F = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_convert_unsigned_v8i8_float", RetType, IDType,
+          ValCatType, IDType, VectorType::get(IRB.getInt8Ty(), 8)));
+  CsiBeforeConvert8UI16F = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_convert_unsigned_v8i16_float", RetType, IDType,
+          ValCatType, IDType, VectorType::get(IRB.getInt16Ty(), 8)));
+  CsiBeforeConvert8UI32F = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_convert_unsigned_v8i32_float", RetType, IDType,
+          ValCatType, IDType, VectorType::get(IRB.getInt32Ty(), 8)));
+  CsiBeforeConvert8UI64F = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_convert_unsigned_v8i64_float", RetType, IDType,
+          ValCatType, IDType, VectorType::get(IRB.getInt64Ty(), 8)));
+  CsiBeforeConvert16UI8F = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_convert_unsigned_v16i8_float", RetType, IDType,
+          ValCatType, IDType, VectorType::get(IRB.getInt8Ty(), 16)));
+  CsiBeforeConvert16UI16F = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_convert_unsigned_v16i16_float", RetType, IDType,
+          ValCatType, IDType, VectorType::get(IRB.getInt16Ty(), 16)));
+  CsiBeforeConvert16UI32F = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_convert_unsigned_v16i32_float", RetType, IDType,
+          ValCatType, IDType, VectorType::get(IRB.getInt32Ty(), 16)));
+
+  CsiBeforeConvert2UI8D = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_convert_unsigned_v2i8_double", RetType, IDType,
+          ValCatType, IDType, VectorType::get(IRB.getInt8Ty(), 2)));
+  CsiBeforeConvert2UI16D = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_convert_unsigned_v2i16_double", RetType, IDType,
+          ValCatType, IDType, VectorType::get(IRB.getInt16Ty(), 2)));
+  CsiBeforeConvert2UI32D = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_convert_unsigned_v2i32_double", RetType, IDType,
+          ValCatType, IDType, VectorType::get(IRB.getInt32Ty(), 2)));
+  CsiBeforeConvert2UI64D = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_convert_unsigned_v2i64_double", RetType, IDType,
+          ValCatType, IDType, VectorType::get(IRB.getInt64Ty(), 2)));
+  CsiBeforeConvert2UI128D = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_convert_unsigned_v2i128_double", RetType, IDType,
+          ValCatType, IDType, VectorType::get(IRB.getInt128Ty(), 2)));
+  CsiBeforeConvert4UI8D = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_convert_unsigned_v4i8_double", RetType, IDType,
+          ValCatType, IDType, VectorType::get(IRB.getInt8Ty(), 4)));
+  CsiBeforeConvert4UI16D = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_convert_unsigned_v4i16_double", RetType, IDType,
+          ValCatType, IDType, VectorType::get(IRB.getInt16Ty(), 4)));
+  CsiBeforeConvert4UI32D = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_convert_unsigned_v4i32_double", RetType, IDType,
+          ValCatType, IDType, VectorType::get(IRB.getInt32Ty(), 4)));
+  CsiBeforeConvert4UI64D = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_convert_unsigned_v4i64_double", RetType, IDType,
+          ValCatType, IDType, VectorType::get(IRB.getInt64Ty(), 4)));
+  CsiBeforeConvert4UI128D = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_convert_unsigned_v4i128_double", RetType, IDType,
+          ValCatType, IDType, VectorType::get(IRB.getInt128Ty(), 4)));
+  CsiBeforeConvert8UI8D = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_convert_unsigned_v8i8_double", RetType, IDType,
+          ValCatType, IDType, VectorType::get(IRB.getInt8Ty(), 8)));
+  CsiBeforeConvert8UI16D = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_convert_unsigned_v8i16_double", RetType, IDType,
+          ValCatType, IDType, VectorType::get(IRB.getInt16Ty(), 8)));
+  CsiBeforeConvert8UI32D = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_convert_unsigned_v8i32_double", RetType, IDType,
+          ValCatType, IDType, VectorType::get(IRB.getInt32Ty(), 8)));
+  CsiBeforeConvert8UI64D = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_convert_unsigned_v8i64_double", RetType, IDType,
+          ValCatType, IDType, VectorType::get(IRB.getInt64Ty(), 8)));
 
   // Integer-to-floating-point signed type conversions
   // CsiBeforeConvertSI8H = checkCsiInterfaceFunction(
   //     M.getOrInsertFunction(
   //         "__csi_before_convert_signed_i8_half", RetType, IDType,
   //         ValCatType, IDType, IRB.getInt8Ty()));
-  CsiBeforeConvertSI8F = checkCsiInterfaceFunction(
-      M.getOrInsertFunction(
-          "__csi_before_convert_signed_i8_float", RetType, IDType,
-          ValCatType, IDType, IRB.getInt8Ty()));
-  CsiBeforeConvertSI8D = checkCsiInterfaceFunction(
-      M.getOrInsertFunction(
-          "__csi_before_convert_signed_i8_double", RetType, IDType,
-          ValCatType, IDType, IRB.getInt8Ty()));
-
   // CsiBeforeConvertSI16H = checkCsiInterfaceFunction(
   //     M.getOrInsertFunction(
   //         "__csi_before_convert_signed_i16_half", RetType, IDType,
   //         ValCatType, IDType, IRB.getInt16Ty()));
-  CsiBeforeConvertSI16F = checkCsiInterfaceFunction(
-      M.getOrInsertFunction(
-          "__csi_before_convert_signed_i16_float", RetType, IDType,
-          ValCatType, IDType, IRB.getInt16Ty()));
-  CsiBeforeConvertSI16D = checkCsiInterfaceFunction(
-      M.getOrInsertFunction(
-          "__csi_before_convert_signed_i16_double", RetType, IDType,
-          ValCatType, IDType, IRB.getInt16Ty()));
-
   // CsiBeforeConvertSI32H = checkCsiInterfaceFunction(
   //     M.getOrInsertFunction(
   //         "__csi_before_convert_signed_i32_half", RetType, IDType,
   //         ValCatType, IDType, IRB.getInt32Ty()));
-  CsiBeforeConvertSI32F = checkCsiInterfaceFunction(
-      M.getOrInsertFunction(
-          "__csi_before_convert_signed_i32_float", RetType, IDType,
-          ValCatType, IDType, IRB.getInt32Ty()));
-  CsiBeforeConvertSI32D = checkCsiInterfaceFunction(
-      M.getOrInsertFunction(
-          "__csi_before_convert_signed_i32_double", RetType, IDType,
-          ValCatType, IDType, IRB.getInt32Ty()));
-
   // CsiBeforeConvertSI64H = checkCsiInterfaceFunction(
   //     M.getOrInsertFunction(
   //         "__csi_before_convert_signed_i64_half", RetType, IDType,
   //         ValCatType, IDType, IRB.getInt64Ty()));
-  CsiBeforeConvertSI64F = checkCsiInterfaceFunction(
-      M.getOrInsertFunction(
-          "__csi_before_convert_signed_i64_float", RetType, IDType,
-          ValCatType, IDType, IRB.getInt64Ty()));
-  CsiBeforeConvertSI64D = checkCsiInterfaceFunction(
-      M.getOrInsertFunction(
-          "__csi_before_convert_signed_i64_double", RetType, IDType,
-          ValCatType, IDType, IRB.getInt64Ty()));
-
   // CsiBeforeConvertSI128H = checkCsiInterfaceFunction(
   //     M.getOrInsertFunction(
   //         "__csi_before_convert_signed_i128_half", RetType, IDType,
   //         ValCatType, IDType, IRB.getInt128Ty()));
+
+  CsiBeforeConvertSI8F = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_convert_signed_i8_float", RetType, IDType,
+          ValCatType, IDType, IRB.getInt8Ty()));
+  CsiBeforeConvertSI16F = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_convert_signed_i16_float", RetType, IDType,
+          ValCatType, IDType, IRB.getInt16Ty()));
+  CsiBeforeConvertSI32F = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_convert_signed_i32_float", RetType, IDType,
+          ValCatType, IDType, IRB.getInt32Ty()));
+  CsiBeforeConvertSI64F = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_convert_signed_i64_float", RetType, IDType,
+          ValCatType, IDType, IRB.getInt64Ty()));
   CsiBeforeConvertSI128F = checkCsiInterfaceFunction(
       M.getOrInsertFunction(
           "__csi_before_convert_signed_i128_float", RetType, IDType,
           ValCatType, IDType, IRB.getInt128Ty()));
+
+  CsiBeforeConvertSI8D = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_convert_signed_i8_double", RetType, IDType,
+          ValCatType, IDType, IRB.getInt8Ty()));
+  CsiBeforeConvertSI16D = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_convert_signed_i16_double", RetType, IDType,
+          ValCatType, IDType, IRB.getInt16Ty()));
+  CsiBeforeConvertSI32D = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_convert_signed_i32_double", RetType, IDType,
+          ValCatType, IDType, IRB.getInt32Ty()));
+  CsiBeforeConvertSI64D = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_convert_signed_i64_double", RetType, IDType,
+          ValCatType, IDType, IRB.getInt64Ty()));
   CsiBeforeConvertSI128D = checkCsiInterfaceFunction(
       M.getOrInsertFunction(
           "__csi_before_convert_signed_i128_double", RetType, IDType,
           ValCatType, IDType, IRB.getInt128Ty()));
+
+  CsiBeforeConvert4SI8F = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_convert_signed_v4i8_float", RetType, IDType,
+          ValCatType, IDType, VectorType::get(IRB.getInt8Ty(), 4)));
+  CsiBeforeConvert4SI16F = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_convert_signed_v4i16_float", RetType, IDType,
+          ValCatType, IDType, VectorType::get(IRB.getInt16Ty(), 4)));
+  CsiBeforeConvert4SI32F = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_convert_signed_v4i32_float", RetType, IDType,
+          ValCatType, IDType, VectorType::get(IRB.getInt32Ty(), 4)));
+  CsiBeforeConvert4SI64F = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_convert_signed_v4i64_float", RetType, IDType,
+          ValCatType, IDType, VectorType::get(IRB.getInt64Ty(), 4)));
+  CsiBeforeConvert4SI128F = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_convert_signed_v4i128_float", RetType, IDType,
+          ValCatType, IDType, VectorType::get(IRB.getInt128Ty(), 4)));
+  CsiBeforeConvert8SI8F = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_convert_signed_v8i8_float", RetType, IDType,
+          ValCatType, IDType, VectorType::get(IRB.getInt8Ty(), 8)));
+  CsiBeforeConvert8SI16F = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_convert_signed_v8i16_float", RetType, IDType,
+          ValCatType, IDType, VectorType::get(IRB.getInt16Ty(), 8)));
+  CsiBeforeConvert8SI32F = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_convert_signed_v8i32_float", RetType, IDType,
+          ValCatType, IDType, VectorType::get(IRB.getInt32Ty(), 8)));
+  CsiBeforeConvert8SI64F = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_convert_signed_v8i64_float", RetType, IDType,
+          ValCatType, IDType, VectorType::get(IRB.getInt64Ty(), 8)));
+  CsiBeforeConvert16SI8F = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_convert_signed_v16i8_float", RetType, IDType,
+          ValCatType, IDType, VectorType::get(IRB.getInt8Ty(), 16)));
+  CsiBeforeConvert16SI16F = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_convert_signed_v16i16_float", RetType, IDType,
+          ValCatType, IDType, VectorType::get(IRB.getInt16Ty(), 16)));
+  CsiBeforeConvert16SI32F = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_convert_signed_v16i32_float", RetType, IDType,
+          ValCatType, IDType, VectorType::get(IRB.getInt32Ty(), 16)));
+
+  CsiBeforeConvert2SI8D = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_convert_signed_v2i8_double", RetType, IDType,
+          ValCatType, IDType, VectorType::get(IRB.getInt8Ty(), 2)));
+  CsiBeforeConvert2SI16D = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_convert_signed_v2i16_double", RetType, IDType,
+          ValCatType, IDType, VectorType::get(IRB.getInt16Ty(), 2)));
+  CsiBeforeConvert2SI32D = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_convert_signed_v2i32_double", RetType, IDType,
+          ValCatType, IDType, VectorType::get(IRB.getInt32Ty(), 2)));
+  CsiBeforeConvert2SI64D = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_convert_signed_v2i64_double", RetType, IDType,
+          ValCatType, IDType, VectorType::get(IRB.getInt64Ty(), 2)));
+  CsiBeforeConvert2SI128D = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_convert_signed_v2i128_double", RetType, IDType,
+          ValCatType, IDType, VectorType::get(IRB.getInt128Ty(), 2)));
+  CsiBeforeConvert4SI8D = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_convert_signed_v4i8_double", RetType, IDType,
+          ValCatType, IDType, VectorType::get(IRB.getInt8Ty(), 4)));
+  CsiBeforeConvert4SI16D = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_convert_signed_v4i16_double", RetType, IDType,
+          ValCatType, IDType, VectorType::get(IRB.getInt16Ty(), 4)));
+  CsiBeforeConvert4SI32D = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_convert_signed_v4i32_double", RetType, IDType,
+          ValCatType, IDType, VectorType::get(IRB.getInt32Ty(), 4)));
+  CsiBeforeConvert4SI64D = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_convert_signed_v4i64_double", RetType, IDType,
+          ValCatType, IDType, VectorType::get(IRB.getInt64Ty(), 4)));
+  CsiBeforeConvert4SI128D = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_convert_signed_v4i128_double", RetType, IDType,
+          ValCatType, IDType, VectorType::get(IRB.getInt128Ty(), 4)));
+  CsiBeforeConvert8SI8D = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_convert_signed_v8i8_double", RetType, IDType,
+          ValCatType, IDType, VectorType::get(IRB.getInt8Ty(), 8)));
+  CsiBeforeConvert8SI16D = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_convert_signed_v8i16_double", RetType, IDType,
+          ValCatType, IDType, VectorType::get(IRB.getInt16Ty(), 8)));
+  CsiBeforeConvert8SI32D = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_convert_signed_v8i32_double", RetType, IDType,
+          ValCatType, IDType, VectorType::get(IRB.getInt32Ty(), 8)));
+  CsiBeforeConvert8SI64D = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_convert_signed_v8i64_double", RetType, IDType,
+          ValCatType, IDType, VectorType::get(IRB.getInt64Ty(), 8)));
 
   // Phi nodes for scalar types
   CsiPhiI8 = checkCsiInterfaceFunction(
@@ -1193,6 +1670,210 @@ void CSIImpl::initializeArithmeticHooks() {
       M.getOrInsertFunction(
           "__csi_phi_double", RetType, IDType, ValCatType, IDType,
           IRB.getDoubleTy()));
+
+  CsiPhi4F = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_phi_v4float", RetType, IDType, ValCatType, IDType,
+          VectorType::get(IRB.getFloatTy(), 4)));
+  CsiPhi8F = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_phi_v8float", RetType, IDType, ValCatType, IDType,
+          VectorType::get(IRB.getFloatTy(), 8)));
+  CsiPhi16F = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_phi_v16float", RetType, IDType, ValCatType, IDType,
+          VectorType::get(IRB.getFloatTy(), 16)));
+  CsiPhi2D = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_phi_v2double", RetType, IDType, ValCatType, IDType,
+          VectorType::get(IRB.getDoubleTy(), 2)));
+  CsiPhi4D = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_phi_v4double", RetType, IDType, ValCatType, IDType,
+          VectorType::get(IRB.getDoubleTy(), 4)));
+  CsiPhi8D = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_phi_v8double", RetType, IDType, ValCatType, IDType,
+          VectorType::get(IRB.getDoubleTy(), 8)));
+
+  // Vector operations
+  CsiBeforeInsertEl4F = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_insert_element_v4float", RetType, IDType,
+          ValCatType, IDType, VectorType::get(IRB.getFloatTy(), 4),
+          ValCatType, IDType, IRB.getFloatTy(),
+          ValCatType, IDType, IRB.getInt32Ty()));
+  CsiBeforeInsertEl8F = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_insert_element_v8float", RetType, IDType,
+          ValCatType, IDType, VectorType::get(IRB.getFloatTy(), 8),
+          ValCatType, IDType, IRB.getFloatTy(),
+          ValCatType, IDType, IRB.getInt32Ty()));
+  CsiBeforeInsertEl16F = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_insert_element_v16float", RetType, IDType,
+          ValCatType, IDType, VectorType::get(IRB.getFloatTy(), 16),
+          ValCatType, IDType, IRB.getFloatTy(),
+          ValCatType, IDType, IRB.getInt32Ty()));
+  CsiBeforeInsertEl2D = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_insert_element_v2double", RetType, IDType,
+          ValCatType, IDType, VectorType::get(IRB.getDoubleTy(), 2),
+          ValCatType, IDType, IRB.getDoubleTy(),
+          ValCatType, IDType, IRB.getInt32Ty()));
+  CsiBeforeInsertEl4D = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_insert_element_v4double", RetType, IDType,
+          ValCatType, IDType, VectorType::get(IRB.getDoubleTy(), 4),
+          ValCatType, IDType, IRB.getDoubleTy(),
+          ValCatType, IDType, IRB.getInt32Ty()));
+  CsiBeforeInsertEl8D = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_insert_element_v8double", RetType, IDType,
+          ValCatType, IDType, VectorType::get(IRB.getDoubleTy(), 8),
+          ValCatType, IDType, IRB.getDoubleTy(),
+          ValCatType, IDType, IRB.getInt32Ty()));
+
+  CsiBeforeExtractEl4F = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_extract_element_v4float", RetType, IDType,
+          ValCatType, IDType, VectorType::get(IRB.getFloatTy(), 4),
+          ValCatType, IDType, IRB.getInt32Ty()));
+  CsiBeforeExtractEl8F = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_extract_element_v8float", RetType, IDType,
+          ValCatType, IDType, VectorType::get(IRB.getFloatTy(), 8),
+          ValCatType, IDType, IRB.getInt32Ty()));
+  CsiBeforeExtractEl16F = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_extract_element_v16float", RetType, IDType,
+          ValCatType, IDType, VectorType::get(IRB.getFloatTy(), 16),
+          ValCatType, IDType, IRB.getInt32Ty()));
+  CsiBeforeExtractEl2D = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_extract_element_v2double", RetType, IDType,
+          ValCatType, IDType, VectorType::get(IRB.getDoubleTy(), 2),
+          ValCatType, IDType, IRB.getInt32Ty()));
+  CsiBeforeExtractEl4D = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_extract_element_v4double", RetType, IDType,
+          ValCatType, IDType, VectorType::get(IRB.getDoubleTy(), 4),
+          ValCatType, IDType, IRB.getInt32Ty()));
+  CsiBeforeExtractEl8D = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_extract_element_v8double", RetType, IDType,
+          ValCatType, IDType, VectorType::get(IRB.getDoubleTy(), 8),
+          ValCatType, IDType, IRB.getInt32Ty()));
+
+  CsiBeforeShuffle4F4F = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_shuffle_v4float_v4float_v4float", RetType, IDType,
+          ValCatType, IDType, VectorType::get(IRB.getFloatTy(), 4),
+          ValCatType, IDType, VectorType::get(IRB.getFloatTy(), 4),
+          ValCatType, IDType, VectorType::get(IRB.getInt32Ty(), 4)));
+  CsiBeforeShuffle4F8F = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_shuffle_v4float_v4float_v8float", RetType, IDType,
+          ValCatType, IDType, VectorType::get(IRB.getFloatTy(), 4),
+          ValCatType, IDType, VectorType::get(IRB.getFloatTy(), 4),
+          ValCatType, IDType, VectorType::get(IRB.getInt32Ty(), 8)));
+  CsiBeforeShuffle4F16F = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_shuffle_v4float_v4float_v16float", RetType, IDType,
+          ValCatType, IDType, VectorType::get(IRB.getFloatTy(), 4),
+          ValCatType, IDType, VectorType::get(IRB.getFloatTy(), 4),
+          ValCatType, IDType, VectorType::get(IRB.getInt32Ty(), 16)));
+  CsiBeforeShuffle8F4F = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_shuffle_v8float_v8float_v4float", RetType, IDType,
+          ValCatType, IDType, VectorType::get(IRB.getFloatTy(), 8),
+          ValCatType, IDType, VectorType::get(IRB.getFloatTy(), 8),
+          ValCatType, IDType, VectorType::get(IRB.getInt32Ty(), 4)));
+  CsiBeforeShuffle8F8F = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_shuffle_v8float_v8float_v8float", RetType, IDType,
+          ValCatType, IDType, VectorType::get(IRB.getFloatTy(), 8),
+          ValCatType, IDType, VectorType::get(IRB.getFloatTy(), 8),
+          ValCatType, IDType, VectorType::get(IRB.getInt32Ty(), 8)));
+  CsiBeforeShuffle8F16F = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_shuffle_v8float_v8float_v16float", RetType, IDType,
+          ValCatType, IDType, VectorType::get(IRB.getFloatTy(), 8),
+          ValCatType, IDType, VectorType::get(IRB.getFloatTy(), 8),
+          ValCatType, IDType, VectorType::get(IRB.getInt32Ty(), 16)));
+  CsiBeforeShuffle16F4F = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_shuffle_v16float_v16float_v4float", RetType, IDType,
+          ValCatType, IDType, VectorType::get(IRB.getFloatTy(), 16),
+          ValCatType, IDType, VectorType::get(IRB.getFloatTy(), 16),
+          ValCatType, IDType, VectorType::get(IRB.getInt32Ty(), 4)));
+  CsiBeforeShuffle16F8F = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_shuffle_v16float_v16float_v8float", RetType, IDType,
+          ValCatType, IDType, VectorType::get(IRB.getFloatTy(), 16),
+          ValCatType, IDType, VectorType::get(IRB.getFloatTy(), 16),
+          ValCatType, IDType, VectorType::get(IRB.getInt32Ty(), 8)));
+  CsiBeforeShuffle16F16F = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_shuffle_v16float_v16float_v16float", RetType, IDType,
+          ValCatType, IDType, VectorType::get(IRB.getFloatTy(), 16),
+          ValCatType, IDType, VectorType::get(IRB.getFloatTy(), 16),
+          ValCatType, IDType, VectorType::get(IRB.getInt32Ty(), 16)));
+
+  CsiBeforeShuffle2D2D = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_shuffle_v2double_v2double_v2double", RetType, IDType,
+          ValCatType, IDType, VectorType::get(IRB.getDoubleTy(), 2),
+          ValCatType, IDType, VectorType::get(IRB.getDoubleTy(), 2),
+          ValCatType, IDType, VectorType::get(IRB.getInt32Ty(), 2)));
+  CsiBeforeShuffle2D4D = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_shuffle_v2double_v2double_v4double", RetType, IDType,
+          ValCatType, IDType, VectorType::get(IRB.getDoubleTy(), 2),
+          ValCatType, IDType, VectorType::get(IRB.getDoubleTy(), 2),
+          ValCatType, IDType, VectorType::get(IRB.getInt32Ty(), 4)));
+  CsiBeforeShuffle2D8D = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_shuffle_v2double_v2double_v8double", RetType, IDType,
+          ValCatType, IDType, VectorType::get(IRB.getDoubleTy(), 2),
+          ValCatType, IDType, VectorType::get(IRB.getDoubleTy(), 2),
+          ValCatType, IDType, VectorType::get(IRB.getInt32Ty(), 8)));
+  CsiBeforeShuffle4D2D = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_shuffle_v4double_v4double_v2double", RetType, IDType,
+          ValCatType, IDType, VectorType::get(IRB.getDoubleTy(), 4),
+          ValCatType, IDType, VectorType::get(IRB.getDoubleTy(), 4),
+          ValCatType, IDType, VectorType::get(IRB.getInt32Ty(), 2)));
+  CsiBeforeShuffle4D4D = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_shuffle_v4double_v4double_v4double", RetType, IDType,
+          ValCatType, IDType, VectorType::get(IRB.getDoubleTy(), 4),
+          ValCatType, IDType, VectorType::get(IRB.getDoubleTy(), 4),
+          ValCatType, IDType, VectorType::get(IRB.getInt32Ty(), 4)));
+  CsiBeforeShuffle4D8D = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_shuffle_v4double_v4double_v8double", RetType, IDType,
+          ValCatType, IDType, VectorType::get(IRB.getDoubleTy(), 4),
+          ValCatType, IDType, VectorType::get(IRB.getDoubleTy(), 4),
+          ValCatType, IDType, VectorType::get(IRB.getInt32Ty(), 8)));
+  CsiBeforeShuffle8D2D = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_shuffle_v8double_v8double_v2double", RetType, IDType,
+          ValCatType, IDType, VectorType::get(IRB.getDoubleTy(), 8),
+          ValCatType, IDType, VectorType::get(IRB.getDoubleTy(), 8),
+          ValCatType, IDType, VectorType::get(IRB.getInt32Ty(), 2)));
+  CsiBeforeShuffle8D4D = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_shuffle_v8double_v8double_v4double", RetType, IDType,
+          ValCatType, IDType, VectorType::get(IRB.getDoubleTy(), 8),
+          ValCatType, IDType, VectorType::get(IRB.getDoubleTy(), 8),
+          ValCatType, IDType, VectorType::get(IRB.getInt32Ty(), 4)));
+  CsiBeforeShuffle8D8D = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_shuffle_v8double_v8double_v8double", RetType, IDType,
+          ValCatType, IDType, VectorType::get(IRB.getDoubleTy(), 8),
+          ValCatType, IDType, VectorType::get(IRB.getDoubleTy(), 8),
+          ValCatType, IDType, VectorType::get(IRB.getInt32Ty(), 8)));
 }
 
 // Alloca (local variable) hook initialization
@@ -1276,6 +1957,370 @@ void CSIImpl::initializeLoadStoreHooks() {
                             AddrType, NumBytesType, ValCatType, IDType,
                             StorePropertyTy));
   CsiAfterWrite->addParamAttr(1, Attribute::ReadOnly);
+
+  CsiBeforeVMaskedLoad4F = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_masked_load_v4float", RetType, IDType,
+          PointerType::get(VectorType::get(IRB.getFloatTy(), 4), 0),
+          ValCatType, IDType, VectorType::get(IRB.getInt8Ty(), 4),
+          ValCatType, IDType, VectorType::get(IRB.getFloatTy(), 4),
+          LoadPropertyTy));
+  CsiBeforeVMaskedLoad4F->addParamAttr(1, Attribute::ReadOnly);
+  CsiAfterVMaskedLoad4F = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_after_masked_load_v4float", RetType, IDType,
+          PointerType::get(VectorType::get(IRB.getFloatTy(), 4), 0),
+          ValCatType, IDType, VectorType::get(IRB.getInt8Ty(), 4),
+          ValCatType, IDType, VectorType::get(IRB.getFloatTy(), 4),
+          LoadPropertyTy));
+  CsiAfterVMaskedLoad4F->addParamAttr(1, Attribute::ReadOnly);
+  CsiBeforeVMaskedLoad8F = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_masked_load_v8float", RetType, IDType,
+          PointerType::get(VectorType::get(IRB.getFloatTy(), 8), 0),
+          ValCatType, IDType, VectorType::get(IRB.getInt8Ty(), 8),
+          ValCatType, IDType, VectorType::get(IRB.getFloatTy(), 8),
+          LoadPropertyTy));
+  CsiBeforeVMaskedLoad8F->addParamAttr(1, Attribute::ReadOnly);
+  CsiAfterVMaskedLoad8F = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_after_masked_load_v8float", RetType, IDType,
+          PointerType::get(VectorType::get(IRB.getFloatTy(), 8), 0),
+          ValCatType, IDType, VectorType::get(IRB.getInt8Ty(), 8),
+          ValCatType, IDType, VectorType::get(IRB.getFloatTy(), 8),
+          LoadPropertyTy));
+  CsiAfterVMaskedLoad8F->addParamAttr(1, Attribute::ReadOnly);
+  CsiBeforeVMaskedLoad16F = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_masked_load_v16float", RetType, IDType,
+          PointerType::get(VectorType::get(IRB.getFloatTy(), 16), 0),
+          ValCatType, IDType, VectorType::get(IRB.getInt8Ty(), 16),
+          ValCatType, IDType, VectorType::get(IRB.getFloatTy(), 16),
+          LoadPropertyTy));
+  CsiBeforeVMaskedLoad16F->addParamAttr(1, Attribute::ReadOnly);
+  CsiAfterVMaskedLoad16F = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_after_masked_load_v16float", RetType, IDType,
+          PointerType::get(VectorType::get(IRB.getFloatTy(), 16), 0),
+          ValCatType, IDType, VectorType::get(IRB.getInt8Ty(), 16),
+          ValCatType, IDType, VectorType::get(IRB.getFloatTy(), 16),
+          LoadPropertyTy));
+  CsiAfterVMaskedLoad16F->addParamAttr(1, Attribute::ReadOnly);
+  CsiBeforeVMaskedLoad2D = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_masked_load_v2double", RetType, IDType,
+          PointerType::get(VectorType::get(IRB.getDoubleTy(), 2), 0),
+          ValCatType, IDType, VectorType::get(IRB.getInt8Ty(), 2),
+          ValCatType, IDType, VectorType::get(IRB.getDoubleTy(), 2),
+          LoadPropertyTy));
+  CsiBeforeVMaskedLoad2D->addParamAttr(1, Attribute::ReadOnly);
+  CsiAfterVMaskedLoad2D = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_after_masked_load_v2double", RetType, IDType,
+          PointerType::get(VectorType::get(IRB.getDoubleTy(), 2), 0),
+          ValCatType, IDType, VectorType::get(IRB.getInt8Ty(), 2),
+          ValCatType, IDType, VectorType::get(IRB.getDoubleTy(), 2),
+          LoadPropertyTy));
+  CsiAfterVMaskedLoad2D->addParamAttr(1, Attribute::ReadOnly);
+  CsiBeforeVMaskedLoad4D = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_masked_load_v4double", RetType, IDType,
+          PointerType::get(VectorType::get(IRB.getDoubleTy(), 4), 0),
+          ValCatType, IDType, VectorType::get(IRB.getInt8Ty(), 4),
+          ValCatType, IDType, VectorType::get(IRB.getDoubleTy(), 4),
+          LoadPropertyTy));
+  CsiBeforeVMaskedLoad4D->addParamAttr(1, Attribute::ReadOnly);
+  CsiAfterVMaskedLoad4D = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_after_masked_load_v4double", RetType, IDType,
+          PointerType::get(VectorType::get(IRB.getDoubleTy(), 4), 0),
+          ValCatType, IDType, VectorType::get(IRB.getInt8Ty(), 4),
+          ValCatType, IDType, VectorType::get(IRB.getDoubleTy(), 4),
+          LoadPropertyTy));
+  CsiAfterVMaskedLoad4D->addParamAttr(1, Attribute::ReadOnly);
+  CsiBeforeVMaskedLoad8D = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_masked_load_v8double", RetType, IDType,
+          PointerType::get(VectorType::get(IRB.getDoubleTy(), 8), 0),
+          ValCatType, IDType, VectorType::get(IRB.getInt8Ty(), 8),
+          ValCatType, IDType, VectorType::get(IRB.getDoubleTy(), 8),
+          LoadPropertyTy));
+  CsiBeforeVMaskedLoad8D->addParamAttr(1, Attribute::ReadOnly);
+  CsiAfterVMaskedLoad8D = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_after_masked_load_v8double", RetType, IDType,
+          PointerType::get(VectorType::get(IRB.getDoubleTy(), 8), 0),
+          ValCatType, IDType, VectorType::get(IRB.getInt8Ty(), 8),
+          ValCatType, IDType, VectorType::get(IRB.getDoubleTy(), 8),
+          LoadPropertyTy));
+  CsiAfterVMaskedLoad8D->addParamAttr(1, Attribute::ReadOnly);
+
+  CsiBeforeVMaskedStore4F = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_masked_store_v4float", RetType, IDType,
+          PointerType::get(VectorType::get(IRB.getFloatTy(), 4), 0),
+          ValCatType, IDType, VectorType::get(IRB.getInt8Ty(), 4),
+          ValCatType, IDType, VectorType::get(IRB.getFloatTy(), 4),
+          StorePropertyTy));
+  CsiBeforeVMaskedStore4F->addParamAttr(1, Attribute::ReadOnly);
+  CsiAfterVMaskedStore4F = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_after_masked_store_v4float", RetType, IDType,
+          PointerType::get(VectorType::get(IRB.getFloatTy(), 4), 0),
+          ValCatType, IDType, VectorType::get(IRB.getInt8Ty(), 4),
+          ValCatType, IDType, VectorType::get(IRB.getFloatTy(), 4),
+          StorePropertyTy));
+  CsiAfterVMaskedStore4F->addParamAttr(1, Attribute::ReadOnly);
+  CsiBeforeVMaskedStore8F = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_masked_store_v8float", RetType, IDType,
+          PointerType::get(VectorType::get(IRB.getFloatTy(), 8), 0),
+          ValCatType, IDType, VectorType::get(IRB.getInt8Ty(), 8),
+          ValCatType, IDType, VectorType::get(IRB.getFloatTy(), 8),
+          StorePropertyTy));
+  CsiBeforeVMaskedStore8F->addParamAttr(1, Attribute::ReadOnly);
+  CsiAfterVMaskedStore8F = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_after_masked_store_v8float", RetType, IDType,
+          PointerType::get(VectorType::get(IRB.getFloatTy(), 8), 0),
+          ValCatType, IDType, VectorType::get(IRB.getInt8Ty(), 8),
+          ValCatType, IDType, VectorType::get(IRB.getFloatTy(), 8),
+          StorePropertyTy));
+  CsiAfterVMaskedStore8F->addParamAttr(1, Attribute::ReadOnly);
+  CsiBeforeVMaskedStore16F = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_masked_store_v16float", RetType, IDType,
+          PointerType::get(VectorType::get(IRB.getFloatTy(), 16), 0),
+          ValCatType, IDType, VectorType::get(IRB.getInt8Ty(), 16),
+          ValCatType, IDType, VectorType::get(IRB.getFloatTy(), 16),
+          StorePropertyTy));
+  CsiBeforeVMaskedStore16F->addParamAttr(1, Attribute::ReadOnly);
+  CsiAfterVMaskedStore16F = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_after_masked_store_v16float", RetType, IDType,
+          PointerType::get(VectorType::get(IRB.getFloatTy(), 16), 0),
+          ValCatType, IDType, VectorType::get(IRB.getInt8Ty(), 16),
+          ValCatType, IDType, VectorType::get(IRB.getFloatTy(), 16),
+          StorePropertyTy));
+  CsiAfterVMaskedStore16F->addParamAttr(1, Attribute::ReadOnly);
+  CsiBeforeVMaskedStore2D = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_masked_store_v2double", RetType, IDType,
+          PointerType::get(VectorType::get(IRB.getDoubleTy(), 2), 0),
+          ValCatType, IDType, VectorType::get(IRB.getInt8Ty(), 2),
+          ValCatType, IDType, VectorType::get(IRB.getDoubleTy(), 2),
+          StorePropertyTy));
+  CsiBeforeVMaskedStore2D->addParamAttr(1, Attribute::ReadOnly);
+  CsiAfterVMaskedStore2D = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_after_masked_store_v2double", RetType, IDType,
+          PointerType::get(VectorType::get(IRB.getDoubleTy(), 2), 0),
+          ValCatType, IDType, VectorType::get(IRB.getInt8Ty(), 2),
+          ValCatType, IDType, VectorType::get(IRB.getDoubleTy(), 2),
+          StorePropertyTy));
+  CsiAfterVMaskedStore2D->addParamAttr(1, Attribute::ReadOnly);
+  CsiBeforeVMaskedStore4D = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_masked_store_v4double", RetType, IDType,
+          PointerType::get(VectorType::get(IRB.getDoubleTy(), 4), 0),
+          ValCatType, IDType, VectorType::get(IRB.getInt8Ty(), 4),
+          ValCatType, IDType, VectorType::get(IRB.getDoubleTy(), 4),
+          StorePropertyTy));
+  CsiBeforeVMaskedStore4D->addParamAttr(1, Attribute::ReadOnly);
+  CsiAfterVMaskedStore4D = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_after_masked_store_v4double", RetType, IDType,
+          PointerType::get(VectorType::get(IRB.getDoubleTy(), 4), 0),
+          ValCatType, IDType, VectorType::get(IRB.getInt8Ty(), 4),
+          ValCatType, IDType, VectorType::get(IRB.getDoubleTy(), 4),
+          StorePropertyTy));
+  CsiAfterVMaskedStore4D->addParamAttr(1, Attribute::ReadOnly);
+  CsiBeforeVMaskedStore8D = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_masked_store_v8double", RetType, IDType,
+          PointerType::get(VectorType::get(IRB.getDoubleTy(), 8), 0),
+          ValCatType, IDType, VectorType::get(IRB.getInt8Ty(), 8),
+          ValCatType, IDType, VectorType::get(IRB.getDoubleTy(), 8),
+          StorePropertyTy));
+  CsiBeforeVMaskedStore8D->addParamAttr(1, Attribute::ReadOnly);
+  CsiAfterVMaskedStore8D = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_after_masked_store_v8double", RetType, IDType,
+          PointerType::get(VectorType::get(IRB.getDoubleTy(), 8), 0),
+          ValCatType, IDType, VectorType::get(IRB.getInt8Ty(), 8),
+          ValCatType, IDType, VectorType::get(IRB.getDoubleTy(), 8),
+          StorePropertyTy));
+  CsiAfterVMaskedStore8D->addParamAttr(1, Attribute::ReadOnly);
+
+  CsiBeforeVMaskedGather4F = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_masked_gather_v4float", RetType, IDType,
+          VectorType::get(PointerType::get(IRB.getFloatTy(), 0), 4),
+          ValCatType, IDType, VectorType::get(IRB.getInt8Ty(), 4),
+          ValCatType, IDType, VectorType::get(IRB.getFloatTy(), 4),
+          LoadPropertyTy));
+  CsiAfterVMaskedGather4F = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_after_masked_gather_v4float", RetType, IDType,
+          VectorType::get(PointerType::get(IRB.getFloatTy(), 0), 4),
+          ValCatType, IDType, VectorType::get(IRB.getInt8Ty(), 4),
+          ValCatType, IDType, VectorType::get(IRB.getFloatTy(), 4),
+          LoadPropertyTy));
+  CsiBeforeVMaskedGather8F = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_masked_gather_v8float", RetType, IDType,
+          VectorType::get(PointerType::get(IRB.getFloatTy(), 0), 8),
+          ValCatType, IDType, VectorType::get(IRB.getInt8Ty(), 8),
+          ValCatType, IDType, VectorType::get(IRB.getFloatTy(), 8),
+          LoadPropertyTy));
+  CsiAfterVMaskedGather8F = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_after_masked_gather_v8float", RetType, IDType,
+          VectorType::get(PointerType::get(IRB.getFloatTy(), 0), 8),
+          ValCatType, IDType, VectorType::get(IRB.getInt8Ty(), 8),
+          ValCatType, IDType, VectorType::get(IRB.getFloatTy(), 8),
+          LoadPropertyTy));
+  CsiBeforeVMaskedGather16F = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_masked_gather_v16float", RetType, IDType,
+          VectorType::get(PointerType::get(IRB.getFloatTy(), 0), 16),
+          ValCatType, IDType, VectorType::get(IRB.getInt8Ty(), 16),
+          ValCatType, IDType, VectorType::get(IRB.getFloatTy(), 16),
+          LoadPropertyTy));
+  CsiAfterVMaskedGather16F = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_after_masked_gather_v16float", RetType, IDType,
+          VectorType::get(PointerType::get(IRB.getFloatTy(), 0), 16),
+          ValCatType, IDType, VectorType::get(IRB.getInt8Ty(), 16),
+          ValCatType, IDType, VectorType::get(IRB.getFloatTy(), 16),
+          LoadPropertyTy));
+  CsiBeforeVMaskedGather2D = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_masked_gather_v2double", RetType, IDType,
+          VectorType::get(PointerType::get(IRB.getDoubleTy(), 0), 2),
+          ValCatType, IDType, VectorType::get(IRB.getInt8Ty(), 2),
+          ValCatType, IDType, VectorType::get(IRB.getDoubleTy(), 2),
+          LoadPropertyTy));
+  CsiAfterVMaskedGather2D = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_after_masked_gather_v2double", RetType, IDType,
+          VectorType::get(PointerType::get(IRB.getDoubleTy(), 0), 2),
+          ValCatType, IDType, VectorType::get(IRB.getInt8Ty(), 2),
+          ValCatType, IDType, VectorType::get(IRB.getDoubleTy(), 2),
+          LoadPropertyTy));
+  CsiBeforeVMaskedGather4D = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_masked_gather_v4double", RetType, IDType,
+          VectorType::get(PointerType::get(IRB.getDoubleTy(), 0), 4),
+          ValCatType, IDType, VectorType::get(IRB.getInt8Ty(), 4),
+          ValCatType, IDType, VectorType::get(IRB.getDoubleTy(), 4),
+          LoadPropertyTy));
+  CsiAfterVMaskedGather4D = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_after_masked_gather_v4double", RetType, IDType,
+          VectorType::get(PointerType::get(IRB.getDoubleTy(), 0), 4),
+          ValCatType, IDType, VectorType::get(IRB.getInt8Ty(), 4),
+          ValCatType, IDType, VectorType::get(IRB.getDoubleTy(), 4),
+          LoadPropertyTy));
+  CsiBeforeVMaskedGather8D = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_masked_gather_v8double", RetType, IDType,
+          VectorType::get(PointerType::get(IRB.getDoubleTy(), 0), 8),
+          ValCatType, IDType, VectorType::get(IRB.getInt8Ty(), 8),
+          ValCatType, IDType, VectorType::get(IRB.getDoubleTy(), 8),
+          LoadPropertyTy));
+  CsiAfterVMaskedGather8D = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_after_masked_gather_v8double", RetType, IDType,
+          VectorType::get(PointerType::get(IRB.getDoubleTy(), 0), 8),
+          ValCatType, IDType, VectorType::get(IRB.getInt8Ty(), 8),
+          ValCatType, IDType, VectorType::get(IRB.getDoubleTy(), 8),
+          LoadPropertyTy));
+
+  CsiBeforeVMaskedScatter4F = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_masked_scatter_v4float", RetType, IDType,
+          VectorType::get(PointerType::get(IRB.getFloatTy(), 0), 4),
+          ValCatType, IDType, VectorType::get(IRB.getInt8Ty(), 4),
+          ValCatType, IDType, VectorType::get(IRB.getFloatTy(), 4),
+          StorePropertyTy));
+  CsiAfterVMaskedScatter4F = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_after_masked_scatter_v4float", RetType, IDType,
+          VectorType::get(PointerType::get(IRB.getFloatTy(), 0), 4),
+          ValCatType, IDType, VectorType::get(IRB.getInt8Ty(), 4),
+          ValCatType, IDType, VectorType::get(IRB.getFloatTy(), 4),
+          StorePropertyTy));
+  CsiBeforeVMaskedScatter8F = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_masked_scatter_v8float", RetType, IDType,
+          VectorType::get(PointerType::get(IRB.getFloatTy(), 0), 8),
+          ValCatType, IDType, VectorType::get(IRB.getInt8Ty(), 8),
+          ValCatType, IDType, VectorType::get(IRB.getFloatTy(), 8),
+          StorePropertyTy));
+  CsiAfterVMaskedScatter8F = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_after_masked_scatter_v8float", RetType, IDType,
+          VectorType::get(PointerType::get(IRB.getFloatTy(), 0), 8),
+          ValCatType, IDType, VectorType::get(IRB.getInt8Ty(), 8),
+          ValCatType, IDType, VectorType::get(IRB.getFloatTy(), 8),
+          StorePropertyTy));
+  CsiBeforeVMaskedScatter16F = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_masked_scatter_v16float", RetType, IDType,
+          VectorType::get(PointerType::get(IRB.getFloatTy(), 0), 16),
+          ValCatType, IDType, VectorType::get(IRB.getInt8Ty(), 16),
+          ValCatType, IDType, VectorType::get(IRB.getFloatTy(), 16),
+          StorePropertyTy));
+  CsiAfterVMaskedScatter16F = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_after_masked_scatter_v16float", RetType, IDType,
+          VectorType::get(PointerType::get(IRB.getFloatTy(), 0), 16),
+          ValCatType, IDType, VectorType::get(IRB.getInt8Ty(), 16),
+          ValCatType, IDType, VectorType::get(IRB.getFloatTy(), 16),
+          StorePropertyTy));
+  CsiBeforeVMaskedScatter2D = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_masked_scatter_v2double", RetType, IDType,
+          VectorType::get(PointerType::get(IRB.getDoubleTy(), 0), 2),
+          ValCatType, IDType, VectorType::get(IRB.getInt8Ty(), 2),
+          ValCatType, IDType, VectorType::get(IRB.getDoubleTy(), 2),
+          StorePropertyTy));
+  CsiAfterVMaskedScatter2D = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_after_masked_scatter_v2double", RetType, IDType,
+          VectorType::get(PointerType::get(IRB.getDoubleTy(), 0), 2),
+          ValCatType, IDType, VectorType::get(IRB.getInt8Ty(), 2),
+          ValCatType, IDType, VectorType::get(IRB.getDoubleTy(), 2),
+          StorePropertyTy));
+  CsiBeforeVMaskedScatter4D = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_masked_scatter_v4double", RetType, IDType,
+          VectorType::get(PointerType::get(IRB.getDoubleTy(), 0), 4),
+          ValCatType, IDType, VectorType::get(IRB.getInt8Ty(), 4),
+          ValCatType, IDType, VectorType::get(IRB.getDoubleTy(), 4),
+          StorePropertyTy));
+  CsiAfterVMaskedScatter4D = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_after_masked_scatter_v4double", RetType, IDType,
+          VectorType::get(PointerType::get(IRB.getDoubleTy(), 0), 4),
+          ValCatType, IDType, VectorType::get(IRB.getInt8Ty(), 4),
+          ValCatType, IDType, VectorType::get(IRB.getDoubleTy(), 4),
+          StorePropertyTy));
+  CsiBeforeVMaskedScatter8D = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_before_masked_scatter_v8double", RetType, IDType,
+          VectorType::get(PointerType::get(IRB.getDoubleTy(), 0), 8),
+          ValCatType, IDType, VectorType::get(IRB.getInt8Ty(), 8),
+          ValCatType, IDType, VectorType::get(IRB.getDoubleTy(), 8),
+          StorePropertyTy));
+  CsiAfterVMaskedScatter8D = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          "__csi_after_masked_scatter_v8double", RetType, IDType,
+          VectorType::get(PointerType::get(IRB.getDoubleTy(), 0), 8),
+          ValCatType, IDType, VectorType::get(IRB.getInt8Ty(), 8),
+          ValCatType, IDType, VectorType::get(IRB.getDoubleTy(), 8),
+          StorePropertyTy));
 }
 
 // Initialization of hooks for LLVM memory intrinsics
@@ -1482,8 +2527,23 @@ void CSIImpl::addLoadStoreInstrumentation(Instruction *I, Function *BeforeFn,
 void CSIImpl::assignLoadOrStoreID(Instruction *I) {
   if (isa<StoreInst>(I))
     StoreFED.add(*I);
-  else
+  else if (isa<LoadInst>(I))
     LoadFED.add(*I);
+  else if (IntrinsicInst *II = dyn_cast<IntrinsicInst>(I)) {
+    switch (II->getIntrinsicID()) {
+    case Intrinsic::masked_load:
+    case Intrinsic::masked_gather:
+      LoadFED.add(*I);
+      break;
+    case Intrinsic::masked_store:
+    case Intrinsic::masked_scatter:
+      StoreFED.add(*I);
+      break;
+    default:
+      dbgs() << "Unknown load/store instruction " << *I << "\n";
+      break;
+    }
+  }
 }
 
 void CSIImpl::instrumentLoadOrStore(Instruction *I, CsiLoadStoreProperty &Prop,
@@ -1514,6 +2574,201 @@ void CSIImpl::instrumentLoadOrStore(Instruction *I, CsiLoadStoreProperty &Prop,
     addLoadStoreInstrumentation(I, CsiBeforeRead, CsiAfterRead, CsiId, AddrType,
                                 Addr, NumBytes, nullptr, nullptr, Prop);
   }
+}
+
+void CSIImpl::instrumentVectorMemBuiltin(Instruction *I) {
+  IntrinsicInst *II = dyn_cast<IntrinsicInst>(I);
+  if (!II)
+    return;
+
+  IRBuilder<> IRB(I);
+  CsiLoadStoreProperty Prop;
+  csi_id_t LocalId;
+  Value *Operand0, *Operand1, *Operand2;
+  unsigned Alignment = 0;
+  VectorType *OpTy = cast<VectorType>(II->getType());
+  unsigned NumEls = OpTy->getNumElements();
+  Function *BeforeHook = nullptr, *AfterHook = nullptr;
+  switch (II->getIntrinsicID()) {
+  default:
+    dbgs() << "Unknown VectorMemBuiltin " << *I << "\n";
+    break;
+  case Intrinsic::masked_load: {
+    LocalId = LoadFED.lookupId(I);
+    Operand0 = II->getArgOperand(0);
+    if (ConstantInt *C = dyn_cast<ConstantInt>(II->getArgOperand(1)))
+      Alignment = C->getZExtValue();
+    Operand1 = II->getArgOperand(2);
+    Operand2 = II->getArgOperand(3);
+    switch (OpTy->getElementType()->getTypeID()) {
+    default:
+      // TODO: Support more vector types
+      break;
+    case Type::FloatTyID:
+      if (4 == NumEls) {
+        BeforeHook = CsiBeforeVMaskedLoad4F;
+        AfterHook = CsiAfterVMaskedLoad4F;
+      } else if (8 == NumEls) {
+        BeforeHook = CsiBeforeVMaskedLoad8F;
+        AfterHook = CsiAfterVMaskedLoad8F;
+      } else if (16 == NumEls) {
+        BeforeHook = CsiBeforeVMaskedLoad16F;
+        AfterHook = CsiAfterVMaskedLoad16F;
+      }
+      break;
+    case Type::DoubleTyID:
+      if (2 == NumEls) {
+        BeforeHook = CsiBeforeVMaskedLoad2D;
+        AfterHook = CsiAfterVMaskedLoad2D;
+      } else if (4 == NumEls) {
+        BeforeHook = CsiBeforeVMaskedLoad4D;
+        AfterHook = CsiAfterVMaskedLoad4D;
+      } else if (8 == NumEls) {
+        BeforeHook = CsiBeforeVMaskedLoad8D;
+        AfterHook = CsiAfterVMaskedLoad8D;
+      }
+      break;
+    }
+    break;
+  }
+  case Intrinsic::masked_gather: {
+    LocalId = LoadFED.lookupId(I);
+    Operand0 = II->getArgOperand(0);
+    if (ConstantInt *C = dyn_cast<ConstantInt>(II->getArgOperand(1)))
+      Alignment = C->getZExtValue();
+    Operand1 = II->getArgOperand(2);
+    Operand2 = II->getArgOperand(3);
+    switch (OpTy->getElementType()->getTypeID()) {
+    default:
+      // TODO: Support more vector types
+      break;
+    case Type::FloatTyID:
+      if (4 == NumEls) {
+        BeforeHook = CsiBeforeVMaskedGather4F;
+        AfterHook = CsiAfterVMaskedGather4F;
+      } else if (8 == NumEls) {
+        BeforeHook = CsiBeforeVMaskedGather8F;
+        AfterHook = CsiAfterVMaskedGather8F;
+      } else if (16 == NumEls) {
+        BeforeHook = CsiBeforeVMaskedGather16F;
+        AfterHook = CsiAfterVMaskedGather16F;
+      }
+      break;
+    case Type::DoubleTyID:
+      if (2 == NumEls) {
+        BeforeHook = CsiBeforeVMaskedGather2D;
+        AfterHook = CsiAfterVMaskedGather2D;
+      } else if (4 == NumEls) {
+        BeforeHook = CsiBeforeVMaskedGather4D;
+        AfterHook = CsiAfterVMaskedGather4D;
+      } else if (8 == NumEls) {
+        BeforeHook = CsiBeforeVMaskedGather8D;
+        AfterHook = CsiAfterVMaskedGather8D;
+      }
+      break;
+    }
+    break;
+  }
+  case Intrinsic::masked_store: {
+    LocalId = StoreFED.lookupId(I);
+    Operand0 = II->getArgOperand(1);
+    if (ConstantInt *C = dyn_cast<ConstantInt>(II->getArgOperand(2)))
+      Alignment = C->getZExtValue();
+    Operand1 = II->getArgOperand(3);
+    Operand2 = II->getArgOperand(0);
+    switch (OpTy->getElementType()->getTypeID()) {
+    default:
+      // TODO: Support more vector types
+      break;
+    case Type::FloatTyID:
+      if (4 == NumEls) {
+        BeforeHook = CsiBeforeVMaskedStore4F;
+        AfterHook = CsiAfterVMaskedStore4F;
+      } else if (8 == NumEls) {
+        BeforeHook = CsiBeforeVMaskedStore8F;
+        AfterHook = CsiAfterVMaskedStore8F;
+      } else if (16 == NumEls) {
+        BeforeHook = CsiBeforeVMaskedStore16F;
+        AfterHook = CsiAfterVMaskedStore16F;
+      }
+      break;
+    case Type::DoubleTyID:
+      if (2 == NumEls) {
+        BeforeHook = CsiBeforeVMaskedStore2D;
+        AfterHook = CsiAfterVMaskedStore2D;
+      } else if (4 == NumEls) {
+        BeforeHook = CsiBeforeVMaskedStore4D;
+        AfterHook = CsiAfterVMaskedStore4D;
+      } else if (8 == NumEls) {
+        BeforeHook = CsiBeforeVMaskedStore8D;
+        AfterHook = CsiAfterVMaskedStore8D;
+      }
+      break;
+    }
+    break;
+  }
+  case Intrinsic::masked_scatter: {
+    LocalId = StoreFED.lookupId(I);
+    Operand0 = II->getArgOperand(1);
+    if (ConstantInt *C = dyn_cast<ConstantInt>(II->getArgOperand(2)))
+      Alignment = C->getZExtValue();
+    Operand1 = II->getArgOperand(3);
+    Operand2 = II->getArgOperand(0);
+    switch (OpTy->getElementType()->getTypeID()) {
+    default:
+      // TODO: Support more vector types
+      break;
+    case Type::FloatTyID:
+      if (4 == NumEls) {
+        BeforeHook = CsiBeforeVMaskedScatter4F;
+        AfterHook = CsiAfterVMaskedScatter4F;
+      } else if (8 == NumEls) {
+        BeforeHook = CsiBeforeVMaskedScatter8F;
+        AfterHook = CsiAfterVMaskedScatter8F;
+      } else if (16 == NumEls) {
+        BeforeHook = CsiBeforeVMaskedScatter16F;
+        AfterHook = CsiAfterVMaskedScatter16F;
+      }
+      break;
+    case Type::DoubleTyID:
+      if (2 == NumEls) {
+        BeforeHook = CsiBeforeVMaskedScatter2D;
+        AfterHook = CsiAfterVMaskedScatter2D;
+      } else if (4 == NumEls) {
+        BeforeHook = CsiBeforeVMaskedScatter4D;
+        AfterHook = CsiAfterVMaskedScatter4D;
+      } else if (8 == NumEls) {
+        BeforeHook = CsiBeforeVMaskedScatter8D;
+        AfterHook = CsiAfterVMaskedScatter8D;
+      }
+      break;
+    }
+    break;
+  }
+  }
+  if (!BeforeHook) {
+    dbgs() << "Uninstrumented function " << *I << "\n";
+    return;
+  }
+  Prop.setAlignment(Alignment);
+  Value *PropVal = Prop.getValue(IRB);
+  Value *CsiId = LoadFED.localToGlobalId(LocalId, IRB);
+  std::pair<Value *, Value *> Operand1ID = getOperandID(Operand1, IRB);
+  std::pair<Value *, Value *> Operand2ID = getOperandID(Operand2, IRB);
+  Value *CastMask = IRB.CreateZExtOrBitCast(Operand1,
+                                            VectorType::get(IRB.getInt8Ty(),
+                                                            NumEls));
+  insertHookCall(I, BeforeHook,
+                 {CsiId, Operand0, Operand1ID.first, Operand1ID.second,
+                  CastMask, Operand2ID.first, Operand2ID.second, Operand2,
+                  PropVal});
+  BasicBlock::iterator Iter(I);
+  Iter++;
+  IRB.SetInsertPoint(&*Iter);
+  insertHookCall(&*Iter, AfterHook,
+                 {CsiId, Operand0, Operand1ID.first, Operand1ID.second,
+                  CastMask, Operand2ID.first, Operand2ID.second, Operand2,
+                  PropVal});
 }
 
 void CSIImpl::assignAtomicID(Instruction *I) {
@@ -2319,6 +3574,31 @@ void CSIImpl::instrumentArithmetic(Instruction *I) {
       }
       break;
     }
+    case Type::VectorTyID: {
+      VectorType *VTy = cast<VectorType>(OpTy);
+      Type *ElTy = VTy->getElementType();
+      uint64_t NumEls = VTy->getNumElements();
+      switch (ElTy->getTypeID()) {
+      case Type::FloatTyID:
+        if (4 == NumEls)
+          ArithmeticHook = CsiBeforeArithmetic4F;
+        else if (8 == NumEls)
+          ArithmeticHook = CsiBeforeArithmetic8F;
+        else if (16 == NumEls)
+          ArithmeticHook = CsiBeforeArithmetic16F;
+        break;
+      case Type::DoubleTyID:
+        if (2 == NumEls)
+          ArithmeticHook = CsiBeforeArithmetic2D;
+        else if (4 == NumEls)
+          ArithmeticHook = CsiBeforeArithmetic4D;
+        else if (8 == NumEls)
+          ArithmeticHook = CsiBeforeArithmetic8D;
+        break;
+      default: break;
+      }
+      break;
+    }
     default:
       dbgs() << "Uninstrumented binary operator " << *BO << "\n";
       break;
@@ -2443,20 +3723,21 @@ void CSIImpl::instrumentArithmetic(Instruction *I) {
     insertHookCall(I, ArithmeticHook, {CsiId, OperandID.first, OperandID.second,
                                        Operand});
   } else if (FPToUIInst *CI = dyn_cast<FPToUIInst>(I)) {
-
+      dbgs() << "Uninstrumented operation " << *CI << "\n";
   } else if (FPToSIInst *CI = dyn_cast<FPToSIInst>(I)) {
-
+      dbgs() << "Uninstrumented operation " << *CI << "\n";
   } else if (UIToFPInst *CI = dyn_cast<UIToFPInst>(I)) {
     Value *Operand = CI->getOperand(0);
-    std::pair<Value *, Value *> OperandID = getOperandID(Operand, IRB);
     Type *OpTy = CI->getType();
     Type *OperandTy = Operand->getType();
+    unsigned Width;
     if (OpTy->isVectorTy()) {
-      dbgs() << "Uninstrumented operation " << *CI << "\n";
-      return;
+      Width = cast<VectorType>(OperandTy)->getElementType()
+        ->getIntegerBitWidth();
+    } else {
+      assert(OperandTy->isIntegerTy() && "Operand of UIToFP is not an int");
+      Width = OperandTy->getIntegerBitWidth();
     }
-    assert(OperandTy->isIntegerTy() && "Operand of UIToFP is not an int");
-    unsigned Width = OperandTy->getIntegerBitWidth();
 
     Function *ArithmeticHook = nullptr;
     Type *OperandCastTy = nullptr;
@@ -2515,8 +3796,117 @@ void CSIImpl::instrumentArithmetic(Instruction *I) {
         OperandCastTy = IRB.getInt128Ty();
       }
       break;
+    case Type::VectorTyID: {
+      VectorType *VOpTy = cast<VectorType>(OpTy);
+      uint64_t NumEls = VOpTy->getNumElements();
+      switch (VOpTy->getElementType()->getTypeID()) {
+      case Type::FloatTyID:
+        if (Width <= 8) {
+          if (4 == NumEls) {
+            ArithmeticHook = CsiBeforeConvert4UI8F;
+          } else if (8 == NumEls) {
+            ArithmeticHook = CsiBeforeConvert8UI8F;
+          } else if (16 == NumEls) {
+            ArithmeticHook = CsiBeforeConvert16UI8F;
+          }
+          OperandCastTy = VectorType::get(IRB.getInt8Ty(), NumEls);
+        } else if (Width <= 16) {
+          if (4 == NumEls) {
+            ArithmeticHook = CsiBeforeConvert4UI16F;
+          } else if (8 == NumEls) {
+            ArithmeticHook = CsiBeforeConvert8UI16F;
+          } else if (16 == NumEls) {
+            ArithmeticHook = CsiBeforeConvert16UI16F;
+          }
+          OperandCastTy = VectorType::get(IRB.getInt16Ty(), NumEls);
+        } else if (Width <= 32) {
+          if (4 == NumEls) {
+            ArithmeticHook = CsiBeforeConvert4UI32F;
+          } else if (8 == NumEls) {
+            ArithmeticHook = CsiBeforeConvert8UI32F;
+          } else if (16 == NumEls) {
+            ArithmeticHook = CsiBeforeConvert16UI32F;
+          }
+          OperandCastTy = VectorType::get(IRB.getInt32Ty(), NumEls);
+        } else if (Width <= 64) {
+          if (4 == NumEls) {
+            ArithmeticHook = CsiBeforeConvert4UI64F;
+          } else if (8 == NumEls) {
+            ArithmeticHook = CsiBeforeConvert8UI64F;
+          } else if (16 == NumEls) {
+            // This case would involve vector widths that are too big for modern
+            // architectures.
+          }
+          OperandCastTy = VectorType::get(IRB.getInt64Ty(), NumEls);
+        } else { // Assume width == 128
+          if (4 == NumEls) {
+            ArithmeticHook = CsiBeforeConvert4UI128F;
+          } else if (8 == NumEls) {
+            // This case would involve vector widths that are too big for modern
+            // architectures.
+          } else if (16 == NumEls) {
+            // This case would involve vector widths that are too big for modern
+            // architectures.
+          }
+          OperandCastTy = VectorType::get(IRB.getInt128Ty(), NumEls);
+        }
+        break;
+      case Type::DoubleTyID:
+        if (Width <= 8) {
+          if (2 == NumEls) {
+            ArithmeticHook = CsiBeforeConvert2UI8D;
+          } else if (4 == NumEls) {
+            ArithmeticHook = CsiBeforeConvert4UI8D;
+          } else if (8 == NumEls) {
+            ArithmeticHook = CsiBeforeConvert8UI8D;
+          }
+          OperandCastTy = VectorType::get(IRB.getInt8Ty(), NumEls);
+        } else if (Width <= 16) {
+          if (2 == NumEls) {
+            ArithmeticHook = CsiBeforeConvert2UI16D;
+          } else if (4 == NumEls) {
+            ArithmeticHook = CsiBeforeConvert4UI16D;
+          } else if (8 == NumEls) {
+            ArithmeticHook = CsiBeforeConvert8UI16D;
+          }
+          OperandCastTy = VectorType::get(IRB.getInt16Ty(), NumEls);
+        } else if (Width <= 32) {
+          if (2 == NumEls) {
+            ArithmeticHook = CsiBeforeConvert2UI32D;
+          } else if (4 == NumEls) {
+            ArithmeticHook = CsiBeforeConvert4UI32D;
+          } else if (8 == NumEls) {
+            ArithmeticHook = CsiBeforeConvert8UI32D;
+          }
+          OperandCastTy = VectorType::get(IRB.getInt32Ty(), NumEls);
+        } else if (Width <= 64) {
+          if (2 == NumEls) {
+            ArithmeticHook = CsiBeforeConvert2UI64D;
+          } else if (4 == NumEls) {
+            ArithmeticHook = CsiBeforeConvert4UI64D;
+          } else if (8 == NumEls) {
+            ArithmeticHook = CsiBeforeConvert8UI64D;
+          }
+          OperandCastTy = VectorType::get(IRB.getInt64Ty(), NumEls);
+        } else { // Assume width == 128
+          if (2 == NumEls) {
+            ArithmeticHook = CsiBeforeConvert2UI128D;
+          } else if (4 == NumEls) {
+            ArithmeticHook = CsiBeforeConvert4UI128D;
+          } else if (8 == NumEls) {
+            // This case would involve vector widths that are too big for modern
+            // architectures.
+          }
+          OperandCastTy = VectorType::get(IRB.getInt128Ty(), NumEls);
+        }
+        break;
+      default:
+        // TODO: Add support for more vector types
+        break;
+      }
+      break;
+    }
     default:
-      // llvm_unreachable("Invalid type for UIToFP");
       break;
     }
     if (!ArithmeticHook) {
@@ -2525,22 +3915,23 @@ void CSIImpl::instrumentArithmetic(Instruction *I) {
     }
 
     assert(OperandCastTy && "No type found for operand.");
+    std::pair<Value *, Value *> OperandID = getOperandID(Operand, IRB);
     Value *CastOperand = IRB.CreateZExtOrBitCast(Operand, OperandCastTy);
     insertHookCall(I, ArithmeticHook, {CsiId, OperandID.first, OperandID.second,
                                        CastOperand});
 
   } else if (SIToFPInst *CI = dyn_cast<SIToFPInst>(I)) {
     Value *Operand = CI->getOperand(0);
-    std::pair<Value *, Value *> OperandID = getOperandID(Operand, IRB);
     Type *OpTy = CI->getType();
     Type *OperandTy = Operand->getType();
+    unsigned Width;
     if (OpTy->isVectorTy()) {
-      dbgs() << "Uninstrumented operation " << *CI << "\n";
-      return;
+      Width = cast<VectorType>(OperandTy)->getElementType()
+        ->getIntegerBitWidth();
+    } else {
+      assert(OperandTy->isIntegerTy() && "Operand of UIToFP is not an int");
+      Width = OperandTy->getIntegerBitWidth();
     }
-    assert(OperandTy->isIntegerTy() && "Operand of UIToFP is not an int");
-    unsigned Width = OperandTy->getIntegerBitWidth();
-
     Function *ArithmeticHook = nullptr;
     Type *OperandCastTy = nullptr;
     switch (OpTy->getTypeID()) {
@@ -2598,8 +3989,117 @@ void CSIImpl::instrumentArithmetic(Instruction *I) {
         OperandCastTy = IRB.getInt128Ty();
       }
       break;
+    case Type::VectorTyID: {
+      VectorType *VOpTy = cast<VectorType>(OpTy);
+      uint64_t NumEls = VOpTy->getNumElements();
+      switch (VOpTy->getElementType()->getTypeID()) {
+      case Type::FloatTyID:
+        if (Width <= 8) {
+          if (4 == NumEls) {
+            ArithmeticHook = CsiBeforeConvert4SI8F;
+          } else if (8 == NumEls) {
+            ArithmeticHook = CsiBeforeConvert8SI8F;
+          } else if (16 == NumEls) {
+            ArithmeticHook = CsiBeforeConvert16SI8F;
+          }
+          OperandCastTy = VectorType::get(IRB.getInt8Ty(), NumEls);
+        } else if (Width <= 16) {
+          if (4 == NumEls) {
+            ArithmeticHook = CsiBeforeConvert4SI16F;
+          } else if (8 == NumEls) {
+            ArithmeticHook = CsiBeforeConvert8SI16F;
+          } else if (16 == NumEls) {
+            ArithmeticHook = CsiBeforeConvert16SI16F;
+          }
+          OperandCastTy = VectorType::get(IRB.getInt16Ty(), NumEls);
+        } else if (Width <= 32) {
+          if (4 == NumEls) {
+            ArithmeticHook = CsiBeforeConvert4SI32F;
+          } else if (8 == NumEls) {
+            ArithmeticHook = CsiBeforeConvert8SI32F;
+          } else if (16 == NumEls) {
+            ArithmeticHook = CsiBeforeConvert16SI32F;
+          }
+          OperandCastTy = VectorType::get(IRB.getInt32Ty(), NumEls);
+        } else if (Width <= 64) {
+          if (4 == NumEls) {
+            ArithmeticHook = CsiBeforeConvert4SI64F;
+          } else if (8 == NumEls) {
+            ArithmeticHook = CsiBeforeConvert8SI64F;
+          } else if (16 == NumEls) {
+            // This case would involve vector widths that are too big for modern
+            // architectures.
+          }
+          OperandCastTy = VectorType::get(IRB.getInt64Ty(), NumEls);
+        } else { // Assume width == 128
+          if (4 == NumEls) {
+            ArithmeticHook = CsiBeforeConvert4SI128F;
+          } else if (8 == NumEls) {
+            // This case would involve vector widths that are too big for modern
+            // architectures.
+          } else if (16 == NumEls) {
+            // This case would involve vector widths that are too big for modern
+            // architectures.
+          }
+          OperandCastTy = VectorType::get(IRB.getInt128Ty(), NumEls);
+        }
+        break;
+      case Type::DoubleTyID:
+        if (Width <= 8) {
+          if (2 == NumEls) {
+            ArithmeticHook = CsiBeforeConvert2SI8D;
+          } else if (4 == NumEls) {
+            ArithmeticHook = CsiBeforeConvert4SI8D;
+          } else if (8 == NumEls) {
+            ArithmeticHook = CsiBeforeConvert8SI8D;
+          }
+          OperandCastTy = VectorType::get(IRB.getInt8Ty(), NumEls);
+        } else if (Width <= 16) {
+          if (2 == NumEls) {
+            ArithmeticHook = CsiBeforeConvert2SI16D;
+          } else if (4 == NumEls) {
+            ArithmeticHook = CsiBeforeConvert4SI16D;
+          } else if (8 == NumEls) {
+            ArithmeticHook = CsiBeforeConvert8SI16D;
+          }
+          OperandCastTy = VectorType::get(IRB.getInt16Ty(), NumEls);
+        } else if (Width <= 32) {
+          if (2 == NumEls) {
+            ArithmeticHook = CsiBeforeConvert2SI32D;
+          } else if (4 == NumEls) {
+            ArithmeticHook = CsiBeforeConvert4SI32D;
+          } else if (8 == NumEls) {
+            ArithmeticHook = CsiBeforeConvert8SI32D;
+          }
+          OperandCastTy = VectorType::get(IRB.getInt32Ty(), NumEls);
+        } else if (Width <= 64) {
+          if (2 == NumEls) {
+            ArithmeticHook = CsiBeforeConvert2SI64D;
+          } else if (4 == NumEls) {
+            ArithmeticHook = CsiBeforeConvert4SI64D;
+          } else if (8 == NumEls) {
+            ArithmeticHook = CsiBeforeConvert8SI64D;
+          }
+          OperandCastTy = VectorType::get(IRB.getInt64Ty(), NumEls);
+        } else { // Assume width == 128
+          if (2 == NumEls) {
+            ArithmeticHook = CsiBeforeConvert2SI128D;
+          } else if (4 == NumEls) {
+            ArithmeticHook = CsiBeforeConvert4SI128D;
+          } else if (8 == NumEls) {
+            // This case would involve vector widths that are too big for modern
+            // architectures.
+          }
+          OperandCastTy = VectorType::get(IRB.getInt128Ty(), NumEls);
+        }
+        break;
+      default:
+        // TODO: Add support for more vector types
+        break;
+      }
+      break;
+    }
     default:
-      // llvm_unreachable("Invalid type for SIToFP");
       break;
     }
     if (!ArithmeticHook) {
@@ -2607,6 +4107,7 @@ void CSIImpl::instrumentArithmetic(Instruction *I) {
       return;
     }
     assert(OperandCastTy && "No type found for operand.");
+    std::pair<Value *, Value *> OperandID = getOperandID(Operand, IRB);
     Value *CastOperand = IRB.CreateSExtOrBitCast(Operand, OperandCastTy);
     insertHookCall(I, ArithmeticHook, {CsiId, OperandID.first, OperandID.second,
                                        CastOperand});
@@ -2614,7 +4115,6 @@ void CSIImpl::instrumentArithmetic(Instruction *I) {
   } else if (PHINode *PN = dyn_cast<PHINode>(I)) {
     Type *OpTy = PN->getType();
     Function *CsiPhiHook = nullptr;
-
     Type *OperandCastTy = OpTy;
     switch (OpTy->getTypeID()) {
       // case Type::HalfTyID:
@@ -2643,6 +4143,31 @@ void CSIImpl::instrumentArithmetic(Instruction *I) {
       } else { // Assume width == 128
         CsiPhiHook = CsiPhiI128;
         OperandCastTy = IRB.getInt128Ty();
+      }
+      break;
+    }
+    case Type::VectorTyID: {
+      VectorType *VTy = cast<VectorType>(OpTy);
+      Type *ElTy = VTy->getElementType();
+      uint64_t NumEls = VTy->getNumElements();
+      switch (ElTy->getTypeID()) {
+      case Type::FloatTyID:
+        if (4 == NumEls)
+          CsiPhiHook = CsiPhi4F;
+        else if (8 == NumEls)
+          CsiPhiHook = CsiPhi8F;
+        else if (16 == NumEls)
+          CsiPhiHook = CsiPhi16F;
+        break;
+      case Type::DoubleTyID:
+        if (2 == NumEls)
+          CsiPhiHook = CsiPhi2D;
+        else if (4 == NumEls)
+          CsiPhiHook = CsiPhi4D;
+        else if (8 == NumEls)
+          CsiPhiHook = CsiPhi8D;
+        break;
+      default: break;
       }
       break;
     }
@@ -2681,6 +4206,163 @@ void CSIImpl::instrumentArithmetic(Instruction *I) {
                                                    PHIArgs[1], CastPN});
       setInstrumentationDebugLoc(I, (Instruction *)Call);
     }
+  } else if (InsertElementInst *IE = dyn_cast<InsertElementInst>(I)) {
+    Value *Operand0 = IE->getOperand(0);
+    Value *Operand1 = IE->getOperand(1);
+    Value *Operand2 = IE->getOperand(2);
+    VectorType *OpTy = cast<VectorType>(IE->getType());
+    Function *CsiInsertElHook = nullptr;
+    uint64_t NumEls = OpTy->getNumElements();
+    switch (OpTy->getElementType()->getTypeID()) {
+    case Type::FloatTyID:
+      if (4 == NumEls)
+        CsiInsertElHook = CsiBeforeInsertEl4F;
+      else if (8 == NumEls)
+        CsiInsertElHook = CsiBeforeInsertEl8F;
+      else if (16 == NumEls)
+        CsiInsertElHook = CsiBeforeInsertEl16F;
+      break;
+    case Type::DoubleTyID:
+      if (2 == NumEls)
+        CsiInsertElHook = CsiBeforeInsertEl2D;
+      else if (4 == NumEls)
+        CsiInsertElHook = CsiBeforeInsertEl4D;
+      else if (8 == NumEls)
+        CsiInsertElHook = CsiBeforeInsertEl8D;
+      break;
+    default:
+      // TODO: Add support for more vector types
+      break;
+    }
+    if (!CsiInsertElHook) {
+      dbgs() << "Uninstrumented operation " << *IE << "\n";
+      return;
+    }
+    std::pair<Value *, Value *> Operand0ID = getOperandID(Operand0, IRB);
+    std::pair<Value *, Value *> Operand1ID = getOperandID(Operand1, IRB);
+    std::pair<Value *, Value *> Operand2ID = getOperandID(Operand2, IRB);
+    insertHookCall(I, CsiInsertElHook,
+                   {CsiId, Operand0ID.first, Operand0ID.second, Operand0,
+                    Operand1ID.first, Operand1ID.second, Operand1,
+                    Operand2ID.first, Operand2ID.second, Operand2});
+
+  } else if (ExtractElementInst *EE = dyn_cast<ExtractElementInst>(I)) {
+    Value *Operand0 = EE->getOperand(0);
+    Value *Operand1 = EE->getOperand(1);
+    Function *CsiExtractElHook = nullptr;
+    Type *OpTy = EE->getType();
+    VectorType *OperandTy = cast<VectorType>(Operand0->getType());
+    uint64_t NumEls = OperandTy->getNumElements();
+    switch (OpTy->getTypeID()) {
+    case Type::FloatTyID:
+      if (4 == NumEls)
+        CsiExtractElHook = CsiBeforeExtractEl4F;
+      else if (8 == NumEls)
+        CsiExtractElHook = CsiBeforeExtractEl8F;
+      else if (16 == NumEls)
+        CsiExtractElHook = CsiBeforeExtractEl16F;
+      break;
+    case Type::DoubleTyID:
+      if (2 == NumEls)
+        CsiExtractElHook = CsiBeforeExtractEl2D;
+      else if (4 == NumEls)
+        CsiExtractElHook = CsiBeforeExtractEl4D;
+      else if (8 == NumEls)
+        CsiExtractElHook = CsiBeforeExtractEl8D;
+      break;
+    default:
+      // TODO: Add support for more vector types
+      break;
+    }
+    if (!CsiExtractElHook) {
+      dbgs() << "Uninstrumented operation " << *EE << "\n";
+      return;
+    }
+    std::pair<Value *, Value *> Operand0ID = getOperandID(Operand0, IRB);
+    std::pair<Value *, Value *> Operand1ID = getOperandID(Operand1, IRB);
+    insertHookCall(I, CsiExtractElHook,
+                   {CsiId, Operand0ID.first, Operand0ID.second, Operand0,
+                    Operand1ID.first, Operand1ID.second, Operand1});
+
+  } else if (ShuffleVectorInst *SV = dyn_cast<ShuffleVectorInst>(I)) {
+    Value *Operand0 = SV->getOperand(0);
+    Value *Operand1 = SV->getOperand(1);
+    Value *Operand2 = SV->getOperand(2);
+    Function *CsiShuffleHook = nullptr;
+    VectorType *OpTy = cast<VectorType>(SV->getType());
+    // Operand0 and Operand1 have the same type.
+    VectorType *OperandTy = cast<VectorType>(Operand0->getType());
+    uint64_t NumElsIn = OperandTy->getNumElements();
+    // Output vector has same number of elements as mask.
+    uint64_t NumElsOut = OpTy->getNumElements();
+    switch (OpTy->getElementType()->getTypeID()) {
+    case Type::FloatTyID:
+      if (4 == NumElsOut) {
+        if (4 == NumElsIn) {
+          CsiShuffleHook = CsiBeforeShuffle4F4F;
+        } else if (8 == NumElsIn) {
+          CsiShuffleHook = CsiBeforeShuffle4F8F;
+        } else if (16 == NumElsIn) {
+          CsiShuffleHook = CsiBeforeShuffle4F16F;
+        }
+      } else if (8 == NumElsOut) {
+        if (4 == NumElsIn) {
+          CsiShuffleHook = CsiBeforeShuffle8F4F;
+        } else if (8 == NumElsIn) {
+          CsiShuffleHook = CsiBeforeShuffle8F8F;
+        } else if (16 == NumElsIn) {
+          CsiShuffleHook = CsiBeforeShuffle8F16F;
+        }
+      } else if (16 == NumElsOut) {
+        if (4 == NumElsIn) {
+          CsiShuffleHook = CsiBeforeShuffle16F4F;
+        } else if (8 == NumElsIn) {
+          CsiShuffleHook = CsiBeforeShuffle16F8F;
+        } else if (16 == NumElsIn) {
+          CsiShuffleHook = CsiBeforeShuffle16F16F;
+        }
+      }
+    case Type::DoubleTyID:
+      if (2 == NumElsOut) {
+        if (2 == NumElsIn) {
+          CsiShuffleHook = CsiBeforeShuffle2D2D;
+        } else if (4 == NumElsIn) {
+          CsiShuffleHook = CsiBeforeShuffle2D4D;
+        } else if (8 == NumElsIn) {
+          CsiShuffleHook = CsiBeforeShuffle2D8D;
+        }
+      } else if (4 == NumElsOut) {
+        if (2 == NumElsIn) {
+          CsiShuffleHook = CsiBeforeShuffle4D2D;
+        } else if (4 == NumElsIn) {
+          CsiShuffleHook = CsiBeforeShuffle4D4D;
+        } else if (8 == NumElsIn) {
+          CsiShuffleHook = CsiBeforeShuffle4D8D;
+        }
+      } else if (8 == NumElsOut) {
+        if (2 == NumElsIn) {
+          CsiShuffleHook = CsiBeforeShuffle8D2D;
+        } else if (4 == NumElsIn) {
+          CsiShuffleHook = CsiBeforeShuffle8D4D;
+        } else if (8 == NumElsIn) {
+          CsiShuffleHook = CsiBeforeShuffle8D8D;
+        }
+      }
+    default:
+      // TODO: Add support for more vector types
+      break;
+    }
+    if (!CsiShuffleHook) {
+      dbgs() << "Uninstrumented operation " << *SV << "\n";
+      return;
+    }
+    std::pair<Value *, Value *> Operand0ID = getOperandID(Operand0, IRB);
+    std::pair<Value *, Value *> Operand1ID = getOperandID(Operand1, IRB);
+    std::pair<Value *, Value *> Operand2ID = getOperandID(Operand2, IRB);
+    insertHookCall(I, CsiShuffleHook,
+                   {CsiId, Operand0ID.first, Operand0ID.second, Operand0,
+                    Operand1ID.first, Operand1ID.second, Operand1,
+                    Operand2ID.first, Operand2ID.second, Operand2});
   }
 }
 
@@ -3576,6 +5258,7 @@ void CSIImpl::instrumentFunction(Function &F) {
   SmallVector<Instruction *, 8> Allocas;
   SmallVector<Instruction *, 8> AllCalls;
   SmallVector<Instruction *, 32> Arithmetic;
+  SmallVector<Instruction *, 8> VectorMemBuiltins;
   bool MaySpawn = false;
 
   DominatorTree *DT = &GetDomTree(F);
@@ -3609,7 +5292,21 @@ void CSIImpl::instrumentFunction(Function &F) {
           FreeCalls.push_back(&I);
         else if (isa<MemIntrinsic>(I))
           MemIntrinsics.push_back(&I);
-        else
+        else if (IntrinsicInst *II = dyn_cast<IntrinsicInst>(&I)) {
+          switch (II->getIntrinsicID()) {
+          case Intrinsic::masked_load:
+          case Intrinsic::masked_store:
+          case Intrinsic::masked_gather:
+          case Intrinsic::masked_scatter:
+            // Handle instrinsics for masked vector loads, stores, gathers, and
+            // scatters specially.
+            VectorMemBuiltins.push_back(II);
+            break;
+          default:
+            Callsites.push_back(II);
+            break;
+          }
+        } else
           Callsites.push_back(&I);
 
         // All calls are candidates for interpositioning except for calls to
@@ -3625,14 +5322,14 @@ void CSIImpl::instrumentFunction(Function &F) {
         if (isa<BinaryOperator>(I) || isa<TruncInst>(I) || isa<ZExtInst>(I) ||
             isa<SExtInst>(I) || isa<FPToUIInst>(I) || isa<FPToSIInst>(I) ||
             isa<UIToFPInst>(I) || isa<SIToFPInst>(I) || isa<FPTruncInst>(I) ||
-            isa<FPExtInst>(I) || isa<PHINode>(I))
+            isa<FPExtInst>(I) || isa<PHINode>(I) || isa<InsertElementInst>(I) ||
+            isa<ExtractElementInst>(I) || isa<ShuffleVectorInst>(I))
           Arithmetic.push_back(&I);
 
         // TODO: Handle GetElementPtr, PtrToInt, IntToPtr, BitCast,
         // AddrSpaceCast
 
-        // TODO: Handle ExtractElement, InsertElement, ShuffleVector,
-        // ExtractValue, InsertValue
+        // TODO: Handle ExtractValue, InsertValue
       }
     }
     computeLoadAndStoreProperties(LoadAndStoreProperties, BBLoadsAndStores, DL);
@@ -3645,6 +5342,8 @@ void CSIImpl::instrumentFunction(Function &F) {
   for (std::pair<Instruction *, CsiLoadStoreProperty> p :
          LoadAndStoreProperties)
     assignLoadOrStoreID(p.first);
+  for (Instruction *I : VectorMemBuiltins)
+    assignLoadOrStoreID(I);
   for (Instruction *I : AtomicAccesses)
     assignAtomicID(I);
   for (Instruction *I : Callsites)
@@ -3684,10 +5383,13 @@ void CSIImpl::instrumentFunction(Function &F) {
 
   // Do this work in a separate loop after copying the iterators so that we
   // aren't modifying the list as we're iterating.
-  if (Options.InstrumentMemoryAccesses)
+  if (Options.InstrumentMemoryAccesses) {
     for (std::pair<Instruction *, CsiLoadStoreProperty> p :
          LoadAndStoreProperties)
       instrumentLoadOrStore(p.first, p.second, DL);
+    for (Instruction *I : VectorMemBuiltins)
+      instrumentVectorMemBuiltin(I);
+  }
 
   // Instrument atomic memory accesses in any case (they can be used to
   // implement synchronization).
