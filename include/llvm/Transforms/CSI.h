@@ -29,6 +29,7 @@
 
 namespace llvm {
 
+class LoopInfo;
 class Spindle;
 class Task;
 class TaskInfo;
@@ -458,6 +459,7 @@ public:
   static StructType *getStructType(LLVMContext &C) {
     // Must match the definition of property type in csi.h
     return StructType::get(IntegerType::get(C, PropBits.IsIndirect),
+                           IntegerType::get(C, PropBits.HasOneUse),
                            IntegerType::get(C, PropBits.Padding));
   }
   static Type *getType(LLVMContext &C) {
@@ -481,13 +483,16 @@ public:
 
   /// Set the value of the IsIndirect property.
   void setIsIndirect(bool v) { PropValue.Fields.IsIndirect = v; }
+  /// Set the value of the HasOneUse property.
+  void setHasOneUse(bool v) { PropValue.Fields.HasOneUse = v; }
 
 private:
   typedef union {
     // Must match the definition of property type in csi.h
     struct {
       unsigned IsIndirect : 1;
-      uint64_t Padding : 63;
+      unsigned HasOneUse : 1;
+      uint64_t Padding : 62;
     } Fields;
     uint64_t Bits;
   } Property;
@@ -497,11 +502,12 @@ private:
 
   typedef struct {
     int IsIndirect;
+    int HasOneUse;
     int Padding;
   } PropertyBits;
 
   /// The number of bits representing each property.
-  static constexpr PropertyBits PropBits = {1, (64 - 1)};
+  static constexpr PropertyBits PropBits = {1, 1, (64 - 1 - 1)};
 };
 
 class CsiLoadStoreProperty : public CsiProperty {
@@ -516,7 +522,9 @@ public:
         IntegerType::get(C, PropBits.IsConstant),
         IntegerType::get(C, PropBits.IsOnStack),
         IntegerType::get(C, PropBits.MayBeCaptured),
+        IntegerType::get(C, PropBits.IsVolatile),
         IntegerType::get(C, PropBits.LoadReadBeforeWriteInBB),
+        IntegerType::get(C, PropBits.HasOneUse),
         IntegerType::get(C, PropBits.Padding));
   }
   static Type *getType(LLVMContext &C) {
@@ -556,6 +564,10 @@ public:
   void setIsOnStack(bool v) { PropValue.Fields.IsOnStack = v; }
   /// Set the value of the MayBeCaptured property.
   void setMayBeCaptured(bool v) { PropValue.Fields.MayBeCaptured = v; }
+  /// Set the value of the IsVolatile property.
+  void setIsVolatile(bool v) { PropValue.Fields.IsVolatile = v; }
+  /// Set the value of the HasOneUse property.
+  void setHasOneUse(bool v) { PropValue.Fields.HasOneUse = v; }
   /// Set the value of the LoadReadBeforeWriteInBB property.
   void setLoadReadBeforeWriteInBB(bool v) {
     PropValue.Fields.LoadReadBeforeWriteInBB = v;
@@ -570,8 +582,10 @@ private:
       unsigned IsConstant : 1;
       unsigned IsOnStack : 1;
       unsigned MayBeCaptured : 1;
+      unsigned IsVolatile : 1;
       unsigned LoadReadBeforeWriteInBB : 1;
-      uint64_t Padding : 53;
+      unsigned HasOneUse : 1;
+      uint64_t Padding : 49;
     } Fields;
     uint64_t Bits;
   } Property;
@@ -585,13 +599,15 @@ private:
     int IsConstant;
     int IsOnStack;
     int MayBeCaptured;
+    int IsVolatile;
     int LoadReadBeforeWriteInBB;
+    int HasOneUse;
     int Padding;
   } PropertyBits;
 
   /// The number of bits representing each property.
   static constexpr PropertyBits PropBits = {
-      8, 1, 1, 1, 1, 1, (64 - 8 - 1 - 1 - 1 - 1 - 1)};
+      8, 1, 1, 1, 1, 1, 1, 1, (64 - 8 - 1 - 1 - 1 - 1 - 1 - 1 - 1)};
 };
 
 class CsiAllocaProperty : public CsiProperty {
@@ -602,6 +618,7 @@ public:
   static StructType *getStructType(LLVMContext &C) {
     // Must match the definition of property type in csi.h
     return StructType::get(IntegerType::get(C, PropBits.IsStatic),
+                           IntegerType::get(C, PropBits.MayBeCaptured),
                            IntegerType::get(C, PropBits.Padding));
   }
   static Type *getType(LLVMContext &C) {
@@ -618,13 +635,16 @@ public:
 
   /// Set the value of the IsIndirect property.
   void setIsStatic(bool v) { PropValue.Fields.IsStatic = v; }
+  /// Set the value of the MayBeCaptured property.
+  void setMayBeCaptured(bool v) { PropValue.Fields.MayBeCaptured = v; }
 
 private:
   typedef union {
     // Must match the definition of property type in csi.h
     struct {
       unsigned IsStatic : 1;
-      uint64_t Padding : 63;
+      unsigned MayBeCaptured : 1;
+      uint64_t Padding : 62;
     } Fields;
     uint64_t Bits;
   } Property;
@@ -634,11 +654,12 @@ private:
 
   typedef struct {
     int IsStatic;
+    int MayBeCaptured;
     int Padding;
   } PropertyBits;
 
   /// The number of bits representing each property.
-  static constexpr PropertyBits PropBits = {1, (64 - 1)};
+  static constexpr PropertyBits PropBits = {1, 1, (64 - 1 - 1)};
 };
 
 class CsiAllocFnProperty : public CsiProperty {
@@ -648,6 +669,7 @@ public:
   static StructType *getStructType(LLVMContext &C) {
     // Must match the definition of property type in csi.h
     return StructType::get(IntegerType::get(C, PropBits.AllocFnTy),
+                           IntegerType::get(C, PropBits.MayBeCaptured),
                            IntegerType::get(C, PropBits.Padding));
   }
   static Type *getType(LLVMContext &C) {
@@ -662,13 +684,16 @@ public:
 
   /// Set the value of the allocation function type (e.g., malloc, calloc, new).
   void setAllocFnTy(unsigned v) { PropValue.Fields.AllocFnTy = v; }
+  /// Set the value of the MayBeCaptured property.
+  void setMayBeCaptured(bool v) { PropValue.Fields.MayBeCaptured = v; }
 
 private:
   typedef union {
     // Must match the definition of property type in csi.h
     struct {
       unsigned AllocFnTy : 8;
-      uint64_t Padding : 56;
+      unsigned MayBeCaptured : 1;
+      uint64_t Padding : 55;
     } Fields;
     uint64_t Bits;
   } Property;
@@ -678,11 +703,12 @@ private:
 
   typedef struct {
     int AllocFnTy;
+    int MayBeCaptured;
     int Padding;
   } PropertyBits;
 
   /// The number of bits representing each property.
-  static constexpr PropertyBits PropBits = {8, (64 - 8)};
+  static constexpr PropertyBits PropBits = {8, 1, (64 - 8 - 1)};
 };
 
 class CsiFreeProperty : public CsiProperty {
@@ -746,6 +772,7 @@ public:
                            IntegerType::get(C, PropBits.AllowContract),
                            IntegerType::get(C, PropBits.ApproxFunc),
                            IntegerType::get(C, PropBits.IsInBounds),
+                           IntegerType::get(C, PropBits.HasOneUse),
                            IntegerType::get(C, PropBits.Padding));
   }
   static Type *getType(LLVMContext &C) {
@@ -784,6 +811,8 @@ public:
       PropValue.Fields.IsInBounds = GEP->isInBounds();
     }
   }
+  /// Set the value of the HasOneUse property.
+  void setHasOneUse(bool v) { PropValue.Fields.HasOneUse = v; }
 
 private:
   typedef union {
@@ -800,7 +829,8 @@ private:
       unsigned AllowContract : 1;
       unsigned ApproxFunc : 1;
       unsigned IsInBounds : 1;
-      uint64_t Padding : 53;
+      unsigned HasOneUse : 1;
+      uint64_t Padding : 52;
     } Fields;
     uint64_t Bits;
   } Property;
@@ -820,24 +850,27 @@ private:
     int AllowContract;
     int ApproxFunc;
     int IsInBounds;
+    int HasOneUse;
     int Padding;
   } PropertyBits;
 
   /// The number of bits representing each property.
   static constexpr PropertyBits PropBits =
-    {1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
-     (64 - 1 - 1 - 1 - 1 - 1 - 1 - 1 - 1 - 1 - 1 - 1)};
+    {1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+     (64 - 1 - 1 - 1 - 1 - 1 - 1 - 1 - 1 - 1 - 1 - 1 - 1)};
 };
 
 struct CSIImpl {
 public:
   CSIImpl(Module &M, CallGraph *CG,
           function_ref<DominatorTree &(Function &)> GetDomTree,
+          function_ref<LoopInfo &(Function &)> GetLoopInfo,
           function_ref<TaskInfo &(Function &)> GetTaskInfo,
           const TargetLibraryInfo *TLI,
           const CSIOptions &Options = CSIOptions())
       : M(M), DL(M.getDataLayout()), CG(CG), GetDomTree(GetDomTree),
-        GetTaskInfo(GetTaskInfo), TLI(TLI), Options(Options) {
+        GetLoopInfo(GetLoopInfo), GetTaskInfo(GetTaskInfo), TLI(TLI),
+        Options(Options) {
     loadConfiguration();
   }
 
@@ -920,7 +953,8 @@ protected:
   void computeLoadAndStoreProperties(
       SmallVectorImpl<std::pair<Instruction *, CsiLoadStoreProperty>>
           &LoadAndStoreProperties,
-      SmallVectorImpl<Instruction *> &BBLoadsAndStores, const DataLayout &DL);
+      SmallVectorImpl<Instruction *> &BBLoadsAndStores, const DataLayout &DL,
+      LoopInfo &LI);
 
   /// Insert calls to the instrumentation hooks.
   /// @{
@@ -937,8 +971,8 @@ protected:
   void instrumentAtomic(Instruction *I, const DataLayout &DL);
   bool instrumentMemIntrinsic(Instruction *I);
   void assignCallsiteID(Instruction *I);
-  bool handleFPBuiltinCall(CallInst *I, Function *F);
-  void instrumentCallsite(Instruction *I, DominatorTree *DT);
+  bool handleFPBuiltinCall(CallInst *I, Function *F, LoopInfo &LI);
+  void instrumentCallsite(Instruction *I, DominatorTree *DT, LoopInfo &LI);
   void instrumentBasicBlock(BasicBlock &BB);
 
   void instrumentDetach(DetachInst *DI, DominatorTree *DT, TaskInfo &TI,
@@ -951,7 +985,7 @@ protected:
   void instrumentAllocFn(Instruction *I, DominatorTree *DT);
   void instrumentFree(Instruction *I);
   void assignArithmeticID(Instruction *I);
-  void instrumentArithmetic(Instruction *I);
+  void instrumentArithmetic(Instruction *I, LoopInfo &LI);
 
   void interposeCall(Instruction *I);
 
@@ -1227,11 +1261,11 @@ protected:
     if (!Operand) {
       OperandID.first = IRB.getInt8(
           static_cast<unsigned>(CSIOperandCategory::None));
-      OperandID.second = IRB.getInt64(CsiUnknownId);
+      OperandID.second = getDefaultID(IRB);
     } else if (isa<Constant>(Operand)) {
       OperandID.first = IRB.getInt8(
           static_cast<unsigned>(CSIOperandCategory::Constant));
-      OperandID.second = IRB.getInt64(CsiUnknownId);
+      OperandID.second = getDefaultID(IRB);
     } else if (isa<Argument>(Operand)) {
       OperandID.first = IRB.getInt8(
           static_cast<unsigned>(CSIOperandCategory::Parameter));
@@ -1249,7 +1283,7 @@ protected:
           M.getOrInsertGlobal(GVName, IRB.getInt64Ty()));
       GlobIdGV->setConstant(false);
       GlobIdGV->setLinkage(GlobalValue::WeakAnyLinkage);
-      GlobIdGV->setInitializer(IRB.getInt64(CsiUnknownId));
+      GlobIdGV->setInitializer(getDefaultID(IRB));
       OperandID.second = IRB.CreateLoad(GlobIdGV);
     } else if (isa<CallInst>(Operand) || isa<InvokeInst>(Operand)) {
       OperandID.first = IRB.getInt8(
@@ -1336,6 +1370,7 @@ protected:
   const DataLayout &DL;
   CallGraph *CG;
   function_ref<DominatorTree &(Function &)> GetDomTree;
+  function_ref<LoopInfo &(Function &)> GetLoopInfo;
   function_ref<TaskInfo &(Function &)> GetTaskInfo;
   const TargetLibraryInfo *TLI;
   CSIOptions Options;

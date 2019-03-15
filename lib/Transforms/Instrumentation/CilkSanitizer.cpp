@@ -193,8 +193,8 @@ struct CilkSanitizerImpl : public CSIImpl {
                     function_ref<LoopInfo &(Function &)> GetLoopInfo,
                     function_ref<DependenceInfo &(Function &)> GetDepInfo,
                     const TargetLibraryInfo *TLI)
-      : CSIImpl(M, CG, GetDomTree, GetTaskInfo, TLI),
-        GetLoopInfo(GetLoopInfo), GetDepInfo(GetDepInfo) {
+      : CSIImpl(M, CG, GetDomTree, GetLoopInfo, GetTaskInfo, TLI),
+        GetDepInfo(GetDepInfo) {
     // Even though we're doing our own instrumentation, we want the CSI setup
     // for the instrumentation of function entry/exit, memory accesses (i.e.,
     // loads and stores), and atomics.
@@ -408,7 +408,6 @@ private:
   }
 
   // Analysis results
-  function_ref<LoopInfo &(Function &)> GetLoopInfo;
   function_ref<DependenceInfo &(Function &)> GetDepInfo;
 
   // Instrumentation hooks
