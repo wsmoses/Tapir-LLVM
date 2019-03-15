@@ -2327,16 +2327,45 @@ void CSIImpl::initializeLoadStoreHooks() {
 void CSIImpl::initializeMemIntrinsicsHooks() {
   LLVMContext &C = M.getContext();
   IRBuilder<> IRB(C);
+  Type *RetType = IRB.getVoidTy();
+  Type *IDType = IRB.getInt64Ty();
+  Type *ValCatType = IRB.getInt8Ty();
+  Type *AddrType = IRB.getInt8PtrTy();
+  Type *NumBytesType = IRB.getInt64Ty();
 
-  MemmoveFn = checkCsiInterfaceFunction(
-      M.getOrInsertFunction("memmove", IRB.getInt8PtrTy(), IRB.getInt8PtrTy(),
-                            IRB.getInt8PtrTy(), IntptrTy));
-  MemcpyFn = checkCsiInterfaceFunction(
-      M.getOrInsertFunction("memcpy", IRB.getInt8PtrTy(), IRB.getInt8PtrTy(),
-                            IRB.getInt8PtrTy(), IntptrTy));
-  MemsetFn = checkCsiInterfaceFunction(
-      M.getOrInsertFunction("memset", IRB.getInt8PtrTy(), IRB.getInt8PtrTy(),
-                            IRB.getInt32Ty(), IntptrTy));
+  // TODO: Propagate alignment, volatile information to hooks.
+  CsiBeforeMemset = checkCsiInterfaceFunction(
+      M.getOrInsertFunction("__csi_before_memset", RetType, IDType,
+                            AddrType, NumBytesType, ValCatType, IDType,
+                            IRB.getInt8Ty()));
+  CsiBeforeMemset->addParamAttr(1, Attribute::ReadOnly);
+  CsiAfterMemset = checkCsiInterfaceFunction(
+      M.getOrInsertFunction("__csi_after_memset", RetType, IDType,
+                            AddrType, NumBytesType, ValCatType, IDType,
+                            IRB.getInt8Ty()));
+  CsiAfterMemset->addParamAttr(1, Attribute::ReadOnly);
+
+  CsiBeforeMemcpy = checkCsiInterfaceFunction(
+      M.getOrInsertFunction("__csi_before_memcpy", RetType, IDType,
+                            AddrType, AddrType, NumBytesType));
+  CsiBeforeMemcpy->addParamAttr(1, Attribute::ReadOnly);
+  CsiBeforeMemcpy->addParamAttr(2, Attribute::ReadOnly);
+  CsiAfterMemcpy = checkCsiInterfaceFunction(
+      M.getOrInsertFunction("__csi_after_memcpy", RetType, IDType,
+                            AddrType, AddrType, NumBytesType));
+  CsiAfterMemcpy->addParamAttr(1, Attribute::ReadOnly);
+  CsiAfterMemcpy->addParamAttr(2, Attribute::ReadOnly);
+
+  CsiBeforeMemmove = checkCsiInterfaceFunction(
+      M.getOrInsertFunction("__csi_before_memmove", RetType, IDType,
+                            AddrType, AddrType, NumBytesType));
+  CsiBeforeMemmove->addParamAttr(1, Attribute::ReadOnly);
+  CsiBeforeMemmove->addParamAttr(2, Attribute::ReadOnly);
+  CsiAfterMemmove = checkCsiInterfaceFunction(
+      M.getOrInsertFunction("__csi_after_memmove", RetType, IDType,
+                            AddrType, AddrType, NumBytesType));
+  CsiAfterMemmove->addParamAttr(1, Attribute::ReadOnly);
+  CsiAfterMemmove->addParamAttr(2, Attribute::ReadOnly);
 }
 
 // Initialization of Tapir hooks
@@ -2783,39 +2812,67 @@ void CSIImpl::instrumentAtomic(Instruction *I, const DataLayout &DL) {
       << "WARNING: Uninstrumented atomic operations in program-under-test!\n";
 }
 
-// TODO: This code for instrumenting memory intrinsics was borrowed
-// from TSan.  Different tools might have better ways to handle these
-// function calls.  Replace this logic with a more flexible solution,
-// possibly one based on interpositioning.
-//
-// If a memset intrinsic gets inlined by the code gen, we will miss it.
-// So, we either need to ensure the intrinsic is not inlined, or instrument it.
-// We do not instrument memset/memmove/memcpy intrinsics (too complicated),
-// instead we simply replace them with regular function calls, which are then
-// intercepted by the run-time.
-// Since our pass runs after everyone else, the calls should not be
-// replaced back with intrinsics. If that becomes wrong at some point,
-// we will need to call e.g. __csi_memset to avoid the intrinsics.
 bool CSIImpl::instrumentMemIntrinsic(Instruction *I) {
   IRBuilder<> IRB(I);
   if (MemSetInst *M = dyn_cast<MemSetInst>(I)) {
-    Instruction *Call = IRB.CreateCall(
-        MemsetFn,
-        {IRB.CreatePointerCast(M->getArgOperand(0), IRB.getInt8PtrTy()),
-         IRB.CreateIntCast(M->getArgOperand(1), IRB.getInt32Ty(), false),
-         IRB.CreateIntCast(M->getArgOperand(2), IntptrTy, false)});
-    setInstrumentationDebugLoc(I, Call);
-    I->eraseFromParent();
+    // Retrieve operands of instruction
+    Value *Addr = M->getArgOperand(0);
+    Value *Operand = M->getArgOperand(1);
+    Value *NumBytes = M->getArgOperand(2);
+
+    // Get arguments for hooks
+    csi_id_t LocalId = CallsiteFED.lookupId(I);
+    Value *CsiId = CallsiteFED.localToGlobalId(LocalId, IRB);
+    Value *AddrArg = IRB.CreatePointerCast(Addr, IRB.getInt8PtrTy());
+    Value *NumBytesArg = IRB.CreateSExtOrBitCast(NumBytes, IRB.getInt64Ty());
+    std::pair<Value *, Value *> OperandID = getOperandID(Operand, IRB);
+
+    // Insert hooks
+    insertHookCall(I, CsiBeforeMemset, {CsiId, Addr, NumBytesArg,
+                                        OperandID.first, OperandID.second,
+                                        Operand});
+    BasicBlock::iterator Iter(I);
+    Iter++;
+    IRB.SetInsertPoint(&*Iter);
+    insertHookCall(&*Iter, CsiAfterMemset, {CsiId, Addr, NumBytesArg,
+                                            OperandID.first, OperandID.second,
+                                            Operand});
     return true;
   } else if (MemTransferInst *M = dyn_cast<MemTransferInst>(I)) {
-    Instruction *Call = IRB.CreateCall(
-        isa<MemCpyInst>(M) ? MemcpyFn : MemmoveFn,
-        {IRB.CreatePointerCast(M->getArgOperand(0), IRB.getInt8PtrTy()),
-         IRB.CreatePointerCast(M->getArgOperand(1), IRB.getInt8PtrTy()),
-         IRB.CreateIntCast(M->getArgOperand(2), IntptrTy, false)});
-    setInstrumentationDebugLoc(I, Call);
-    I->eraseFromParent();
+    // Retrieve operands of instruction
+    Value *Dest = M->getArgOperand(0);
+    Value *Src = M->getArgOperand(1);
+    Value *NumBytes = M->getArgOperand(2);
+
+    // Get hooks.
+    Function *BeforeHook = nullptr, *AfterHook = nullptr;
+    if (isa<MemCpyInst>(M)) {
+      BeforeHook = CsiBeforeMemcpy;
+      AfterHook = CsiAfterMemcpy;
+    } else if (isa<MemMoveInst>(M)) {
+      BeforeHook = CsiBeforeMemmove;
+      AfterHook = CsiAfterMemmove;
+    } else {
+      dbgs() << "Uninstrumented memory intrinsic " << *M << "\n";
+      return false;
+    }
+
+    // Get arguments for hooks
+    csi_id_t LocalId = CallsiteFED.lookupId(I);
+    Value *CsiId = CallsiteFED.localToGlobalId(LocalId, IRB);
+    Value *DestArg = IRB.CreatePointerCast(Dest, IRB.getInt8PtrTy());
+    Value *SrcArg = IRB.CreatePointerCast(Src, IRB.getInt8PtrTy());
+    Value *NumBytesArg = IRB.CreateSExtOrBitCast(NumBytes, IRB.getInt64Ty());
+
+    // Insert hooks
+    insertHookCall(I, BeforeHook, {CsiId, DestArg, SrcArg, NumBytesArg});
+    BasicBlock::iterator Iter(I);
+    Iter++;
+    IRB.SetInsertPoint(&*Iter);
+    insertHookCall(&*Iter, AfterHook, {CsiId, DestArg, SrcArg, NumBytesArg});
     return true;
+  } else {
+    dbgs() << "Uninstrumented memory intrinsic " << *M << "\n";
   }
   return false;
 }
@@ -5347,6 +5404,8 @@ void CSIImpl::instrumentFunction(Function &F) {
   for (Instruction *I : AtomicAccesses)
     assignAtomicID(I);
   for (Instruction *I : Callsites)
+    assignCallsiteID(I);
+  for (Instruction *I : MemIntrinsics)
     assignCallsiteID(I);
   for (Instruction *I : Allocas)
     assignAllocaID(I);

@@ -1747,7 +1747,10 @@ protected:
   Function *CsiAfterBuiltinFFI = nullptr, *CsiAfterBuiltinDDI = nullptr;
   Function *CsiAfterBuiltinFFFF = nullptr, *CsiAfterBuiltinDDDD = nullptr;
 
-  Function *MemmoveFn = nullptr, *MemcpyFn = nullptr, *MemsetFn = nullptr;
+  Function *CsiBeforeMemset = nullptr, *CsiAfterMemset = nullptr;
+  Function *CsiBeforeMemcpy = nullptr, *CsiAfterMemcpy = nullptr;
+  Function *CsiBeforeMemmove = nullptr, *CsiAfterMemmove = nullptr;
+
   Function *InitCallsiteToFunction = nullptr;
   // GlobalVariable *DisableInstrGV;
 
