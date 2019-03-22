@@ -153,6 +153,10 @@ static cl::opt<bool> EnableGVNSink(
     "enable-gvn-sink", cl::init(false), cl::Hidden,
     cl::desc("Enable the GVN sinking pass (default = off)"));
 
+static cl::opt<bool> EnableTapirLoopStripmine(
+    "enable-tapir-loop-stripmine", cl::init(false), cl::Hidden,
+    cl::desc("Enable the new, experimental Tapir LoopStripMine Pass"));
+
 PassManagerBuilder::PassManagerBuilder() {
     TapirTarget = TapirTargetID::None;
     DisableTapirOpts = false;
@@ -647,6 +651,13 @@ void PassManagerBuilder::populateModulePassManager(
   MPM.add(createGlobalsAAWrapperPass());
 
   MPM.add(createFloat2IntPass());
+
+  // Stripmine Tapir loops.  This pass is currently only performed when
+  // -enable-tapir-loop-stripmine is specified.
+  if (EnableTapirLoopStripmine) {
+    MPM.add(createLoopStripMinePass());
+    addFunctionSimplificationPasses(MPM);
+  }
 
   addExtensionsToPM(EP_VectorizerStart, MPM);
 
