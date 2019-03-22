@@ -133,6 +133,11 @@ void TargetTransformInfo::getUnrollingPreferences(
   return TTIImpl->getUnrollingPreferences(L, SE, UP);
 }
 
+void TargetTransformInfo::getStripMiningPreferences(
+    Loop *L, ScalarEvolution &SE, StripMiningPreferences &SMP) const {
+  return TTIImpl->getStripMiningPreferences(L, SE, SMP);
+}
+
 bool TargetTransformInfo::isLegalAddImmediate(int64_t Imm) const {
   return TTIImpl->isLegalAddImmediate(Imm);
 }
