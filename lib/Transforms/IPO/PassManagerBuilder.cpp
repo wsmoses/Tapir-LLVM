@@ -162,8 +162,8 @@ static cl::opt<bool>
               cl::desc("Enable control height reduction optimization (CHR)"));
 
 static cl::opt<bool> EnableTapirLoopStripmine(
-    "enable-tapir-loop-stripmine", cl::init(false), cl::Hidden,
-    cl::desc("Enable the new, experimental Tapir LoopStripMine Pass"));
+    "enable-tapir-loop-stripmine", cl::init(true), cl::Hidden,
+    cl::desc("Enable the Tapir loop-stripmining pass (default = on)"));
 
 static cl::opt<bool> EnableDRFAA(
     "enable-drf-aa", cl::init(false), cl::Hidden,
@@ -677,7 +677,14 @@ void PassManagerBuilder::populateModulePassManager(
   // -enable-tapir-loop-stripmine is specified.
   if (EnableTapirLoopStripmine) {
     MPM.add(createLoopStripMinePass());
-    addFunctionSimplificationPasses(MPM);
+    // Cleanup the IR after stripminning.
+    MPM.add(createTaskSimplifyPass());
+    MPM.add(createLoopSimplifyCFGPass());
+    MPM.add(createIndVarSimplifyPass());        // Canonicalize indvars
+    MPM.add(createEarlyCSEPass(false, Rhino));
+    MPM.add(createJumpThreadingPass());         // Thread jumps
+    MPM.add(createCorrelatedValuePropagationPass());
+    addInstructionCombiningPass(MPM);
   }
 
   addExtensionsToPM(EP_VectorizerStart, MPM);
@@ -830,9 +837,6 @@ void PassManagerBuilder::populateModulePassManager(
     addExtensionsToPM(EP_TapirLoopEnd, MPM);
 
     // Now lower Tapir to Target runtime calls.
-    //
-    // TODO: Make this sequence of passes check the library info for the target
-    // parallel RTS.
 
     MPM.add(createLowerTapirToTargetPass());
     // The lowering pass introduces new functions and may leave cruft around.
@@ -848,6 +852,8 @@ void PassManagerBuilder::populateModulePassManager(
     MPM.add(createBarrierNoopPass());
 
     TapirHasBeenLowered = true;
+    // HACK to disable rerun of the pipeline after Tapir lowering.
+    RerunAfterTapirLowering = false;
   }
   } while (RerunAfterTapirLowering);
 
