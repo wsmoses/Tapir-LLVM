@@ -247,8 +247,6 @@ void PassManagerBuilder::addInitialAliasAnalysisPasses(
   // BasicAliasAnalysis wins if they disagree. This is intended to help
   // support "obvious" type-punning idioms.
   PM.add(createTypeBasedAAWrapperPass());
-  if (EnableDRFAA)
-    PM.add(createDRFAAWrapperPass());
   PM.add(createScopedNoAliasAAWrapperPass());
 }
 
@@ -672,6 +670,8 @@ void PassManagerBuilder::populateModulePassManager(
     MPM.add(createJumpThreadingPass());         // Thread jumps
     MPM.add(createCorrelatedValuePropagationPass());
     addInstructionCombiningPass(MPM);
+    if (EnableDRFAA)
+      MPM.add(createDRFScopedNoAliasWrapperPass());
   }
 
   addExtensionsToPM(EP_VectorizerStart, MPM);
@@ -688,6 +688,8 @@ void PassManagerBuilder::populateModulePassManager(
   MPM.add(createLoopDistributePass());
 
   MPM.add(createLoopVectorizePass(DisableUnrollLoops, LoopVectorize));
+  if (EnableDRFAA)
+    MPM.add(createDRFScopedNoAliasWrapperPass());
 
   // Eliminate loads by forwarding stores from the previous iteration to loads
   // of the current iteration.
