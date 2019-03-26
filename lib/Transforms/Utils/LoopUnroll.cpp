@@ -413,7 +413,6 @@ LoopUnrollResult llvm::UnrollLoop(
   bool CompletelyUnroll = Count == TripCount;
 
   // Disallow partial unrolling of Tapir loops.
-  // FIXME: Allow partial unrolling of a Tapir loop to produce a new Tapir loop.
   if (getTaskIfTapirLoop(L, TI) && !CompletelyUnroll)
     return LoopUnrollResult::Unmodified;
 
@@ -888,7 +887,7 @@ LoopUnrollResult llvm::UnrollLoop(
     if (TI)
       // FIXME: Recalculating TaskInfo for the whole function is wasteful.
       // Optimize this routine in the future.
-      TI->recalculate(*Header->getParent(), *DT);
+      TI->recalculate(*DT->getRoot()->getParent(), *DT);
   }
 
   return CompletelyUnroll ? LoopUnrollResult::FullyUnrolled

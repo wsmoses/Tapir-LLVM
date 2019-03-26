@@ -218,9 +218,16 @@ public:
         &getAnalysis<TargetTransformInfoWrapperPass>().getTTI(
             *L->getHeader()->getParent());
     const DataLayout *DL = &L->getHeader()->getModule()->getDataLayout();
+    Function *F = L->getHeader()->getParent();
+    TaskInfo *TI = &getAnalysis<TaskInfoWrapperPass>().getTaskInfo();
 
     LoopIdiomRecognize LIR(AA, DT, LI, SE, TLI, TTI, DL);
-    return LIR.runOnLoop(L);
+    bool Changed = LIR.runOnLoop(L);
+    if (Changed && TI)
+      // FIXME: Recalculating TaskInfo for the whole function is wasteful.
+      // Optimize this routine in the future.
+      TI->recalculate(*F, *DT);
+    return Changed;
   }
 
   /// This transformation requires natural loop information & requires that
@@ -240,10 +247,14 @@ PreservedAnalyses LoopIdiomRecognizePass::run(Loop &L, LoopAnalysisManager &AM,
                                               LoopStandardAnalysisResults &AR,
                                               LPMUpdater &) {
   const auto *DL = &L.getHeader()->getModule()->getDataLayout();
-
+  Function *F = L.getHeader()->getParent();
   LoopIdiomRecognize LIR(&AR.AA, &AR.DT, &AR.LI, &AR.SE, &AR.TLI, &AR.TTI, DL);
   if (!LIR.runOnLoop(&L))
     return PreservedAnalyses::all();
+
+  // FIXME: Recalculating TaskInfo for the whole function is wasteful.
+  // Optimize this routine in the future.
+  AR.TI.recalculate(*F, AR.DT);
 
   return getLoopPassPreservedAnalyses();
 }

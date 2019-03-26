@@ -38,6 +38,7 @@
 #include "llvm/Analysis/LoopInfo.h"
 #include "llvm/Analysis/LoopPass.h"
 #include "llvm/Analysis/ScalarEvolution.h"
+#include "llvm/Analysis/TapirTaskInfo.h"
 #include "llvm/Analysis/TargetTransformInfo.h"
 #include "llvm/Transforms/Utils/Local.h"
 #include "llvm/IR/Attributes.h"
@@ -515,6 +516,8 @@ bool LoopUnswitch::runOnLoop(Loop *L, LPPassManager &LPM_Ref) {
   LI = &getAnalysis<LoopInfoWrapperPass>().getLoopInfo();
   LPM = &LPM_Ref;
   DT = &getAnalysis<DominatorTreeWrapperPass>().getDomTree();
+  auto *TIWP = getAnalysisIfAvailable<TaskInfoWrapperPass>();
+  auto *TI = TIWP ? &TIWP->getTaskInfo() : nullptr;
   currentLoop = L;
   Function *F = currentLoop->getHeader()->getParent();
 
@@ -528,7 +531,11 @@ bool LoopUnswitch::runOnLoop(Loop *L, LPPassManager &LPM_Ref) {
     redoLoop = false;
     Changed |= processCurrentLoop();
   } while(redoLoop);
-
+  // Update TaskInfo manually using the updated DT.
+  if (Changed && TI)
+    // FIXME: Recalculating TaskInfo for the whole function is wasteful.
+    // Optimize this routine in the future.
+    TI->recalculate(*F, *DT);
   return Changed;
 }
 
