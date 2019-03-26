@@ -822,6 +822,8 @@ PassBuilder::buildModuleOptimizationPipeline(OptimizationLevel Level,
     OptimizePM.addPass(JumpThreadingPass());
     OptimizePM.addPass(CorrelatedValuePropagationPass());
     OptimizePM.addPass(InstCombinePass());
+    if (EnableDRFAA)
+      OptimizePM.addPass(DRFScopedNoAliasPass());
   }
 
   for (auto &C : VectorizerStartEPCallbacks)
@@ -839,6 +841,8 @@ PassBuilder::buildModuleOptimizationPipeline(OptimizationLevel Level,
 
   // Now run the core loop vectorizer.
   OptimizePM.addPass(LoopVectorizePass());
+  if (EnableDRFAA)
+    OptimizePM.addPass(DRFScopedNoAliasPass());
 
   // Eliminate loads by forwarding stores from the previous iteration to loads
   // of the current iteration.
@@ -1361,9 +1365,10 @@ AAManager PassBuilder::buildDefaultAAPipeline() {
   // results from `GlobalsAA` through a readonly proxy.
   AA.registerModuleAnalysis<GlobalsAA>();
 
-  // Add support for using Tapir parallel control flow to inform alias analysis
-  // based on the DRF assumption.
-  AA.registerFunctionAnalysis<DRFAA>();
+  if (EnableDRFAA)
+    // Add support for using Tapir parallel control flow to inform alias
+    // analysis based on the data-race-free assumption.
+    AA.registerFunctionAnalysis<DRFAA>();
 
   return AA;
 }
