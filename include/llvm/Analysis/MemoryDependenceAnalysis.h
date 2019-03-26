@@ -43,6 +43,7 @@ class Instruction;
 class LoadInst;
 class PHITransAddr;
 class TargetLibraryInfo;
+class TaskInfo;
 class PhiValues;
 class Value;
 
@@ -362,12 +363,14 @@ private:
   DominatorTree &DT;
   PhiValues &PV;
   PredIteratorCache PredCache;
+  TaskInfo *TI;
 
 public:
   MemoryDependenceResults(AliasAnalysis &AA, AssumptionCache &AC,
                           const TargetLibraryInfo &TLI,
-                          DominatorTree &DT, PhiValues &PV)
-      : AA(AA), AC(AC), TLI(TLI), DT(DT), PV(PV) {}
+                          DominatorTree &DT, PhiValues &PV,
+                          TaskInfo *TI = nullptr)
+      : AA(AA), AC(AC), TLI(TLI), DT(DT), PV(PV), TI(TI) {}
 
   /// Handle invalidation in the new PM.
   bool invalidate(Function &F, const PreservedAnalyses &PA,

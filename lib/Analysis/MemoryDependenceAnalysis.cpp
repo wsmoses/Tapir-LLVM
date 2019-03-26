@@ -27,6 +27,7 @@
 #include "llvm/Analysis/OrderedBasicBlock.h"
 #include "llvm/Analysis/PHITransAddr.h"
 #include "llvm/Analysis/PhiValues.h"
+#include "llvm/Analysis/TapirTaskInfo.h"
 #include "llvm/Analysis/TargetLibraryInfo.h"
 #include "llvm/Analysis/ValueTracking.h"
 #include "llvm/IR/Attributes.h"
@@ -88,6 +89,11 @@ static cl::opt<unsigned>
     BlockNumberLimit("memdep-block-number-limit", cl::Hidden, cl::init(1000),
                      cl::desc("The number of blocks to scan during memory "
                               "dependency analysis (default = 1000)"));
+
+static cl::opt<bool>
+    EnableDRF("enable-drf-memdep", cl::init(false), cl::Hidden,
+              cl::desc("Allow MemoryDependenceAnalysis to assume the program "
+                       "is data-race free."));
 
 // Limit on the number of memdep results to process.
 static const unsigned int NumResultsLimit = 100;
@@ -185,6 +191,11 @@ MemDepResult MemoryDependenceResults::getCallDependencyFrom(
     CallBase *Call, bool isReadOnlyCall, BasicBlock::iterator ScanIt,
     BasicBlock *BB) {
   unsigned Limit = BlockScanLimit;
+
+  if (EnableDRF && TI)
+    if ((TI->getTaskFor(BB) != TI->getTaskFor(CS.getInstruction()->getParent()))
+        && TI->mayHappenInParallel(CS.getInstruction()->getParent(), BB))
+      return MemDepResult::getNonLocal();
 
   // Walk backwards through the block, looking for dependencies.
   while (ScanIt != BB->begin()) {
@@ -328,6 +339,11 @@ static bool isVolatile(Instruction *Inst) {
 MemDepResult MemoryDependenceResults::getPointerDependencyFrom(
     const MemoryLocation &MemLoc, bool isLoad, BasicBlock::iterator ScanIt,
     BasicBlock *BB, Instruction *QueryInst, unsigned *Limit) {
+  if (EnableDRF && TI && QueryInst)
+    if ((TI->getTaskFor(BB) != TI->getTaskFor(QueryInst->getParent()))
+        && TI->mayHappenInParallel(QueryInst->getParent(), BB))
+      return MemDepResult::getNonLocal();
+
   MemDepResult InvariantGroupDependency = MemDepResult::getUnknown();
   if (QueryInst != nullptr) {
     if (auto *LI = dyn_cast<LoadInst>(QueryInst)) {
@@ -1749,7 +1765,8 @@ MemoryDependenceAnalysis::run(Function &F, FunctionAnalysisManager &AM) {
   auto &TLI = AM.getResult<TargetLibraryAnalysis>(F);
   auto &DT = AM.getResult<DominatorTreeAnalysis>(F);
   auto &PV = AM.getResult<PhiValuesAnalysis>(F);
-  return MemoryDependenceResults(AA, AC, TLI, DT, PV);
+  auto *TI = EnableDRF ? &AM.getResult<TaskAnalysis>(F) : nullptr;
+  return MemoryDependenceResults(AA, AC, TLI, DT, PV, TI);
 }
 
 char MemoryDependenceWrapperPass::ID = 0;
@@ -1761,6 +1778,7 @@ INITIALIZE_PASS_DEPENDENCY(AAResultsWrapperPass)
 INITIALIZE_PASS_DEPENDENCY(DominatorTreeWrapperPass)
 INITIALIZE_PASS_DEPENDENCY(TargetLibraryInfoWrapperPass)
 INITIALIZE_PASS_DEPENDENCY(PhiValuesWrapperPass)
+INITIALIZE_PASS_DEPENDENCY(TaskInfoWrapperPass)
 INITIALIZE_PASS_END(MemoryDependenceWrapperPass, "memdep",
                     "Memory Dependence Analysis", false, true)
 
@@ -1779,6 +1797,8 @@ void MemoryDependenceWrapperPass::getAnalysisUsage(AnalysisUsage &AU) const {
   AU.addRequired<AssumptionCacheTracker>();
   AU.addRequired<DominatorTreeWrapperPass>();
   AU.addRequired<PhiValuesWrapperPass>();
+  if (EnableDRF)
+    AU.addRequired<TaskInfoWrapperPass>();
   AU.addRequiredTransitive<AAResultsWrapperPass>();
   AU.addRequiredTransitive<TargetLibraryInfoWrapperPass>();
 }
@@ -1812,6 +1832,8 @@ bool MemoryDependenceWrapperPass::runOnFunction(Function &F) {
   auto &TLI = getAnalysis<TargetLibraryInfoWrapperPass>().getTLI();
   auto &DT = getAnalysis<DominatorTreeWrapperPass>().getDomTree();
   auto &PV = getAnalysis<PhiValuesWrapperPass>().getResult();
-  MemDep.emplace(AA, AC, TLI, DT, PV);
+  auto *TI =
+    EnableDRF ? &getAnalysis<TaskInfoWrapperPass>().getTaskInfo() : nullptr;
+  MemDep.emplace(AA, AC, TLI, DT, PV, TI);
   return false;
 }
