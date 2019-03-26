@@ -285,6 +285,7 @@ static ClobberAlias instructionClobbersQuery(MemoryDef *MD,
     case Intrinsic::lifetime_end:
     case Intrinsic::invariant_start:
     case Intrinsic::invariant_end:
+    case Intrinsic::syncregion_start:
     case Intrinsic::assume:
       return {false, NoAlias};
     default:
@@ -1553,9 +1554,13 @@ MemoryUseOrDef *MemorySSA::createNewAccess(Instruction *I) {
   // that it writes arbitrarily. Ignore that fake memory dependency here.
   // FIXME: Replace this special casing with a more accurate modelling of
   // assume's control dependency.
-  if (IntrinsicInst *II = dyn_cast<IntrinsicInst>(I))
+  if (IntrinsicInst *II = dyn_cast<IntrinsicInst>(I)) {
     if (II->getIntrinsicID() == Intrinsic::assume)
       return nullptr;
+    // Also ignore syncregions
+    if (II->getIntrinsicID() == Intrinsic::syncregion_start)
+      return nullptr;
+  }
 
   // Ignore detach instructions.
   if (isa<DetachInst>(I))
