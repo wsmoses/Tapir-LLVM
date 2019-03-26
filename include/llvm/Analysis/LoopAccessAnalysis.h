@@ -162,7 +162,8 @@ public:
                const SmallVectorImpl<Instruction *> &Instrs) const;
   };
 
-  MemoryDepChecker(PredicatedScalarEvolution &PSE, const Loop *L)
+  MemoryDepChecker(PredicatedScalarEvolution &PSE, const Loop *L,
+                   TaskInfo *TI = nullptr)
       : PSE(PSE), InnermostLoop(L), AccessIdx(0), MaxSafeRegisterWidth(-1U),
         ShouldRetryWithRuntimeCheck(false), SafeForVectorization(true),
         RecordDependences(true) {}
@@ -281,6 +282,9 @@ private:
   /// Memory dependences collected during the analysis.  Only valid if
   /// RecordDependences is true.
   SmallVector<Dependence, 8> Dependences;
+
+  /// Optional TaskInfo
+  TaskInfo *TI;
 
   /// Check whether there is a plausible dependence between the two
   /// accesses.
@@ -493,7 +497,8 @@ private:
 class LoopAccessInfo {
 public:
   LoopAccessInfo(Loop *L, ScalarEvolution *SE, const TargetLibraryInfo *TLI,
-                 AliasAnalysis *AA, DominatorTree *DT, LoopInfo *LI);
+                 AliasAnalysis *AA, DominatorTree *DT, LoopInfo *LI,
+                 TaskInfo *TI = nullptr);
 
   /// Return true we can analyze the memory accesses in the loop and there are
   /// no memory dependence cycles.
@@ -581,7 +586,8 @@ public:
 private:
   /// Analyze the loop.
   void analyzeLoop(AliasAnalysis *AA, LoopInfo *LI,
-                   const TargetLibraryInfo *TLI, DominatorTree *DT);
+                   const TargetLibraryInfo *TLI, DominatorTree *DT,
+                   TaskInfo *TI);
 
   /// Check if the structure of the loop allows it to be analyzed by this
   /// pass.
@@ -728,6 +734,7 @@ private:
   AliasAnalysis *AA;
   DominatorTree *DT;
   LoopInfo *LI;
+  TaskInfo *TI = nullptr;
 };
 
 /// This analysis provides dependence information for the memory
