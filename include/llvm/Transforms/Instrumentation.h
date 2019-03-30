@@ -194,6 +194,7 @@ struct CSIOptions {
   enum class ArithmeticType { None, FP, Int, All };
   bool InstrumentFuncEntryExit = true;
   bool InstrumentBasicBlocks = true;
+  bool InstrumentLoops = true;
   bool InstrumentMemoryAccesses = true;
   bool InstrumentCalls = true;
   bool InstrumentAtomics = true;
