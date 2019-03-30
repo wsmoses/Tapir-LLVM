@@ -191,6 +191,7 @@ ModulePass *createCilkSanitizerLegacyPass();
 
 // Options for comprehensive static instrumentation
 struct CSIOptions {
+  enum class ArithmeticType { None, FP, Int, All };
   bool InstrumentFuncEntryExit = true;
   bool InstrumentBasicBlocks = true;
   bool InstrumentMemoryAccesses = true;
@@ -200,7 +201,7 @@ struct CSIOptions {
   bool InstrumentTapir = true;
   bool InstrumentAllocas = true;
   bool InstrumentAllocFns = true;
-  bool InstrumentArithmetic = true;
+  ArithmeticType InstrumentArithmetic = ArithmeticType::All;
   bool Interpose = true;
 
   CSIOptions() = default;

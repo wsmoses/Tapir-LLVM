@@ -1,5 +1,5 @@
-; RUN: opt < %s -loop-spawning-ti -simplifycfg -csi -csi-instrument-basic-blocks=false -csi-instrument-memory-accesses=false -csi-instrument-atomics=false -csi-instrument-memintrinsics=false -csi-instrument-allocfn=false -csi-instrument-alloca=false -csi-instrument-function-calls=false -csi-instrument-arithmetic=false -S -o - | FileCheck %s
-; RUN: opt < %s -passes='loop-spawning,function(simplify-cfg),csi' -csi-instrument-basic-blocks=false -csi-instrument-memory-accesses=false -csi-instrument-atomics=false -csi-instrument-memintrinsics=false -csi-instrument-allocfn=false -csi-instrument-alloca=false -csi-instrument-function-calls=false -csi-instrument-arithmetic=false -S -o - | FileCheck %s
+; RUN: opt < %s -loop-spawning-ti -simplifycfg -csi -csi-instrument-basic-blocks=false -csi-instrument-memory-accesses=false -csi-instrument-atomics=false -csi-instrument-memintrinsics=false -csi-instrument-allocfn=false -csi-instrument-alloca=false -csi-instrument-function-calls=false -csi-instrument-arithmetic=none -S -o - | FileCheck %s
+; RUN: opt < %s -passes='loop-spawning,function(simplify-cfg),csi' -csi-instrument-basic-blocks=false -csi-instrument-memory-accesses=false -csi-instrument-atomics=false -csi-instrument-memintrinsics=false -csi-instrument-allocfn=false -csi-instrument-alloca=false -csi-instrument-function-calls=false -csi-instrument-arithmetic=none -S -o - | FileCheck %s
 ; RUN: opt < %s -loop-spawning-ti -simplifycfg -csi -S -o - | FileCheck %s
 ; RUN: opt < %s -passes='loop-spawning,function(simplify-cfg),csi' -S -o - | FileCheck %s
 

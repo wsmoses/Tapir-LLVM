@@ -200,7 +200,7 @@ struct CilkSanitizerImpl : public CSIImpl {
     // loads and stores), and atomics.
     Options.InstrumentFuncEntryExit = false;
     Options.InstrumentBasicBlocks = false;
-    Options.InstrumentArithmetic = false;
+    Options.InstrumentArithmetic = CSIOptions::ArithmeticType::None;
     // Cilksan defines its own hooks for instrumenting call sites, memory
     // accesses, memory intrinsics, and Tapir instructions, so we disable the
     // default CSI instrumentation hooks for these IR objects.

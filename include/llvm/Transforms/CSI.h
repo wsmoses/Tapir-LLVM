@@ -403,6 +403,9 @@ public:
     // Must match the definition of property type in csi.h
     return StructType::get(IntegerType::get(C, PropBits.IsLandingPad),
                            IntegerType::get(C, PropBits.IsEHPad),
+                           IntegerType::get(C, PropBits.IsEmpty),
+                           IntegerType::get(C, PropBits.NoInstrumentedContent),
+                           IntegerType::get(C, PropBits.TerminatorTy),
                            IntegerType::get(C, PropBits.Padding));
   }
   static Type *getType(LLVMContext &C) {
@@ -427,13 +430,27 @@ public:
   /// Set the value of the IsEHPad property.
   void setIsEHPad(bool v) { PropValue.Fields.IsEHPad = v; }
 
+  /// Set the value of the IsEmpty property.
+  void setIsEmpty(bool v) { PropValue.Fields.IsEmpty = v; }
+
+  /// Set the value of the IsEmpty property.
+  void setNoInstrumentedContent(bool v) {
+    PropValue.Fields.NoInstrumentedContent = v;
+  }
+
+  /// Set the value of the TerminatorTy property.
+  void setTerminatorTy(char v) { PropValue.Fields.TerminatorTy = v; }
+
 private:
   typedef union {
     // Must match the definition of property type in csi.h
     struct {
       unsigned IsLandingPad : 1;
       unsigned IsEHPad : 1;
-      uint64_t Padding : 62;
+      unsigned IsEmpty : 1;
+      unsigned NoInstrumentedContent : 1;
+      unsigned TerminatorTy : 4;
+      uint64_t Padding : 56;
     } Fields;
     uint64_t Bits;
   } Property;
@@ -444,11 +461,15 @@ private:
   typedef struct {
     int IsLandingPad;
     int IsEHPad;
+    int IsEmpty;
+    int NoInstrumentedContent;
+    int TerminatorTy;
     int Padding;
   } PropertyBits;
 
   /// The number of bits representing each property.
-  static constexpr PropertyBits PropBits = {1, 1, (64 - 1 - 1)};
+  static constexpr PropertyBits PropBits =
+    {1, 1, 1, 1, 4, (64 - 1 - 1 - 1 - 1 - 4)};
 };
 
 class CsiCallProperty : public CsiProperty {
@@ -1024,6 +1045,70 @@ protected:
   // Update the attributes on the instrumented function that might be
   // invalidated by the inserted instrumentation.
   void updateInstrumentedFnAttrs(Function &F);
+
+  // List of all supported types of terminators for basic blocks.
+  enum class CSITerminatorTy
+    {
+     UnconditionalBr = 0,
+     ConditionalBr,
+     Switch,
+     Call,
+     Invoke,
+     Return,
+     EHReturn,
+     Unreachable,
+     Detach,
+     Reattach,
+     Sync,
+     IndirectBr,
+     LAST_CSITerminatorTy
+    };
+  CSITerminatorTy getTerminatorTy(Instruction &I) {
+    // FIXME: Treat calls as terminators.
+    assert(I.isTerminator() &&
+           "CSIImpl::getTerminatorTy called on non-terminator.");
+
+    // FIXME: Use this new API in future LLVM versions.
+    // if (I.isIndirectTerminator(I))
+    //   return CSITerminatorTy::IndirectBr;
+    if (isa<IndirectBrInst>(I))
+      return CSITerminatorTy::IndirectBr;
+
+    if (isa<InvokeInst>(I) && !isDetachedRethrow(&I))
+      return CSITerminatorTy::Invoke;
+
+    // FIXME: Use this new API in future LLVM versions.
+    // if (I.isExceptionalTerminator() || isDetachedRethrow(&I))
+    //   return CSITerminatorTy::EHReturn;
+    if (isa<ResumeInst>(I) || isa<CleanupReturnInst>(I) ||
+        isa<CatchReturnInst>(I) || isa<CatchSwitchInst>(I))
+      return CSITerminatorTy::EHReturn;
+
+    if (BranchInst *Br = dyn_cast<BranchInst>(&I)) {
+      if (Br->isUnconditional())
+        return CSITerminatorTy::UnconditionalBr;
+      return CSITerminatorTy::ConditionalBr;
+    }
+
+    unsigned Opcode = I.getOpcode();
+    switch (Opcode) {
+    case Instruction::Switch: return CSITerminatorTy::Switch;
+    case Instruction::Ret: return CSITerminatorTy::Return;
+    case Instruction::Detach: return CSITerminatorTy::Detach;
+    case Instruction::Reattach: return CSITerminatorTy::Reattach;
+    case Instruction::Sync: return CSITerminatorTy::Sync;
+    case Instruction::Unreachable: return CSITerminatorTy::Unreachable;
+    default:
+      dbgs() << "Unrecognized terminator " << I << "\n";
+      return CSITerminatorTy::LAST_CSITerminatorTy;
+    }
+  }
+  // Helper function to check if basic block BB contains any other instructions.
+  // This helper separately checks if the BB contains any other instructions at
+  // all as well as any instructions instrumented by CSI.  PHI nodes and
+  // terminators are ignored in this evaluation of BB.
+  std::pair<bool, bool> isBBEmpty(BasicBlock &BB);
+
   // List of all allocation function types.  This list needs to remain
   // consistent with TargetLibraryInfo and with csan.h.
   enum class AllocFnTy {

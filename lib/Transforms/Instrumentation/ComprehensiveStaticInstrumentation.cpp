@@ -79,11 +79,19 @@ static cl::opt<bool>
     ClInstrumentAllocFns("csi-instrument-allocfn", cl::init(true),
                          cl::desc("Instrument allocation functions"),
                          cl::Hidden);
-
-static cl::opt<bool>
-    ClInstrumentArithmetic("csi-instrument-arithmetic", cl::init(true),
-                           cl::desc("Instrument arithmetic operations"),
-                           cl::Hidden);
+static cl::opt<CSIOptions::ArithmeticType>
+ClInstrumentArithmetic("csi-instrument-arithmetic",
+                       cl::init(CSIOptions::ArithmeticType::All), cl::Hidden,
+                       cl::desc("Instrument arithmetic operations"),
+                       cl::values(
+                           clEnumValN(CSIOptions::ArithmeticType::None, "none",
+                                      "Disable instrumentation of arithmetic"),
+                           clEnumValN(CSIOptions::ArithmeticType::FP, "fp",
+                                      "Instrument floating-point arithmetic"),
+                           clEnumValN(CSIOptions::ArithmeticType::Int, "int",
+                                      "Instrument integer arithmetic"),
+                           clEnumValN(CSIOptions::ArithmeticType::All, "all",
+                                      "Instrument all arithmetic")));
 
 static cl::opt<bool> ClInterpose("csi-interpose", cl::init(true),
                                  cl::desc("Enable function interpositioning"),
@@ -2902,17 +2910,103 @@ bool CSIImpl::instrumentMemIntrinsic(Instruction *I) {
   return false;
 }
 
+// Helper function to check if the given basic block is devoid of instructions
+// other than PHI's, calls to placeholders, and its terminator.
+std::pair<bool, bool> CSIImpl::isBBEmpty(BasicBlock &BB) {
+  bool IsEmpty = false;
+  BasicBlock::iterator Iter = BB.getFirstInsertionPt();
+  while (callsPlaceholderFunction(*Iter)) Iter++;
+  IsEmpty = (&*Iter == BB.getTerminator());
+
+  // TODO: Update these checks once we instrument atomics
+  while (&*Iter != BB.getTerminator()) {
+    Instruction *I = &*Iter++;
+
+    // TODO: Instrument atomics.
+    // if (isAtomic(I))
+    //   if (AtomicFED.hasId(I))
+    //     return std::make_pair(IsEmpty, false);
+
+    if (isa<LoadInst>(I))
+      if (LoadFED.hasId(I))
+        return std::make_pair(IsEmpty, false);
+
+    if (isa<StoreInst>(I))
+      if (StoreFED.hasId(I))
+        return std::make_pair(IsEmpty, false);
+
+    if (CallInst *CI = dyn_cast<CallInst>(I)) {
+      // Skip this call if it calls a placeholder function.
+      if (callsPlaceholderFunction(*I)) {
+        ++Iter;
+        continue;
+      }
+
+      if (isAllocationFn(CI, TLI))
+        if (AllocFnFED.hasId(CI))
+          return std::make_pair(IsEmpty, false);
+
+      if (isFreeCall(CI, TLI))
+        if (FreeFED.hasId(CI))
+          return std::make_pair(IsEmpty, false);
+
+      if (IntrinsicInst *II = dyn_cast<IntrinsicInst>(CI)) {
+        // Skip this intrinsic if there's no FED entry.
+        switch (II->getIntrinsicID()) {
+          // Handle instrinsics for masked vector loads, stores, gathers, and
+          // scatters specially.
+        case Intrinsic::masked_load:
+        case Intrinsic::masked_gather:
+          if (LoadFED.hasId(II))
+            return std::make_pair(IsEmpty, false);
+        case Intrinsic::masked_store:
+        case Intrinsic::masked_scatter:
+          if (StoreFED.hasId(II))
+            return std::make_pair(IsEmpty, false);
+        default:
+          if (CallsiteFED.hasId(II))
+            return std::make_pair(IsEmpty, false);
+        }
+      } else {
+        if (CallsiteFED.hasId(CI))
+          return std::make_pair(IsEmpty, false);
+      }
+    }
+
+    if (isa<AllocaInst>(I))
+      if (AllocaFED.hasId(I))
+        return std::make_pair(IsEmpty, false);
+
+    if (isa<BinaryOperator>(I) || isa<TruncInst>(I) || isa<ZExtInst>(I) ||
+        isa<SExtInst>(I) || isa<FPToUIInst>(I) || isa<FPToSIInst>(I) ||
+        isa<UIToFPInst>(I) || isa<SIToFPInst>(I) || isa<FPTruncInst>(I) ||
+        isa<FPExtInst>(I) || isa<PHINode>(I) || isa<InsertElementInst>(I) ||
+        isa<ExtractElementInst>(I) || isa<ShuffleVectorInst>(I))
+      if (ArithmeticFED.hasId(I))
+        return std::make_pair(IsEmpty, false);
+  }
+  return std::make_pair(IsEmpty, true);
+}
+
 void CSIImpl::instrumentBasicBlock(BasicBlock &BB) {
+  // Compute the properties of this basic block.
+  CsiBBProperty Prop;
+  Prop.setIsLandingPad(BB.isLandingPad());
+  Prop.setIsEHPad(BB.isEHPad());
+  TerminatorInst *TI = BB.getTerminator();
+  assert(TI && "Found a BB with no terminator.");
+  Prop.setTerminatorTy(static_cast<unsigned>(getTerminatorTy(*TI)));
+  std::pair<bool, bool> EmptyBB = isBBEmpty(BB);
+  Prop.setIsEmpty(EmptyBB.first);
+  Prop.setNoInstrumentedContent(EmptyBB.second);
+
+  // Insert entry and exit hooks.
   IRBuilder<> IRB(&*BB.getFirstInsertionPt());
   csi_id_t LocalId = BasicBlockFED.add(BB);
   csi_id_t BBSizeId = BBSize.add(BB);
   assert(LocalId == BBSizeId &&
          "BB recieved different ID's in FED and sizeinfo tables.");
   Value *CsiId = BasicBlockFED.localToGlobalId(LocalId, IRB);
-  CsiBBProperty Prop;
-  Prop.setIsLandingPad(BB.isLandingPad());
-  Prop.setIsEHPad(BB.isEHPad());
-  TerminatorInst *TI = BB.getTerminator();
   Value *PropVal = Prop.getValue(IRB);
   insertHookCall(&*IRB.GetInsertPoint(), CsiBBEntry, {CsiId, PropVal});
   IRB.SetInsertPoint(TI);
@@ -2925,7 +3019,7 @@ void CSIImpl::assignCallsiteID(Instruction *I) {
     Called = CI->getCalledFunction();
   else if (InvokeInst *II = dyn_cast<InvokeInst>(I))
     Called = II->getCalledFunction();
-  /*csi_id_t LocalId =*/CallsiteFED.add(*I, Called ? Called->getName() : "");
+  CallsiteFED.add(*I, Called ? Called->getName() : "");
 }
 
 CSIImpl::CSIBuiltinFuncOp CSIImpl::getBuiltinFuncOp(CallSite &CS) {
@@ -4940,7 +5034,7 @@ void CSIImpl::initializeCsi() {
     initializeAllocaHooks();
   if (Options.InstrumentAllocFns)
     initializeAllocFnHooks();
-  if (Options.InstrumentArithmetic)
+  if (Options.InstrumentArithmetic != CSIOptions::ArithmeticType::None)
     initializeArithmeticHooks();
 
   FunctionType *FnType =
@@ -5409,18 +5503,20 @@ void CSIImpl::instrumentFunction(Function &F) {
         else if (isa<MemIntrinsic>(I))
           MemIntrinsics.push_back(&I);
         else if (IntrinsicInst *II = dyn_cast<IntrinsicInst>(&I)) {
-          switch (II->getIntrinsicID()) {
-          case Intrinsic::masked_load:
-          case Intrinsic::masked_store:
-          case Intrinsic::masked_gather:
-          case Intrinsic::masked_scatter:
-            // Handle instrinsics for masked vector loads, stores, gathers, and
-            // scatters specially.
-            VectorMemBuiltins.push_back(II);
-            break;
-          default:
-            Callsites.push_back(II);
-            break;
+          if (!callsPlaceholderFunction(I)) {
+            switch (II->getIntrinsicID()) {
+            case Intrinsic::masked_load:
+            case Intrinsic::masked_store:
+            case Intrinsic::masked_gather:
+            case Intrinsic::masked_scatter:
+              // Handle instrinsics for masked vector loads, stores, gathers, and
+              // scatters specially.
+              VectorMemBuiltins.push_back(II);
+              break;
+            default:
+              Callsites.push_back(II);
+              break;
+            }
           }
         } else
           Callsites.push_back(&I);
@@ -5439,13 +5535,27 @@ void CSIImpl::instrumentFunction(Function &F) {
             isa<SExtInst>(I) || isa<FPToUIInst>(I) || isa<FPToSIInst>(I) ||
             isa<UIToFPInst>(I) || isa<SIToFPInst>(I) || isa<FPTruncInst>(I) ||
             isa<FPExtInst>(I) || isa<PHINode>(I) || isa<InsertElementInst>(I) ||
-            isa<ExtractElementInst>(I) || isa<ShuffleVectorInst>(I))
-          Arithmetic.push_back(&I);
+            isa<ExtractElementInst>(I) || isa<ShuffleVectorInst>(I)) {
+          switch (Options.InstrumentArithmetic) {
+          default: break;
+          case CSIOptions::ArithmeticType::All:
+            Arithmetic.push_back(&I);
+            break;
+          case CSIOptions::ArithmeticType::FP:
+            if (I.getType()->isFPOrFPVectorTy())
+              Arithmetic.push_back(&I);
+            break;
+          case CSIOptions::ArithmeticType::Int:
+            if (I.getType()->isIntOrIntVectorTy())
+              Arithmetic.push_back(&I);
+            break;
+          }
 
         // TODO: Handle GetElementPtr, PtrToInt, IntToPtr, BitCast,
         // AddrSpaceCast
 
         // TODO: Handle ExtractValue, InsertValue
+        }
       }
     }
     computeLoadAndStoreProperties(LoadAndStoreProperties, BBLoadsAndStores, DL,
@@ -5535,7 +5645,7 @@ void CSIImpl::instrumentFunction(Function &F) {
       instrumentFree(I);
   }
 
-  if (Options.InstrumentArithmetic)
+  if (Options.InstrumentArithmetic != CSIOptions::ArithmeticType::None)
     for (Instruction *I : Arithmetic)
       instrumentArithmetic(I, LI);
 
