@@ -5601,12 +5601,12 @@ void CSIImpl::instrumentFunction(Function &F) {
 
   DominatorTree *DT = &GetDomTree(F);
   LoopInfo &LI = GetLoopInfo(F);
+  TaskInfo &TI = GetTaskInfo(F);
   ScalarEvolution *SE = nullptr;
   if (GetScalarEvolution)
     SE = &(*GetScalarEvolution)(F);
   for (Loop *L : LI)
     simplifyLoop(L, DT, &LI, SE, nullptr, false /* PreserveLCSSA */);
-  TaskInfo &TI = GetTaskInfo(F);
 
   for (Argument &Arg : F.args())
     // Add an ID for this function argument.
