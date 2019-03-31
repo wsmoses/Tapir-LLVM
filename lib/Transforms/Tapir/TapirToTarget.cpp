@@ -345,6 +345,35 @@ struct LowerTapirToTarget : public ModulePass {
     AU.addRequired<TaskInfoWrapperPass>();
   }
 };
+
+/// A wrapper pass for external Tapir targets. This pass squirrels away the
+/// callback used to run any analyses and register their results.
+///
+/// This code is based heavily on the ExternalAAWrapperPass for extending alias
+/// analyses in the old pass manager.
+struct ExternalTapirTargetWrapperPass : ImmutablePass {
+  using CallbackT = std::function<TapirTarget *(void)>;
+
+  CallbackT CB;
+
+  static char ID;
+
+  ExternalTapirTargetWrapperPass() : ImmutablePass(ID) {
+    initializeExternalTapirTargetWrapperPassPass(
+        *PassRegistry::getPassRegistry());
+  }
+
+  explicit ExternalTapirTargetWrapperPass(CallbackT CB)
+      : ImmutablePass(ID), CB(std::move(CB)) {
+    initializeExternalTapirTargetWrapperPassPass(
+        *PassRegistry::getPassRegistry());
+  }
+
+  void getAnalysisUsage(AnalysisUsage &AU) const override {
+    AU.setPreservesAll();
+  }
+};
+
 }  // End of anonymous namespace
 
 char LowerTapirToTarget::ID = 0;
@@ -352,10 +381,16 @@ INITIALIZE_PASS_BEGIN(LowerTapirToTarget, "tapir2target",
                       "Lower Tapir to Target ABI", false, false)
 INITIALIZE_PASS_DEPENDENCY(AssumptionCacheTracker)
 INITIALIZE_PASS_DEPENDENCY(DominatorTreeWrapperPass)
+INITIALIZE_PASS_DEPENDENCY(ExternalTapirTargetWrapperPass)
 INITIALIZE_PASS_DEPENDENCY(TargetLibraryInfoWrapperPass)
 INITIALIZE_PASS_DEPENDENCY(TaskInfoWrapperPass)
 INITIALIZE_PASS_END(LowerTapirToTarget, "tapir2target",
                     "Lower Tapir to Target ABI", false, false)
+
+char ExternalTapirTargetWrapperPass::ID = 0;
+
+INITIALIZE_PASS(ExternalTapirTargetWrapperPass, "external-tapir-target",
+                "External Tapir Target", false, true)
 
 bool LowerTapirToTarget::runOnModule(Module &M) {
   if (skipModule(M))
@@ -377,9 +412,20 @@ bool LowerTapirToTarget::runOnModule(Module &M) {
       return ACT->getAssumptionCache(F);
     };
 
+  TapirTarget *TT = nullptr;
+  // If available, run an external Tapir target providing callback over the
+  // results as well.
+  if (auto *WrapperPass =
+      getAnalysisIfAvailable<ExternalTapirTargetWrapperPass>())
+    if (WrapperPass->CB)
+      // TODO: Determine what arguments if any to pass to the callback.
+      TT = WrapperPass->CB();
+  // Otherwise, get a Tapir target based on the ID.
+  if (!TT)
+    TT = getTapirTargetFromID(TargetID);
+
   bool Changed = false;
-  Changed |= TapirToTargetImpl(M, GetDT, GetTI, GetAC,
-                               getTapirTargetFromID(TargetID)).run();
+  Changed |= TapirToTargetImpl(M, GetDT, GetTI, GetAC, TT).run();
   return Changed;
 }
 
@@ -388,5 +434,13 @@ bool LowerTapirToTarget::runOnModule(Module &M) {
 namespace llvm {
 ModulePass *createLowerTapirToTargetPass() {
   return new LowerTapirToTarget();
+}
+
+// createExternalTapirTargetWrapperPass - Wrapper pass for specifying an
+// external target for Tapir lowering
+//
+ImmutablePass *createExternalTapirTargetWrapperPass(
+    ExternalTapirTargetWrapperPass::CallbackT Callback) {
+  return new ExternalTapirTargetWrapperPass(std::move(Callback));
 }
 }

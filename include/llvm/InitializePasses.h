@@ -142,6 +142,7 @@ void initializeExpandMemCmpPassPass(PassRegistry&);
 void initializeExpandPostRAPass(PassRegistry&);
 void initializeExpandReductionsPass(PassRegistry&);
 void initializeExternalAAWrapperPassPass(PassRegistry&);
+void initializeExternalTapirTargetWrapperPassPass(PassRegistry&);
 void initializeFEntryInserterPass(PassRegistry&);
 void initializeFinalizeMachineBundlesPass(PassRegistry&);
 void initializeFlattenCFGPassPass(PassRegistry&);

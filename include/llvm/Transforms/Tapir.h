@@ -15,10 +15,14 @@
 #ifndef LLVM_TRANSFORMS_TAPIR_H
 #define LLVM_TRANSFORMS_TAPIR_H
 
+#include <functional>
+
 namespace llvm {
-class Pass;
-class ModulePass;
 class FunctionPass;
+class ImmutablePass;
+class ModulePass;
+class Pass;
+class TapirTarget;
 enum class TapirTargetID;
 
 //===----------------------------------------------------------------------===//
@@ -68,6 +72,13 @@ FunctionPass *createSpawnUnswitchPass();
 // LowerTapirToTarget - Lower Tapir constructs to a specified parallel runtime.
 //
 ModulePass *createLowerTapirToTargetPass();
+
+// A wrapper pass around a callback which can be used to produce a Tapir target
+// from an external source.
+//
+// TODO: Determine what arguments if any to pass to this callback
+ImmutablePass *createExternalTapirTargetWrapperPass(
+    std::function<TapirTarget *(void)> Callback);
 
 //===----------------------------------------------------------------------===//
 //
