@@ -1130,10 +1130,10 @@ static bool DependenceMightRace(
              " for underlying object.\n");
 
   // Find the spindle that dominates both instructions.
-  Spindle *DomSpindle = TI.getSpindleFor(
-      DT.findNearestCommonDominator(Src->getParent(), Dst->getParent()));
+  BasicBlock *Dom =
+    DT.findNearestCommonDominator(Src->getParent(), Dst->getParent());
   // Find the deepest loop that contains both Src and Dst.
-  Loop *CommonLoop = LI.getLoopFor(DomSpindle->getEntry());
+  Loop *CommonLoop = LI.getLoopFor(Dom);
   unsigned MaxLoopDepthToCheck = CommonLoop ? CommonLoop->getLoopDepth() : 0;
   while (MaxLoopDepthToCheck &&
          (!CommonLoop->contains(Src->getParent()) ||
@@ -1148,10 +1148,18 @@ static bool DependenceMightRace(
     // implies the potential for a race.
     return true;
 
+  LLVM_DEBUG(
+      if (MinObjDepth > MaxLoopDepthToCheck) {
+        dbgs() << "\tSrc " << *Src << "\n\tDst " << *Dst;
+        dbgs() << "\n\tMaxLoopDepthToCheck " << MaxLoopDepthToCheck;
+        dbgs() << "\n\tMinObjDepthToCheck " << MinObjDepth << "\n";
+        dbgs() << *Src->getFunction();
+      });
   assert(MinObjDepth <= MaxLoopDepthToCheck &&
          "Minimum loop depth of underlying object cannot be greater "
          "than maximum loop depth of dependence.");
 
+  Spindle *DomSpindle = TI.getSpindleFor(Dom);
   if (MaxLoopDepthToCheck == MinObjDepth) {
     if (TI.getTaskFor(Src->getParent()) == TI.getTaskFor(Dst->getParent()))
       return false;
