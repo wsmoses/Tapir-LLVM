@@ -1489,7 +1489,8 @@ static bool MightHaveDetachedUse(const Instruction *AI, const TaskInfo &TI) {
 
 /// Returns true if accesses on Addr could race due to pointer capture.
 static bool PossibleRaceByCapture(Value *Addr, const DataLayout &DL,
-                                  const TaskInfo &TI, LoopInfo *LI) {
+                                  const TaskInfo &TI, LoopInfo *LI,
+                                  const TargetLibraryInfo *TLI) {
   if (isa<GlobalValue>(Addr))
     // For this analysis, we consider all global values to be captured.
     return true;
@@ -1512,7 +1513,7 @@ static bool PossibleRaceByCapture(Value *Addr, const DataLayout &DL,
         continue;
 
     // If the base object is not an instruction, conservatively return true.
-    if (!isa<Instruction>(BaseObj))
+    if (!isa<AllocaInst>(BaseObj) && !isAllocationFn(BaseObj, TLI))
       return true;
 
     // If the base object might have a detached use, return true.
@@ -1526,7 +1527,8 @@ static bool PossibleRaceByCapture(Value *Addr, const DataLayout &DL,
 /// Returns true if any address referenced by the callsite could race due to
 /// pointer capture.
 static bool PossibleRaceByCapture(ImmutableCallSite &CS, const DataLayout &DL,
-                                  const TaskInfo &TI, LoopInfo *LI) {
+                                  const TaskInfo &TI, LoopInfo *LI,
+                                  const TargetLibraryInfo *TLI) {
   // Check whether all pointer arguments point to local memory, and
   // ignore calls that only access local memory.
   for (auto CI = CS.arg_begin(), CE = CS.arg_end(); CI != CE; ++CI) {
@@ -1534,7 +1536,7 @@ static bool PossibleRaceByCapture(ImmutableCallSite &CS, const DataLayout &DL,
     if (!Arg->getType()->isPtrOrPtrVectorTy())
       continue;
 
-    if (PossibleRaceByCapture(Arg, DL, TI, LI))
+    if (PossibleRaceByCapture(Arg, DL, TI, LI, TLI))
       return true;
   }
   return false;
@@ -1572,7 +1574,7 @@ bool CilkSanitizerImpl::GetMaybeRacingAccesses(
     }
     Value *Addr = const_cast<Value *>(Loc.Ptr);
 
-    if (!PossibleRaceByCapture(Addr, DL, TI, &LI)) {
+    if (!PossibleRaceByCapture(Addr, DL, TI, &LI, TLI)) {
       // The variable is addressable but not captured, so it cannot be
       // referenced from a different strand and participate in a race (see
       // llvm/Analysis/CaptureTracking.h for details).
@@ -1611,7 +1613,7 @@ bool CilkSanitizerImpl::GetMaybeRacingAccesses(
     }
     Value *Addr = const_cast<Value *>(Loc.Ptr);
 
-    if (!PossibleRaceByCapture(Addr, DL, TI, &LI)) {
+    if (!PossibleRaceByCapture(Addr, DL, TI, &LI, TLI)) {
       // The variable is addressable but not captured, so it cannot be
       // referenced from a different strand and participate in a race (see
       // llvm/Analysis/CaptureTracking.h for details).
@@ -1643,7 +1645,7 @@ bool CilkSanitizerImpl::GetMaybeRacingAccesses(
     if (MemSetInst *M = dyn_cast<MemSetInst>(I)) {
       Value *Addr = M->getArgOperand(0);
 
-      if (!PossibleRaceByCapture(Addr, DL, TI, &LI)) {
+      if (!PossibleRaceByCapture(Addr, DL, TI, &LI, TLI)) {
         // The variable is addressable but not captured, so it cannot be
         // referenced from a different strand and participate in a race (see
         // llvm/Analysis/CaptureTracking.h for details).
@@ -1676,7 +1678,7 @@ bool CilkSanitizerImpl::GetMaybeRacingAccesses(
         NumOmittedReadsFromConstants++;
         SkipRead = true;
       } else if (!PossibleRaceByCapture(const_cast<Value *>(ReadLoc.Ptr),
-                                        DL, TI, &LI)) {
+                                        DL, TI, &LI, TLI)) {
         // The variable is addressable but not captured, so it cannot be
         // referenced from a different strand and participate in a race (see
         // llvm/Analysis/CaptureTracking.h for details).
@@ -1695,7 +1697,7 @@ bool CilkSanitizerImpl::GetMaybeRacingAccesses(
       // access.  Nothing can write to constant memory, so just check the local
       // base object.
       if (!PossibleRaceByCapture(const_cast<Value *>(WriteLoc.Ptr),
-                                 DL, TI, &LI)) {
+                                 DL, TI, &LI, TLI)) {
           // The variable is addressable but not captured, so it cannot be
           // referenced from a different strand and participate in a race (see
           // llvm/Analysis/CaptureTracking.h for details).
@@ -1741,7 +1743,7 @@ bool CilkSanitizerImpl::GetMaybeRacingAccesses(
 
     auto CSB = AA->getModRefBehavior(CS);
     if (!ToInstrument.count(I) && AliasAnalysis::onlyAccessesArgPointees(CSB) &&
-        !PossibleRaceByCapture(CS, DL, TI, &LI)) {
+        !PossibleRaceByCapture(CS, DL, TI, &LI, TLI)) {
       // The variable is addressable but not captured, so it cannot be
       // referenced from a different strand and participate in a race (see
       // llvm/Analysis/CaptureTracking.h for details).
@@ -1842,7 +1844,7 @@ void CilkSanitizerImpl::chooseInstructionsToInstrument(
         ? cast<StoreInst>(I)->getPointerOperand()
         : cast<LoadInst>(I)->getPointerOperand();
     if (LocalBaseObj(Addr, DL, &LI, TLI) &&
-        !PossibleRaceByCapture(Addr, DL, TI, &LI)) {
+        !PossibleRaceByCapture(Addr, DL, TI, &LI, TLI)) {
       // The variable is addressable but not captured, so it cannot be
       // referenced from a different thread and participate in a data race
       // (see llvm/Analysis/CaptureTracking.h for details).
