@@ -2945,7 +2945,8 @@ bool CSIImpl::instrumentMemIntrinsic(Instruction *I) {
 std::pair<bool, bool> CSIImpl::isBBEmpty(BasicBlock &BB) {
   bool IsEmpty = false;
   BasicBlock::iterator Iter = BB.getFirstInsertionPt();
-  while (callsPlaceholderFunction(*Iter)) Iter++;
+  while ((&*Iter != BB.getTerminator()) && callsPlaceholderFunction(*Iter))
+    Iter++;
   IsEmpty = (&*Iter == BB.getTerminator());
 
   // TODO: Update these checks once we instrument atomics
@@ -2967,10 +2968,8 @@ std::pair<bool, bool> CSIImpl::isBBEmpty(BasicBlock &BB) {
 
     if (CallInst *CI = dyn_cast<CallInst>(I)) {
       // Skip this call if it calls a placeholder function.
-      if (callsPlaceholderFunction(*I)) {
-        ++Iter;
+      if (callsPlaceholderFunction(*I))
         continue;
-      }
 
       if (isAllocationFn(CI, TLI))
         if (AllocFnFED.hasId(CI))
