@@ -3083,6 +3083,7 @@ void CSIImpl::instrumentLoop(Loop &L, TaskInfo &TI, ScalarEvolution *SE) {
   // Record properties of this loop.
   CsiLoopProperty LoopProp;
   LoopProp.setIsTapirLoop(static_cast<bool>(getTaskIfTapirLoop(&L, &TI)));
+  LoopProp.setHasUniqueExitingBlock((ExitingBlocks.size() == 1));
   IRBuilder<> IRB(Preheader->getTerminator());
   Value *LoopCsiId = LoopFED.localToGlobalId(LocalId, IRB);
   Value *LoopPropVal = LoopProp.getValue(IRB);

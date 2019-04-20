@@ -407,6 +407,7 @@ public:
   static StructType *getStructType(LLVMContext &C) {
     // Must match the definition of property type in csi.h
     return StructType::get(IntegerType::get(C, PropBits.IsTapirLoop),
+                           IntegerType::get(C, PropBits.HasUniqueExitingBlock),
                            IntegerType::get(C, PropBits.Padding));
   }
   static Type *getType(LLVMContext &C) {
@@ -425,15 +426,21 @@ public:
     return ConstantInt::get(getType(C), PropValue.Bits);
   }
 
-  /// Set the value of the IsLandingPad property.
+  /// Set the value of the IsTapirLoop property.
   void setIsTapirLoop(bool v) { PropValue.Fields.IsTapirLoop = v; }
+
+  /// Set the value of the HasUniqueExitingBlock property.
+  void setHasUniqueExitingBlock(bool v) {
+    PropValue.Fields.HasUniqueExitingBlock = v;
+  }
 
 private:
   typedef union {
     // Must match the definition of property type in csi.h
     struct {
       unsigned IsTapirLoop : 1;
-      uint64_t Padding : 63;
+      unsigned HasUniqueExitingBlock : 1;
+      uint64_t Padding : 62;
     } Fields;
     uint64_t Bits;
   } Property;
@@ -443,11 +450,12 @@ private:
 
   typedef struct {
     int IsTapirLoop;
+    int HasUniqueExitingBlock;
     int Padding;
   } PropertyBits;
 
   /// The number of bits representing each property.
-  static constexpr PropertyBits PropBits = {1, (64 - 1)};
+  static constexpr PropertyBits PropBits = {1, 1, (64 - 1 - 1)};
 };
 
 class CsiLoopExitProperty : public CsiProperty {
