@@ -588,8 +588,10 @@ void CSIImpl::initializeBasicBlockHooks() {
   LLVMContext &C = M.getContext();
   IRBuilder<> IRB(C);
   Type *PropertyTy = CsiBBProperty::getType(C);
+  Type *OperandIDType = StructType::get(IRB.getInt8Ty(), IRB.getInt64Ty());
   CsiBBEntry = checkCsiInterfaceFunction(M.getOrInsertFunction(
-      "__csi_bb_entry", IRB.getVoidTy(), IRB.getInt64Ty(), PropertyTy));
+      "__csi_bb_entry", IRB.getVoidTy(), IRB.getInt64Ty(),
+      PointerType::get(OperandIDType, 0), IRB.getInt32Ty(), PropertyTy));
   CsiBBExit = checkCsiInterfaceFunction(M.getOrInsertFunction(
       "__csi_bb_exit", IRB.getVoidTy(), IRB.getInt64Ty(), PropertyTy));
 }
@@ -599,12 +601,13 @@ void CSIImpl::initializeLoopHooks() {
   LLVMContext &C = M.getContext();
   IRBuilder<> IRB(C);
   Type *IDType = IRB.getInt64Ty();
+  Type *OperandIDType = StructType::get(IRB.getInt8Ty(), IRB.getInt64Ty());
   Type *LoopPropertyTy = CsiLoopProperty::getType(C);
   Type *LoopExitPropertyTy = CsiLoopExitProperty::getType(C);
 
   CsiBeforeLoop = checkCsiInterfaceFunction(M.getOrInsertFunction(
       "__csi_before_loop", IRB.getVoidTy(), IDType, IRB.getInt64Ty(),
-      LoopPropertyTy));
+      PointerType::get(OperandIDType, 0), IRB.getInt32Ty(), LoopPropertyTy));
   CsiAfterLoop = checkCsiInterfaceFunction(M.getOrInsertFunction(
       "__csi_after_loop", IRB.getVoidTy(), IDType, LoopPropertyTy));
 
@@ -2413,6 +2416,7 @@ void CSIImpl::initializeTapirHooks() {
   IRBuilder<> IRB(C);
   Type *IDType = IRB.getInt64Ty();
   Type *RetType = IRB.getVoidTy();
+  Type *OperandIDType = StructType::get(IRB.getInt8Ty(), IRB.getInt64Ty());
 
   // TODO: Can we change the type of the TrackVars variable to be a simple i32?
   // That would allow the optimizer to more generally optimize away the
@@ -2422,10 +2426,11 @@ void CSIImpl::initializeTapirHooks() {
       "__csi_detach", RetType,
       /* detach_id */ IDType, IntegerType::getInt32Ty(C)->getPointerTo()));
   CsiDetach->addParamAttr(1, Attribute::ReadOnly);
-  CsiTaskEntry =
-      checkCsiInterfaceFunction(M.getOrInsertFunction("__csi_task", RetType,
-                                                      /* task_id */ IDType,
-                                                      /* detach_id */ IDType));
+  CsiTaskEntry = checkCsiInterfaceFunction(
+      M.getOrInsertFunction("__csi_task", RetType, /* task_id */ IDType,
+                            /* detach_id */ IDType,
+                            PointerType::get(OperandIDType, 0),
+                            IRB.getInt32Ty()));
   CsiTaskExit = checkCsiInterfaceFunction(
       M.getOrInsertFunction("__csi_task_exit", RetType,
                             /* task_exit_id */ IDType,
@@ -3017,7 +3022,45 @@ std::pair<bool, bool> CSIImpl::isBBEmpty(BasicBlock &BB) {
   return std::make_pair(IsEmpty, true);
 }
 
-void CSIImpl::instrumentBasicBlock(BasicBlock &BB) {
+static void getBBInputs(BasicBlock &BB, SmallPtrSetImpl<Value *> &Inputs) {
+  // If a used value is defined outside the region, it's an input.  If an
+  // instruction is used outside the region, it's an output.
+  for (Instruction &II : BB) {
+    // Because PHI-node instrumentation is inserted before bb_entry, we consider
+    // the PHI nodes inputs of the basic block.
+    if (isa<PHINode>(II)) {
+      Inputs.insert(&II);
+      continue;
+    }
+
+    if (isa<InvokeInst>(II))
+      // Skip invoke instructions, because they are handled separately along
+      // with calls.
+      continue;
+
+    if (isa<DetachInst>(II) || isa<ReattachInst>(II) || isa<SyncInst>(II))
+      // Skip the Tapir instructions, because they don't directly use any
+      // values.  This check ensures that we ignore sync regions as BB inputs.
+      continue;
+
+    // Examine all operands of this instruction.
+    for (User::const_op_iterator OI = II.op_begin(), OE = II.op_end(); OI != OE;
+         ++OI) {
+      // Skip constants
+      if (isa<Constant>(*OI))
+        continue;
+      // If this operand is not defined in this basic block, it's an input.
+      if (isa<Argument>(*OI) || isa<GlobalValue>(*OI))
+        Inputs.insert(*OI);
+      if (Instruction *UI = dyn_cast<Instruction>(&*OI))
+        if (UI->getParent() != &BB)
+          Inputs.insert(*OI);
+    }
+  }
+}
+
+void CSIImpl::instrumentBasicBlock(BasicBlock &BB,
+                                   const SmallPtrSetImpl<Value *> &Inputs) {
   // Compute the properties of this basic block.
   CsiBBProperty Prop;
   Prop.setIsLandingPad(BB.isLandingPad());
@@ -3029,15 +3072,54 @@ void CSIImpl::instrumentBasicBlock(BasicBlock &BB) {
   Prop.setIsEmpty(EmptyBB.first);
   Prop.setNoInstrumentedContent(EmptyBB.second);
 
-  // Insert entry and exit hooks.
+  // Get the inputs of this basic block
   IRBuilder<> IRB(&*BB.getFirstInsertionPt());
+  unsigned NumArgs = Inputs.size();
+  Type *InputIDType = StructType::get(IRB.getInt8Ty(), IRB.getInt64Ty());
+  Value *ArgArray =
+    ConstantPointerNull::get(PointerType::get(InputIDType, 0));
+  Type *ArgArrayTy = nullptr;
+  Value *StackAddr = nullptr;
+  if (NumArgs > 0) {
+    // Save the stack for proper deallocation of this allocated array later.
+    StackAddr = IRB.CreateCall(
+        Intrinsic::getDeclaration(&M, Intrinsic::stacksave));
+    // Create an array to store input ID information for the call.
+    ArgArray = IRB.CreateAlloca(InputIDType, IRB.getInt32(NumArgs));
+    ArgArrayTy = cast<AllocaInst>(ArgArray)->getAllocatedType();
+    IRB.CreateLifetimeStart(
+        ArgArray, IRB.getInt64(DL.getTypeAllocSize(ArgArrayTy) * NumArgs));
+    // Store input ID information into the array.
+    unsigned ArgNum = 0;
+    for (Value *Input : Inputs) {
+      std::pair<Value *, Value *> OperandID = getOperandID(Input, IRB);
+      IRB.CreateStore(OperandID.first,
+                      IRB.CreateInBoundsGEP(ArgArray, {IRB.getInt32(ArgNum),
+                                                       IRB.getInt32(0)}));
+      IRB.CreateStore(OperandID.second,
+                      IRB.CreateInBoundsGEP(ArgArray, {IRB.getInt32(ArgNum),
+                                                       IRB.getInt32(1)}));
+      ArgNum++;
+    }
+  }
+
+  // Insert entry and exit hooks.
   csi_id_t LocalId = BasicBlockFED.add(BB);
   csi_id_t BBSizeId = BBSize.add(BB);
   assert(LocalId == BBSizeId &&
          "BB recieved different ID's in FED and sizeinfo tables.");
   Value *CsiId = BasicBlockFED.localToGlobalId(LocalId, IRB);
   Value *PropVal = Prop.getValue(IRB);
-  insertHookCall(&*IRB.GetInsertPoint(), CsiBBEntry, {CsiId, PropVal});
+  insertHookCall(&*IRB.GetInsertPoint(), CsiBBEntry,
+                 {CsiId, ArgArray, IRB.getInt32(NumArgs), PropVal});
+  if (NumArgs > 0) {
+    // Clean up the array of inputs
+    IRB.CreateLifetimeEnd(
+        ArgArray, IRB.getInt64(DL.getTypeAllocSize(ArgArrayTy) * NumArgs));
+    IRB.CreateCall(Intrinsic::getDeclaration(&M, Intrinsic::stackrestore),
+                   {StackAddr});
+  }
+
   IRB.SetInsertPoint(TI);
   insertHookCall(TI, CsiBBExit, {CsiId, PropVal});
 }
@@ -3064,7 +3146,72 @@ static const SCEV *getRuntimeTripCount(Loop &L, ScalarEvolution *SE) {
   return TripCountSC;
 }
 
-void CSIImpl::instrumentLoop(Loop &L, TaskInfo &TI, ScalarEvolution *SE) {
+void CSIImpl::getAllLoopInputs(Loop &L, LoopInfo &LI, InputMap<Loop> &Inputs) {
+  // Recursively get the loop inputs for all subloops.
+  for (Loop *SubL : L)
+    getAllLoopInputs(*SubL, LI, Inputs);
+
+  SmallPtrSetImpl<Value *> &LInputs = Inputs[&L];
+  // Check the loop inputs for the subloops to see which are defined in this
+  // loop.
+  for (Loop *SubL : L) {
+    for (Value *SubLInput : Inputs[SubL]) {
+      // Add all inputs that are arguments or global values
+      if (isa<Argument>(SubLInput) || isa<GlobalValue>(SubLInput))
+        LInputs.insert(SubLInput);
+
+      // Check if the input is defined in this loop.
+      if (Instruction *I = dyn_cast<Instruction>(SubLInput))
+        if (LI.getLoopFor(I->getParent()) != &L)
+          LInputs.insert(SubLInput);
+    }
+  }
+
+  // Now check the basic blocks in L and not any subloop of L.
+  for (BasicBlock *BB : L.blocks()) {
+    // Skip basic blocks in subloops of L.
+    if (LI.getLoopFor(BB) != &L)
+      continue;
+
+    // If a used value is defined outside the region, it's an input.  If an
+    // instruction is used outside the region, it's an output.
+    for (Instruction &II : *BB) {
+      if (isa<DetachInst>(II) || isa<ReattachInst>(II) || isa<SyncInst>(II))
+        // Skip the Tapir instructions, because they don't directly use any
+        // values.  This check ensures that we ignore sync regions as inputs.
+        continue;
+
+      // Examine all operands of this instruction.
+      for (User::const_op_iterator OI = II.op_begin(), OE = II.op_end(); OI != OE;
+           ++OI) {
+        // Skip constants
+        if (isa<Constant>(*OI))
+          continue;
+        // If this operand is not defined in this basic block, it's an input.
+        if (isa<Argument>(*OI) || isa<GlobalValue>(*OI))
+          LInputs.insert(*OI);
+        if (Instruction *UI = dyn_cast<Instruction>(&*OI))
+          if (!L.contains(UI->getParent()))
+            LInputs.insert(*OI);
+      }
+    }
+  }
+
+  DEBUG({
+      dbgs() << "Inputs for " << L << "\n";
+      for (Value *Input : LInputs) {
+        dbgs() << "\t" << *Input;
+        if (Instruction *I = dyn_cast<Instruction>(Input))
+          dbgs() << " in " << I->getParent()->getName();
+        else if (Argument *A = dyn_cast<Argument>(Input))
+          dbgs() << " in " << A->getParent()->getName();
+        dbgs() << "\n";
+      }
+    });
+}
+
+void CSIImpl::instrumentLoop(Loop &L, const InputMap<Loop> &LoopInputs,
+                             TaskInfo &TI, ScalarEvolution *SE) {
   assert(L.isLoopSimplifyForm() && "CSI assumes loops are in simplified form.");
   BasicBlock *Preheader = L.getLoopPreheader();
   BasicBlock *Header = L.getHeader();
@@ -3078,12 +3225,13 @@ void CSIImpl::instrumentLoop(Loop &L, TaskInfo &TI, ScalarEvolution *SE) {
 
   // Recursively instrument each subloop.
   for (Loop *SubL : L)
-    instrumentLoop(*SubL, TI, SE);
+    instrumentLoop(*SubL, LoopInputs, TI, SE);
 
   // Record properties of this loop.
   CsiLoopProperty LoopProp;
   LoopProp.setIsTapirLoop(static_cast<bool>(getTaskIfTapirLoop(&L, &TI)));
   LoopProp.setHasUniqueExitingBlock((ExitingBlocks.size() == 1));
+
   IRBuilder<> IRB(Preheader->getTerminator());
   Value *LoopCsiId = LoopFED.localToGlobalId(LocalId, IRB);
   Value *LoopPropVal = LoopProp.getValue(IRB);
@@ -3103,8 +3251,49 @@ void CSIImpl::instrumentLoop(Loop &L, TaskInfo &TI, ScalarEvolution *SE) {
                                          &*IRB.GetInsertPoint());
     }
   }
+
+  // Determine inputs for this loop.
+  const SmallPtrSetImpl<Value *> &Inputs = LoopInputs.lookup(&L);
+  unsigned NumArgs = Inputs.size();
+  Type *InputIDType = StructType::get(IRB.getInt8Ty(), IRB.getInt64Ty());
+  Value *ArgArray =
+    ConstantPointerNull::get(PointerType::get(InputIDType, 0));
+  Type *ArgArrayTy = nullptr;
+  Value *StackAddr = nullptr;
+  if (NumArgs > 0) {
+    // Save the stack for proper deallocation of this allocated array later.
+    StackAddr = IRB.CreateCall(
+        Intrinsic::getDeclaration(&M, Intrinsic::stacksave));
+    // Create an array to store input ID information for the call.
+    ArgArray = IRB.CreateAlloca(InputIDType, IRB.getInt32(NumArgs));
+    ArgArrayTy = cast<AllocaInst>(ArgArray)->getAllocatedType();
+    IRB.CreateLifetimeStart(
+        ArgArray, IRB.getInt64(DL.getTypeAllocSize(ArgArrayTy) * NumArgs));
+    // Store input ID information into the array.
+    unsigned ArgNum = 0;
+    for (Value *Input : Inputs) {
+      std::pair<Value *, Value *> OperandID = getOperandID(Input, IRB);
+      IRB.CreateStore(OperandID.first,
+                      IRB.CreateInBoundsGEP(ArgArray, {IRB.getInt32(ArgNum),
+                                                       IRB.getInt32(0)}));
+      IRB.CreateStore(OperandID.second,
+                      IRB.CreateInBoundsGEP(ArgArray, {IRB.getInt32(ArgNum),
+                                                       IRB.getInt32(1)}));
+      ArgNum++;
+    }
+  }
+
   insertHookCall(&*IRB.GetInsertPoint(), CsiBeforeLoop,
-                 {LoopCsiId, TripCount, LoopPropVal});
+                 {LoopCsiId, TripCount, ArgArray, IRB.getInt32(NumArgs),
+                  LoopPropVal});
+  if (NumArgs > 0) {
+    // Clean up the array of inputs
+    IRB.CreateLifetimeEnd(
+        ArgArray, IRB.getInt64(DL.getTypeAllocSize(ArgArrayTy) * NumArgs));
+    IRB.CreateCall(Intrinsic::getDeclaration(&M, Intrinsic::stackrestore),
+                   {StackAddr});
+  }
+
   IRB.SetInsertPoint(&*Header->getFirstInsertionPt());
   // TODO: Pass IVs to hook?
   insertHookCall(&*IRB.GetInsertPoint(), CsiLoopBodyEntry,
@@ -3559,39 +3748,45 @@ void CSIImpl::instrumentCallsite(Instruction *I, DominatorTree *DT,
   }
   assert(FuncId != NULL);
   Type *OperandIDType = StructType::get(IRB.getInt8Ty(), IRB.getInt64Ty());
-  // Save the stack for proper deallocation of this allocated array later.
-  Value *StackAddr = IRB.CreateCall(
-      Intrinsic::getDeclaration(&M, Intrinsic::stacksave));
-  // Create an array to store operand ID information for the call.
-  AllocaInst *ArgArray = IRB.CreateAlloca(OperandIDType, IRB.getInt32(NumArgs));
-  IRB.CreateLifetimeStart(
-      ArgArray, IRB.getInt64(DL.getTypeAllocSize(
-                                 ArgArray->getAllocatedType()) * NumArgs));
+  Value *ArgArray =
+    ConstantPointerNull::get(PointerType::get(OperandIDType, 0));
+  Type *ArgArrayTy = nullptr;
+  Value *StackAddr = nullptr;
+  if (NumArgs > 0) {
+    // Create an array to store operand ID information for the call.
+    ArgArray = IRB.CreateAlloca(OperandIDType, IRB.getInt32(NumArgs));
+    ArgArrayTy = cast<AllocaInst>(ArgArray)->getAllocatedType();
+    // Save the stack for proper deallocation of this allocated array later.
+    StackAddr = IRB.CreateCall(
+        Intrinsic::getDeclaration(&M, Intrinsic::stacksave));
+    IRB.CreateLifetimeStart(
+        ArgArray, IRB.getInt64(DL.getTypeAllocSize(ArgArrayTy) * NumArgs));
 
-  // Store operand ID information into the array.
-  if (CallInst *CI = dyn_cast<CallInst>(I)) {
-    unsigned ArgNum = 0;
-    for (Value *Operand : CI->arg_operands()) {
-      std::pair<Value *, Value *> OperandID = getOperandID(Operand, IRB);
-      IRB.CreateStore(OperandID.first,
-                      IRB.CreateInBoundsGEP(ArgArray, {IRB.getInt32(ArgNum),
-                                                       IRB.getInt32(0)}));
-      IRB.CreateStore(OperandID.second,
-                      IRB.CreateInBoundsGEP(ArgArray, {IRB.getInt32(ArgNum),
-                                                       IRB.getInt32(1)}));
-      ArgNum++;
-    }
-  } else if (InvokeInst *II = dyn_cast<InvokeInst>(I)) {
-    unsigned ArgNum = 0;
-    for (Value *Operand : II->arg_operands()) {
-      std::pair<Value *, Value *> OperandID = getOperandID(Operand, IRB);
-      IRB.CreateStore(OperandID.first,
-                      IRB.CreateInBoundsGEP(ArgArray, {IRB.getInt32(ArgNum),
-                                                       IRB.getInt32(0)}));
-      IRB.CreateStore(OperandID.second,
-                      IRB.CreateInBoundsGEP(ArgArray, {IRB.getInt32(ArgNum),
-                                                       IRB.getInt32(1)}));
-      ArgNum++;
+    // Store operand ID information into the array.
+    if (CallInst *CI = dyn_cast<CallInst>(I)) {
+      unsigned ArgNum = 0;
+      for (Value *Operand : CI->arg_operands()) {
+        std::pair<Value *, Value *> OperandID = getOperandID(Operand, IRB);
+        IRB.CreateStore(OperandID.first,
+                        IRB.CreateInBoundsGEP(ArgArray, {IRB.getInt32(ArgNum),
+                                                         IRB.getInt32(0)}));
+        IRB.CreateStore(OperandID.second,
+                        IRB.CreateInBoundsGEP(ArgArray, {IRB.getInt32(ArgNum),
+                                                         IRB.getInt32(1)}));
+        ArgNum++;
+      }
+    } else if (InvokeInst *II = dyn_cast<InvokeInst>(I)) {
+      unsigned ArgNum = 0;
+      for (Value *Operand : II->arg_operands()) {
+        std::pair<Value *, Value *> OperandID = getOperandID(Operand, IRB);
+        IRB.CreateStore(OperandID.first,
+                        IRB.CreateInBoundsGEP(ArgArray, {IRB.getInt32(ArgNum),
+                                                         IRB.getInt32(0)}));
+        IRB.CreateStore(OperandID.second,
+                        IRB.CreateInBoundsGEP(ArgArray, {IRB.getInt32(ArgNum),
+                                                         IRB.getInt32(1)}));
+        ArgNum++;
+      }
     }
   }
 
@@ -3606,13 +3801,13 @@ void CSIImpl::instrumentCallsite(Instruction *I, DominatorTree *DT,
   if (shouldInstrumentBefore)
     insertHookCall(I, CsiBeforeCallsite, {CallsiteId, FuncId, ArgArray,
                                           IRB.getInt32(NumArgs), PropVal});
-  // Clean up the array of operand args
-  IRB.CreateLifetimeEnd(
-      ArgArray, IRB.getInt64(DL.getTypeAllocSize(
-                                 ArgArray->getAllocatedType()) * NumArgs));
-  IRB.CreateCall(Intrinsic::getDeclaration(&M, Intrinsic::stackrestore),
-                 {StackAddr});
-
+  if (NumArgs > 0) {
+    // Clean up the array of operand args
+    IRB.CreateLifetimeEnd(
+        ArgArray, IRB.getInt64(DL.getTypeAllocSize(ArgArrayTy) * NumArgs));
+    IRB.CreateCall(Intrinsic::getDeclaration(&M, Intrinsic::stackrestore),
+                   {StackAddr});
+  }
   BasicBlock::iterator Iter(I);
   if (shouldInstrumentAfter) {
     if (IsInvoke) {
@@ -3701,8 +3896,87 @@ static void getTaskExits(DetachInst *DI,
   }
 }
 
+// TODO: See if there's a simple way to combine this logic with the
+// findTaskInputsOutputs logic currently in Tapir/LoweringUtils.
+void CSIImpl::getAllTaskInputs(TaskInfo &TI, InputMap<Task> &Inputs) {
+  for (Task *T : post_order(TI.getRootTask())) {
+    // Skip the root task
+    if (T->isRootTask())
+      break;
+
+    SmallPtrSetImpl<Value *> &TInputs = Inputs[T];
+    // Check the inputs for all subtasks to see which are defined in this task.
+    for (Task *SubT : T->subtasks())
+      if (Inputs.count(SubT))
+        for (Value *V : Inputs[SubT]) {
+          if (isa<Argument>(V) || isa<GlobalValue>(V))
+            TInputs.insert(V);
+
+          if (Instruction *I = dyn_cast<Instruction>(V))
+            if (TI.getTaskFor(I->getParent()) != T)
+              TInputs.insert(V);
+        }
+
+    for (Spindle *S : depth_first<InTask<Spindle *>>(T->getEntrySpindle())) {
+      for (BasicBlock *BB : S->blocks()) {
+        // Skip basic blocks that are successors of detached rethrows.  They're
+        // dead anyway.
+        if (isSuccessorOfDetachedRethrow(BB))
+          continue;
+
+        // If a used value is defined outside the region, it's an input.  If an
+        // instruction is used outside the region, it's an output.
+        for (Instruction &II : *BB) {
+          if (isa<DetachInst>(II) || isa<ReattachInst>(II) || isa<SyncInst>(II))
+            // Skip the Tapir instructions, because they don't directly use any
+            // values.  This check ensures that we ignore sync regions as inputs.
+            continue;
+
+          // Examine all operands of this instruction.
+          for (User::op_iterator OI = II.op_begin(), OE = II.op_end(); OI != OE;
+               ++OI) {
+            // PHI nodes in the entry block of a shared-EH exit will be
+            // rewritten in any cloned helper, so we skip operands of these PHI
+            // nodes for blocks not in this task.
+            if (S->isSharedEH() && S->isEntry(BB))
+              if (PHINode *PN = dyn_cast<PHINode>(&II)) {
+                DEBUG(dbgs() << "\tPHI node in shared-EH spindle: " << *PN << "\n");
+                if (!T->simplyEncloses(PN->getIncomingBlock(*OI))) {
+                  DEBUG(dbgs() << "skipping\n");
+                  continue;
+                }
+              }
+            // Skip constants
+            if (isa<Constant>(*OI))
+              continue;
+            // If this operand is not defined in this basic block, it's an input.
+            if (isa<Argument>(*OI) || isa<GlobalValue>(*OI))
+              TInputs.insert(*OI);
+            // If this operand is defined in the parent, it's an input.
+            if (T->definedInParent(*OI))
+              TInputs.insert(*OI);
+          }
+        }
+      }
+    }
+
+    DEBUG({
+        dbgs() << "Inputs for " << *T << "\n";
+        for (Value *Input : TInputs) {
+          dbgs() << "\t" << *Input;
+          if (Instruction *I = dyn_cast<Instruction>(Input))
+            dbgs() << " in " << I->getParent()->getName();
+          else if (Argument *A = dyn_cast<Argument>(Input))
+            dbgs() << " in " << A->getParent()->getName();
+          dbgs() << "\n";
+        }
+      });
+  }
+}
+
 void CSIImpl::instrumentDetach(DetachInst *DI, DominatorTree *DT, TaskInfo &TI,
-                               const DenseMap<Value *, Value *> &TrackVars) {
+                               const DenseMap<Value *, Value *> &TrackVars,
+                               const InputMap<Task> &TaskInputs) {
   // Instrument the detach instruction itself
   Value *DetachID;
   {
@@ -3733,10 +4007,51 @@ void CSIImpl::instrumentDetach(DetachInst *DI, DominatorTree *DT, TaskInfo &TI,
     IRBuilder<> IRB(&*DetachedBlock->getFirstInsertionPt());
     csi_id_t LocalID = TaskFED.add(*DetachedBlock);
     Value *TaskID = TaskFED.localToGlobalId(LocalID, IRB);
+    // Determine inputs for this task.
+    const SmallPtrSetImpl<Value *> &Inputs =
+      TaskInputs.lookup(TI.getTaskFor(DetachedBlock));
+    unsigned NumArgs = Inputs.size();
+    Type *InputIDType = StructType::get(IRB.getInt8Ty(), IRB.getInt64Ty());
+    Value *ArgArray =
+      ConstantPointerNull::get(PointerType::get(InputIDType, 0));
+    Type *ArgArrayTy = nullptr;
+    Value *StackAddr = nullptr;
+    if (NumArgs > 0) {
+      // Save the stack for proper deallocation of this allocated array later.
+      StackAddr = IRB.CreateCall(
+          Intrinsic::getDeclaration(&M, Intrinsic::stacksave));
+      // Create an array to store input ID information for the call.
+      ArgArray = IRB.CreateAlloca(InputIDType, IRB.getInt32(NumArgs));
+      ArgArrayTy = cast<AllocaInst>(ArgArray)->getAllocatedType();
+      IRB.CreateLifetimeStart(
+          ArgArray, IRB.getInt64(DL.getTypeAllocSize(ArgArrayTy) * NumArgs));
+      // Store input ID information into the array.
+      unsigned ArgNum = 0;
+      for (Value *Input : Inputs) {
+        std::pair<Value *, Value *> OperandID = getOperandID(Input, IRB);
+        IRB.CreateStore(OperandID.first,
+                        IRB.CreateInBoundsGEP(ArgArray, {IRB.getInt32(ArgNum),
+                                                         IRB.getInt32(0)}));
+        IRB.CreateStore(OperandID.second,
+                        IRB.CreateInBoundsGEP(ArgArray, {IRB.getInt32(ArgNum),
+                                                         IRB.getInt32(1)}));
+        ArgNum++;
+      }
+    }
+
     // Value *StackSave = IRB.CreateCall(
     //     Intrinsic::getDeclaration(&M, Intrinsic::stacksave));
-    Instruction *Call = IRB.CreateCall(CsiTaskEntry, {TaskID, DetachID});
+    Instruction *Call = IRB.CreateCall(CsiTaskEntry,
+                                       {TaskID, DetachID, ArgArray,
+                                        IRB.getInt32(NumArgs)});
     setInstrumentationDebugLoc(*DetachedBlock, Call);
+    if (NumArgs > 0) {
+      // Clean up the array of inputs
+      IRB.CreateLifetimeEnd(
+          ArgArray, IRB.getInt64(DL.getTypeAllocSize(ArgArrayTy) * NumArgs));
+      IRB.CreateCall(Intrinsic::getDeclaration(&M, Intrinsic::stackrestore),
+                     {StackAddr});
+    }
 
     // Instrument the exit points of the detached tasks.
     for (BasicBlock *Exit : TaskExits) {
@@ -5718,12 +6033,26 @@ void CSIImpl::instrumentFunction(Function &F) {
   for (Instruction *I : Arithmetic)
     assignArithmeticID(I);
 
+  // Determine inputs for CFG structures.
+  InputMap<BasicBlock> BBInputs;
+  InputMap<Loop> LoopInputs;
+  InputMap<Task> TaskInputs;
+
+  if (Options.InstrumentBasicBlocks)
+    for (BasicBlock *BB : BasicBlocks)
+      getBBInputs(*BB, BBInputs[BB]);
+  if (Options.InstrumentLoops)
+    for (Loop *L : LI)
+      getAllLoopInputs(*L, LI, LoopInputs);
+  if (Options.InstrumentTapir)
+    getAllTaskInputs(TI, TaskInputs);
+
   // Instrument basic blocks.  Note that we do this before other instrumentation
   // so that we put this at the beginning of the basic block, and then the
   // function entry call goes before the call to basic block entry.
   if (Options.InstrumentBasicBlocks)
     for (BasicBlock *BB : BasicBlocks)
-      instrumentBasicBlock(*BB);
+      instrumentBasicBlock(*BB, BBInputs[BB]);
 
   // Instrument Tapir constructs.
   if (Options.InstrumentTapir) {
@@ -5735,7 +6064,7 @@ void CSIImpl::instrumentFunction(Function &F) {
     if (Config->DoesFunctionRequireInstrumentationForPoint(
             F.getName(), InstrumentationPoint::INSTR_TAPIR_DETACH)) {
       for (DetachInst *DI : Detaches)
-        instrumentDetach(DI, DT, TI, TrackVars);
+        instrumentDetach(DI, DT, TI, TrackVars, TaskInputs);
     }
     if (Config->DoesFunctionRequireInstrumentationForPoint(
             F.getName(), InstrumentationPoint::INSTR_TAPIR_SYNC)) {
@@ -5747,7 +6076,7 @@ void CSIImpl::instrumentFunction(Function &F) {
   if (Options.InstrumentLoops)
     // Recursively instrument all loops
     for (Loop *L : LI)
-      instrumentLoop(*L, TI, SE);
+      instrumentLoop(*L, LoopInputs, TI, SE);
 
   // Do this work in a separate loop after copying the iterators so that we
   // aren't modifying the list as we're iterating.

@@ -1094,6 +1094,11 @@ public:
     return IRB.getInt64(CsiUnknownId);
   }
 
+  template<typename T>
+  using InputMap = DenseMap<T *, SmallPtrSet<Value *, 8>>;
+  static void getAllLoopInputs(Loop &L, LoopInfo &LI, InputMap<Loop> &Inputs);
+  static void getAllTaskInputs(TaskInfo &TI, InputMap<Task> &Inputs);
+
 protected:
   /// Initialize the CSI pass.
   void initializeCsi();
@@ -1165,11 +1170,14 @@ protected:
   void assignCallsiteID(Instruction *I);
   bool handleFPBuiltinCall(CallInst *I, Function *F, LoopInfo &LI);
   void instrumentCallsite(Instruction *I, DominatorTree *DT, LoopInfo &LI);
-  void instrumentBasicBlock(BasicBlock &BB);
-  void instrumentLoop(Loop &L, TaskInfo &TI, ScalarEvolution *SE);
+  void instrumentBasicBlock(BasicBlock &BB,
+                            const SmallPtrSetImpl<Value *> &Inputs);
+  void instrumentLoop(Loop &L, const InputMap<Loop> &LoopInputs,
+                      TaskInfo &TI, ScalarEvolution *SE);
 
   void instrumentDetach(DetachInst *DI, DominatorTree *DT, TaskInfo &TI,
-                        const DenseMap<Value *, Value *> &TrackVars);
+                        const DenseMap<Value *, Value *> &TrackVars,
+                        const InputMap<Task> &TaskInputs);
   void instrumentSync(SyncInst *SI,
                       const DenseMap<Value *, Value *> &TrackVars);
   void assignAllocaID(Instruction *I);
