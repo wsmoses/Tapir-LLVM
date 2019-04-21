@@ -1982,22 +1982,24 @@ void CSIImpl::initializeLoadStoreHooks() {
 
   CsiBeforeRead = checkCsiInterfaceFunction(
       M.getOrInsertFunction("__csi_before_load", RetType, IDType,
-                            AddrType, NumBytesType, LoadPropertyTy));
+                            AddrType, NumBytesType, ValCatType, IDType,
+                            LoadPropertyTy));
   CsiBeforeRead->addParamAttr(1, Attribute::ReadOnly);
   CsiAfterRead = checkCsiInterfaceFunction(
       M.getOrInsertFunction("__csi_after_load", RetType, IDType,
-                            AddrType, NumBytesType, LoadPropertyTy));
+                            AddrType, NumBytesType, ValCatType, IDType,
+                            LoadPropertyTy));
   CsiAfterRead->addParamAttr(1, Attribute::ReadOnly);
 
   CsiBeforeWrite = checkCsiInterfaceFunction(
       M.getOrInsertFunction("__csi_before_store", RetType, IDType,
                             AddrType, NumBytesType, ValCatType, IDType,
-                            StorePropertyTy));
+                            ValCatType, IDType, StorePropertyTy));
   CsiBeforeWrite->addParamAttr(1, Attribute::ReadOnly);
   CsiAfterWrite = checkCsiInterfaceFunction(
       M.getOrInsertFunction("__csi_after_store", RetType, IDType,
                             AddrType, NumBytesType, ValCatType, IDType,
-                            StorePropertyTy));
+                            ValCatType, IDType, StorePropertyTy));
   CsiAfterWrite->addParamAttr(1, Attribute::ReadOnly);
 
   CsiBeforeVMaskedLoad4F = checkCsiInterfaceFunction(
@@ -2572,29 +2574,32 @@ void CSIImpl::addLoadStoreInstrumentation(Instruction *I, Function *BeforeFn,
                                           Function *AfterFn, Value *CsiId,
                                           Type *AddrType, Value *Addr,
                                           int NumBytes, Value *StoreValCat,
-                                          Value *StoreValID,
+                                          Value *StoreValID, Value *ObjValCat,
+                                          Value *ObjValID,
                                           CsiLoadStoreProperty &Prop) {
   IRBuilder<> IRB(I);
   Value *PropVal = Prop.getValue(IRB);
   if (StoreValCat && StoreValID)
     insertHookCall(I, BeforeFn,
                    {CsiId, IRB.CreatePointerCast(Addr, AddrType),
-                    IRB.getInt32(NumBytes), StoreValCat, StoreValID, PropVal});
+                    IRB.getInt32(NumBytes), StoreValCat, StoreValID,
+                    ObjValCat, ObjValID, PropVal});
   else
     insertHookCall(I, BeforeFn,
                    {CsiId, IRB.CreatePointerCast(Addr, AddrType),
-                    IRB.getInt32(NumBytes), PropVal});
+                    IRB.getInt32(NumBytes), ObjValCat, ObjValID, PropVal});
 
   BasicBlock::iterator Iter = ++I->getIterator();
   IRB.SetInsertPoint(&*Iter);
   if (StoreValCat && StoreValID)
     insertHookCall(&*Iter, AfterFn,
                    {CsiId, IRB.CreatePointerCast(Addr, AddrType),
-                    IRB.getInt32(NumBytes), StoreValCat, StoreValID, PropVal});
+                    IRB.getInt32(NumBytes), StoreValCat, StoreValID, ObjValCat,
+                    ObjValID, PropVal});
   else
     insertHookCall(&*Iter, AfterFn,
                    {CsiId, IRB.CreatePointerCast(Addr, AddrType),
-                    IRB.getInt32(NumBytes), PropVal});
+                    IRB.getInt32(NumBytes), ObjValCat, ObjValID, PropVal});
 }
 
 void CSIImpl::assignLoadOrStoreID(Instruction *I) {
@@ -2655,6 +2660,9 @@ void CSIImpl::instrumentLoadOrStore(Instruction *I, CsiLoadStoreProperty &Prop,
   if (NumBytes == -1)
     return; // size that we don't recognize
 
+  Value *Obj = GetUnderlyingObject(Addr, DL);
+  std::pair<Value *, Value *> ObjID = getOperandID(Obj, IRB);
+
   if (IsWrite) {
     csi_id_t LocalId = StoreFED.lookupId(I);
     Value *CsiId = StoreFED.localToGlobalId(LocalId, IRB);
@@ -2663,13 +2671,15 @@ void CSIImpl::instrumentLoadOrStore(Instruction *I, CsiLoadStoreProperty &Prop,
     std::pair<Value *, Value *> OperandID = getOperandID(Operand, IRB);
     addLoadStoreInstrumentation(I, CsiBeforeWrite, CsiAfterWrite, CsiId,
                                 AddrType, Addr, NumBytes, OperandID.first,
-                                OperandID.second, Prop);
+                                OperandID.second, ObjID.first, ObjID.second,
+                                Prop);
   } else { // is read
     csi_id_t LocalId = LoadFED.lookupId(I);
     Value *CsiId = LoadFED.localToGlobalId(LocalId, IRB);
 
     addLoadStoreInstrumentation(I, CsiBeforeRead, CsiAfterRead, CsiId, AddrType,
-                                Addr, NumBytes, nullptr, nullptr, Prop);
+                                Addr, NumBytes, nullptr, nullptr, ObjID.first,
+                                ObjID.second, Prop);
   }
 }
 
@@ -3046,11 +3056,8 @@ static void getBBInputs(BasicBlock &BB, SmallPtrSetImpl<Value *> &Inputs) {
     // Examine all operands of this instruction.
     for (User::const_op_iterator OI = II.op_begin(), OE = II.op_end(); OI != OE;
          ++OI) {
-      // Skip constants
-      if (isa<Constant>(*OI))
-        continue;
       // If this operand is not defined in this basic block, it's an input.
-      if (isa<Argument>(*OI) || isa<GlobalValue>(*OI))
+      if (isa<Argument>(*OI) || isa<GlobalVariable>(*OI))
         Inputs.insert(*OI);
       if (Instruction *UI = dyn_cast<Instruction>(&*OI))
         if (UI->getParent() != &BB)
@@ -3184,11 +3191,8 @@ void CSIImpl::getAllLoopInputs(Loop &L, LoopInfo &LI, InputMap<Loop> &Inputs) {
       // Examine all operands of this instruction.
       for (User::const_op_iterator OI = II.op_begin(), OE = II.op_end(); OI != OE;
            ++OI) {
-        // Skip constants
-        if (isa<Constant>(*OI))
-          continue;
         // If this operand is not defined in this basic block, it's an input.
-        if (isa<Argument>(*OI) || isa<GlobalValue>(*OI))
+        if (isa<Argument>(*OI) || isa<GlobalVariable>(*OI))
           LInputs.insert(*OI);
         if (Instruction *UI = dyn_cast<Instruction>(&*OI))
           if (!L.contains(UI->getParent()))
@@ -3946,11 +3950,8 @@ void CSIImpl::getAllTaskInputs(TaskInfo &TI, InputMap<Task> &Inputs) {
                   continue;
                 }
               }
-            // Skip constants
-            if (isa<Constant>(*OI))
-              continue;
             // If this operand is not defined in this basic block, it's an input.
-            if (isa<Argument>(*OI) || isa<GlobalValue>(*OI))
+            if (isa<Argument>(*OI) || isa<GlobalVariable>(*OI))
               TInputs.insert(*OI);
             // If this operand is defined in the parent, it's an input.
             if (T->definedInParent(*OI))

@@ -1159,6 +1159,7 @@ protected:
                                    Function *AfterFn, Value *CsiId,
                                    Type *AddrType, Value *Addr, int NumBytes,
                                    Value *StoreValCat, Value *StoreValID,
+                                   Value *ObjValCat, Value *ObjValID,
                                    CsiLoadStoreProperty &Prop);
   void assignLoadOrStoreID(Instruction *I);
   void instrumentLoadOrStore(Instruction *I, CsiLoadStoreProperty &Prop,
@@ -1527,7 +1528,8 @@ protected:
       OperandID.first = IRB.getInt8(
           static_cast<unsigned>(CSIOperandCategory::None));
       OperandID.second = getDefaultID(IRB);
-    } else if (isa<Constant>(Operand)) {
+    } else if (isa<ConstantData>(Operand) || isa<ConstantExpr>(Operand) ||
+               isa<ConstantAggregate>(Operand) || isa<BlockAddress>(Operand)) {
       OperandID.first = IRB.getInt8(
           static_cast<unsigned>(CSIOperandCategory::Constant));
       OperandID.second = getDefaultID(IRB);
