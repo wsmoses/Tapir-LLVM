@@ -312,15 +312,6 @@ Instruction *llvm::fixupHelperInputs(
   return StorePt;
 }
 
-/// Returns true if BasicBlock \p B is the immediate successor of only
-/// detached-rethrow instructions.
-bool llvm::isSuccessorOfDetachedRethrow(const BasicBlock *B) {
-  for (const BasicBlock *Pred : predecessors(B))
-    if (!isDetachedRethrow(Pred->getTerminator()))
-      return false;
-  return true;
-}
-
 /// Collect the set of blocks in task \p T.  All blocks enclosed by \p T will be
 /// pushed onto \p TaskBlocks.  The set of blocks terminated by reattaches from
 /// \p T are added to \p ReattachBlocks.  The set of blocks terminated by

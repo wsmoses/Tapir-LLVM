@@ -103,10 +103,6 @@ Instruction *fixupHelperInputs(Function &F, Task *T, ValueSet &TaskInputs,
                                ValueSet &HelperInputs, Instruction *StorePt,
                                Instruction *LoadPt);
 
-/// Returns true if BasicBlock \p B is the immediate successor of a
-/// detached-rethrow instruction.
-bool isSuccessorOfDetachedRethrow(const BasicBlock *B);
-
 /// Collect the set of blocks in task \p T.  All blocks enclosed by \p T will be
 /// pushed onto \p TaskBlocks.  The set of blocks terminated by reattaches from
 /// \p T are added to \p ReattachBlocks.  The set of blocks terminated by

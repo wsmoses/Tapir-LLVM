@@ -30,6 +30,10 @@ class TaskInfo;
 /// otherwise.
 bool isDetachedRethrow(const Instruction *I, const Value *SyncRegion = nullptr);
 
+/// Returns true if BasicBlock \p B is the immediate successor of only
+/// detached-rethrow instructions.
+bool isSuccessorOfDetachedRethrow(const BasicBlock *B);
+
 /// Returns true if the reattach instruction appears to match the given detach
 /// instruction, false otherwise.
 bool ReattachMatchesDetach(const ReattachInst *RI, const DetachInst *DI,

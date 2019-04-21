@@ -38,6 +38,15 @@ bool llvm::isDetachedRethrow(const Instruction *I, const Value *SyncRegion) {
   return false;
 }
 
+/// Returns true if BasicBlock \p B is the immediate successor of only
+/// detached-rethrow instructions.
+bool llvm::isSuccessorOfDetachedRethrow(const BasicBlock *B) {
+  for (const BasicBlock *Pred : predecessors(B))
+    if (!isDetachedRethrow(Pred->getTerminator()))
+      return false;
+  return true;
+}
+
 /// Returns true if the reattach instruction appears to match the given detach
 /// instruction, false otherwise.
 ///
