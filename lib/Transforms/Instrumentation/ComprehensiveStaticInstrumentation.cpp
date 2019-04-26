@@ -5150,6 +5150,14 @@ void CSIImpl::instrumentAllocFn(Instruction *I, DominatorTree *DT) {
   AllocFnArgs.push_back(Prop.getValue(IRB));
   DefaultAllocFnArgs.push_back(DefaultPropVal);
 
+  // Instrument the call
+  {
+    SmallVector<Value *, 4> BeforeAllocFnArgs;
+    BeforeAllocFnArgs.push_back(AllocFnId);
+    BeforeAllocFnArgs.append(AllocFnArgs.begin(), AllocFnArgs.end());
+    insertHookCall(I, CsiBeforeAllocFn, BeforeAllocFnArgs);
+  }
+
   BasicBlock::iterator Iter(I);
   if (IsInvoke) {
     // There are two "after" positions for invokes: the normal block and the

@@ -1552,11 +1552,6 @@ protected:
       GlobIdGV->setLinkage(GlobalValue::WeakAnyLinkage);
       GlobIdGV->setInitializer(getDefaultID(IRB));
       OperandID.second = IRB.CreateLoad(GlobIdGV);
-    } else if (isa<CallInst>(Operand) || isa<InvokeInst>(Operand)) {
-      OperandID.first = IRB.getInt8(
-          static_cast<unsigned>(CSIOperandCategory::Callsite));
-      OperandID.second = CallsiteFED.localToGlobalId(
-          CallsiteFED.lookupId(Operand),IRB);
     } else if (isa<LoadInst>(Operand)) {
       OperandID.first = IRB.getInt8(
           static_cast<unsigned>(CSIOperandCategory::Load));
@@ -1568,10 +1563,17 @@ protected:
       OperandID.second = AllocaFED.localToGlobalId(AllocaFED.lookupId(Operand),
                                                    IRB);
     } else if (isAllocationFn(Operand, TLI)) {
+      // Check for calls to allocation functions before checking for generic
+      // callsites.
       OperandID.first = IRB.getInt8(
           static_cast<unsigned>(CSIOperandCategory::AllocFn));
       OperandID.second = AllocFnFED.localToGlobalId(
           AllocFnFED.lookupId(Operand), IRB);
+    } else if (isa<CallInst>(Operand) || isa<InvokeInst>(Operand)) {
+      OperandID.first = IRB.getInt8(
+          static_cast<unsigned>(CSIOperandCategory::Callsite));
+      OperandID.second = CallsiteFED.localToGlobalId(
+          CallsiteFED.lookupId(Operand),IRB);
     } else {
       OperandID.first = IRB.getInt8(
           static_cast<unsigned>(CSIOperandCategory::Arithmetic));
