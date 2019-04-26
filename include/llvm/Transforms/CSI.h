@@ -996,49 +996,6 @@ private:
      (64 - 1 - 1 - 1 - 1 - 1 - 1 - 1 - 1 - 1 - 1 - 1 - 1)};
 };
 
-// /// Maintains a mapping from CSI ID to a set of properties.
-// template<typename PropertyT>
-// class PropertyTable : public ForensicTable {
-//   static_assert(std::is_base_of<CsiProperty, T>::value &&
-//                 "Template of PropertyTable must be a CsiProperty.");
-// public:
-//   PropertyTable() : ForensicTable() {}
-//   PropertyTable(Module &M, StringRef BaseIdName) : ForensicTable(M, BaseIdName) {}
-
-//   /// The number of entries in this table
-//   uint64_t size() const { return LocalIdToSizeMap.size(); }
-
-//   /// Add the given value to this table.
-//   /// \returns The local ID of the value.
-//   csi_id_t add(const Value *V);
-
-//   /// Get a reference to the property associated with ID.
-//   PropertyT &getProperty(csi_id_t ID);
-
-//   /// Get the Type for a pointer to a table entry.
-//   ///
-//   /// A table entry is just a source location.
-//   static PointerType *getPointerType(LLVMContext &C);
-
-//   /// Insert this table into the given Module.
-//   ///
-//   /// The table is constructed as a ConstantArray indexed by local IDs.  The
-//   /// runtime is responsible for performing the mapping that allows the table to
-//   /// be indexed by global ID.
-//   Constant *insertIntoModule(Module &M) const;
-
-// private:
-//   /// Map of local ID to property.
-//   DenseMap<csi_id_t, PropertyT> LocalIdToPropertyMap;
-
-//   /// Create a struct type to match the "struct SourceLocation" type.
-//   /// (and the source_loc_t type in csi.h).
-//   static StructType *getSizeStructType(LLVMContext &C);
-
-//   /// Append the size information to the table.
-//   void add(csi_id_t ID, PropertyT &Property);
-// };
-
 struct CSIImpl {
 public:
   CSIImpl(Module &M, CallGraph *CG,
@@ -1129,6 +1086,7 @@ protected:
   static Constant *sizeTableToUnitSizeTable(Module &M,
                                             StructType *UnitSizeTableType,
                                             SizeTable &SzTable);
+
   /// Initialize the front-end data table structures.
   void initializeFEDTables();
   /// Collect unit front-end data table structures for finalization.
@@ -1670,330 +1628,88 @@ protected:
   Function *CsiBeforeAllocFn = nullptr, *CsiAfterAllocFn = nullptr;
   Function *CsiBeforeFree = nullptr, *CsiAfterFree = nullptr;
 
-  // Function *CsiBeforeArithmeticH = nullptr, *CsiAfterArithmeticH = nullptr;
-  Function *CsiBeforeArithmeticF = nullptr, *CsiAfterArithmeticF = nullptr;
-  Function *CsiBeforeArithmeticD = nullptr, *CsiAfterArithmeticD = nullptr;
-  Function *CsiBeforeArithmeticI8 = nullptr, *CsiAfterArithmeticI8 = nullptr;
-  Function *CsiBeforeArithmeticI16 = nullptr, *CsiAfterArithmeticI16 = nullptr;
-  Function *CsiBeforeArithmeticI32 = nullptr, *CsiAfterArithmeticI32 = nullptr;
-  Function *CsiBeforeArithmeticI64 = nullptr, *CsiAfterArithmeticI64 = nullptr;
-  Function *CsiBeforeArithmeticI128 = nullptr,
-    *CsiAfterArithmeticI128 = nullptr;
+  static bool SupportedType(const Type *Ty) {
+    switch (Ty->getTypeID()) {
+    case Type::HalfTyID:
+    case Type::FloatTyID:
+    case Type::DoubleTyID:
+    case Type::X86_FP80TyID:
+    case Type::FP128TyID:
+      return true;
+    case Type::IntegerTyID: {
+      unsigned Width = Ty->getIntegerBitWidth();
+      return (Width <= 128);
+    }
+    case Type::VectorTyID: {
+      const Type *ElTy = cast<VectorType>(Ty)->getElementType();
+      return SupportedType(ElTy);
+    }
+      // TODO: Handle array types, struct types
+    default: return false;
+    }
+  }
 
-  Function *CsiBeforeArithmetic4F = nullptr, *CsiAfterArithmetic4F = nullptr;
-  Function *CsiBeforeArithmetic8F = nullptr, *CsiAfterArithmetic8F = nullptr;
-  Function *CsiBeforeArithmetic16F = nullptr, *CsiAfterArithmetic16F = nullptr;
-  Function *CsiBeforeArithmetic2D = nullptr, *CsiAfterArithmetic2D = nullptr;
-  Function *CsiBeforeArithmetic4D = nullptr, *CsiAfterArithmetic4D = nullptr;
-  Function *CsiBeforeArithmetic8D = nullptr, *CsiAfterArithmetic8D = nullptr;
+  static Twine TypeToStr(const Type *Ty) {
+    if (!SupportedType(Ty))
+      return "unhandled_type";
 
-  // Function *CsiBeforeExtendHF = nullptr, *CsiAfterExtendHF = nullptr;
-  // Function *CsiBeforeExtendHD = nullptr, *CsiAfterExtendHD = nullptr;
-  Function *CsiBeforeExtendFD = nullptr, *CsiAfterExtendFD = nullptr;
-  Function *CsiBeforeTruncateDF = nullptr, *CsiAfterTruncateDF = nullptr;
-  // Function *CsiBeforeTruncateDH = nullptr, *CsiAfterTruncateDH = nullptr;
-  // Function *CsiBeforeTruncateFH = nullptr, *CsiAfterTruncateFH = nullptr;
+    switch (Ty->getTypeID()) {
+    case Type::HalfTyID: return "half";
+    case Type::FloatTyID: return "float";
+    case Type::DoubleTyID: return "double";
+    case Type::X86_FP80TyID: return "x86fp80";
+    case Type::FP128TyID: return "fp128";
+    case Type::IntegerTyID: {
+      unsigned Width = Ty->getIntegerBitWidth();
+      return "i" + Twine(Width);
+    }
+    case Type::VectorTyID: {
+      const VectorType *VecTy = cast<VectorType>(Ty);
+      const Type *ElTy = VecTy->getElementType();
+      uint64_t NumEls = VecTy->getNumElements();
+      return "v" + Twine(NumEls) + TypeToStr(ElTy);
+    }
+    default: llvm_unreachable("No string for supported type");
+    }
+  }
 
-  Function *CsiBeforeTruncateI128I8 = nullptr,
-    *CsiAfterTruncateI128I8 = nullptr;
-  Function *CsiBeforeTruncateI128I16 = nullptr,
-    *CsiAfterTruncateI128I16 = nullptr;
-  Function *CsiBeforeTruncateI128I32 = nullptr,
-    *CsiAfterTruncateI128I32 = nullptr;
-  Function *CsiBeforeTruncateI128I64 = nullptr,
-    *CsiAfterTruncateI128I64 = nullptr;
-  Function *CsiBeforeTruncateI64I8 = nullptr, *CsiAfterTruncateI64I8 = nullptr;
-  Function *CsiBeforeTruncateI64I16 = nullptr,
-    *CsiAfterTruncateI64I16 = nullptr;
-  Function *CsiBeforeTruncateI64I32 = nullptr,
-    *CsiAfterTruncateI64I32 = nullptr;
-  Function *CsiBeforeTruncateI32I8 = nullptr, *CsiAfterTruncateI32I8 = nullptr;
-  Function *CsiBeforeTruncateI32I16 = nullptr,
-    *CsiAfterTruncateI32I16 = nullptr;
-  Function *CsiBeforeTruncateI16I8 = nullptr, *CsiAfterTruncateI16I8 = nullptr;
+  static Type *getOperandCastTy(Module &M, Type *Ty) {
+    if (!SupportedType(Ty))
+      return nullptr;
 
-  Function *CsiBeforeZeroExtendI8I16 = nullptr,
-    *CsiAfterZeroExtendI8I16 = nullptr;
-  Function *CsiBeforeZeroExtendI8I32 = nullptr,
-    *CsiAfterZeroExtendI8I32 = nullptr;
-  Function *CsiBeforeZeroExtendI8I64 = nullptr,
-    *CsiAfterZeroExtendI8I64 = nullptr;
-  Function *CsiBeforeZeroExtendI8I128 = nullptr,
-    *CsiAfterZeroExtendI8I128 = nullptr;
-  Function *CsiBeforeZeroExtendI16I32 = nullptr,
-    *CsiAfterZeroExtendI16I32 = nullptr;
-  Function *CsiBeforeZeroExtendI16I64 = nullptr,
-    *CsiAfterZeroExtendI16I64 = nullptr;
-  Function *CsiBeforeZeroExtendI16I128 = nullptr,
-    *CsiAfterZeroExtendI16I128 = nullptr;
-  Function *CsiBeforeZeroExtendI32I64 = nullptr,
-    *CsiAfterZeroExtendI32I64 = nullptr;
-  Function *CsiBeforeZeroExtendI32I128 = nullptr,
-    *CsiAfterZeroExtendI32I128 = nullptr;
-  Function *CsiBeforeZeroExtendI64I128 = nullptr,
-    *CsiAfterZeroExtendI64I128 = nullptr;
+    LLVMContext &C = M.getContext();
+    switch (Ty->getTypeID()) {
+    case Type::HalfTyID:
+    case Type::FloatTyID:
+    case Type::DoubleTyID:
+    case Type::X86_FP80TyID:
+    case Type::FP128TyID:
+      return Ty;
+    case Type::IntegerTyID: {
+      unsigned Width = Ty->getIntegerBitWidth();
+      if (Width <= 8)
+        return Type::getInt8Ty(C);
+      else if (Width <= 16)
+        return Type::getInt16Ty(C);
+      else if (Width <= 32)
+        return Type::getInt32Ty(C);
+      else if (Width <= 64)
+        return Type::getInt64Ty(C);
+      else
+        return Type::getInt128Ty(C);
+    }
+    case Type::VectorTyID: {
+      // TODO: Revisit whether we need to cast vector-type operands.
+      return Ty;
+    }
+    case Type::PointerTyID:
+      return Type::getInt8PtrTy(C);
+    default: llvm_unreachable("No operand cast for supported type");
+    }
+  }
 
-  Function *CsiBeforeSignExtendI8I16 = nullptr,
-    *CsiAfterSignExtendI8I16 = nullptr;
-  Function *CsiBeforeSignExtendI8I32 = nullptr,
-    *CsiAfterSignExtendI8I32 = nullptr;
-  Function *CsiBeforeSignExtendI8I64 = nullptr,
-    *CsiAfterSignExtendI8I64 = nullptr;
-  Function *CsiBeforeSignExtendI8I128 = nullptr,
-    *CsiAfterSignExtendI8I128 = nullptr;
-  Function *CsiBeforeSignExtendI16I32 = nullptr,
-    *CsiAfterSignExtendI16I32 = nullptr;
-  Function *CsiBeforeSignExtendI16I64 = nullptr,
-    *CsiAfterSignExtendI16I64 = nullptr;
-  Function *CsiBeforeSignExtendI16I128 = nullptr,
-    *CsiAfterSignExtendI16I128 = nullptr;
-  Function *CsiBeforeSignExtendI32I64 = nullptr,
-    *CsiAfterSignExtendI32I64 = nullptr;
-  Function *CsiBeforeSignExtendI32I128 = nullptr,
-    *CsiAfterSignExtendI32I128 = nullptr;
-  Function *CsiBeforeSignExtendI64I128 = nullptr,
-    *CsiAfterSignExtendI64I128 = nullptr;
-
-  // Function *CsiBeforeConvertHUI8 = nullptr, *CsiAfterConvertHUI8 = nullptr;
-  // Function *CsiBeforeConvertHUI16 = nullptr, *CsiAfterConvertHUI16 = nullptr;
-  // Function *CsiBeforeConvertHUI32 = nullptr, *CsiAfterConvertHUI32 = nullptr;
-  // Function *CsiBeforeConvertHUI64 = nullptr, *CsiAfterConvertHUI64 = nullptr;
-  // Function *CsiBeforeConvertHUI128 = nullptr, *CsiAfterConvertHUI128 = nullptr;
-  Function *CsiBeforeConvertFUI8 = nullptr, *CsiAfterConvertFUI8 = nullptr;
-  Function *CsiBeforeConvertFUI16 = nullptr, *CsiAfterConvertFUI16 = nullptr;
-  Function *CsiBeforeConvertFUI32 = nullptr, *CsiAfterConvertFUI32 = nullptr;
-  Function *CsiBeforeConvertFUI64 = nullptr, *CsiAfterConvertFUI64 = nullptr;
-  Function *CsiBeforeConvertFUI128 = nullptr, *CsiAfterConvertFUI128 = nullptr;
-  Function *CsiBeforeConvertDUI8 = nullptr, *CsiAfterConvertDUI8 = nullptr;
-  Function *CsiBeforeConvertDUI16 = nullptr, *CsiAfterConvertDUI16 = nullptr;
-  Function *CsiBeforeConvertDUI32 = nullptr, *CsiAfterConvertDUI32 = nullptr;
-  Function *CsiBeforeConvertDUI64 = nullptr, *CsiAfterConvertDUI64 = nullptr;
-  Function *CsiBeforeConvertDUI128 = nullptr, *CsiAfterConvertDUI128 = nullptr;
-
-  Function *CsiBeforeConvert4FUI8 = nullptr, *CsiAfterConvert4FUI8 = nullptr;
-  Function *CsiBeforeConvert4FUI16 = nullptr, *CsiAfterConvert4FUI16 = nullptr;
-  Function *CsiBeforeConvert4FUI32 = nullptr, *CsiAfterConvert4FUI32 = nullptr;
-  Function *CsiBeforeConvert4FUI64 = nullptr, *CsiAfterConvert4FUI64 = nullptr;
-  Function *CsiBeforeConvert4FUI128 = nullptr,
-    *CsiAfterConvert4FUI128 = nullptr;
-  Function *CsiBeforeConvert8FUI8 = nullptr, *CsiAfterConvert8FUI8 = nullptr;
-  Function *CsiBeforeConvert8FUI16 = nullptr, *CsiAfterConvert8FUI16 = nullptr;
-  Function *CsiBeforeConvert8FUI32 = nullptr, *CsiAfterConvert8FUI32 = nullptr;
-  Function *CsiBeforeConvert8FUI64 = nullptr, *CsiAfterConvert8FUI64 = nullptr;
-  Function *CsiBeforeConvert8FUI128 = nullptr,
-    *CsiAfterConvert8FUI128 = nullptr;
-  Function *CsiBeforeConvert16FUI8 = nullptr, *CsiAfterConvert16FUI8 = nullptr;
-  Function *CsiBeforeConvert16FUI16 = nullptr,
-    *CsiAfterConvert16FUI16 = nullptr;
-  Function *CsiBeforeConvert16FUI32 = nullptr,
-    *CsiAfterConvert16FUI32 = nullptr;
-  Function *CsiBeforeConvert16FUI64 = nullptr,
-    *CsiAfterConvert16FUI64 = nullptr;
-  Function *CsiBeforeConvert16FUI128 = nullptr,
-    *CsiAfterConvert16FUI128 = nullptr;
-  Function *CsiBeforeConvert2DUI8 = nullptr, *CsiAfterConvert2DUI8 = nullptr;
-  Function *CsiBeforeConvert2DUI16 = nullptr, *CsiAfterConvert2DUI16 = nullptr;
-  Function *CsiBeforeConvert2DUI32 = nullptr, *CsiAfterConvert2DUI32 = nullptr;
-  Function *CsiBeforeConvert2DUI64 = nullptr, *CsiAfterConvert2DUI64 = nullptr;
-  Function *CsiBeforeConvert2DUI128 = nullptr,
-    *CsiAfterConvert2DUI128 = nullptr;
-  Function *CsiBeforeConvert4DUI8 = nullptr, *CsiAfterConvert4DUI8 = nullptr;
-  Function *CsiBeforeConvert4DUI16 = nullptr, *CsiAfterConvert4DUI16 = nullptr;
-  Function *CsiBeforeConvert4DUI32 = nullptr, *CsiAfterConvert4DUI32 = nullptr;
-  Function *CsiBeforeConvert4DUI64 = nullptr, *CsiAfterConvert4DUI64 = nullptr;
-  Function *CsiBeforeConvert4DUI128 = nullptr,
-    *CsiAfterConvert4DUI128 = nullptr;
-  Function *CsiBeforeConvert8DUI8 = nullptr, *CsiAfterConvert8DUI8 = nullptr;
-  Function *CsiBeforeConvert8DUI16 = nullptr, *CsiAfterConvert8DUI16 = nullptr;
-  Function *CsiBeforeConvert8DUI32 = nullptr, *CsiAfterConvert8DUI32 = nullptr;
-  Function *CsiBeforeConvert8DUI64 = nullptr, *CsiAfterConvert8DUI64 = nullptr;
-  Function *CsiBeforeConvert8DUI128 = nullptr,
-    *CsiAfterConvert8DUI128 = nullptr;
-
-  // Function *CsiBeforeConvertHSI8 = nullptr, *CsiAfterConvertHSI8 = nullptr;
-  // Function *CsiBeforeConvertHSI16 = nullptr, *CsiAfterConvertHSI16 = nullptr;
-  // Function *CsiBeforeConvertHSI32 = nullptr, *CsiAfterConvertHSI32 = nullptr;
-  // Function *CsiBeforeConvertHSI64 = nullptr, *CsiAfterConvertHSI64 = nullptr;
-  // Function *CsiBeforeConvertHSI128 = nullptr, *CsiAfterConvertHSI128 = nullptr;
-  Function *CsiBeforeConvertFSI8 = nullptr, *CsiAfterConvertFSI8 = nullptr;
-  Function *CsiBeforeConvertFSI16 = nullptr, *CsiAfterConvertFSI16 = nullptr;
-  Function *CsiBeforeConvertFSI32 = nullptr, *CsiAfterConvertFSI32 = nullptr;
-  Function *CsiBeforeConvertFSI64 = nullptr, *CsiAfterConvertFSI64 = nullptr;
-  Function *CsiBeforeConvertFSI128 = nullptr, *CsiAfterConvertFSI128 = nullptr;
-  Function *CsiBeforeConvertDSI8 = nullptr, *CsiAfterConvertDSI8 = nullptr;
-  Function *CsiBeforeConvertDSI16 = nullptr, *CsiAfterConvertDSI16 = nullptr;
-  Function *CsiBeforeConvertDSI32 = nullptr, *CsiAfterConvertDSI32 = nullptr;
-  Function *CsiBeforeConvertDSI64 = nullptr, *CsiAfterConvertDSI64 = nullptr;
-  Function *CsiBeforeConvertDSI128 = nullptr, *CsiAfterConvertDSI128 = nullptr;
-
-  Function *CsiBeforeConvert4FSI8 = nullptr, *CsiAfterConvert4FSI8 = nullptr;
-  Function *CsiBeforeConvert4FSI16 = nullptr, *CsiAfterConvert4FSI16 = nullptr;
-  Function *CsiBeforeConvert4FSI32 = nullptr, *CsiAfterConvert4FSI32 = nullptr;
-  Function *CsiBeforeConvert4FSI64 = nullptr, *CsiAfterConvert4FSI64 = nullptr;
-  Function *CsiBeforeConvert4FSI128 = nullptr,
-    *CsiAfterConvert4FSI128 = nullptr;
-  Function *CsiBeforeConvert8FSI8 = nullptr, *CsiAfterConvert8FSI8 = nullptr;
-  Function *CsiBeforeConvert8FSI16 = nullptr, *CsiAfterConvert8FSI16 = nullptr;
-  Function *CsiBeforeConvert8FSI32 = nullptr, *CsiAfterConvert8FSI32 = nullptr;
-  Function *CsiBeforeConvert8FSI64 = nullptr, *CsiAfterConvert8FSI64 = nullptr;
-  Function *CsiBeforeConvert16FSI8 = nullptr, *CsiAfterConvert16FSI8 = nullptr;
-  Function *CsiBeforeConvert16FSI16 = nullptr,
-    *CsiAfterConvert16FSI16 = nullptr;
-  Function *CsiBeforeConvert16FSI32 = nullptr,
-    *CsiAfterConvert16FSI32 = nullptr;
-  Function *CsiBeforeConvert2DSI8 = nullptr, *CsiAfterConvert2DSI8 = nullptr;
-  Function *CsiBeforeConvert2DSI16 = nullptr, *CsiAfterConvert2DSI16 = nullptr;
-  Function *CsiBeforeConvert2DSI32 = nullptr, *CsiAfterConvert2DSI32 = nullptr;
-  Function *CsiBeforeConvert2DSI64 = nullptr, *CsiAfterConvert2DSI64 = nullptr;
-  Function *CsiBeforeConvert2DSI128 = nullptr,
-    *CsiAfterConvert2DSI128 = nullptr;
-  Function *CsiBeforeConvert4DSI8 = nullptr, *CsiAfterConvert4DSI8 = nullptr;
-  Function *CsiBeforeConvert4DSI16 = nullptr, *CsiAfterConvert4DSI16 = nullptr;
-  Function *CsiBeforeConvert4DSI32 = nullptr, *CsiAfterConvert4DSI32 = nullptr;
-  Function *CsiBeforeConvert4DSI64 = nullptr, *CsiAfterConvert4DSI64 = nullptr;
-  Function *CsiBeforeConvert4DSI128 = nullptr,
-    *CsiAfterConvert4DSI128 = nullptr;
-  Function *CsiBeforeConvert8DSI8 = nullptr, *CsiAfterConvert8DSI8 = nullptr;
-  Function *CsiBeforeConvert8DSI16 = nullptr, *CsiAfterConvert8DSI16 = nullptr;
-  Function *CsiBeforeConvert8DSI32 = nullptr, *CsiAfterConvert8DSI32 = nullptr;
-  Function *CsiBeforeConvert8DSI64 = nullptr, *CsiAfterConvert8DSI64 = nullptr;
-
-  // Function *CsiBeforeConvertUI8H = nullptr, *CsiAfterConvertUI8H = nullptr;
-  // Function *CsiBeforeConvertUI16H = nullptr, *CsiAfterConvertUI16H = nullptr;
-  // Function *CsiBeforeConvertUI32H = nullptr, *CsiAfterConvertUI32H = nullptr;
-  // Function *CsiBeforeConvertUI64H = nullptr, *CsiAfterConvertUI64H = nullptr;
-  // Function *CsiBeforeConvertUI128H = nullptr, *CsiAfterConvertUI128H = nullptr;
-  Function *CsiBeforeConvertUI8F = nullptr, *CsiAfterConvertUI8F = nullptr;
-  Function *CsiBeforeConvertUI16F = nullptr, *CsiAfterConvertUI16F = nullptr;
-  Function *CsiBeforeConvertUI32F = nullptr, *CsiAfterConvertUI32F = nullptr;
-  Function *CsiBeforeConvertUI64F = nullptr, *CsiAfterConvertUI64F = nullptr;
-  Function *CsiBeforeConvertUI128F = nullptr, *CsiAfterConvertUI128F = nullptr;
-  Function *CsiBeforeConvertUI8D = nullptr, *CsiAfterConvertUI8D = nullptr;
-  Function *CsiBeforeConvertUI16D = nullptr, *CsiAfterConvertUI16D = nullptr;
-  Function *CsiBeforeConvertUI32D = nullptr, *CsiAfterConvertUI32D = nullptr;
-  Function *CsiBeforeConvertUI64D = nullptr, *CsiAfterConvertUI64D = nullptr;
-  Function *CsiBeforeConvertUI128D = nullptr, *CsiAfterConvertUI128D = nullptr;
-
-  Function *CsiBeforeConvert4UI8F = nullptr, *CsiAfterConvert4UI8F = nullptr;
-  Function *CsiBeforeConvert4UI16F = nullptr, *CsiAfterConvert4UI16F = nullptr;
-  Function *CsiBeforeConvert4UI32F = nullptr, *CsiAfterConvert4UI32F = nullptr;
-  Function *CsiBeforeConvert4UI64F = nullptr, *CsiAfterConvert4UI64F = nullptr;
-  Function *CsiBeforeConvert4UI128F = nullptr,
-    *CsiAfterConvert4UI128F = nullptr;
-  Function *CsiBeforeConvert8UI8F = nullptr, *CsiAfterConvert8UI8F = nullptr;
-  Function *CsiBeforeConvert8UI16F = nullptr, *CsiAfterConvert8UI16F = nullptr;
-  Function *CsiBeforeConvert8UI32F = nullptr, *CsiAfterConvert8UI32F = nullptr;
-  Function *CsiBeforeConvert8UI64F = nullptr, *CsiAfterConvert8UI64F = nullptr;
-  Function *CsiBeforeConvert16UI8F = nullptr, *CsiAfterConvert16UI8F = nullptr;
-  Function *CsiBeforeConvert16UI16F = nullptr,
-    *CsiAfterConvert16UI16F = nullptr;
-  Function *CsiBeforeConvert16UI32F = nullptr,
-    *CsiAfterConvert16UI32F = nullptr;
-  Function *CsiBeforeConvert2UI8D = nullptr, *CsiAfterConvert2UI8D = nullptr;
-  Function *CsiBeforeConvert2UI16D = nullptr, *CsiAfterConvert2UI16D = nullptr;
-  Function *CsiBeforeConvert2UI32D = nullptr, *CsiAfterConvert2UI32D = nullptr;
-  Function *CsiBeforeConvert2UI64D = nullptr, *CsiAfterConvert2UI64D = nullptr;
-  Function *CsiBeforeConvert2UI128D = nullptr,
-    *CsiAfterConvert2UI128D = nullptr;
-  Function *CsiBeforeConvert4UI8D = nullptr, *CsiAfterConvert4UI8D = nullptr;
-  Function *CsiBeforeConvert4UI16D = nullptr, *CsiAfterConvert4UI16D = nullptr;
-  Function *CsiBeforeConvert4UI32D = nullptr, *CsiAfterConvert4UI32D = nullptr;
-  Function *CsiBeforeConvert4UI64D = nullptr, *CsiAfterConvert4UI64D = nullptr;
-  Function *CsiBeforeConvert4UI128D = nullptr,
-    *CsiAfterConvert4UI128D = nullptr;
-  Function *CsiBeforeConvert8UI8D = nullptr, *CsiAfterConvert8UI8D = nullptr;
-  Function *CsiBeforeConvert8UI16D = nullptr, *CsiAfterConvert8UI16D = nullptr;
-  Function *CsiBeforeConvert8UI32D = nullptr, *CsiAfterConvert8UI32D = nullptr;
-  Function *CsiBeforeConvert8UI64D = nullptr, *CsiAfterConvert8UI64D = nullptr;
-
-  // Function *CsiBeforeConvertSI8H = nullptr, *CsiAfterConvertSI8H = nullptr;
-  // Function *CsiBeforeConvertSI16H = nullptr, *CsiAfterConvertSI16H = nullptr;
-  // Function *CsiBeforeConvertSI32H = nullptr, *CsiAfterConvertSI32H = nullptr;
-  // Function *CsiBeforeConvertSI64H = nullptr, *CsiAfterConvertSI64H = nullptr;
-  // Function *CsiBeforeConvertSI128H = nullptr, *CsiAfterConvertSI128H = nullptr;
-  Function *CsiBeforeConvertSI8F = nullptr, *CsiAfterConvertSI8F = nullptr;
-  Function *CsiBeforeConvertSI16F = nullptr, *CsiAfterConvertSI16F = nullptr;
-  Function *CsiBeforeConvertSI32F = nullptr, *CsiAfterConvertSI32F = nullptr;
-  Function *CsiBeforeConvertSI64F = nullptr, *CsiAfterConvertSI64F = nullptr;
-  Function *CsiBeforeConvertSI128F = nullptr, *CsiAfterConvertSI128F = nullptr;
-  Function *CsiBeforeConvertSI8D = nullptr, *CsiAfterConvertSI8D = nullptr;
-  Function *CsiBeforeConvertSI16D = nullptr, *CsiAfterConvertSI16D = nullptr;
-  Function *CsiBeforeConvertSI32D = nullptr, *CsiAfterConvertSI32D = nullptr;
-  Function *CsiBeforeConvertSI64D = nullptr, *CsiAfterConvertSI64D = nullptr;
-  Function *CsiBeforeConvertSI128D = nullptr, *CsiAfterConvertSI128D = nullptr;
-
-  Function *CsiBeforeConvert4SI8F = nullptr, *CsiAfterConvert4SI8F = nullptr;
-  Function *CsiBeforeConvert4SI16F = nullptr, *CsiAfterConvert4SI16F = nullptr;
-  Function *CsiBeforeConvert4SI32F = nullptr, *CsiAfterConvert4SI32F = nullptr;
-  Function *CsiBeforeConvert4SI64F = nullptr, *CsiAfterConvert4SI64F = nullptr;
-  Function *CsiBeforeConvert4SI128F = nullptr,
-    *CsiAfterConvert4SI128F = nullptr;
-  Function *CsiBeforeConvert8SI8F = nullptr, *CsiAfterConvert8SI8F = nullptr;
-  Function *CsiBeforeConvert8SI16F = nullptr, *CsiAfterConvert8SI16F = nullptr;
-  Function *CsiBeforeConvert8SI32F = nullptr, *CsiAfterConvert8SI32F = nullptr;
-  Function *CsiBeforeConvert8SI64F = nullptr, *CsiAfterConvert8SI64F = nullptr;
-  Function *CsiBeforeConvert16SI8F = nullptr, *CsiAfterConvert16SI8F = nullptr;
-  Function *CsiBeforeConvert16SI16F = nullptr,
-    *CsiAfterConvert16SI16F = nullptr;
-  Function *CsiBeforeConvert16SI32F = nullptr,
-    *CsiAfterConvert16SI32F = nullptr;
-  Function *CsiBeforeConvert2SI8D = nullptr, *CsiAfterConvert2SI8D = nullptr;
-  Function *CsiBeforeConvert2SI16D = nullptr, *CsiAfterConvert2SI16D = nullptr;
-  Function *CsiBeforeConvert2SI32D = nullptr, *CsiAfterConvert2SI32D = nullptr;
-  Function *CsiBeforeConvert2SI64D = nullptr, *CsiAfterConvert2SI64D = nullptr;
-  Function *CsiBeforeConvert2SI128D = nullptr,
-    *CsiAfterConvert2SI128D = nullptr;
-  Function *CsiBeforeConvert4SI8D = nullptr, *CsiAfterConvert4SI8D = nullptr;
-  Function *CsiBeforeConvert4SI16D = nullptr, *CsiAfterConvert4SI16D = nullptr;
-  Function *CsiBeforeConvert4SI32D = nullptr, *CsiAfterConvert4SI32D = nullptr;
-  Function *CsiBeforeConvert4SI64D = nullptr, *CsiAfterConvert4SI64D = nullptr;
-  Function *CsiBeforeConvert4SI128D = nullptr,
-    *CsiAfterConvert4SI128D = nullptr;
-  Function *CsiBeforeConvert8SI8D = nullptr, *CsiAfterConvert8SI8D = nullptr;
-  Function *CsiBeforeConvert8SI16D = nullptr, *CsiAfterConvert8SI16D = nullptr;
-  Function *CsiBeforeConvert8SI32D = nullptr, *CsiAfterConvert8SI32D = nullptr;
-  Function *CsiBeforeConvert8SI64D = nullptr, *CsiAfterConvert8SI64D = nullptr;
-
-  Function /**CsiPhiH = nullptr,*/ *CsiPhiF = nullptr, *CsiPhiD = nullptr;
-  Function *CsiPhiI8 = nullptr, *CsiPhiI16 = nullptr, *CsiPhiI32 = nullptr;
-  Function *CsiPhiI64 = nullptr, *CsiPhiI128 = nullptr, *CsiPhi4F = nullptr;
-  Function *CsiPhi8F = nullptr, *CsiPhi16F = nullptr, *CsiPhi2D = nullptr;
-  Function *CsiPhi4D = nullptr, *CsiPhi8D = nullptr;
-
-  // Vector operations
-  Function *CsiBeforeInsertEl4F = nullptr, *CsiAfterInsertEl4F = nullptr;
-  Function *CsiBeforeInsertEl8F = nullptr, *CsiAfterInsertEl8F = nullptr;
-  Function *CsiBeforeInsertEl16F = nullptr, *CsiAfterInsertEl16F = nullptr;
-  Function *CsiBeforeInsertEl2D = nullptr, *CsiAfterInsertEl2D = nullptr;
-  Function *CsiBeforeInsertEl4D = nullptr, *CsiAfterInsertEl4D = nullptr;
-  Function *CsiBeforeInsertEl8D = nullptr, *CsiAfterInsertEl8D = nullptr;
-
-  Function *CsiBeforeExtractEl4F = nullptr, *CsiAfterExtractEl4F = nullptr;
-  Function *CsiBeforeExtractEl8F = nullptr, *CsiAfterExtractEl8F = nullptr;
-  Function *CsiBeforeExtractEl16F = nullptr, *CsiAfterExtractEl16F = nullptr;
-  Function *CsiBeforeExtractEl2D = nullptr, *CsiAfterExtractEl2D = nullptr;
-  Function *CsiBeforeExtractEl4D = nullptr, *CsiAfterExtractEl4D = nullptr;
-  Function *CsiBeforeExtractEl8D = nullptr, *CsiAfterExtractEl8D = nullptr;
-
-  Function *CsiBeforeShuffle4F4F = nullptr, *CsiAfterShuffle4F4F = nullptr;
-  Function *CsiBeforeShuffle4F8F = nullptr, *CsiAfterShuffle4F8F = nullptr;
-  Function *CsiBeforeShuffle4F16F = nullptr, *CsiAfterShuffle4F16F = nullptr;
-  Function *CsiBeforeShuffle8F4F = nullptr, *CsiAfterShuffle8F4F = nullptr;
-  Function *CsiBeforeShuffle8F8F = nullptr, *CsiAfterShuffle8F8F = nullptr;
-  Function *CsiBeforeShuffle8F16F = nullptr, *CsiAfterShuffle8F16F = nullptr;
-  Function *CsiBeforeShuffle16F4F = nullptr, *CsiAfterShuffle16F4F = nullptr;
-  Function *CsiBeforeShuffle16F8F = nullptr, *CsiAfterShuffle16F8F = nullptr;
-  Function *CsiBeforeShuffle16F16F = nullptr, *CsiAfterShuffle16F16F = nullptr;
-
-  Function *CsiBeforeShuffle2D2D = nullptr, *CsiAfterShuffle2D2D = nullptr;
-  Function *CsiBeforeShuffle2D4D = nullptr, *CsiAfterShuffle2D4D = nullptr;
-  Function *CsiBeforeShuffle2D8D = nullptr, *CsiAfterShuffle2D8D = nullptr;
-  Function *CsiBeforeShuffle4D2D = nullptr, *CsiAfterShuffle4D2D = nullptr;
-  Function *CsiBeforeShuffle4D4D = nullptr, *CsiAfterShuffle4D4D = nullptr;
-  Function *CsiBeforeShuffle4D8D = nullptr, *CsiAfterShuffle4D8D = nullptr;
-  Function *CsiBeforeShuffle8D2D = nullptr, *CsiAfterShuffle8D2D = nullptr;
-  Function *CsiBeforeShuffle8D4D = nullptr, *CsiAfterShuffle8D4D = nullptr;
-  Function *CsiBeforeShuffle8D8D = nullptr, *CsiAfterShuffle8D8D = nullptr;
+  static Function *getCSIArithmeticHook(Module &M, Instruction *I, bool Before);
+  // static Function *getCSIBeforeBuiltinHook(Module &M, Instruction *I, bool Before);
 
   // Built-in vector loads, stores, gathers, scatters
   Function *CsiBeforeVMaskedLoad4F = nullptr, *CsiAfterVMaskedLoad4F = nullptr;
