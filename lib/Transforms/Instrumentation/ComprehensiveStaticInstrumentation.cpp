@@ -594,7 +594,7 @@ Function *CSIImpl::getCSIArithmeticHook(Module &M, Instruction *I, bool Before) 
       return nullptr;
     return checkCsiInterfaceFunction(
         M.getOrInsertFunction(
-            ("__csi_phi_" + TypeToStr(Ty)).str(),
+            ("__csi_phi_" + TypeToStr(Ty)),
             RetType, IDType, ValCatType, IDType, Ty, FlagsType));
   }
   case Instruction::FPTrunc: {
@@ -3166,6 +3166,7 @@ void CSIImpl::instrumentArithmetic(Instruction *I, LoopInfo &LI) {
   if (!ArithmeticHook)
     return;
   if (BinaryOperator *BO = dyn_cast<BinaryOperator>(I)) {
+    // Standard binary operators, including all basic arithmetic.
     Value *Opcode = getOpcodeID(BO->getOpcode(), IRB);
     Value *Operand0 = BO->getOperand(0);
     Value *Operand1 = BO->getOperand(1);
@@ -3190,57 +3191,108 @@ void CSIImpl::instrumentArithmetic(Instruction *I, LoopInfo &LI) {
     // BasicBlock::iterator Iter(I);
     // Iter++;
     // IRB.SetInsertPoint(&*Iter);
-
-    // Type *AddrType = IRB.getInt8PtrTy();
-    // insertHookCall(&*Iter, CsiAfterArithmetic, {CsiId, });
   } else if (TruncInst *TI = dyn_cast<TruncInst>(I)) {
-
-  } else if (FPTruncInst *TI = dyn_cast<FPTruncInst>(I)) {
     Value *Operand = TI->getOperand(0);
-    std::pair<Value *, Value *> OperandID = getOperandID(Operand, IRB);
-
     Type *OpTy = TI->getType();
     if (OpTy->isVectorTy()) {
       dbgs() << "Uninstrumented operation " << *TI << "\n";
       return;
     }
+    Type *OperandTy = Operand->getType();
+    Type *OperandCastTy = getOperandCastTy(M, OperandTy);
+    assert(OperandCastTy && "No type found for operand.");
+    std::pair<Value *, Value *> OperandID = getOperandID(Operand, IRB);
+    Value *CastOperand = IRB.CreateZExtOrBitCast(Operand, OperandCastTy);
+    Value *FlagsVal = Flags.getValue(IRB);
+    insertHookCall(I, ArithmeticHook, {CsiId, OperandID.first, OperandID.second,
+                                       CastOperand, FlagsVal});
+  } else if (FPTruncInst *TI = dyn_cast<FPTruncInst>(I)) {
+    // Floating-point truncation
+    Value *Operand = TI->getOperand(0);
+    Type *OpTy = TI->getType();
+    if (OpTy->isVectorTy()) {
+      dbgs() << "Uninstrumented operation " << *TI << "\n";
+      return;
+    }
+    std::pair<Value *, Value *> OperandID = getOperandID(Operand, IRB);
     Value *FlagsVal = Flags.getValue(IRB);
     insertHookCall(I, ArithmeticHook, {CsiId, OperandID.first, OperandID.second,
                                        Operand, FlagsVal});
   } else if (ZExtInst *EI = dyn_cast<ZExtInst>(I)) {
-
-  } else if (SExtInst *EI = dyn_cast<SExtInst>(I)) {
-
-  } else if (FPExtInst *EI = dyn_cast<FPExtInst>(I)) {
     Value *Operand = EI->getOperand(0);
-    std::pair<Value *, Value *> OperandID = getOperandID(Operand, IRB);
-
     Type *OpTy = EI->getType();
     if (OpTy->isVectorTy()) {
       dbgs() << "Uninstrumented operation " << *EI << "\n";
       return;
     }
+    Type *OperandTy = Operand->getType();
+    Type *OperandCastTy = getOperandCastTy(M, OperandTy);
+    assert(OperandCastTy && "No type found for operand.");
+    std::pair<Value *, Value *> OperandID = getOperandID(Operand, IRB);
+    Value *CastOperand = IRB.CreateZExtOrBitCast(Operand, OperandCastTy);
+    Value *FlagsVal = Flags.getValue(IRB);
+    insertHookCall(I, ArithmeticHook, {CsiId, OperandID.first, OperandID.second,
+                                       CastOperand, FlagsVal});
+  } else if (SExtInst *EI = dyn_cast<SExtInst>(I)) {
+    Value *Operand = EI->getOperand(0);
+    Type *OpTy = EI->getType();
+    if (OpTy->isVectorTy()) {
+      dbgs() << "Uninstrumented operation " << *EI << "\n";
+      return;
+    }
+    Type *OperandTy = Operand->getType();
+    Type *OperandCastTy = getOperandCastTy(M, OperandTy);
+    assert(OperandCastTy && "No type found for operand.");
+    std::pair<Value *, Value *> OperandID = getOperandID(Operand, IRB);
+    Value *CastOperand = IRB.CreateSExtOrBitCast(Operand, OperandCastTy);
+    Value *FlagsVal = Flags.getValue(IRB);
+    insertHookCall(I, ArithmeticHook, {CsiId, OperandID.first, OperandID.second,
+                                       CastOperand, FlagsVal});
+  } else if (FPExtInst *EI = dyn_cast<FPExtInst>(I)) {
+    // Floating-point extension
+    Value *Operand = EI->getOperand(0);
+    Type *OpTy = EI->getType();
+    if (OpTy->isVectorTy()) {
+      dbgs() << "Uninstrumented operation " << *EI << "\n";
+      return;
+    }
+    std::pair<Value *, Value *> OperandID = getOperandID(Operand, IRB);
     Value *FlagsVal = Flags.getValue(IRB);
     insertHookCall(I, ArithmeticHook, {CsiId, OperandID.first, OperandID.second,
                                        Operand, FlagsVal});
   } else if (FPToUIInst *CI = dyn_cast<FPToUIInst>(I)) {
-      dbgs() << "Uninstrumented operation " << *CI << "\n";
-  } else if (FPToSIInst *CI = dyn_cast<FPToSIInst>(I)) {
-      dbgs() << "Uninstrumented operation " << *CI << "\n";
-  } else if (UIToFPInst *CI = dyn_cast<UIToFPInst>(I)) {
+    // Floating-point cast to unsigned integer
     Value *Operand = CI->getOperand(0);
     Type *OpTy = CI->getType();
     Type *OperandTy = Operand->getType();
-    unsigned Width;
-    if (OpTy->isVectorTy()) {
-      Width = cast<VectorType>(OperandTy)->getElementType()
-        ->getIntegerBitWidth();
-    } else {
-      assert(OperandTy->isIntegerTy() && "Operand of UIToFP is not an int");
-      Width = OperandTy->getIntegerBitWidth();
-    }
 
-    Type *OperandCastTy = getOperandCastTy(M, OpTy);
+    Type *OperandCastTy = getOperandCastTy(M, OperandTy);
+    assert(OperandCastTy && "No type found for operand.");
+    std::pair<Value *, Value *> OperandID = getOperandID(Operand, IRB);
+    Value *CastOperand = IRB.CreateFPCast(Operand, OperandCastTy);
+    Value *FlagsVal = Flags.getValue(IRB);
+    insertHookCall(I, ArithmeticHook, {CsiId, OperandID.first, OperandID.second,
+                                       CastOperand, FlagsVal});
+  } else if (FPToSIInst *CI = dyn_cast<FPToSIInst>(I)) {
+    // Floating-point cast to signed integer
+    Value *Operand = CI->getOperand(0);
+    Type *OpTy = CI->getType();
+    Type *OperandTy = Operand->getType();
+
+    Type *OperandCastTy = getOperandCastTy(M, OperandTy);
+    assert(OperandCastTy && "No type found for operand.");
+    std::pair<Value *, Value *> OperandID = getOperandID(Operand, IRB);
+    Value *CastOperand = IRB.CreateFPCast(Operand, OperandCastTy);
+    Value *FlagsVal = Flags.getValue(IRB);
+    insertHookCall(I, ArithmeticHook, {CsiId, OperandID.first, OperandID.second,
+                                       CastOperand, FlagsVal});
+  } else if (UIToFPInst *CI = dyn_cast<UIToFPInst>(I)) {
+    // Unsigned integer cast to floating point
+    Value *Operand = CI->getOperand(0);
+    Type *OpTy = CI->getType();
+    Type *OperandTy = Operand->getType();
+
+    Type *OperandCastTy = getOperandCastTy(M, OperandTy);
     assert(OperandCastTy && "No type found for operand.");
     std::pair<Value *, Value *> OperandID = getOperandID(Operand, IRB);
     Value *CastOperand = IRB.CreateZExtOrBitCast(Operand, OperandCastTy);
@@ -3249,19 +3301,13 @@ void CSIImpl::instrumentArithmetic(Instruction *I, LoopInfo &LI) {
                                        CastOperand, FlagsVal});
 
   } else if (SIToFPInst *CI = dyn_cast<SIToFPInst>(I)) {
+    // Signed integer cast to floating point
     Value *Operand = CI->getOperand(0);
     Type *OpTy = CI->getType();
     Type *OperandTy = Operand->getType();
     unsigned Width;
-    if (OpTy->isVectorTy()) {
-      Width = cast<VectorType>(OperandTy)->getElementType()
-        ->getIntegerBitWidth();
-    } else {
-      assert(OperandTy->isIntegerTy() && "Operand of UIToFP is not an int");
-      Width = OperandTy->getIntegerBitWidth();
-    }
 
-    Type *OperandCastTy = getOperandCastTy(M, OpTy);
+    Type *OperandCastTy = getOperandCastTy(M, OperandTy);
     assert(OperandCastTy && "No type found for operand.");
     std::pair<Value *, Value *> OperandID = getOperandID(Operand, IRB);
     Value *CastOperand = IRB.CreateSExtOrBitCast(Operand, OperandCastTy);

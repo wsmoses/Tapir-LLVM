@@ -1220,7 +1220,8 @@ protected:
     // if (I.isExceptionalTerminator() || isDetachedRethrow(&I))
     //   return CSITerminatorTy::EHReturn;
     if (isa<ResumeInst>(I) || isa<CleanupReturnInst>(I) ||
-        isa<CatchReturnInst>(I) || isa<CatchSwitchInst>(I))
+        isa<CatchReturnInst>(I) || isa<CatchSwitchInst>(I) ||
+        isDetachedRethrow(&I))
       return CSITerminatorTy::EHReturn;
 
     if (BranchInst *Br = dyn_cast<BranchInst>(&I)) {
@@ -1649,7 +1650,7 @@ protected:
     }
   }
 
-  static Twine TypeToStr(const Type *Ty) {
+  static std::string TypeToStr(const Type *Ty) {
     if (!SupportedType(Ty))
       return "unhandled_type";
 
@@ -1661,13 +1662,13 @@ protected:
     case Type::FP128TyID: return "fp128";
     case Type::IntegerTyID: {
       unsigned Width = Ty->getIntegerBitWidth();
-      return "i" + Twine(Width);
+      return ("i" + Twine(Width)).str();
     }
     case Type::VectorTyID: {
       const VectorType *VecTy = cast<VectorType>(Ty);
       const Type *ElTy = VecTy->getElementType();
       uint64_t NumEls = VecTy->getNumElements();
-      return "v" + Twine(NumEls) + TypeToStr(ElTy);
+      return ("v" + Twine(NumEls) + TypeToStr(ElTy)).str();
     }
     default: llvm_unreachable("No string for supported type");
     }
