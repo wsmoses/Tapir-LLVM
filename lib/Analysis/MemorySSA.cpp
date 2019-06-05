@@ -970,8 +970,9 @@ class MemorySSA::ClobberWalkerBase {
   MemorySSA *MSSA;
 
 public:
-  ClobberWalkerBase(MemorySSA *M, AliasAnalysis *A, DominatorTree *D)
-      : Walker(*M, *A, *D), MSSA(M) {}
+  ClobberWalkerBase(MemorySSA *M, AliasAnalysis *A, DominatorTree *D,
+                    TaskInfo *TI)
+      : Walker(*M, *A, *D, TI), MSSA(M) {}
 
   MemoryAccess *getClobberingMemoryAccessBase(MemoryAccess *,
                                               const MemoryLocation &);
@@ -1518,7 +1519,7 @@ MemorySSAWalker *MemorySSA::getSkipSelfWalker() {
     return SkipWalker.get();
 
   if (!WalkerBase)
-    WalkerBase = llvm::make_unique<ClobberWalkerBase>(this, AA, DT);
+    WalkerBase = llvm::make_unique<ClobberWalkerBase>(this, AA, DT, TI);
 
   SkipWalker = llvm::make_unique<SkipSelfWalker>(this, WalkerBase.get());
   return SkipWalker.get();
@@ -1821,7 +1822,7 @@ void MemorySSA::checkClobberSanityAccess(const MemoryAccess *MA) const {
       return;
     auto *Clobber = MUD->getOptimized();
     UpwardsMemoryQuery Q(I, MUD);
-    checkClobberSanity(MUD, Clobber, *Loc, *this, Q, *AA, true);
+    checkClobberSanity(MUD, Clobber, *Loc, *this, Q, *AA, TI, true);
   }
 }
 

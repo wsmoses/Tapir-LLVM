@@ -4410,7 +4410,7 @@ private:
 //===---------------------------------------------------------------------------
 /// DetachInst - Detach instruction
 ///
-class DetachInst : public TerminatorInst {
+class DetachInst : public Instruction {
   /// Ops list - The operands are ordered:
   ///  SyncRegion, Detached, Continue[, Unwind]
   DetachInst(const DetachInst &DI);
@@ -4513,13 +4513,8 @@ public:
   LandingPadInst *getLandingPadInst() const;
 
 private:
-  friend TerminatorInst;
-
   void init(Value *SyncRegion, BasicBlock *Detached, BasicBlock *Continue,
             BasicBlock *Unwind = nullptr);
-  BasicBlock *getSuccessorV(unsigned idx) const;
-  unsigned getNumSuccessorsV() const;
-  void setSuccessorV(unsigned idx, BasicBlock *B);
 };
 
 template <>
@@ -4538,7 +4533,7 @@ DEFINE_TRANSPARENT_OPERAND_ACCESSORS(DetachInst, Value)
 /// maintains the continue block after the detach instruction
 /// corresponding to this reattach.
 ///
-class ReattachInst : public TerminatorInst {
+class ReattachInst : public Instruction {
   ReattachInst(const ReattachInst &RI);
   void AssertOK();
   // ReattachInst constructors (where C is a block and SR is a token):
@@ -4598,12 +4593,6 @@ public:
            "Successor # out of range for reattach!");
     *(&Op<-2>() - idx) = reinterpret_cast<Value*>(NewSucc);
   }
-private:
-  friend TerminatorInst;
-
-  BasicBlock *getSuccessorV(unsigned idx) const;
-  unsigned getNumSuccessorsV() const;
-  void setSuccessorV(unsigned idx, BasicBlock *B);
 };
 
 template <>
@@ -4619,7 +4608,7 @@ DEFINE_TRANSPARENT_OPERAND_ACCESSORS(ReattachInst, Value)
 //===---------------------------------------------------------------------------
 /// SyncInst - Sync instruction.
 ///
-class SyncInst : public TerminatorInst {
+class SyncInst : public Instruction {
   /// Ops list - A sync looks like an unconditional branch to its continuation.
   SyncInst(const SyncInst &SI);
   void AssertOK();
@@ -4675,12 +4664,6 @@ public:
     assert(idx < getNumSuccessors() && "Successor # out of range for sync!");
     *(&Op<-2>() - idx) = reinterpret_cast<Value*>(NewSucc);
   }
-private:
-  friend TerminatorInst;
-
-  BasicBlock *getSuccessorV(unsigned idx) const;
-  unsigned getNumSuccessorsV() const;
-  void setSuccessorV(unsigned idx, BasicBlock *B);
 };
 
 template <>

@@ -141,7 +141,7 @@ Function *llvm::checkCsiInterfaceFunction(Constant *FuncOrBitcast) {
   FuncOrBitcast->print(errs());
   std::string Err;
   raw_string_ostream Stream(Err);
-  Stream << "ComprehensiveStaticInstrumentation interface function redefined: " << *FuncOrBitcast;
+  Stream << "CSI interface function redefined: " << *FuncOrBitcast;
   report_fatal_error(Err);
 }
 

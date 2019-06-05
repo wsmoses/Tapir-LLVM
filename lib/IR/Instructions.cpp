@@ -998,47 +998,47 @@ void DetachInst::init(Value *SyncRegion, BasicBlock *Detached,
 
 DetachInst::DetachInst(BasicBlock *Detached, BasicBlock *Continue,
                        Value *SyncRegion, Instruction *InsertBefore)
-    : TerminatorInst(Type::getVoidTy(Detached->getContext()),
-                     Instruction::Detach,
-                     OperandTraits<DetachInst>::op_end(this) - 3, 3,
-                     InsertBefore) {
+    : Instruction(Type::getVoidTy(Detached->getContext()),
+                  Instruction::Detach,
+                  OperandTraits<DetachInst>::op_end(this) - 3, 3,
+                  InsertBefore) {
   init(SyncRegion, Detached, Continue);
 }
 
 DetachInst::DetachInst(BasicBlock *Detached, BasicBlock *Continue,
                        Value *SyncRegion, BasicBlock *InsertAtEnd)
-    : TerminatorInst(Type::getVoidTy(Detached->getContext()),
-                     Instruction::Detach,
-                     OperandTraits<DetachInst>::op_end(this) - 3, 3,
-                     InsertAtEnd) {
+    : Instruction(Type::getVoidTy(Detached->getContext()),
+                  Instruction::Detach,
+                  OperandTraits<DetachInst>::op_end(this) - 3, 3,
+                  InsertAtEnd) {
   init(SyncRegion, Detached, Continue);
 }
 
 DetachInst::DetachInst(BasicBlock *Detached, BasicBlock *Continue,
                        BasicBlock *Unwind, Value *SyncRegion,
                        Instruction *InsertBefore)
-    : TerminatorInst(Type::getVoidTy(Detached->getContext()),
-                     Instruction::Detach,
-                     OperandTraits<DetachInst>::op_end(this) - 4, 4,
-                     InsertBefore) {
+    : Instruction(Type::getVoidTy(Detached->getContext()),
+                  Instruction::Detach,
+                  OperandTraits<DetachInst>::op_end(this) - 4, 4,
+                  InsertBefore) {
   init(SyncRegion, Detached, Continue, Unwind);
 }
 
 DetachInst::DetachInst(BasicBlock *Detached, BasicBlock *Continue,
                        BasicBlock *Unwind, Value *SyncRegion,
                        BasicBlock *InsertAtEnd)
-    : TerminatorInst(Type::getVoidTy(Detached->getContext()),
-                     Instruction::Detach,
-                     OperandTraits<DetachInst>::op_end(this) - 4, 4,
-                     InsertAtEnd) {
+    : Instruction(Type::getVoidTy(Detached->getContext()),
+                  Instruction::Detach,
+                  OperandTraits<DetachInst>::op_end(this) - 4, 4,
+                  InsertAtEnd) {
   init(SyncRegion, Detached, Continue, Unwind);
 }
 
 DetachInst::DetachInst(const DetachInst &DI)
-    : TerminatorInst(Type::getVoidTy(DI.getContext()), Instruction::Detach,
-                     OperandTraits<DetachInst>::op_end(this) -
-                     DI.getNumOperands(),
-                     DI.getNumOperands()) {
+    : Instruction(Type::getVoidTy(DI.getContext()), Instruction::Detach,
+                  OperandTraits<DetachInst>::op_end(this) -
+                  DI.getNumOperands(),
+                  DI.getNumOperands()) {
   setInstructionSubclassData(DI.getSubclassDataFromInstruction());
   Op<-1>() = DI.Op<-1>();
   Op<-2>() = DI.Op<-2>();
@@ -1056,16 +1056,6 @@ LandingPadInst *DetachInst::getLandingPadInst() const {
   return cast<LandingPadInst>(getUnwindDest()->getFirstNonPHI());
 }
 
-BasicBlock *DetachInst::getSuccessorV(unsigned idx) const {
-  return getSuccessor(idx);
-}
-unsigned DetachInst::getNumSuccessorsV() const {
-  return getNumSuccessors();
-}
-void DetachInst::setSuccessorV(unsigned idx, BasicBlock *B) {
-  setSuccessor(idx, B);
-}
-
 //===----------------------------------------------------------------------===//
 //                      ReattachInst Implementation
 //===----------------------------------------------------------------------===//
@@ -1077,10 +1067,10 @@ void ReattachInst::AssertOK() {
 
 ReattachInst::ReattachInst(BasicBlock *DetachContinue, Value *SyncRegion,
                            Instruction *InsertBefore)
-    : TerminatorInst(Type::getVoidTy(DetachContinue->getContext()),
-                     Instruction::Reattach,
-                     OperandTraits<ReattachInst>::op_end(this) - 2, 2,
-                     InsertBefore) {
+    : Instruction(Type::getVoidTy(DetachContinue->getContext()),
+                  Instruction::Reattach,
+                  OperandTraits<ReattachInst>::op_end(this) - 2, 2,
+                  InsertBefore) {
   Op<-1>() = SyncRegion;
   Op<-2>() = DetachContinue;
 #ifndef NDEBUG
@@ -1090,10 +1080,10 @@ ReattachInst::ReattachInst(BasicBlock *DetachContinue, Value *SyncRegion,
 
 ReattachInst::ReattachInst(BasicBlock *DetachContinue, Value *SyncRegion,
                            BasicBlock *InsertAtEnd)
-    : TerminatorInst(Type::getVoidTy(DetachContinue->getContext()),
-                     Instruction::Reattach,
-                     OperandTraits<ReattachInst>::op_end(this) - 2, 2,
-                     InsertAtEnd) {
+    : Instruction(Type::getVoidTy(DetachContinue->getContext()),
+                  Instruction::Reattach,
+                  OperandTraits<ReattachInst>::op_end(this) - 2, 2,
+                  InsertAtEnd) {
   Op<-1>() = SyncRegion;
   Op<-2>() = DetachContinue;
 #ifndef NDEBUG
@@ -1102,26 +1092,14 @@ ReattachInst::ReattachInst(BasicBlock *DetachContinue, Value *SyncRegion,
 }
 
 ReattachInst::ReattachInst(const ReattachInst &RI)
-    : TerminatorInst(Type::getVoidTy(RI.getContext()), Instruction::Reattach,
-                     OperandTraits<ReattachInst>::op_end(this) -
-                     RI.getNumOperands(),
-                     RI.getNumOperands()) {
+    : Instruction(Type::getVoidTy(RI.getContext()), Instruction::Reattach,
+                  OperandTraits<ReattachInst>::op_end(this) -
+                  RI.getNumOperands(),
+                  RI.getNumOperands()) {
   Op<-1>() = RI.Op<-1>();
   Op<-2>() = RI.Op<-2>();
   assert(RI.getNumOperands() == 2 && "Reattach must have 2 operands!");
   SubclassOptionalData = RI.SubclassOptionalData;
-}
-
-unsigned ReattachInst::getNumSuccessorsV() const {
-  return getNumSuccessors();
-}
-
-BasicBlock *ReattachInst::getSuccessorV(unsigned idx) const {
-  return getSuccessor(idx);
-}
-
-void ReattachInst::setSuccessorV(unsigned idx, BasicBlock *B) {
-  setSuccessor(idx, B);
 }
 
 //===----------------------------------------------------------------------===//
@@ -1135,9 +1113,9 @@ void SyncInst::AssertOK() {
 
 SyncInst::SyncInst(BasicBlock *Continue, Value *SyncRegion,
                    Instruction *InsertBefore)
-    : TerminatorInst(Type::getVoidTy(Continue->getContext()), Instruction::Sync,
-                     OperandTraits<SyncInst>::op_end(this) - 2, 2,
-                     InsertBefore) {
+    : Instruction(Type::getVoidTy(Continue->getContext()), Instruction::Sync,
+                  OperandTraits<SyncInst>::op_end(this) - 2, 2,
+                  InsertBefore) {
   Op<-1>() = SyncRegion;
   Op<-2>() = Continue;
 #ifndef NDEBUG
@@ -1147,9 +1125,9 @@ SyncInst::SyncInst(BasicBlock *Continue, Value *SyncRegion,
 
 SyncInst::SyncInst(BasicBlock *Continue, Value *SyncRegion,
                    BasicBlock *InsertAtEnd)
-    : TerminatorInst(Type::getVoidTy(Continue->getContext()), Instruction::Sync,
-                     OperandTraits<SyncInst>::op_end(this) - 2, 2,
-                     InsertAtEnd) {
+    : Instruction(Type::getVoidTy(Continue->getContext()), Instruction::Sync,
+                  OperandTraits<SyncInst>::op_end(this) - 2, 2,
+                  InsertAtEnd) {
   Op<-1>() = SyncRegion;
   Op<-2>() = Continue;
 #ifndef NDEBUG
@@ -1158,24 +1136,14 @@ SyncInst::SyncInst(BasicBlock *Continue, Value *SyncRegion,
 }
 
 
-SyncInst::SyncInst(const SyncInst &SI) :
-    TerminatorInst(Type::getVoidTy(SI.getContext()), Instruction::Sync,
-                   OperandTraits<SyncInst>::op_end(this) - SI.getNumOperands(),
-                   SI.getNumOperands()) {
+SyncInst::SyncInst(const SyncInst &SI)
+    : Instruction(Type::getVoidTy(SI.getContext()), Instruction::Sync,
+                  OperandTraits<SyncInst>::op_end(this) - SI.getNumOperands(),
+                  SI.getNumOperands()) {
   Op<-1>() = SI.Op<-1>();
   Op<-2>() = SI.Op<-2>();
   assert(SI.getNumOperands() == 2 && "Sync must have 2 operands!");
   SubclassOptionalData = SI.SubclassOptionalData;
-}
-
-BasicBlock *SyncInst::getSuccessorV(unsigned idx) const {
-  return getSuccessor(idx);
-}
-unsigned SyncInst::getNumSuccessorsV() const {
-  return getNumSuccessors();
-}
-void SyncInst::setSuccessorV(unsigned idx, BasicBlock *B) {
-  setSuccessor(idx, B);
 }
 
 //===----------------------------------------------------------------------===//
