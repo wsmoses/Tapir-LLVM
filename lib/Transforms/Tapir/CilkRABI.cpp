@@ -182,8 +182,8 @@ public:
           TypeBuilder<int32_t,                 X>::get(C), // self
           TypeBuilder<void*,                   X>::get(C), // g
           TypeBuilder<void*,                   X>::get(C), // l
-          // TypeBuilder<void*,                   X>::get(C), // reducer_map
-          TypeBuilder<__cilkrts_stack_frame*,  X>::get(C)  // current_stack_frame
+          TypeBuilder<__cilkrts_stack_frame*,  X>::get(C), // current_stack_frame
+          TypeBuilder<void*,                   X>::get(C) // reducer_map
           // TypeBuilder<void*,                   X>::get(C), // saved_protected_tail
           // TypeBuilder<void*,                   X>::get(C), // sysdep
           // TypeBuilder<__cilkrts_pedigree,      X>::get(C)  // pedigree
@@ -212,8 +212,8 @@ public:
     self,
     g,
     l,
-    // reducer_map,
     current_stack_frame,
+    reducer_map,
     // saved_protected_tail,
     // sysdep,
     // pedigree
