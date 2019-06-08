@@ -3261,9 +3261,8 @@ void CSIImpl::instrumentArithmetic(Instruction *I, LoopInfo &LI) {
     insertHookCall(I, ArithmeticHook, {CsiId, OperandID.first, OperandID.second,
                                        Operand, FlagsVal});
   } else if (FPToUIInst *CI = dyn_cast<FPToUIInst>(I)) {
-    // Floating-point cast to unsigned integer
+    // Floating-point conversion to unsigned integer
     Value *Operand = CI->getOperand(0);
-    Type *OpTy = CI->getType();
     Type *OperandTy = Operand->getType();
 
     Type *OperandCastTy = getOperandCastTy(M, OperandTy);
@@ -3274,9 +3273,8 @@ void CSIImpl::instrumentArithmetic(Instruction *I, LoopInfo &LI) {
     insertHookCall(I, ArithmeticHook, {CsiId, OperandID.first, OperandID.second,
                                        CastOperand, FlagsVal});
   } else if (FPToSIInst *CI = dyn_cast<FPToSIInst>(I)) {
-    // Floating-point cast to signed integer
+    // Floating-point conversion to signed integer
     Value *Operand = CI->getOperand(0);
-    Type *OpTy = CI->getType();
     Type *OperandTy = Operand->getType();
 
     Type *OperandCastTy = getOperandCastTy(M, OperandTy);
@@ -3287,9 +3285,8 @@ void CSIImpl::instrumentArithmetic(Instruction *I, LoopInfo &LI) {
     insertHookCall(I, ArithmeticHook, {CsiId, OperandID.first, OperandID.second,
                                        CastOperand, FlagsVal});
   } else if (UIToFPInst *CI = dyn_cast<UIToFPInst>(I)) {
-    // Unsigned integer cast to floating point
+    // Unsigned integer conversion to floating point
     Value *Operand = CI->getOperand(0);
-    Type *OpTy = CI->getType();
     Type *OperandTy = Operand->getType();
 
     Type *OperandCastTy = getOperandCastTy(M, OperandTy);
@@ -3301,11 +3298,9 @@ void CSIImpl::instrumentArithmetic(Instruction *I, LoopInfo &LI) {
                                        CastOperand, FlagsVal});
 
   } else if (SIToFPInst *CI = dyn_cast<SIToFPInst>(I)) {
-    // Signed integer cast to floating point
+    // Signed integer conversion to floating point
     Value *Operand = CI->getOperand(0);
-    Type *OpTy = CI->getType();
     Type *OperandTy = Operand->getType();
-    unsigned Width;
 
     Type *OperandCastTy = getOperandCastTy(M, OperandTy);
     assert(OperandCastTy && "No type found for operand.");
