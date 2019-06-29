@@ -850,6 +850,37 @@ Function *CSIImpl::getCSIArithmeticHook(Module &M, Instruction *I, bool Before) 
              TypeToStr(ITy)).str(),
             RetType, IDType, ValCatType, IDType, InTy, FlagsType));
   }
+  case Instruction::BitCast: {
+    Type *IOpTy = I->getOperand(0)->getType();
+    Type *InTy = getOperandCastTy(M, IOpTy);
+    if (!InTy)
+      return nullptr;
+    return checkCsiInterfaceFunction(
+        M.getOrInsertFunction(
+            ("__csi_" + Twine(Before ? "before" : "after") +
+             "_bitcast_" + TypeToStr(IOpTy) + "_" + TypeToStr(ITy)).str(),
+            RetType, IDType, ValCatType, IDType, InTy, FlagsType));
+  }
+  case Instruction::GetElementPtr: {
+    // TODO: Generalize the name of this hook to be less LLVM-specific.
+    Type *IOpTy = I->getOperand(0)->getType();
+    // TODO: Add support for GEP instructions on pointers of vectors.
+    if (isa<VectorType>(IOpTy))
+      return nullptr;
+    Type *OutTy = getOperandCastTy(M, ITy);
+    Type *InTy = getOperandCastTy(M, IOpTy);
+    if (!OutTy || !InTy)
+      return nullptr;
+    Type *IdxArgType = StructType::get(IRB.getInt8Ty(), // Index ValCat
+                                       IRB.getInt64Ty(), // Index operand ID
+                                       IRB.getInt64Ty()); // Index operand
+    return checkCsiInterfaceFunction(
+        M.getOrInsertFunction(
+            ("__csi_" + Twine(Before ? "before" : "after") +
+             "_getelementptr_" + TypeToStr(ITy)).str(),
+            RetType, IDType, ValCatType, IDType, InTy,
+            PointerType::get(IdxArgType, 0), IRB.getInt32Ty(), FlagsType));
+  }
   case Instruction::InsertElement: {
     VectorType *VecTy = cast<VectorType>(getOperandCastTy(M, ITy));
     if (!VecTy)
@@ -2937,6 +2968,78 @@ void CSIImpl::instrumentArithmetic(Instruction *I, LoopInfo &LI) {
     Value *FlagsVal = Flags.getValue(IRB);
     insertHookCall(I, ArithmeticHook, {CsiId, OperandID.first, OperandID.second,
                                        CastOperand, FlagsVal});
+
+  } else if (BitCastInst *BC = dyn_cast<BitCastInst>(I)) {
+    // Arbitrary bit cast
+    Value *Operand = BC->getOperand(0);
+    Type *OperandTy = Operand->getType();
+    Type *OperandCastTy = getOperandCastTy(M, OperandTy);
+    assert(OperandCastTy && "No type found for operand.");
+    std::pair<Value *, Value *> OperandID = getOperandID(Operand, IRB);
+    Value *CastOperand = IRB.CreateSExtOrBitCast(Operand, OperandCastTy);
+    Value *FlagsVal = Flags.getValue(IRB);
+    insertHookCall(I, ArithmeticHook, {CsiId, OperandID.first, OperandID.second,
+                                       CastOperand, FlagsVal});
+
+  } else if (GetElementPtrInst *GEP = dyn_cast<GetElementPtrInst>(I)) {
+    // GEP instruction
+    // TODO? Special-case GEP's with constant offsets.
+    Value *Operand = GEP->getOperand(0);
+    Type *OperandTy = Operand->getType();
+    Type *OperandCastTy = getOperandCastTy(M, OperandTy);
+    Type *IdxOpTy = IRB.getInt64Ty();
+    Type *IdxArrayElTy = StructType::get(IRB.getInt8Ty(), IRB.getInt64Ty(),
+                                         IdxOpTy);
+    // Handle the indices of the GEP, if it has them.
+    Value *IdxArray =
+      ConstantPointerNull::get(PointerType::get(IdxArrayElTy, 0));
+    ConstantInt *IdxArraySize = nullptr;
+    Value *NumIdxVal = IRB.getInt32(0);
+    Value *StackAddr = nullptr;
+    if (GEP->hasIndices()) {
+      unsigned NumIdx = GEP->getNumIndices();
+      NumIdxVal = IRB.getInt32(NumIdx);
+      // Save information about the stack before allocating the index array.
+      StackAddr =
+        IRB.CreateCall(Intrinsic::getDeclaration(&M, Intrinsic::stacksave));
+      // Allocate the index array.
+      IdxArray = IRB.CreateAlloca(IdxArrayElTy, NumIdxVal);
+      IdxArraySize =
+        IRB.getInt64(DL.getTypeAllocSize(
+                         cast<AllocaInst>(IdxArray)->getAllocatedType())
+                     * NumIdx);
+      IRB.CreateLifetimeStart(IdxArray, IdxArraySize);
+      // Populate the index array.
+      unsigned IdxNum = 0;
+      for (Value *Idx : GEP->indices()) {
+        std::pair<Value *, Value *> OperandID = getOperandID(Idx, IRB);
+        IRB.CreateStore(OperandID.first,
+                        IRB.CreateInBoundsGEP(IdxArray, {IRB.getInt32(IdxNum),
+                                                         IRB.getInt32(0)}));
+        IRB.CreateStore(OperandID.second,
+                        IRB.CreateInBoundsGEP(IdxArray, {IRB.getInt32(IdxNum),
+                                                         IRB.getInt32(1)}));
+        IRB.CreateStore(IRB.CreateSExt(Idx, IdxOpTy),
+                        IRB.CreateInBoundsGEP(IdxArray, {IRB.getInt32(IdxNum),
+                                                         IRB.getInt32(2)}));
+        IdxNum++;
+      }
+    }
+    // Get information on the pointer operand.
+    std::pair<Value *, Value *> OperandID = getOperandID(Operand, IRB);
+    Value *CastOperand = IRB.CreateSExtOrBitCast(Operand, OperandCastTy);
+    Flags.copyIRFlags(GEP);
+    Value *FlagsVal = Flags.getValue(IRB);
+    // Insert the hook.
+    insertHookCall(I, ArithmeticHook, {CsiId, OperandID.first, OperandID.second,
+                                       CastOperand, IdxArray, NumIdxVal,
+                                       FlagsVal});
+    if (GEP->hasIndices()) {
+      // Clean up the index array.
+      IRB.CreateLifetimeEnd(IdxArray, IdxArraySize);
+      IRB.CreateCall(Intrinsic::getDeclaration(&M, Intrinsic::stackrestore),
+                     {StackAddr});
+    }
 
   } else if (PHINode *PN = dyn_cast<PHINode>(I)) {
     Type *OpTy = PN->getType();
