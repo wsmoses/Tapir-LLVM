@@ -108,14 +108,26 @@ public:
   /// The GlobalVariable holding the base ID for this forensic table.
   GlobalVariable *baseId() const { return BaseId; }
 
-  /// Converts a local to global ID conversion.
+  /// Converts a local to a global ID.
   ///
-  /// This is done by using the given IRBuilder to insert a load to the base ID
-  /// global variable followed by an add of the base value and the local ID.
+  /// If LocalId == CsiUnknownId, then a value storing CsiUnkownId is returned.
+  /// Otherwise the given IRBuilder inserts a load to the base ID global
+  /// variable followed by an add of the base value and LocalId.
   ///
   /// \returns A Value holding the global ID corresponding to the
   /// given local ID.
   Value *localToGlobalId(csi_id_t LocalId, IRBuilder<> &IRB) const;
+
+  /// Converts a local to a global ID.
+  ///
+  /// This is done by using the given IRBuilder to insert a load to the base ID
+  /// global variable followed by an add of the base value and the local ID.  A
+  /// runtime check is added to see if LocalId == CsiUnknownId and avoid the add
+  /// if so.
+  ///
+  /// \returns A Value holding the global ID corresponding to the
+  /// given local ID.
+  Value *localToGlobalId(Value *LocalId, IRBuilder<> &IRB) const;
 
   /// Helper function to get or create a string for a forensic-table entry.
   static Constant *getObjectStrGV(Module &M, StringRef Str, const Twine GVName);
@@ -596,6 +608,7 @@ public:
     // Must match the definition of property type in csi.h
     return StructType::get(IntegerType::get(C, PropBits.IsIndirect),
                            IntegerType::get(C, PropBits.HasOneUse),
+                           IntegerType::get(C, PropBits.BBLocal),
                            IntegerType::get(C, PropBits.Padding));
   }
   static Type *getType(LLVMContext &C) {
@@ -621,6 +634,8 @@ public:
   void setIsIndirect(bool v) { PropValue.Fields.IsIndirect = v; }
   /// Set the value of the HasOneUse property.
   void setHasOneUse(bool v) { PropValue.Fields.HasOneUse = v; }
+  /// Set the value of the BBLocal property.
+  void setBBLocal(bool v) { PropValue.Fields.BBLocal = v; }
 
 private:
   typedef union {
@@ -628,7 +643,8 @@ private:
     struct {
       unsigned IsIndirect : 1;
       unsigned HasOneUse : 1;
-      uint64_t Padding : 62;
+      unsigned BBLocal : 1;
+      uint64_t Padding : 61;
     } Fields;
     uint64_t Bits;
   } Property;
@@ -639,11 +655,12 @@ private:
   typedef struct {
     int IsIndirect;
     int HasOneUse;
+    int BBLocal;
     int Padding;
   } PropertyBits;
 
   /// The number of bits representing each property.
-  static constexpr PropertyBits PropBits = {1, 1, (64 - 1 - 1)};
+  static constexpr PropertyBits PropBits = {1, 1, 1, (64 - 1 - 1 - 1)};
 };
 
 class CsiLoadStoreProperty : public CsiProperty {
@@ -661,6 +678,7 @@ public:
         IntegerType::get(C, PropBits.IsVolatile),
         IntegerType::get(C, PropBits.LoadReadBeforeWriteInBB),
         IntegerType::get(C, PropBits.HasOneUse),
+        IntegerType::get(C, PropBits.BBLocal),
         IntegerType::get(C, PropBits.Padding));
   }
   static Type *getType(LLVMContext &C) {
@@ -704,6 +722,8 @@ public:
   void setIsVolatile(bool v) { PropValue.Fields.IsVolatile = v; }
   /// Set the value of the HasOneUse property.
   void setHasOneUse(bool v) { PropValue.Fields.HasOneUse = v; }
+  /// Set the value of the BBLocal property.
+  void setBBLocal(bool v) { PropValue.Fields.BBLocal = v; }
   /// Set the value of the LoadReadBeforeWriteInBB property.
   void setLoadReadBeforeWriteInBB(bool v) {
     PropValue.Fields.LoadReadBeforeWriteInBB = v;
@@ -721,7 +741,8 @@ private:
       unsigned IsVolatile : 1;
       unsigned LoadReadBeforeWriteInBB : 1;
       unsigned HasOneUse : 1;
-      uint64_t Padding : 49;
+      unsigned BBLocal : 1;
+      uint64_t Padding : 48;
     } Fields;
     uint64_t Bits;
   } Property;
@@ -738,12 +759,13 @@ private:
     int IsVolatile;
     int LoadReadBeforeWriteInBB;
     int HasOneUse;
+    int BBLocal;
     int Padding;
   } PropertyBits;
 
   /// The number of bits representing each property.
   static constexpr PropertyBits PropBits = {
-      8, 1, 1, 1, 1, 1, 1, 1, (64 - 8 - 1 - 1 - 1 - 1 - 1 - 1 - 1)};
+      8, 1, 1, 1, 1, 1, 1, 1, 1, (64 - 8 - 1 - 1 - 1 - 1 - 1 - 1 - 1 - 1)};
 };
 
 class CsiAllocaProperty : public CsiProperty {
@@ -909,6 +931,7 @@ public:
                            IntegerType::get(C, PropBits.ApproxFunc),
                            IntegerType::get(C, PropBits.IsInBounds),
                            IntegerType::get(C, PropBits.HasOneUse),
+                           IntegerType::get(C, PropBits.BBLocal),
                            IntegerType::get(C, PropBits.Padding));
   }
   static Type *getType(LLVMContext &C) {
@@ -949,6 +972,8 @@ public:
   }
   /// Set the value of the HasOneUse property.
   void setHasOneUse(bool v) { PropValue.Fields.HasOneUse = v; }
+  /// Set the value of the BBLocal property.
+  void setBBLocal(bool v) { PropValue.Fields.BBLocal = v; }
 
 private:
   typedef union {
@@ -966,7 +991,8 @@ private:
       unsigned ApproxFunc : 1;
       unsigned IsInBounds : 1;
       unsigned HasOneUse : 1;
-      uint64_t Padding : 52;
+      unsigned BBLocal : 1;
+      uint64_t Padding : 51;
     } Fields;
     uint64_t Bits;
   } Property;
@@ -987,13 +1013,14 @@ private:
     int ApproxFunc;
     int IsInBounds;
     int HasOneUse;
+    int BBLocal;
     int Padding;
   } PropertyBits;
 
   /// The number of bits representing each property.
   static constexpr PropertyBits PropBits =
-    {1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
-     (64 - 1 - 1 - 1 - 1 - 1 - 1 - 1 - 1 - 1 - 1 - 1 - 1)};
+    {1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+     (64 - 1 - 1 - 1 - 1 - 1 - 1 - 1 - 1 - 1 - 1 - 1 - 1 - 1)};
 };
 
 struct CSIImpl {
@@ -1129,6 +1156,7 @@ protected:
   void assignCallsiteID(Instruction *I);
   bool handleFPBuiltinCall(CallInst *I, Function *F, LoopInfo &LI);
   void instrumentCallsite(Instruction *I, DominatorTree *DT, LoopInfo &LI);
+  void assignBasicBlockID(BasicBlock &BB);
   void instrumentBasicBlock(BasicBlock &BB,
                             const SmallPtrSetImpl<Value *> &Inputs);
   void instrumentLoop(Loop &L, const InputMap<Loop> &LoopInputs,
@@ -1184,6 +1212,10 @@ protected:
   // Update the attributes on the instrumented function that might be
   // invalidated by the inserted instrumentation.
   void updateInstrumentedFnAttrs(Function &F);
+
+  // Returns true if the given instruction is an instrumented arithmetic
+  // operation.
+  bool IsInstrumentedArithmetic(const Instruction *I);
 
   // List of all supported types of terminators for basic blocks.
   enum class CSITerminatorTy
@@ -1466,6 +1498,17 @@ protected:
     }
   }
 
+  enum class CSIDataFlowObject
+    {
+     BasicBlock,
+     Call,
+     Loop,
+     Task,
+     FunctionEntry,
+     FunctionExit,
+     LAST_CSIDataFlowObject
+    };
+
   enum class CSIOperandCategory
     {
      None = 0,
@@ -1645,6 +1688,10 @@ protected:
       const Type *ElTy = cast<VectorType>(Ty)->getElementType();
       return SupportedType(ElTy);
     }
+    case Type::PointerTyID: {
+      const Type *ElTy = cast<PointerType>(Ty)->getElementType();
+      return SupportedType(ElTy);
+    }
       // TODO: Handle array types, struct types
     default: return false;
     }
@@ -1669,6 +1716,11 @@ protected:
       const Type *ElTy = VecTy->getElementType();
       uint64_t NumEls = VecTy->getNumElements();
       return ("v" + Twine(NumEls) + TypeToStr(ElTy)).str();
+    }
+    case Type::PointerTyID: {
+      const PointerType *PtrTy = cast<PointerType>(Ty);
+      const Type *ElTy = PtrTy->getElementType();
+      return ("p" + TypeToStr(ElTy));
     }
     default: llvm_unreachable("No string for supported type");
     }
@@ -1710,7 +1762,15 @@ protected:
   }
 
   static Function *getCSIArithmeticHook(Module &M, Instruction *I, bool Before);
-  // static Function *getCSIBeforeBuiltinHook(Module &M, Instruction *I, bool Before);
+  static Function *getCSIBuiltinHook(Module &M, CallInst *I, bool Before);
+  static Function *getMaskedReadWriteHook(Module &M, Instruction *I,
+                                          bool Before);
+  static Function *getCSIInputHook(Module &M, CSIDataFlowObject Obj,
+                                   Type *InputTy);
+  void instrumentParams(IRBuilder<> &IRB, Function &F, Value *FuncId);
+  void instrumentInputs(IRBuilder<> &IRB, CSIDataFlowObject DFObj,
+                        Value *DFObjCsiId,
+                        const SmallPtrSetImpl<Value *> &Inputs);
 
   // Built-in vector loads, stores, gathers, scatters
   Function *CsiBeforeVMaskedLoad4F = nullptr, *CsiAfterVMaskedLoad4F = nullptr;

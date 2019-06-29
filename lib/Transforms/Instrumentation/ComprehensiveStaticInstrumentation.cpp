@@ -98,6 +98,10 @@ ClInstrumentArithmetic("csi-instrument-arithmetic",
                                       "Instrument integer arithmetic"),
                            clEnumValN(CSIOptions::ArithmeticType::All, "all",
                                       "Instrument all arithmetic")));
+static cl::opt<bool>
+    ClInstrumentInputs("csi-instrument-inputs", cl::init(true),
+                         cl::desc("Instrument data-flow inputs"),
+                         cl::Hidden);
 
 static cl::opt<bool> ClInterpose("csi-interpose", cl::init(true),
                                  cl::desc("Enable function interpositioning"),
@@ -141,6 +145,7 @@ static CSIOptions OverrideFromCL(CSIOptions Options) {
   Options.InstrumentAllocas = ClInstrumentAllocas;
   Options.InstrumentAllocFns = ClInstrumentAllocFns;
   Options.InstrumentArithmetic = ClInstrumentArithmetic;
+  Options.InstrumentInputs = ClInstrumentInputs;
   return Options;
 }
 
@@ -334,6 +339,19 @@ Value *ForensicTable::localToGlobalId(csi_id_t LocalId,
   Base->setMetadata(LLVMContext::MD_invariant_load, MD);
   Value *Offset = IRB.getInt64(LocalId);
   return IRB.CreateAdd(Base, Offset);
+}
+
+Value *ForensicTable::localToGlobalId(Value *LocalId,
+                                      IRBuilder<> &IRB) const {
+  assert(BaseId);
+  LLVMContext &C = IRB.getContext();
+  LoadInst *Base = IRB.CreateLoad(BaseId);
+  MDNode *MD = llvm::MDNode::get(C, None);
+  Base->setMetadata(LLVMContext::MD_invariant_load, MD);
+
+  return IRB.CreateSelect(
+      IRB.CreateICmp(ICmpInst::ICMP_NE, LocalId, IRB.getInt64(CsiUnknownId)),
+      IRB.CreateAdd(Base, LocalId), LocalId);
 }
 
 csi_id_t SizeTable::add(const BasicBlock &BB) {
@@ -565,6 +583,127 @@ Constant *FrontEndDataTable::insertIntoModule(Module &M) const {
   return ConstantExpr::getGetElementPtr(GV->getValueType(), GV, GepArgs);
 }
 
+static Function *CreateNullHook(Function *Hook, Module &M) {
+  // Set weak linkage on this hook implementation.
+  Hook->setLinkage(GlobalValue::WeakAnyLinkage);
+  // Generate the body of the null hook, which simply returns.
+  BasicBlock *HookEntry = BasicBlock::Create(M.getContext(), "", Hook);
+  IRBuilder<> B(HookEntry);
+  B.CreateRetVoid();
+  return Hook;
+}
+
+template<typename... ArgsTy>
+static Function *CreateCSIHookWithNull(Module &M, StringRef Name,
+                                       Type *RetTy, ArgsTy... Args) {
+  if (Function *Hook = M.getFunction(Name))
+    return Hook;
+
+  Function *Hook = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(Name, RetTy, Args...));
+
+  return CreateNullHook(Hook, M);
+}
+
+Function *CSIImpl::getCSIInputHook(Module &M, CSIDataFlowObject Obj,
+                                   Type *InputTy) {
+  assert(SupportedType(InputTy) &&
+         "No basic-block input hook for unsupported input type.");
+  Type *OperandCastTy = getOperandCastTy(M, InputTy);
+
+  LLVMContext &C = M.getContext();
+  IRBuilder<> IRB(C);
+  Type *RetType = IRB.getVoidTy();
+  Type *IDType = IRB.getInt64Ty();
+  Type *ValCatType = IRB.getInt8Ty();
+  Type *FlagsType = CsiArithmeticFlags::getType(C);
+
+  switch (Obj) {
+  case CSIDataFlowObject::BasicBlock:
+    return CreateCSIHookWithNull(
+        M, ("__csi_bb_input_" + TypeToStr(InputTy)),
+        RetType, IDType, ValCatType, IDType, OperandCastTy, FlagsType);
+    // return checkCsiInterfaceFunction(
+    //     M.getOrInsertFunction(
+    //         ("__csi_bb_input_" + TypeToStr(InputTy)),
+    //         RetType, IDType, ValCatType, IDType, OperandCastTy, FlagsType));
+  case CSIDataFlowObject::Call:
+    return CreateCSIHookWithNull(
+        M, ("__csi_call_input_" + TypeToStr(InputTy)),
+        RetType, IDType, ValCatType, IDType, OperandCastTy, FlagsType);
+    // return checkCsiInterfaceFunction(
+    //     M.getOrInsertFunction(
+    //         ("__csi_call_input_" + TypeToStr(InputTy)),
+    //         RetType, IDType, ValCatType, IDType, OperandCastTy, FlagsType));
+  case CSIDataFlowObject::Loop:
+    return CreateCSIHookWithNull(
+        M, ("__csi_loop_input_" + TypeToStr(InputTy)),
+        RetType, IDType, ValCatType, IDType, OperandCastTy, FlagsType);
+    // return checkCsiInterfaceFunction(
+    //     M.getOrInsertFunction(
+    //         ("__csi_loop_input_" + TypeToStr(InputTy)),
+    //         RetType, IDType, ValCatType, IDType, OperandCastTy, FlagsType));
+  case CSIDataFlowObject::Task:
+    return CreateCSIHookWithNull(
+        M, ("__csi_task_input_" + TypeToStr(InputTy)),
+        RetType, IDType, ValCatType, IDType, OperandCastTy, FlagsType);
+    // return checkCsiInterfaceFunction(
+    //     M.getOrInsertFunction(
+    //         ("__csi_task_input_" + TypeToStr(InputTy)),
+    //         RetType, IDType, ValCatType, IDType, OperandCastTy, FlagsType));
+  case CSIDataFlowObject::FunctionEntry:
+    return CreateCSIHookWithNull(
+        M, ("__csi_func_parameter_" + TypeToStr(InputTy)),
+        RetType, IDType, ValCatType, IDType, OperandCastTy, FlagsType);
+    // return checkCsiInterfaceFunction(
+    //     M.getOrInsertFunction(
+    //         ("__csi_func_parameter_" + TypeToStr(InputTy)),
+    //         RetType, IDType, ValCatType, IDType, OperandCastTy, FlagsType));
+  case CSIDataFlowObject::FunctionExit:
+    return CreateCSIHookWithNull(
+        M, ("__csi_return_val_" + TypeToStr(InputTy)),
+        RetType, IDType, ValCatType, IDType, OperandCastTy, FlagsType);
+    // return checkCsiInterfaceFunction(
+    //     M.getOrInsertFunction(
+    //         ("__csi_return_val_" + TypeToStr(InputTy)),
+    //         RetType, IDType, ValCatType, IDType, OperandCastTy, FlagsType));
+  case CSIDataFlowObject::LAST_CSIDataFlowObject:
+    llvm_unreachable("Unknown CSIDataFlowObject");
+  }
+}
+
+static bool checkArithmeticType(CSIOptions::ArithmeticType Target,
+                                const Type *Ty) {
+  if (CSIOptions::ArithmeticType::All == Target)
+    return true;
+
+  if (const VectorType *VecTy = dyn_cast<VectorType>(Ty))
+    return checkArithmeticType(Target, VecTy->getElementType());
+  if (const PointerType *PtrTy = dyn_cast<PointerType>(Ty))
+    return checkArithmeticType(Target, PtrTy->getElementType());
+  if (const ArrayType *ArrTy = dyn_cast<ArrayType>(Ty))
+    return checkArithmeticType(Target, ArrTy->getElementType());
+
+  if (Ty->isFloatingPointTy())
+    return (CSIOptions::ArithmeticType::FP == Target);
+  if (Ty->isIntegerTy())
+    return (CSIOptions::ArithmeticType::Int == Target);
+
+  return false;
+}
+
+bool CSIImpl::IsInstrumentedArithmetic(const Instruction *I) {
+  if (isa<BinaryOperator>(I) || isa<TruncInst>(I) || isa<ZExtInst>(I) ||
+      isa<SExtInst>(I) || isa<FPToUIInst>(I) || isa<FPToSIInst>(I) ||
+      isa<UIToFPInst>(I) || isa<SIToFPInst>(I) || isa<FPTruncInst>(I) ||
+      isa<FPExtInst>(I) || isa<BitCastInst>(I) || isa<GetElementPtrInst>(I) ||
+      isa<PHINode>(I) || isa<InsertElementInst>(I) ||
+      isa<ExtractElementInst>(I) || isa<ShuffleVectorInst>(I))
+    // TODO: Handle PtrToInt, IntToPtr, AddrSpaceCast, ExtractValue, InsertValue
+    return checkArithmeticType(Options.InstrumentArithmetic, I->getType());
+  return false;
+}
+
 Function *CSIImpl::getCSIArithmeticHook(Module &M, Instruction *I, bool Before) {
   LLVMContext &C = M.getContext();
   IRBuilder<> IRB(C);
@@ -582,10 +721,11 @@ Function *CSIImpl::getCSIArithmeticHook(Module &M, Instruction *I, bool Before) 
     return checkCsiInterfaceFunction(
         M.getOrInsertFunction(
             ("__csi_" + Twine(Before ? "before" : "after") +
-             "_arithmetic_" + TypeToStr(Ty)).str(),
+             "_arithmetic_" + TypeToStr(ITy)).str(),
             RetType, IDType, OpcodeType, ValCatType, IDType, Ty, ValCatType,
             IDType, Ty, FlagsType));
   }
+
   Type *ITy = I->getType();
   switch (I->getOpcode()) {
   case Instruction::PHI: {
@@ -594,8 +734,9 @@ Function *CSIImpl::getCSIArithmeticHook(Module &M, Instruction *I, bool Before) 
       return nullptr;
     return checkCsiInterfaceFunction(
         M.getOrInsertFunction(
-            ("__csi_phi_" + TypeToStr(Ty)),
-            RetType, IDType, ValCatType, IDType, Ty, FlagsType));
+            ("__csi_phi_" + TypeToStr(ITy)),
+            RetType, IDType, IDType, IDType, ValCatType, IDType, Ty,
+            FlagsType));
   }
   case Instruction::FPTrunc: {
     Type *OutTy = getOperandCastTy(M, ITy);
@@ -606,7 +747,7 @@ Function *CSIImpl::getCSIArithmeticHook(Module &M, Instruction *I, bool Before) 
     return checkCsiInterfaceFunction(
         M.getOrInsertFunction(
             ("__csi_" + Twine(Before ? "before" : "after") +
-             "_truncate_" + TypeToStr(InTy) + "_" + TypeToStr(OutTy)).str(),
+             "_truncate_" + TypeToStr(IOpTy) + "_" + TypeToStr(ITy)).str(),
             RetType, IDType, ValCatType, IDType, InTy, FlagsType));
   }
   case Instruction::FPExt: {
@@ -618,7 +759,7 @@ Function *CSIImpl::getCSIArithmeticHook(Module &M, Instruction *I, bool Before) 
     return checkCsiInterfaceFunction(
         M.getOrInsertFunction(
             ("__csi_" + Twine(Before ? "before" : "after") +
-             "_extend_" + TypeToStr(InTy) + "_" + TypeToStr(OutTy)).str(),
+             "_extend_" + TypeToStr(IOpTy) + "_" + TypeToStr(ITy)).str(),
             RetType, IDType, ValCatType, IDType, InTy, FlagsType));
   }
   case Instruction::Trunc: {
@@ -630,7 +771,7 @@ Function *CSIImpl::getCSIArithmeticHook(Module &M, Instruction *I, bool Before) 
     return checkCsiInterfaceFunction(
         M.getOrInsertFunction(
             ("__csi_" + Twine(Before ? "before" : "after") +
-             "_truncate_" + TypeToStr(InTy) + "_" + TypeToStr(OutTy)).str(),
+             "_truncate_" + TypeToStr(IOpTy) + "_" + TypeToStr(ITy)).str(),
             RetType, IDType, ValCatType, IDType, InTy, FlagsType));
   }
   case Instruction::ZExt: {
@@ -642,7 +783,7 @@ Function *CSIImpl::getCSIArithmeticHook(Module &M, Instruction *I, bool Before) 
     return checkCsiInterfaceFunction(
         M.getOrInsertFunction(
             ("__csi_" + Twine(Before ? "before" : "after") +
-             "_zero_extend_" + TypeToStr(InTy) + "_" + TypeToStr(OutTy)).str(),
+             "_zero_extend_" + TypeToStr(IOpTy) + "_" + TypeToStr(ITy)).str(),
             RetType, IDType, ValCatType, IDType, InTy, FlagsType));
   }
   case Instruction::SExt: {
@@ -654,7 +795,7 @@ Function *CSIImpl::getCSIArithmeticHook(Module &M, Instruction *I, bool Before) 
     return checkCsiInterfaceFunction(
         M.getOrInsertFunction(
             ("__csi_" + Twine(Before ? "before" : "after") +
-             "_sign_extend_" + TypeToStr(InTy) + "_" + TypeToStr(OutTy)).str(),
+             "_sign_extend_" + TypeToStr(IOpTy) + "_" + TypeToStr(ITy)).str(),
             RetType, IDType, ValCatType, IDType, InTy, FlagsType));
   }
   case Instruction::FPToUI: {
@@ -666,8 +807,8 @@ Function *CSIImpl::getCSIArithmeticHook(Module &M, Instruction *I, bool Before) 
     return checkCsiInterfaceFunction(
         M.getOrInsertFunction(
             ("__csi_" + Twine(Before ? "before" : "after") +
-             "_convert_" + TypeToStr(InTy) + "_unsigned_" +
-             TypeToStr(OutTy)).str(),
+             "_convert_" + TypeToStr(IOpTy) + "_unsigned_" +
+             TypeToStr(ITy)).str(),
             RetType, IDType, ValCatType, IDType, InTy, FlagsType));
   }
   case Instruction::FPToSI: {
@@ -679,8 +820,8 @@ Function *CSIImpl::getCSIArithmeticHook(Module &M, Instruction *I, bool Before) 
     return checkCsiInterfaceFunction(
         M.getOrInsertFunction(
             ("__csi_" + Twine(Before ? "before" : "after") +
-             "_convert_" + TypeToStr(InTy) + "_signed_" +
-             TypeToStr(OutTy)).str(),
+             "_convert_" + TypeToStr(IOpTy) + "_signed_" +
+             TypeToStr(ITy)).str(),
             RetType, IDType, ValCatType, IDType, InTy, FlagsType));
   }
   case Instruction::UIToFP: {
@@ -692,8 +833,8 @@ Function *CSIImpl::getCSIArithmeticHook(Module &M, Instruction *I, bool Before) 
     return checkCsiInterfaceFunction(
         M.getOrInsertFunction(
             ("__csi_" + Twine(Before ? "before" : "after") +
-             "_convert_unsigned_" + TypeToStr(InTy) + "_" +
-             TypeToStr(OutTy)).str(),
+             "_convert_unsigned_" + TypeToStr(IOpTy) + "_" +
+             TypeToStr(ITy)).str(),
             RetType, IDType, ValCatType, IDType, InTy, FlagsType));
   }
   case Instruction::SIToFP: {
@@ -705,8 +846,8 @@ Function *CSIImpl::getCSIArithmeticHook(Module &M, Instruction *I, bool Before) 
     return checkCsiInterfaceFunction(
         M.getOrInsertFunction(
             ("__csi_" + Twine(Before ? "before" : "after") +
-             "_convert_signed_" + TypeToStr(InTy) + "_" +
-             TypeToStr(OutTy)).str(),
+             "_convert_signed_" + TypeToStr(IOpTy) + "_" +
+             TypeToStr(ITy)).str(),
             RetType, IDType, ValCatType, IDType, InTy, FlagsType));
   }
   case Instruction::InsertElement: {
@@ -717,54 +858,222 @@ Function *CSIImpl::getCSIArithmeticHook(Module &M, Instruction *I, bool Before) 
     return checkCsiInterfaceFunction(
         M.getOrInsertFunction(
             ("__csi_" + Twine(Before ? "before" : "after") +
-             "_insert_element_" + TypeToStr(VecTy)).str(),
+             "_insert_element_" + TypeToStr(ITy)).str(),
             RetType, IDType, ValCatType, IDType, VecTy, ValCatType, IDType,
             ElTy, ValCatType, IDType, IRB.getInt32Ty(), FlagsType));
   }
   case Instruction::ExtractElement: {
-    VectorType *VecTy =
-      cast<VectorType>(getOperandCastTy(M, I->getOperand(0)->getType()));
+    Type *IOpTy = I->getOperand(0)->getType();
+    VectorType *VecTy = cast<VectorType>(getOperandCastTy(M, IOpTy));
     if (!VecTy)
       return nullptr;
     return checkCsiInterfaceFunction(
         M.getOrInsertFunction(
             ("__csi_" + Twine(Before ? "before" : "after") +
-             "_extract_element_" + TypeToStr(VecTy)).str(),
+             "_extract_element_" + TypeToStr(IOpTy)).str(),
             RetType, IDType, ValCatType, IDType, VecTy, ValCatType, IDType,
             IRB.getInt32Ty(), FlagsType));
   }
   case Instruction::ShuffleVector: {
-    VectorType *Vec1Ty =
-      cast<VectorType>(getOperandCastTy(M, I->getOperand(0)->getType()));
-    VectorType *Vec2Ty =
-      cast<VectorType>(getOperandCastTy(M, I->getOperand(1)->getType()));
-    VectorType *MaskTy =
-      cast<VectorType>(getOperandCastTy(M, I->getOperand(2)->getType()));
+    Type *IOp0Ty = I->getOperand(0)->getType();
+    Type *IOp1Ty = I->getOperand(1)->getType();
+    Type *IOp2Ty = I->getOperand(2)->getType();
+    VectorType *Vec1Ty = cast<VectorType>(getOperandCastTy(M, IOp0Ty));
+    VectorType *Vec2Ty = cast<VectorType>(getOperandCastTy(M, IOp1Ty));
+    VectorType *MaskTy = cast<VectorType>(getOperandCastTy(M, IOp2Ty));
     VectorType *ResTy = cast<VectorType>(getOperandCastTy(M, ITy));
     if (!Vec1Ty || !Vec2Ty || !MaskTy || !ResTy)
       return nullptr;
     return checkCsiInterfaceFunction(
         M.getOrInsertFunction(
             ("__csi_" + Twine(Before ? "before" : "after") +
-             "_shuffle_" + TypeToStr(Vec1Ty) + "_" + TypeToStr(Vec2Ty) + "_" +
-             TypeToStr(ResTy)).str(),
+             "_shuffle_" + TypeToStr(IOp0Ty) + "_" + TypeToStr(IOp1Ty) + "_" +
+             TypeToStr(ITy)).str(),
             RetType, IDType, ValCatType, IDType, Vec1Ty, ValCatType, IDType,
             Vec2Ty, ValCatType, IDType, MaskTy, FlagsType));
   }
-  // case Instruction::GetElementPtr: {
-
-  //   Type *AddrType = IRB.getInt8PtrTy();
-
-  //   return checkCsiInterfaceFunction(
-  //       M.getOrInsertFunction(
-  //           ("__csi_" + Twine(Before ? "before" : "after") +
-  //            "_addrcalc").str(),
-  //           RetType, IDType, AddrType, ValCatType, IDType, FlagsType));
-  // }
   default:
     dbgs() << "Arithmetic instruction not instrumented: " << *I << "\n";
     return nullptr;
   }
+}
+
+Function *CSIImpl::getCSIBuiltinHook(Module &M, CallInst *I, bool Before) {
+  LLVMContext &C = M.getContext();
+  IRBuilder<> IRB(C);
+  Type *RetType = IRB.getVoidTy();
+  Type *IDType = IRB.getInt64Ty();
+  Type *FuncOpType = IRB.getInt8Ty();
+  // Type *OpcodeType = IRB.getInt8Ty();
+  Type *ValCatType = IRB.getInt8Ty();
+  Type *PropertyTy = CsiCallProperty::getType(C);
+
+  CallSite CS(I);
+  // Create the base name of the hook.
+  std::string HookName = ("__csi_" + Twine(Before ? "before" : "after") +
+                          "_builtin").str();
+  std::vector<Type *> paramTy;
+
+  // Add the CSI ID parameter
+  paramTy.push_back(IDType);
+  // Add the parameter for the code for the builtin operation.
+  paramTy.push_back(FuncOpType);
+
+  // Add the return type of the builtin to the hook name.
+  Type *OpTy = I->getType();
+  if (!SupportedType(OpTy))
+    return nullptr;
+  HookName += "_" + TypeToStr(OpTy);
+
+  // Augment the hook name and parameters for each argument.
+  for (const Value *Arg : CS.args()) {
+    Type *InTy = Arg->getType();
+    if (!SupportedType(InTy))
+      return nullptr;
+    // Append the name of this input type to the hook name.
+    HookName += "_" + TypeToStr(InTy);
+    // Append a value category, CSI ID, and casted input type to the hook
+    // parameters.
+    Type *CastedTy = getOperandCastTy(M, InTy);
+    paramTy.push_back(ValCatType);
+    paramTy.push_back(IDType);
+    paramTy.push_back(CastedTy);
+  }
+
+  // Add the properties parameter.
+  paramTy.push_back(PropertyTy);
+
+  // Return the hook.
+  return checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          HookName, FunctionType::get(RetType, paramTy, false)));
+}
+
+Function *CSIImpl::getMaskedReadWriteHook(Module &M, Instruction *I,
+                                          bool Before) {
+  LLVMContext &C = M.getContext();
+  IRBuilder<> IRB(C);
+  Type *RetType = IRB.getVoidTy();
+  Type *IDType = IRB.getInt64Ty();
+  Type *ValCatType = IRB.getInt8Ty();
+  Type *MaskElTy = IRB.getInt8Ty();
+  Type *LoadPropertyTy = CsiLoadStoreProperty::getType(C);
+  Type *StorePropertyTy = CsiLoadStoreProperty::getType(C);
+
+  IntrinsicInst *II = dyn_cast<IntrinsicInst>(I);
+  // Create the base name of the hook.
+  std::string HookName = ("__csi_" + Twine(Before ? "before" : "after")).str();
+  std::vector<Type *> paramTy;
+
+  // Add the CSI ID parameter
+  paramTy.push_back(IDType);
+
+  switch (II->getIntrinsicID()) {
+  default:
+    return nullptr;
+    break;
+  case Intrinsic::masked_load: {
+    VectorType *OpTy = cast<VectorType>(II->getType());
+    if (!SupportedType(OpTy))
+      return nullptr;
+    HookName += "_masked_load_" + TypeToStr(OpTy);
+    Type *PtrArgTy = II->getArgOperand(0)->getType();
+    Type *MaskArgTy = VectorType::get(MaskElTy, OpTy->getNumElements());
+    Type *PassThruTy = OpTy;
+    // Add the pointer argument
+    paramTy.push_back(PtrArgTy);
+    // Add the mask argument
+    paramTy.push_back(ValCatType);
+    paramTy.push_back(IDType);
+    paramTy.push_back(MaskArgTy);
+    // Add the pass-through argument
+    paramTy.push_back(ValCatType);
+    paramTy.push_back(IDType);
+    paramTy.push_back(PassThruTy);
+    // Add the properties parameter.
+    paramTy.push_back(LoadPropertyTy);
+    break;
+  }
+  case Intrinsic::masked_gather: {
+    VectorType *OpTy = cast<VectorType>(II->getType());
+    if (!SupportedType(OpTy))
+      return nullptr;
+    HookName += "_masked_gather_" + TypeToStr(OpTy);
+    Type *PtrArgTy = II->getArgOperand(0)->getType();
+    Type *MaskArgTy = VectorType::get(MaskElTy, OpTy->getNumElements());
+    Type *PassThruTy = OpTy;
+    // Add the pointer argument
+    paramTy.push_back(PtrArgTy);
+    // Add the mask argument
+    paramTy.push_back(ValCatType);
+    paramTy.push_back(IDType);
+    paramTy.push_back(MaskArgTy);
+    // Add the pass-through argument
+    paramTy.push_back(ValCatType);
+    paramTy.push_back(IDType);
+    paramTy.push_back(PassThruTy);
+    // Add the properties parameter.
+    paramTy.push_back(LoadPropertyTy);
+    break;
+  }
+  case Intrinsic::masked_store: {
+    VectorType *StoreValTy = cast<VectorType>(II->getArgOperand(0)->getType());
+    if (!SupportedType(StoreValTy))
+      return nullptr;
+    HookName += "_masked_store_" + TypeToStr(StoreValTy);
+    Type *PtrArgTy = II->getArgOperand(1)->getType();
+    Type *MaskArgTy = VectorType::get(MaskElTy, StoreValTy->getNumElements());
+    // Add the pointer argument
+    paramTy.push_back(PtrArgTy);
+    // Add the mask argument
+    paramTy.push_back(ValCatType);
+    paramTy.push_back(IDType);
+    paramTy.push_back(MaskArgTy);
+    // Add the store-value argument
+    paramTy.push_back(ValCatType);
+    paramTy.push_back(IDType);
+    paramTy.push_back(StoreValTy);
+    // Add the properties parameter.
+    paramTy.push_back(StorePropertyTy);
+    break;
+  }
+  case Intrinsic::masked_scatter: {
+    VectorType *StoreValTy = cast<VectorType>(II->getArgOperand(0)->getType());
+    if (!SupportedType(StoreValTy))
+      return nullptr;
+    HookName += "_masked_scatter_" + TypeToStr(StoreValTy);
+    Type *PtrArgTy = II->getArgOperand(1)->getType();
+    Type *MaskArgTy = VectorType::get(MaskElTy, StoreValTy->getNumElements());
+    // Add the pointer argument
+    paramTy.push_back(PtrArgTy);
+    // Add the mask argument
+    paramTy.push_back(ValCatType);
+    paramTy.push_back(IDType);
+    paramTy.push_back(MaskArgTy);
+    // Add the store-value argument
+    paramTy.push_back(ValCatType);
+    paramTy.push_back(IDType);
+    paramTy.push_back(StoreValTy);
+    // Add the properties parameter.
+    paramTy.push_back(StorePropertyTy);
+    break;
+  }
+  }
+
+  // Create the hook.
+  Function *Hook = checkCsiInterfaceFunction(
+      M.getOrInsertFunction(
+          HookName, FunctionType::get(RetType, paramTy, false)));
+  switch (II->getIntrinsicID()) {
+  case Intrinsic::masked_load:
+  case Intrinsic::masked_store:
+    Hook->addParamAttr(1, Attribute::ReadOnly);
+    break;
+  default:
+    break;
+  }
+
+  return Hook;
 }
 
 /// Function entry and exit hook initialization
@@ -772,7 +1081,6 @@ void CSIImpl::initializeFuncHooks() {
   LLVMContext &C = M.getContext();
   IRBuilder<> IRB(C);
   Type *IDType = IRB.getInt64Ty();
-  Type *ValCatType = IRB.getInt8Ty();
   // Initialize function entry hooks
   Type *FuncPropertyTy = CsiFuncProperty::getType(C);
   CsiFuncEntry = checkCsiInterfaceFunction(M.getOrInsertFunction(
@@ -781,8 +1089,7 @@ void CSIImpl::initializeFuncHooks() {
   // Initialize function exit hooks
   Type *FuncExitPropertyTy = CsiFuncExitProperty::getType(C);
   CsiFuncExit = checkCsiInterfaceFunction(M.getOrInsertFunction(
-      "__csi_func_exit", IRB.getVoidTy(), IDType, IDType,
-      ValCatType, IDType, FuncExitPropertyTy));
+      "__csi_func_exit", IRB.getVoidTy(), IDType, IDType, FuncExitPropertyTy));
 }
 
 /// Basic-block hook initialization
@@ -790,10 +1097,9 @@ void CSIImpl::initializeBasicBlockHooks() {
   LLVMContext &C = M.getContext();
   IRBuilder<> IRB(C);
   Type *PropertyTy = CsiBBProperty::getType(C);
-  Type *OperandIDType = StructType::get(IRB.getInt8Ty(), IRB.getInt64Ty());
   CsiBBEntry = checkCsiInterfaceFunction(M.getOrInsertFunction(
-      "__csi_bb_entry", IRB.getVoidTy(), IRB.getInt64Ty(),
-      PointerType::get(OperandIDType, 0), IRB.getInt32Ty(), PropertyTy));
+      "__csi_bb_entry", IRB.getVoidTy(), IRB.getInt64Ty(), IRB.getInt64Ty(),
+      PropertyTy));
   CsiBBExit = checkCsiInterfaceFunction(M.getOrInsertFunction(
       "__csi_bb_exit", IRB.getVoidTy(), IRB.getInt64Ty(), PropertyTy));
 }
@@ -803,13 +1109,12 @@ void CSIImpl::initializeLoopHooks() {
   LLVMContext &C = M.getContext();
   IRBuilder<> IRB(C);
   Type *IDType = IRB.getInt64Ty();
-  Type *OperandIDType = StructType::get(IRB.getInt8Ty(), IRB.getInt64Ty());
   Type *LoopPropertyTy = CsiLoopProperty::getType(C);
   Type *LoopExitPropertyTy = CsiLoopExitProperty::getType(C);
 
   CsiBeforeLoop = checkCsiInterfaceFunction(M.getOrInsertFunction(
       "__csi_before_loop", IRB.getVoidTy(), IDType, IRB.getInt64Ty(),
-      PointerType::get(OperandIDType, 0), IRB.getInt32Ty(), LoopPropertyTy));
+      LoopPropertyTy));
   CsiAfterLoop = checkCsiInterfaceFunction(M.getOrInsertFunction(
       "__csi_after_loop", IRB.getVoidTy(), IDType, LoopPropertyTy));
 
@@ -825,103 +1130,14 @@ void CSIImpl::initializeCallsiteHooks() {
   LLVMContext &C = M.getContext();
   IRBuilder<> IRB(C);
   Type *IDType = IRB.getInt64Ty();
-  Type *FuncOpType = IRB.getInt8Ty();
-  Type *ValCatType = IRB.getInt8Ty();
-  Type *OperandIDType = StructType::get(IRB.getInt8Ty(), IRB.getInt64Ty());
   Type *PropertyTy = CsiCallProperty::getType(C);
   CsiBeforeCallsite = checkCsiInterfaceFunction(
       M.getOrInsertFunction("__csi_before_call", IRB.getVoidTy(), IDType,
-                            IDType, PointerType::get(OperandIDType, 0),
-                            IRB.getInt32Ty(), PropertyTy));
-  CsiBeforeCallsite->addParamAttr(2, Attribute::ReadOnly);
+                            /*parent_bb_id*/ IDType, /*callee func_id*/ IDType,
+                            PropertyTy));
   CsiAfterCallsite = checkCsiInterfaceFunction(
       M.getOrInsertFunction("__csi_after_call", IRB.getVoidTy(), IDType,
                             IDType, PropertyTy));
-
-  // Special callsite hooks for builtins.
-  CsiBeforeBuiltinFF = checkCsiInterfaceFunction(
-      M.getOrInsertFunction("__csi_before_builtin_float_float",
-                            IRB.getVoidTy(), IDType, FuncOpType,
-                            ValCatType, IDType, IRB.getFloatTy(), PropertyTy));
-  CsiAfterBuiltinFF = checkCsiInterfaceFunction(
-      M.getOrInsertFunction("__csi_after_builtin_float_float",
-                            IRB.getVoidTy(), IDType, FuncOpType,
-                            ValCatType, IDType, IRB.getFloatTy(), PropertyTy));
-  CsiBeforeBuiltinDD = checkCsiInterfaceFunction(
-      M.getOrInsertFunction("__csi_before_builtin_double_double",
-                            IRB.getVoidTy(), IDType, FuncOpType,
-                            ValCatType, IDType, IRB.getDoubleTy(), PropertyTy));
-  CsiAfterBuiltinDD = checkCsiInterfaceFunction(
-      M.getOrInsertFunction("__csi_after_builtin_double_double",
-                            IRB.getVoidTy(), IDType, FuncOpType,
-                            ValCatType, IDType, IRB.getDoubleTy(), PropertyTy));
-
-  CsiBeforeBuiltinFFF = checkCsiInterfaceFunction(
-      M.getOrInsertFunction("__csi_before_builtin_float_float_float",
-                            IRB.getVoidTy(), IDType, FuncOpType,
-                            ValCatType, IDType, IRB.getFloatTy(),
-                            ValCatType, IDType, IRB.getFloatTy(), PropertyTy));
-  CsiAfterBuiltinFFF = checkCsiInterfaceFunction(
-      M.getOrInsertFunction("__csi_after_builtin_float_float_float",
-                            IRB.getVoidTy(), IDType, FuncOpType,
-                            ValCatType, IDType, IRB.getFloatTy(),
-                            ValCatType, IDType, IRB.getFloatTy(), PropertyTy));
-  CsiBeforeBuiltinDDD = checkCsiInterfaceFunction(
-      M.getOrInsertFunction("__csi_before_builtin_double_double_double",
-                            IRB.getVoidTy(), IDType, FuncOpType,
-                            ValCatType, IDType, IRB.getDoubleTy(),
-                            ValCatType, IDType, IRB.getDoubleTy(), PropertyTy));
-  CsiAfterBuiltinDDD = checkCsiInterfaceFunction(
-      M.getOrInsertFunction("__csi_after_builtin_double_double_double",
-                            IRB.getVoidTy(), IDType, FuncOpType,
-                            ValCatType, IDType, IRB.getDoubleTy(),
-                            ValCatType, IDType, IRB.getDoubleTy(), PropertyTy));
-
-  CsiBeforeBuiltinFFI = checkCsiInterfaceFunction(
-      M.getOrInsertFunction("__csi_before_builtin_float_float_i32",
-                            IRB.getVoidTy(), IDType, FuncOpType,
-                            ValCatType, IDType, IRB.getFloatTy(),
-                            ValCatType, IDType, IRB.getInt32Ty(), PropertyTy));
-  CsiAfterBuiltinFFI = checkCsiInterfaceFunction(
-      M.getOrInsertFunction("__csi_after_builtin_float_float_i32",
-                            IRB.getVoidTy(), IDType, FuncOpType,
-                            ValCatType, IDType, IRB.getFloatTy(),
-                            ValCatType, IDType, IRB.getInt32Ty(), PropertyTy));
-  CsiBeforeBuiltinDDI = checkCsiInterfaceFunction(
-      M.getOrInsertFunction("__csi_before_builtin_double_double_i32",
-                            IRB.getVoidTy(), IDType, FuncOpType,
-                            ValCatType, IDType, IRB.getDoubleTy(),
-                            ValCatType, IDType, IRB.getInt32Ty(), PropertyTy));
-  CsiAfterBuiltinDDI = checkCsiInterfaceFunction(
-      M.getOrInsertFunction("__csi_after_builtin_double_double_i32",
-                            IRB.getVoidTy(), IDType, FuncOpType,
-                            ValCatType, IDType, IRB.getDoubleTy(),
-                            ValCatType, IDType, IRB.getInt32Ty(), PropertyTy));
-
-  CsiBeforeBuiltinFFFF = checkCsiInterfaceFunction(
-      M.getOrInsertFunction("__csi_before_builtin_float_float_float_float",
-                            IRB.getVoidTy(), IDType, FuncOpType,
-                            ValCatType, IDType, IRB.getFloatTy(),
-                            ValCatType, IDType, IRB.getFloatTy(),
-                            ValCatType, IDType, IRB.getFloatTy(), PropertyTy));
-  CsiAfterBuiltinFFFF = checkCsiInterfaceFunction(
-      M.getOrInsertFunction("__csi_after_builtin_float_float_float_float",
-                            IRB.getVoidTy(), IDType, FuncOpType,
-                            ValCatType, IDType, IRB.getFloatTy(),
-                            ValCatType, IDType, IRB.getFloatTy(),
-                            ValCatType, IDType, IRB.getFloatTy(), PropertyTy));
-  CsiBeforeBuiltinDDDD = checkCsiInterfaceFunction(
-      M.getOrInsertFunction("__csi_before_builtin_double_double_double_double",
-                            IRB.getVoidTy(), IDType, FuncOpType,
-                            ValCatType, IDType, IRB.getDoubleTy(),
-                            ValCatType, IDType, IRB.getDoubleTy(),
-                            ValCatType, IDType, IRB.getDoubleTy(), PropertyTy));
-  CsiAfterBuiltinDDDD = checkCsiInterfaceFunction(
-      M.getOrInsertFunction("__csi_after_builtin_double_double_double_double",
-                            IRB.getVoidTy(), IDType, FuncOpType,
-                            ValCatType, IDType, IRB.getDoubleTy(),
-                            ValCatType, IDType, IRB.getDoubleTy(),
-                            ValCatType, IDType, IRB.getDoubleTy(), PropertyTy));
 }
 
 // Alloca (local variable) hook initialization
@@ -1007,370 +1223,6 @@ void CSIImpl::initializeLoadStoreHooks() {
                             AddrType, NumBytesType, ValCatType, IDType,
                             ValCatType, IDType, StorePropertyTy));
   CsiAfterWrite->addParamAttr(1, Attribute::ReadOnly);
-
-  CsiBeforeVMaskedLoad4F = checkCsiInterfaceFunction(
-      M.getOrInsertFunction(
-          "__csi_before_masked_load_v4float", RetType, IDType,
-          PointerType::get(VectorType::get(IRB.getFloatTy(), 4), 0),
-          ValCatType, IDType, VectorType::get(IRB.getInt8Ty(), 4),
-          ValCatType, IDType, VectorType::get(IRB.getFloatTy(), 4),
-          LoadPropertyTy));
-  CsiBeforeVMaskedLoad4F->addParamAttr(1, Attribute::ReadOnly);
-  CsiAfterVMaskedLoad4F = checkCsiInterfaceFunction(
-      M.getOrInsertFunction(
-          "__csi_after_masked_load_v4float", RetType, IDType,
-          PointerType::get(VectorType::get(IRB.getFloatTy(), 4), 0),
-          ValCatType, IDType, VectorType::get(IRB.getInt8Ty(), 4),
-          ValCatType, IDType, VectorType::get(IRB.getFloatTy(), 4),
-          LoadPropertyTy));
-  CsiAfterVMaskedLoad4F->addParamAttr(1, Attribute::ReadOnly);
-  CsiBeforeVMaskedLoad8F = checkCsiInterfaceFunction(
-      M.getOrInsertFunction(
-          "__csi_before_masked_load_v8float", RetType, IDType,
-          PointerType::get(VectorType::get(IRB.getFloatTy(), 8), 0),
-          ValCatType, IDType, VectorType::get(IRB.getInt8Ty(), 8),
-          ValCatType, IDType, VectorType::get(IRB.getFloatTy(), 8),
-          LoadPropertyTy));
-  CsiBeforeVMaskedLoad8F->addParamAttr(1, Attribute::ReadOnly);
-  CsiAfterVMaskedLoad8F = checkCsiInterfaceFunction(
-      M.getOrInsertFunction(
-          "__csi_after_masked_load_v8float", RetType, IDType,
-          PointerType::get(VectorType::get(IRB.getFloatTy(), 8), 0),
-          ValCatType, IDType, VectorType::get(IRB.getInt8Ty(), 8),
-          ValCatType, IDType, VectorType::get(IRB.getFloatTy(), 8),
-          LoadPropertyTy));
-  CsiAfterVMaskedLoad8F->addParamAttr(1, Attribute::ReadOnly);
-  CsiBeforeVMaskedLoad16F = checkCsiInterfaceFunction(
-      M.getOrInsertFunction(
-          "__csi_before_masked_load_v16float", RetType, IDType,
-          PointerType::get(VectorType::get(IRB.getFloatTy(), 16), 0),
-          ValCatType, IDType, VectorType::get(IRB.getInt8Ty(), 16),
-          ValCatType, IDType, VectorType::get(IRB.getFloatTy(), 16),
-          LoadPropertyTy));
-  CsiBeforeVMaskedLoad16F->addParamAttr(1, Attribute::ReadOnly);
-  CsiAfterVMaskedLoad16F = checkCsiInterfaceFunction(
-      M.getOrInsertFunction(
-          "__csi_after_masked_load_v16float", RetType, IDType,
-          PointerType::get(VectorType::get(IRB.getFloatTy(), 16), 0),
-          ValCatType, IDType, VectorType::get(IRB.getInt8Ty(), 16),
-          ValCatType, IDType, VectorType::get(IRB.getFloatTy(), 16),
-          LoadPropertyTy));
-  CsiAfterVMaskedLoad16F->addParamAttr(1, Attribute::ReadOnly);
-  CsiBeforeVMaskedLoad2D = checkCsiInterfaceFunction(
-      M.getOrInsertFunction(
-          "__csi_before_masked_load_v2double", RetType, IDType,
-          PointerType::get(VectorType::get(IRB.getDoubleTy(), 2), 0),
-          ValCatType, IDType, VectorType::get(IRB.getInt8Ty(), 2),
-          ValCatType, IDType, VectorType::get(IRB.getDoubleTy(), 2),
-          LoadPropertyTy));
-  CsiBeforeVMaskedLoad2D->addParamAttr(1, Attribute::ReadOnly);
-  CsiAfterVMaskedLoad2D = checkCsiInterfaceFunction(
-      M.getOrInsertFunction(
-          "__csi_after_masked_load_v2double", RetType, IDType,
-          PointerType::get(VectorType::get(IRB.getDoubleTy(), 2), 0),
-          ValCatType, IDType, VectorType::get(IRB.getInt8Ty(), 2),
-          ValCatType, IDType, VectorType::get(IRB.getDoubleTy(), 2),
-          LoadPropertyTy));
-  CsiAfterVMaskedLoad2D->addParamAttr(1, Attribute::ReadOnly);
-  CsiBeforeVMaskedLoad4D = checkCsiInterfaceFunction(
-      M.getOrInsertFunction(
-          "__csi_before_masked_load_v4double", RetType, IDType,
-          PointerType::get(VectorType::get(IRB.getDoubleTy(), 4), 0),
-          ValCatType, IDType, VectorType::get(IRB.getInt8Ty(), 4),
-          ValCatType, IDType, VectorType::get(IRB.getDoubleTy(), 4),
-          LoadPropertyTy));
-  CsiBeforeVMaskedLoad4D->addParamAttr(1, Attribute::ReadOnly);
-  CsiAfterVMaskedLoad4D = checkCsiInterfaceFunction(
-      M.getOrInsertFunction(
-          "__csi_after_masked_load_v4double", RetType, IDType,
-          PointerType::get(VectorType::get(IRB.getDoubleTy(), 4), 0),
-          ValCatType, IDType, VectorType::get(IRB.getInt8Ty(), 4),
-          ValCatType, IDType, VectorType::get(IRB.getDoubleTy(), 4),
-          LoadPropertyTy));
-  CsiAfterVMaskedLoad4D->addParamAttr(1, Attribute::ReadOnly);
-  CsiBeforeVMaskedLoad8D = checkCsiInterfaceFunction(
-      M.getOrInsertFunction(
-          "__csi_before_masked_load_v8double", RetType, IDType,
-          PointerType::get(VectorType::get(IRB.getDoubleTy(), 8), 0),
-          ValCatType, IDType, VectorType::get(IRB.getInt8Ty(), 8),
-          ValCatType, IDType, VectorType::get(IRB.getDoubleTy(), 8),
-          LoadPropertyTy));
-  CsiBeforeVMaskedLoad8D->addParamAttr(1, Attribute::ReadOnly);
-  CsiAfterVMaskedLoad8D = checkCsiInterfaceFunction(
-      M.getOrInsertFunction(
-          "__csi_after_masked_load_v8double", RetType, IDType,
-          PointerType::get(VectorType::get(IRB.getDoubleTy(), 8), 0),
-          ValCatType, IDType, VectorType::get(IRB.getInt8Ty(), 8),
-          ValCatType, IDType, VectorType::get(IRB.getDoubleTy(), 8),
-          LoadPropertyTy));
-  CsiAfterVMaskedLoad8D->addParamAttr(1, Attribute::ReadOnly);
-
-  CsiBeforeVMaskedStore4F = checkCsiInterfaceFunction(
-      M.getOrInsertFunction(
-          "__csi_before_masked_store_v4float", RetType, IDType,
-          PointerType::get(VectorType::get(IRB.getFloatTy(), 4), 0),
-          ValCatType, IDType, VectorType::get(IRB.getInt8Ty(), 4),
-          ValCatType, IDType, VectorType::get(IRB.getFloatTy(), 4),
-          StorePropertyTy));
-  CsiBeforeVMaskedStore4F->addParamAttr(1, Attribute::ReadOnly);
-  CsiAfterVMaskedStore4F = checkCsiInterfaceFunction(
-      M.getOrInsertFunction(
-          "__csi_after_masked_store_v4float", RetType, IDType,
-          PointerType::get(VectorType::get(IRB.getFloatTy(), 4), 0),
-          ValCatType, IDType, VectorType::get(IRB.getInt8Ty(), 4),
-          ValCatType, IDType, VectorType::get(IRB.getFloatTy(), 4),
-          StorePropertyTy));
-  CsiAfterVMaskedStore4F->addParamAttr(1, Attribute::ReadOnly);
-  CsiBeforeVMaskedStore8F = checkCsiInterfaceFunction(
-      M.getOrInsertFunction(
-          "__csi_before_masked_store_v8float", RetType, IDType,
-          PointerType::get(VectorType::get(IRB.getFloatTy(), 8), 0),
-          ValCatType, IDType, VectorType::get(IRB.getInt8Ty(), 8),
-          ValCatType, IDType, VectorType::get(IRB.getFloatTy(), 8),
-          StorePropertyTy));
-  CsiBeforeVMaskedStore8F->addParamAttr(1, Attribute::ReadOnly);
-  CsiAfterVMaskedStore8F = checkCsiInterfaceFunction(
-      M.getOrInsertFunction(
-          "__csi_after_masked_store_v8float", RetType, IDType,
-          PointerType::get(VectorType::get(IRB.getFloatTy(), 8), 0),
-          ValCatType, IDType, VectorType::get(IRB.getInt8Ty(), 8),
-          ValCatType, IDType, VectorType::get(IRB.getFloatTy(), 8),
-          StorePropertyTy));
-  CsiAfterVMaskedStore8F->addParamAttr(1, Attribute::ReadOnly);
-  CsiBeforeVMaskedStore16F = checkCsiInterfaceFunction(
-      M.getOrInsertFunction(
-          "__csi_before_masked_store_v16float", RetType, IDType,
-          PointerType::get(VectorType::get(IRB.getFloatTy(), 16), 0),
-          ValCatType, IDType, VectorType::get(IRB.getInt8Ty(), 16),
-          ValCatType, IDType, VectorType::get(IRB.getFloatTy(), 16),
-          StorePropertyTy));
-  CsiBeforeVMaskedStore16F->addParamAttr(1, Attribute::ReadOnly);
-  CsiAfterVMaskedStore16F = checkCsiInterfaceFunction(
-      M.getOrInsertFunction(
-          "__csi_after_masked_store_v16float", RetType, IDType,
-          PointerType::get(VectorType::get(IRB.getFloatTy(), 16), 0),
-          ValCatType, IDType, VectorType::get(IRB.getInt8Ty(), 16),
-          ValCatType, IDType, VectorType::get(IRB.getFloatTy(), 16),
-          StorePropertyTy));
-  CsiAfterVMaskedStore16F->addParamAttr(1, Attribute::ReadOnly);
-  CsiBeforeVMaskedStore2D = checkCsiInterfaceFunction(
-      M.getOrInsertFunction(
-          "__csi_before_masked_store_v2double", RetType, IDType,
-          PointerType::get(VectorType::get(IRB.getDoubleTy(), 2), 0),
-          ValCatType, IDType, VectorType::get(IRB.getInt8Ty(), 2),
-          ValCatType, IDType, VectorType::get(IRB.getDoubleTy(), 2),
-          StorePropertyTy));
-  CsiBeforeVMaskedStore2D->addParamAttr(1, Attribute::ReadOnly);
-  CsiAfterVMaskedStore2D = checkCsiInterfaceFunction(
-      M.getOrInsertFunction(
-          "__csi_after_masked_store_v2double", RetType, IDType,
-          PointerType::get(VectorType::get(IRB.getDoubleTy(), 2), 0),
-          ValCatType, IDType, VectorType::get(IRB.getInt8Ty(), 2),
-          ValCatType, IDType, VectorType::get(IRB.getDoubleTy(), 2),
-          StorePropertyTy));
-  CsiAfterVMaskedStore2D->addParamAttr(1, Attribute::ReadOnly);
-  CsiBeforeVMaskedStore4D = checkCsiInterfaceFunction(
-      M.getOrInsertFunction(
-          "__csi_before_masked_store_v4double", RetType, IDType,
-          PointerType::get(VectorType::get(IRB.getDoubleTy(), 4), 0),
-          ValCatType, IDType, VectorType::get(IRB.getInt8Ty(), 4),
-          ValCatType, IDType, VectorType::get(IRB.getDoubleTy(), 4),
-          StorePropertyTy));
-  CsiBeforeVMaskedStore4D->addParamAttr(1, Attribute::ReadOnly);
-  CsiAfterVMaskedStore4D = checkCsiInterfaceFunction(
-      M.getOrInsertFunction(
-          "__csi_after_masked_store_v4double", RetType, IDType,
-          PointerType::get(VectorType::get(IRB.getDoubleTy(), 4), 0),
-          ValCatType, IDType, VectorType::get(IRB.getInt8Ty(), 4),
-          ValCatType, IDType, VectorType::get(IRB.getDoubleTy(), 4),
-          StorePropertyTy));
-  CsiAfterVMaskedStore4D->addParamAttr(1, Attribute::ReadOnly);
-  CsiBeforeVMaskedStore8D = checkCsiInterfaceFunction(
-      M.getOrInsertFunction(
-          "__csi_before_masked_store_v8double", RetType, IDType,
-          PointerType::get(VectorType::get(IRB.getDoubleTy(), 8), 0),
-          ValCatType, IDType, VectorType::get(IRB.getInt8Ty(), 8),
-          ValCatType, IDType, VectorType::get(IRB.getDoubleTy(), 8),
-          StorePropertyTy));
-  CsiBeforeVMaskedStore8D->addParamAttr(1, Attribute::ReadOnly);
-  CsiAfterVMaskedStore8D = checkCsiInterfaceFunction(
-      M.getOrInsertFunction(
-          "__csi_after_masked_store_v8double", RetType, IDType,
-          PointerType::get(VectorType::get(IRB.getDoubleTy(), 8), 0),
-          ValCatType, IDType, VectorType::get(IRB.getInt8Ty(), 8),
-          ValCatType, IDType, VectorType::get(IRB.getDoubleTy(), 8),
-          StorePropertyTy));
-  CsiAfterVMaskedStore8D->addParamAttr(1, Attribute::ReadOnly);
-
-  CsiBeforeVMaskedGather4F = checkCsiInterfaceFunction(
-      M.getOrInsertFunction(
-          "__csi_before_masked_gather_v4float", RetType, IDType,
-          VectorType::get(PointerType::get(IRB.getFloatTy(), 0), 4),
-          ValCatType, IDType, VectorType::get(IRB.getInt8Ty(), 4),
-          ValCatType, IDType, VectorType::get(IRB.getFloatTy(), 4),
-          LoadPropertyTy));
-  CsiAfterVMaskedGather4F = checkCsiInterfaceFunction(
-      M.getOrInsertFunction(
-          "__csi_after_masked_gather_v4float", RetType, IDType,
-          VectorType::get(PointerType::get(IRB.getFloatTy(), 0), 4),
-          ValCatType, IDType, VectorType::get(IRB.getInt8Ty(), 4),
-          ValCatType, IDType, VectorType::get(IRB.getFloatTy(), 4),
-          LoadPropertyTy));
-  CsiBeforeVMaskedGather8F = checkCsiInterfaceFunction(
-      M.getOrInsertFunction(
-          "__csi_before_masked_gather_v8float", RetType, IDType,
-          VectorType::get(PointerType::get(IRB.getFloatTy(), 0), 8),
-          ValCatType, IDType, VectorType::get(IRB.getInt8Ty(), 8),
-          ValCatType, IDType, VectorType::get(IRB.getFloatTy(), 8),
-          LoadPropertyTy));
-  CsiAfterVMaskedGather8F = checkCsiInterfaceFunction(
-      M.getOrInsertFunction(
-          "__csi_after_masked_gather_v8float", RetType, IDType,
-          VectorType::get(PointerType::get(IRB.getFloatTy(), 0), 8),
-          ValCatType, IDType, VectorType::get(IRB.getInt8Ty(), 8),
-          ValCatType, IDType, VectorType::get(IRB.getFloatTy(), 8),
-          LoadPropertyTy));
-  CsiBeforeVMaskedGather16F = checkCsiInterfaceFunction(
-      M.getOrInsertFunction(
-          "__csi_before_masked_gather_v16float", RetType, IDType,
-          VectorType::get(PointerType::get(IRB.getFloatTy(), 0), 16),
-          ValCatType, IDType, VectorType::get(IRB.getInt8Ty(), 16),
-          ValCatType, IDType, VectorType::get(IRB.getFloatTy(), 16),
-          LoadPropertyTy));
-  CsiAfterVMaskedGather16F = checkCsiInterfaceFunction(
-      M.getOrInsertFunction(
-          "__csi_after_masked_gather_v16float", RetType, IDType,
-          VectorType::get(PointerType::get(IRB.getFloatTy(), 0), 16),
-          ValCatType, IDType, VectorType::get(IRB.getInt8Ty(), 16),
-          ValCatType, IDType, VectorType::get(IRB.getFloatTy(), 16),
-          LoadPropertyTy));
-  CsiBeforeVMaskedGather2D = checkCsiInterfaceFunction(
-      M.getOrInsertFunction(
-          "__csi_before_masked_gather_v2double", RetType, IDType,
-          VectorType::get(PointerType::get(IRB.getDoubleTy(), 0), 2),
-          ValCatType, IDType, VectorType::get(IRB.getInt8Ty(), 2),
-          ValCatType, IDType, VectorType::get(IRB.getDoubleTy(), 2),
-          LoadPropertyTy));
-  CsiAfterVMaskedGather2D = checkCsiInterfaceFunction(
-      M.getOrInsertFunction(
-          "__csi_after_masked_gather_v2double", RetType, IDType,
-          VectorType::get(PointerType::get(IRB.getDoubleTy(), 0), 2),
-          ValCatType, IDType, VectorType::get(IRB.getInt8Ty(), 2),
-          ValCatType, IDType, VectorType::get(IRB.getDoubleTy(), 2),
-          LoadPropertyTy));
-  CsiBeforeVMaskedGather4D = checkCsiInterfaceFunction(
-      M.getOrInsertFunction(
-          "__csi_before_masked_gather_v4double", RetType, IDType,
-          VectorType::get(PointerType::get(IRB.getDoubleTy(), 0), 4),
-          ValCatType, IDType, VectorType::get(IRB.getInt8Ty(), 4),
-          ValCatType, IDType, VectorType::get(IRB.getDoubleTy(), 4),
-          LoadPropertyTy));
-  CsiAfterVMaskedGather4D = checkCsiInterfaceFunction(
-      M.getOrInsertFunction(
-          "__csi_after_masked_gather_v4double", RetType, IDType,
-          VectorType::get(PointerType::get(IRB.getDoubleTy(), 0), 4),
-          ValCatType, IDType, VectorType::get(IRB.getInt8Ty(), 4),
-          ValCatType, IDType, VectorType::get(IRB.getDoubleTy(), 4),
-          LoadPropertyTy));
-  CsiBeforeVMaskedGather8D = checkCsiInterfaceFunction(
-      M.getOrInsertFunction(
-          "__csi_before_masked_gather_v8double", RetType, IDType,
-          VectorType::get(PointerType::get(IRB.getDoubleTy(), 0), 8),
-          ValCatType, IDType, VectorType::get(IRB.getInt8Ty(), 8),
-          ValCatType, IDType, VectorType::get(IRB.getDoubleTy(), 8),
-          LoadPropertyTy));
-  CsiAfterVMaskedGather8D = checkCsiInterfaceFunction(
-      M.getOrInsertFunction(
-          "__csi_after_masked_gather_v8double", RetType, IDType,
-          VectorType::get(PointerType::get(IRB.getDoubleTy(), 0), 8),
-          ValCatType, IDType, VectorType::get(IRB.getInt8Ty(), 8),
-          ValCatType, IDType, VectorType::get(IRB.getDoubleTy(), 8),
-          LoadPropertyTy));
-
-  CsiBeforeVMaskedScatter4F = checkCsiInterfaceFunction(
-      M.getOrInsertFunction(
-          "__csi_before_masked_scatter_v4float", RetType, IDType,
-          VectorType::get(PointerType::get(IRB.getFloatTy(), 0), 4),
-          ValCatType, IDType, VectorType::get(IRB.getInt8Ty(), 4),
-          ValCatType, IDType, VectorType::get(IRB.getFloatTy(), 4),
-          StorePropertyTy));
-  CsiAfterVMaskedScatter4F = checkCsiInterfaceFunction(
-      M.getOrInsertFunction(
-          "__csi_after_masked_scatter_v4float", RetType, IDType,
-          VectorType::get(PointerType::get(IRB.getFloatTy(), 0), 4),
-          ValCatType, IDType, VectorType::get(IRB.getInt8Ty(), 4),
-          ValCatType, IDType, VectorType::get(IRB.getFloatTy(), 4),
-          StorePropertyTy));
-  CsiBeforeVMaskedScatter8F = checkCsiInterfaceFunction(
-      M.getOrInsertFunction(
-          "__csi_before_masked_scatter_v8float", RetType, IDType,
-          VectorType::get(PointerType::get(IRB.getFloatTy(), 0), 8),
-          ValCatType, IDType, VectorType::get(IRB.getInt8Ty(), 8),
-          ValCatType, IDType, VectorType::get(IRB.getFloatTy(), 8),
-          StorePropertyTy));
-  CsiAfterVMaskedScatter8F = checkCsiInterfaceFunction(
-      M.getOrInsertFunction(
-          "__csi_after_masked_scatter_v8float", RetType, IDType,
-          VectorType::get(PointerType::get(IRB.getFloatTy(), 0), 8),
-          ValCatType, IDType, VectorType::get(IRB.getInt8Ty(), 8),
-          ValCatType, IDType, VectorType::get(IRB.getFloatTy(), 8),
-          StorePropertyTy));
-  CsiBeforeVMaskedScatter16F = checkCsiInterfaceFunction(
-      M.getOrInsertFunction(
-          "__csi_before_masked_scatter_v16float", RetType, IDType,
-          VectorType::get(PointerType::get(IRB.getFloatTy(), 0), 16),
-          ValCatType, IDType, VectorType::get(IRB.getInt8Ty(), 16),
-          ValCatType, IDType, VectorType::get(IRB.getFloatTy(), 16),
-          StorePropertyTy));
-  CsiAfterVMaskedScatter16F = checkCsiInterfaceFunction(
-      M.getOrInsertFunction(
-          "__csi_after_masked_scatter_v16float", RetType, IDType,
-          VectorType::get(PointerType::get(IRB.getFloatTy(), 0), 16),
-          ValCatType, IDType, VectorType::get(IRB.getInt8Ty(), 16),
-          ValCatType, IDType, VectorType::get(IRB.getFloatTy(), 16),
-          StorePropertyTy));
-  CsiBeforeVMaskedScatter2D = checkCsiInterfaceFunction(
-      M.getOrInsertFunction(
-          "__csi_before_masked_scatter_v2double", RetType, IDType,
-          VectorType::get(PointerType::get(IRB.getDoubleTy(), 0), 2),
-          ValCatType, IDType, VectorType::get(IRB.getInt8Ty(), 2),
-          ValCatType, IDType, VectorType::get(IRB.getDoubleTy(), 2),
-          StorePropertyTy));
-  CsiAfterVMaskedScatter2D = checkCsiInterfaceFunction(
-      M.getOrInsertFunction(
-          "__csi_after_masked_scatter_v2double", RetType, IDType,
-          VectorType::get(PointerType::get(IRB.getDoubleTy(), 0), 2),
-          ValCatType, IDType, VectorType::get(IRB.getInt8Ty(), 2),
-          ValCatType, IDType, VectorType::get(IRB.getDoubleTy(), 2),
-          StorePropertyTy));
-  CsiBeforeVMaskedScatter4D = checkCsiInterfaceFunction(
-      M.getOrInsertFunction(
-          "__csi_before_masked_scatter_v4double", RetType, IDType,
-          VectorType::get(PointerType::get(IRB.getDoubleTy(), 0), 4),
-          ValCatType, IDType, VectorType::get(IRB.getInt8Ty(), 4),
-          ValCatType, IDType, VectorType::get(IRB.getDoubleTy(), 4),
-          StorePropertyTy));
-  CsiAfterVMaskedScatter4D = checkCsiInterfaceFunction(
-      M.getOrInsertFunction(
-          "__csi_after_masked_scatter_v4double", RetType, IDType,
-          VectorType::get(PointerType::get(IRB.getDoubleTy(), 0), 4),
-          ValCatType, IDType, VectorType::get(IRB.getInt8Ty(), 4),
-          ValCatType, IDType, VectorType::get(IRB.getDoubleTy(), 4),
-          StorePropertyTy));
-  CsiBeforeVMaskedScatter8D = checkCsiInterfaceFunction(
-      M.getOrInsertFunction(
-          "__csi_before_masked_scatter_v8double", RetType, IDType,
-          VectorType::get(PointerType::get(IRB.getDoubleTy(), 0), 8),
-          ValCatType, IDType, VectorType::get(IRB.getInt8Ty(), 8),
-          ValCatType, IDType, VectorType::get(IRB.getDoubleTy(), 8),
-          StorePropertyTy));
-  CsiAfterVMaskedScatter8D = checkCsiInterfaceFunction(
-      M.getOrInsertFunction(
-          "__csi_after_masked_scatter_v8double", RetType, IDType,
-          VectorType::get(PointerType::get(IRB.getDoubleTy(), 0), 8),
-          ValCatType, IDType, VectorType::get(IRB.getInt8Ty(), 8),
-          ValCatType, IDType, VectorType::get(IRB.getDoubleTy(), 8),
-          StorePropertyTy));
 }
 
 // Initialization of hooks for LLVM memory intrinsics
@@ -1424,7 +1276,6 @@ void CSIImpl::initializeTapirHooks() {
   IRBuilder<> IRB(C);
   Type *IDType = IRB.getInt64Ty();
   Type *RetType = IRB.getVoidTy();
-  Type *OperandIDType = StructType::get(IRB.getInt8Ty(), IRB.getInt64Ty());
 
   // TODO: Can we change the type of the TrackVars variable to be a simple i32?
   // That would allow the optimizer to more generally optimize away the
@@ -1436,9 +1287,7 @@ void CSIImpl::initializeTapirHooks() {
   CsiDetach->addParamAttr(1, Attribute::ReadOnly);
   CsiTaskEntry = checkCsiInterfaceFunction(
       M.getOrInsertFunction("__csi_task", RetType, /* task_id */ IDType,
-                            /* detach_id */ IDType,
-                            PointerType::get(OperandIDType, 0),
-                            IRB.getInt32Ty()));
+                            /* detach_id */ IDType));
   CsiTaskExit = checkCsiInterfaceFunction(
       M.getOrInsertFunction("__csi_task_exit", RetType,
                             /* task_exit_id */ IDType,
@@ -1654,6 +1503,116 @@ static bool checkHasOneUse(Instruction *I, LoopInfo &LI) {
   return true;
 }
 
+static bool checkBBLocal(const Value *V, const BasicBlock &BB) {
+  for (const Use &U : V->uses()) {
+    const User *Usr = U.getUser();
+    // Ignore users that are not instructions or that don't perform real
+    // computation.
+    if (!isa<Instruction>(Usr))
+      continue;
+    const Instruction *UsrI = cast<Instruction>(Usr);
+    if (CSIImpl::callsPlaceholderFunction(*UsrI))
+      continue;
+
+    // If the parent of this instruction does not match BBParent, then we have a
+    // non-local use.
+    if (&BB != UsrI->getParent())
+      return false;
+  }
+  return true;
+}
+
+void CSIImpl::instrumentParams(IRBuilder<> &IRB, Function &F,
+                               Value *FuncId) {
+  if (!Options.InstrumentInputs)
+    return;
+
+  for (Argument &Arg : F.args()) {
+    Value *Input = &Arg;
+    // Ignore inputs that do not match the type or arithmetic we're
+    // instrumenting.
+    if (Options.InstrumentArithmetic != CSIOptions::ArithmeticType::All) {
+      if ((Options.InstrumentArithmetic != CSIOptions::ArithmeticType::FP) &&
+          Input->getType()->isFPOrFPVectorTy())
+        continue;
+      if ((Options.InstrumentArithmetic != CSIOptions::ArithmeticType::Int) &&
+          Input->getType()->isIntOrIntVectorTy())
+        continue;
+    }
+    // Get the input hook we need, based on the input type.
+    Type *InputTy = Input->getType();
+    if (!SupportedType(InputTy)) {
+      // Skip recording inputs for unsupported types
+      DEBUG(dbgs() << "[CSI] Skipping unsupported type " << *InputTy << "\n");
+      continue;
+    }
+    Function *InputHook = getCSIInputHook(M, CSIDataFlowObject::FunctionEntry,
+                                          InputTy);
+    // Get information on this operand.
+    std::pair<Value *, Value *> OperandID = getOperandID(Input, IRB);
+    // Cast the operand as needed.
+    Type *OperandCastTy = getOperandCastTy(M, InputTy);
+    Value *CastInput = Input;
+    if (OperandCastTy != InputTy)
+      CastInput = IRB.CreateZExtOrBitCast(Input, OperandCastTy);
+    // TODO: Compute flags.  Not sure what flags to compute.
+    CsiArithmeticFlags Flags;
+    Value *FlagsVal = Flags.getValue(IRB);
+    // Insert the hook call.
+    CallInst *Call = IRB.CreateCall(InputHook, {FuncId, OperandID.first,
+                                                OperandID.second, CastInput,
+                                                FlagsVal});
+    setInstrumentationDebugLoc(&*IRB.GetInsertPoint(), (Instruction *)Call);
+  }
+}
+
+void CSIImpl::instrumentInputs(IRBuilder<> &IRB, CSIDataFlowObject DFObj,
+                               Value *DFObjCsiId,
+                               const SmallPtrSetImpl<Value *> &Inputs) {
+  if (!Options.InstrumentInputs)
+    return;
+
+  for (Value *Input : Inputs) {
+    // Ignore inputs that do not match the type or arithmetic we're
+    // instrumenting.
+    if (Options.InstrumentArithmetic != CSIOptions::ArithmeticType::All) {
+      if ((Options.InstrumentArithmetic != CSIOptions::ArithmeticType::FP) &&
+          Input->getType()->isFPOrFPVectorTy())
+        continue;
+      if ((Options.InstrumentArithmetic != CSIOptions::ArithmeticType::Int) &&
+          Input->getType()->isIntOrIntVectorTy())
+        continue;
+    }
+    // Get the input hook we need, based on the input type.
+    Type *InputTy = Input->getType();
+    if (!SupportedType(InputTy)) {
+      // Skip recording inputs for unsupported types
+      DEBUG(dbgs() << "[CSI] Skipping unsupported type " << *InputTy << "\n");
+      continue;
+    }
+    Function *InputHook = getCSIInputHook(M, DFObj, InputTy);
+    // Get the CSI ID information for the operand.
+    std::pair<Value *, Value *> OperandID = getOperandID(Input, IRB);
+    // Cast the operand as needed.
+    Type *OperandCastTy = getOperandCastTy(M, InputTy);
+    Value *CastInput = Input;
+    if (OperandCastTy != InputTy)
+      CastInput = IRB.CreateZExtOrBitCast(Input, OperandCastTy);
+    // Compute flags.
+    CsiArithmeticFlags Flags;
+    if (const Instruction *I = dyn_cast<Instruction>(Input))
+      Flags.setBBLocal(checkBBLocal(I, (DFObj == CSIDataFlowObject::BasicBlock) ?
+                                    *IRB.GetInsertPoint()->getParent() :
+                                    *I->getParent()));
+    Value *FlagsVal = Flags.getValue(IRB);
+    // Insert the hook call.
+    CallInst *Call = IRB.CreateCall(InputHook, {DFObjCsiId, OperandID.first,
+                                                OperandID.second, CastInput,
+                                                FlagsVal});
+    setInstrumentationDebugLoc(&*IRB.GetInsertPoint(), (Instruction *)Call);
+  }
+}
+
 void CSIImpl::instrumentLoadOrStore(Instruction *I, CsiLoadStoreProperty &Prop,
                                     const DataLayout &DL) {
   IRBuilder<> IRB(I);
@@ -1699,13 +1658,18 @@ void CSIImpl::instrumentVectorMemBuiltin(Instruction *I) {
   csi_id_t LocalId;
   Value *Operand0, *Operand1, *Operand2;
   unsigned Alignment = 0;
-  VectorType *OpTy = cast<VectorType>(II->getType());
-  unsigned NumEls = OpTy->getNumElements();
-  Function *BeforeHook = nullptr, *AfterHook = nullptr;
+  // Get the before and after hooks.
+  Function *BeforeHook = getMaskedReadWriteHook(M, I, true);
+  Function *AfterHook = getMaskedReadWriteHook(M, I, false);
+  if (!BeforeHook || !AfterHook) {
+    dbgs() << "Unknown VectorMemBuiltin " << *I << "\n";
+    return;
+  }
+  // Process the arguments of this vector memory builtin.
   switch (II->getIntrinsicID()) {
   default:
     dbgs() << "Unknown VectorMemBuiltin " << *I << "\n";
-    break;
+    return;
   case Intrinsic::masked_load: {
     LocalId = LoadFED.lookupId(I);
     Operand0 = II->getArgOperand(0);
@@ -1713,36 +1677,6 @@ void CSIImpl::instrumentVectorMemBuiltin(Instruction *I) {
       Alignment = C->getZExtValue();
     Operand1 = II->getArgOperand(2);
     Operand2 = II->getArgOperand(3);
-    switch (OpTy->getElementType()->getTypeID()) {
-    default:
-      // TODO: Support more vector types
-      break;
-    case Type::FloatTyID:
-      if (4 == NumEls) {
-        BeforeHook = CsiBeforeVMaskedLoad4F;
-        AfterHook = CsiAfterVMaskedLoad4F;
-      } else if (8 == NumEls) {
-        BeforeHook = CsiBeforeVMaskedLoad8F;
-        AfterHook = CsiAfterVMaskedLoad8F;
-      } else if (16 == NumEls) {
-        BeforeHook = CsiBeforeVMaskedLoad16F;
-        AfterHook = CsiAfterVMaskedLoad16F;
-      }
-      break;
-    case Type::DoubleTyID:
-      if (2 == NumEls) {
-        BeforeHook = CsiBeforeVMaskedLoad2D;
-        AfterHook = CsiAfterVMaskedLoad2D;
-      } else if (4 == NumEls) {
-        BeforeHook = CsiBeforeVMaskedLoad4D;
-        AfterHook = CsiAfterVMaskedLoad4D;
-      } else if (8 == NumEls) {
-        BeforeHook = CsiBeforeVMaskedLoad8D;
-        AfterHook = CsiAfterVMaskedLoad8D;
-      }
-      break;
-    }
-    break;
   }
   case Intrinsic::masked_gather: {
     LocalId = LoadFED.lookupId(I);
@@ -1751,36 +1685,6 @@ void CSIImpl::instrumentVectorMemBuiltin(Instruction *I) {
       Alignment = C->getZExtValue();
     Operand1 = II->getArgOperand(2);
     Operand2 = II->getArgOperand(3);
-    switch (OpTy->getElementType()->getTypeID()) {
-    default:
-      // TODO: Support more vector types
-      break;
-    case Type::FloatTyID:
-      if (4 == NumEls) {
-        BeforeHook = CsiBeforeVMaskedGather4F;
-        AfterHook = CsiAfterVMaskedGather4F;
-      } else if (8 == NumEls) {
-        BeforeHook = CsiBeforeVMaskedGather8F;
-        AfterHook = CsiAfterVMaskedGather8F;
-      } else if (16 == NumEls) {
-        BeforeHook = CsiBeforeVMaskedGather16F;
-        AfterHook = CsiAfterVMaskedGather16F;
-      }
-      break;
-    case Type::DoubleTyID:
-      if (2 == NumEls) {
-        BeforeHook = CsiBeforeVMaskedGather2D;
-        AfterHook = CsiAfterVMaskedGather2D;
-      } else if (4 == NumEls) {
-        BeforeHook = CsiBeforeVMaskedGather4D;
-        AfterHook = CsiAfterVMaskedGather4D;
-      } else if (8 == NumEls) {
-        BeforeHook = CsiBeforeVMaskedGather8D;
-        AfterHook = CsiAfterVMaskedGather8D;
-      }
-      break;
-    }
-    break;
   }
   case Intrinsic::masked_store: {
     LocalId = StoreFED.lookupId(I);
@@ -1789,36 +1693,6 @@ void CSIImpl::instrumentVectorMemBuiltin(Instruction *I) {
       Alignment = C->getZExtValue();
     Operand1 = II->getArgOperand(3);
     Operand2 = II->getArgOperand(0);
-    switch (OpTy->getElementType()->getTypeID()) {
-    default:
-      // TODO: Support more vector types
-      break;
-    case Type::FloatTyID:
-      if (4 == NumEls) {
-        BeforeHook = CsiBeforeVMaskedStore4F;
-        AfterHook = CsiAfterVMaskedStore4F;
-      } else if (8 == NumEls) {
-        BeforeHook = CsiBeforeVMaskedStore8F;
-        AfterHook = CsiAfterVMaskedStore8F;
-      } else if (16 == NumEls) {
-        BeforeHook = CsiBeforeVMaskedStore16F;
-        AfterHook = CsiAfterVMaskedStore16F;
-      }
-      break;
-    case Type::DoubleTyID:
-      if (2 == NumEls) {
-        BeforeHook = CsiBeforeVMaskedStore2D;
-        AfterHook = CsiAfterVMaskedStore2D;
-      } else if (4 == NumEls) {
-        BeforeHook = CsiBeforeVMaskedStore4D;
-        AfterHook = CsiAfterVMaskedStore4D;
-      } else if (8 == NumEls) {
-        BeforeHook = CsiBeforeVMaskedStore8D;
-        AfterHook = CsiAfterVMaskedStore8D;
-      }
-      break;
-    }
-    break;
   }
   case Intrinsic::masked_scatter: {
     LocalId = StoreFED.lookupId(I);
@@ -1827,50 +1701,21 @@ void CSIImpl::instrumentVectorMemBuiltin(Instruction *I) {
       Alignment = C->getZExtValue();
     Operand1 = II->getArgOperand(3);
     Operand2 = II->getArgOperand(0);
-    switch (OpTy->getElementType()->getTypeID()) {
-    default:
-      // TODO: Support more vector types
-      break;
-    case Type::FloatTyID:
-      if (4 == NumEls) {
-        BeforeHook = CsiBeforeVMaskedScatter4F;
-        AfterHook = CsiAfterVMaskedScatter4F;
-      } else if (8 == NumEls) {
-        BeforeHook = CsiBeforeVMaskedScatter8F;
-        AfterHook = CsiAfterVMaskedScatter8F;
-      } else if (16 == NumEls) {
-        BeforeHook = CsiBeforeVMaskedScatter16F;
-        AfterHook = CsiAfterVMaskedScatter16F;
-      }
-      break;
-    case Type::DoubleTyID:
-      if (2 == NumEls) {
-        BeforeHook = CsiBeforeVMaskedScatter2D;
-        AfterHook = CsiAfterVMaskedScatter2D;
-      } else if (4 == NumEls) {
-        BeforeHook = CsiBeforeVMaskedScatter4D;
-        AfterHook = CsiAfterVMaskedScatter4D;
-      } else if (8 == NumEls) {
-        BeforeHook = CsiBeforeVMaskedScatter8D;
-        AfterHook = CsiAfterVMaskedScatter8D;
-      }
-      break;
-    }
-    break;
   }
   }
-  if (!BeforeHook) {
-    dbgs() << "Uninstrumented function " << *I << "\n";
-    return;
-  }
+  // Compute the property
   Prop.setAlignment(Alignment);
   Value *PropVal = Prop.getValue(IRB);
+  // Get the IDs
   Value *CsiId = LoadFED.localToGlobalId(LocalId, IRB);
   std::pair<Value *, Value *> Operand1ID = getOperandID(Operand1, IRB);
   std::pair<Value *, Value *> Operand2ID = getOperandID(Operand2, IRB);
+  // Create a mask argument.
+  unsigned NumEls = cast<VectorType>(Operand1->getType())->getNumElements();
   Value *CastMask = IRB.CreateZExtOrBitCast(Operand1,
                                             VectorType::get(IRB.getInt8Ty(),
                                                             NumEls));
+  // Insert the hooks.
   insertHookCall(I, BeforeHook,
                  {CsiId, Operand0, Operand1ID.first, Operand1ID.second,
                   CastMask, Operand2ID.first, Operand2ID.second, Operand2,
@@ -2027,11 +1872,7 @@ std::pair<bool, bool> CSIImpl::isBBEmpty(BasicBlock &BB) {
       if (AllocaFED.hasId(I))
         return std::make_pair(IsEmpty, false);
 
-    if (isa<BinaryOperator>(I) || isa<TruncInst>(I) || isa<ZExtInst>(I) ||
-        isa<SExtInst>(I) || isa<FPToUIInst>(I) || isa<FPToSIInst>(I) ||
-        isa<UIToFPInst>(I) || isa<SIToFPInst>(I) || isa<FPTruncInst>(I) ||
-        isa<FPExtInst>(I) || isa<PHINode>(I) || isa<InsertElementInst>(I) ||
-        isa<ExtractElementInst>(I) || isa<ShuffleVectorInst>(I))
+    if (IsInstrumentedArithmetic(I))
       if (ArithmeticFED.hasId(I))
         return std::make_pair(IsEmpty, false);
   }
@@ -2072,6 +1913,13 @@ static void getBBInputs(BasicBlock &BB, SmallPtrSetImpl<Value *> &Inputs) {
   }
 }
 
+void CSIImpl::assignBasicBlockID(BasicBlock &BB) {
+  csi_id_t LocalId = BasicBlockFED.add(BB);
+  csi_id_t BBSizeId = BBSize.add(BB);
+  assert(LocalId == BBSizeId &&
+         "BB recieved different ID's in FED and sizeinfo tables.");
+}
+
 void CSIImpl::instrumentBasicBlock(BasicBlock &BB,
                                    const SmallPtrSetImpl<Value *> &Inputs) {
   // Compute the properties of this basic block.
@@ -2085,53 +1933,33 @@ void CSIImpl::instrumentBasicBlock(BasicBlock &BB,
   Prop.setIsEmpty(EmptyBB.first);
   Prop.setNoInstrumentedContent(EmptyBB.second);
 
-  // Get the inputs of this basic block
   IRBuilder<> IRB(&*BB.getFirstInsertionPt());
-  unsigned NumArgs = Inputs.size();
-  Type *InputIDType = StructType::get(IRB.getInt8Ty(), IRB.getInt64Ty());
-  Value *ArgArray =
-    ConstantPointerNull::get(PointerType::get(InputIDType, 0));
-  Type *ArgArrayTy = nullptr;
-  Value *StackAddr = nullptr;
-  if (NumArgs > 0) {
-    // Save the stack for proper deallocation of this allocated array later.
-    StackAddr = IRB.CreateCall(
-        Intrinsic::getDeclaration(&M, Intrinsic::stacksave));
-    // Create an array to store input ID information for the call.
-    ArgArray = IRB.CreateAlloca(InputIDType, IRB.getInt32(NumArgs));
-    ArgArrayTy = cast<AllocaInst>(ArgArray)->getAllocatedType();
-    IRB.CreateLifetimeStart(
-        ArgArray, IRB.getInt64(DL.getTypeAllocSize(ArgArrayTy) * NumArgs));
-    // Store input ID information into the array.
-    unsigned ArgNum = 0;
-    for (Value *Input : Inputs) {
-      std::pair<Value *, Value *> OperandID = getOperandID(Input, IRB);
-      IRB.CreateStore(OperandID.first,
-                      IRB.CreateInBoundsGEP(ArgArray, {IRB.getInt32(ArgNum),
-                                                       IRB.getInt32(0)}));
-      IRB.CreateStore(OperandID.second,
-                      IRB.CreateInBoundsGEP(ArgArray, {IRB.getInt32(ArgNum),
-                                                       IRB.getInt32(1)}));
-      ArgNum++;
+  csi_id_t LocalId = BasicBlockFED.lookupId(&BB);
+  Value *CsiId = BasicBlockFED.localToGlobalId(LocalId, IRB);
+  Type *IDType = IRB.getInt64Ty();
+
+  // Insert a PHI to track the BB predecessor.
+  Value *LocalPredID = IRB.getInt64(CsiUnknownId);
+  if (!pred_empty(&BB)) {
+    IRBuilder<> ArgB(&BB.front());
+    PHINode *LocalPredIDPN = ArgB.CreatePHI(IDType, 0);
+    for (BasicBlock *Pred : predecessors(&BB)) {
+      csi_id_t LocalId = BasicBlockFED.lookupId(Pred);
+      LocalPredIDPN->addIncoming(IRB.getInt64(LocalId), Pred);
     }
+    LocalPredID = LocalPredIDPN;
   }
+  Value *PredID = BasicBlockFED.localToGlobalId(LocalPredID, IRB);
+
+  // Insert input hooks for the inputs to the basic block.
+  instrumentInputs(IRB, CSIDataFlowObject::BasicBlock, CsiId, Inputs);
 
   // Insert entry and exit hooks.
-  csi_id_t LocalId = BasicBlockFED.add(BB);
-  csi_id_t BBSizeId = BBSize.add(BB);
-  assert(LocalId == BBSizeId &&
-         "BB recieved different ID's in FED and sizeinfo tables.");
-  Value *CsiId = BasicBlockFED.localToGlobalId(LocalId, IRB);
+  // csi_id_t BBSizeId = BBSize.add(BB);
+  // assert(LocalId == BBSizeId &&
+  //        "BB recieved different ID's in FED and sizeinfo tables.");
   Value *PropVal = Prop.getValue(IRB);
-  insertHookCall(&*IRB.GetInsertPoint(), CsiBBEntry,
-                 {CsiId, ArgArray, IRB.getInt32(NumArgs), PropVal});
-  if (NumArgs > 0) {
-    // Clean up the array of inputs
-    IRB.CreateLifetimeEnd(
-        ArgArray, IRB.getInt64(DL.getTypeAllocSize(ArgArrayTy) * NumArgs));
-    IRB.CreateCall(Intrinsic::getDeclaration(&M, Intrinsic::stackrestore),
-                   {StackAddr});
-  }
+  insertHookCall(&*IRB.GetInsertPoint(), CsiBBEntry, {CsiId, PredID, PropVal});
 
   IRB.SetInsertPoint(TI);
   insertHookCall(TI, CsiBBExit, {CsiId, PropVal});
@@ -2262,52 +2090,19 @@ void CSIImpl::instrumentLoop(Loop &L, const InputMap<Loop> &LoopInputs,
     }
   }
 
-  // Determine inputs for this loop.
-  const SmallPtrSetImpl<Value *> &Inputs = LoopInputs.lookup(&L);
-  unsigned NumArgs = Inputs.size();
-  Type *InputIDType = StructType::get(IRB.getInt8Ty(), IRB.getInt64Ty());
-  Value *ArgArray =
-    ConstantPointerNull::get(PointerType::get(InputIDType, 0));
-  Type *ArgArrayTy = nullptr;
-  Value *StackAddr = nullptr;
-  if (NumArgs > 0) {
-    // Save the stack for proper deallocation of this allocated array later.
-    StackAddr = IRB.CreateCall(
-        Intrinsic::getDeclaration(&M, Intrinsic::stacksave));
-    // Create an array to store input ID information for the call.
-    ArgArray = IRB.CreateAlloca(InputIDType, IRB.getInt32(NumArgs));
-    ArgArrayTy = cast<AllocaInst>(ArgArray)->getAllocatedType();
-    IRB.CreateLifetimeStart(
-        ArgArray, IRB.getInt64(DL.getTypeAllocSize(ArgArrayTy) * NumArgs));
-    // Store input ID information into the array.
-    unsigned ArgNum = 0;
-    for (Value *Input : Inputs) {
-      std::pair<Value *, Value *> OperandID = getOperandID(Input, IRB);
-      IRB.CreateStore(OperandID.first,
-                      IRB.CreateInBoundsGEP(ArgArray, {IRB.getInt32(ArgNum),
-                                                       IRB.getInt32(0)}));
-      IRB.CreateStore(OperandID.second,
-                      IRB.CreateInBoundsGEP(ArgArray, {IRB.getInt32(ArgNum),
-                                                       IRB.getInt32(1)}));
-      ArgNum++;
-    }
-  }
+  // Insert input hooks for the inputs to the basic block.
+  instrumentInputs(IRB, CSIDataFlowObject::Loop, LoopCsiId,
+                   LoopInputs.lookup(&L));
 
-  insertHookCall(&*IRB.GetInsertPoint(), CsiBeforeLoop,
-                 {LoopCsiId, TripCount, ArgArray, IRB.getInt32(NumArgs),
-                  LoopPropVal});
-  if (NumArgs > 0) {
-    // Clean up the array of inputs
-    IRB.CreateLifetimeEnd(
-        ArgArray, IRB.getInt64(DL.getTypeAllocSize(ArgArrayTy) * NumArgs));
-    IRB.CreateCall(Intrinsic::getDeclaration(&M, Intrinsic::stackrestore),
-                   {StackAddr});
-  }
+  // Insert before-loop hook.
+  insertHookCall(&*IRB.GetInsertPoint(), CsiBeforeLoop, {LoopCsiId, TripCount,
+                                                         LoopPropVal});
 
+  // Insert loop-body-entry hook.
   IRB.SetInsertPoint(&*Header->getFirstInsertionPt());
   // TODO: Pass IVs to hook?
-  insertHookCall(&*IRB.GetInsertPoint(), CsiLoopBodyEntry,
-                 {LoopCsiId, LoopPropVal});
+  insertHookCall(&*IRB.GetInsertPoint(), CsiLoopBodyEntry, {LoopCsiId,
+                                                            LoopPropVal});
 
   // Insert hooks at the ends of the exiting blocks.
   for (BasicBlock *BB : ExitingBlocks) {
@@ -2324,10 +2119,11 @@ void CSIImpl::instrumentLoop(Loop &L, const InputMap<Loop> &LoopInputs,
     insertHookCall(&*IRB.GetInsertPoint(), CsiLoopBodyExit,
                    {ExitCsiId, LoopCsiId, LoopExitPropVal});
   }
+  // Insert after-loop hooks.
   for (BasicBlock *BB : ExitBlocks) {
     IRB.SetInsertPoint(&*BB->getFirstInsertionPt());
-    insertHookCall(&*IRB.GetInsertPoint(), CsiAfterLoop,
-                   {LoopCsiId, LoopPropVal});
+    insertHookCall(&*IRB.GetInsertPoint(), CsiAfterLoop, {LoopCsiId,
+                                                          LoopPropVal});
   }
 }
 
@@ -2564,135 +2360,40 @@ bool CSIImpl::handleFPBuiltinCall(CallInst *I, Function *F, LoopInfo &LI) {
   IRBuilder<> IRB(I);
   CsiCallProperty Prop;
   csi_id_t LocalId = CallsiteFED.lookupId(I);
-  Type *Ty = F->getReturnType();
-  if (CS.getNumArgOperands() == 1) {
-    Value *Operand = CS.getArgOperand(0);
-    Function *BeforeHook = nullptr, *AfterHook = nullptr;
-    // Determine the correct hooks to use
-    if (Ty->isFloatTy()) {
-      if (!Operand->getType()->isFloatTy())
-        return false;
-      BeforeHook = CsiBeforeBuiltinFF;
-      AfterHook = CsiAfterBuiltinFF;
-    } else if (Ty->isDoubleTy()) {
-      if (!Operand->getType()->isDoubleTy())
-        return false;
-      BeforeHook = CsiBeforeBuiltinDD;
-      AfterHook = CsiAfterBuiltinDD;
-    } else {
-      return false;
-    }
-    // Emit the hooks
-    Value *CallsiteId = CallsiteFED.localToGlobalId(LocalId, IRB);
-    Value *OpArg = IRB.getInt8(static_cast<unsigned>(Op));
-    std::pair<Value *, Value *> OperandID = getOperandID(Operand, IRB);
-    Prop.setHasOneUse(checkHasOneUse(I, LI));
-    Value *PropVal = Prop.getValue(IRB);
-    insertHookCall(I, BeforeHook, {CallsiteId, OpArg, OperandID.first,
-                                   OperandID.second, Operand, PropVal});
 
-    BasicBlock::iterator Iter(I);
-    Iter++;
-    IRB.SetInsertPoint(&*Iter);
-    insertHookCall(&*Iter, AfterHook, {CallsiteId, OpArg, OperandID.first,
-                                       OperandID.second, Operand, PropVal});
-    return true;
-  } else if (CS.getNumArgOperands() == 2) {
-    Value *Operand0 = CS.getArgOperand(0);
-    Value *Operand1 = CS.getArgOperand(1);
-    // Determine the correct hooks to use
-    Function *BeforeHook = nullptr, *AfterHook = nullptr;
-    if (Ty->isFloatTy()) {
-      if (!Operand0->getType()->isFloatTy())
-        return false;
-      if (Operand1->getType()->isIntegerTy()) {
-        BeforeHook = CsiBeforeBuiltinFFI;
-        AfterHook = CsiAfterBuiltinFFI;
-      } else if (Operand1->getType()->isFloatTy()) {
-        BeforeHook = CsiBeforeBuiltinFFF;
-        AfterHook = CsiAfterBuiltinFFF;
-      } else {
-        return false;
-      }
-    } else if (Ty->isDoubleTy()) {
-      if (!Operand0->getType()->isDoubleTy())
-        return false;
-      if (Operand1->getType()->isIntegerTy()) {
-        BeforeHook = CsiBeforeBuiltinDDI;
-        AfterHook = CsiAfterBuiltinDDI;
-      } else if (Operand1->getType()->isFloatTy()) {
-        BeforeHook = CsiBeforeBuiltinDDD;
-        AfterHook = CsiAfterBuiltinDDD;
-      } else {
-        return false;
-      }
-    }
-    // Emit the hooks
-    Value *CallsiteId = CallsiteFED.localToGlobalId(LocalId, IRB);
-    Value *OpArg = IRB.getInt8(static_cast<unsigned>(Op));
-    std::pair<Value *, Value *> Operand0ID = getOperandID(Operand0, IRB);
-    std::pair<Value *, Value *> Operand1ID = getOperandID(Operand1, IRB);
-    Prop.setHasOneUse(checkHasOneUse(I, LI));
-    Value *PropVal = Prop.getValue(IRB);
-    insertHookCall(I, BeforeHook, {CallsiteId, OpArg, Operand0ID.first,
-                                   Operand0ID.second, Operand0,
-                                   Operand1ID.first, Operand1ID.second,
-                                   Operand1, PropVal});
-    BasicBlock::iterator Iter(I);
-    Iter++;
-    IRB.SetInsertPoint(&*Iter);
-    insertHookCall(&*Iter, AfterHook, {CallsiteId, OpArg, Operand0ID.first,
-                                       Operand0ID.second, Operand0,
-                                       Operand1ID.first, Operand1ID.second,
-                                       Operand1, PropVal});
-    return true;
-  } else {
-    if (CS.getNumArgOperands() != 3)
-      return false;
-    Value *Operand0 = CS.getArgOperand(0);
-    Value *Operand1 = CS.getArgOperand(1);
-    Value *Operand2 = CS.getArgOperand(2);
-    // Determine the correct hooks to use
-    Function *BeforeHook = nullptr, *AfterHook = nullptr;
-    if (Ty->isFloatTy()) {
-      if (!Operand0->getType()->isFloatTy() ||
-          !Operand1->getType()->isFloatTy() ||
-          !Operand2->getType()->isFloatTy())
-        return false;
-      BeforeHook = CsiBeforeBuiltinFFFF;
-      AfterHook = CsiAfterBuiltinFFFF;
-    } else if (Ty->isDoubleTy()) {
-      if (!Operand0->getType()->isDoubleTy() ||
-          !Operand1->getType()->isDoubleTy() ||
-          !Operand2->getType()->isDoubleTy())
-        return false;
-      BeforeHook = CsiBeforeBuiltinDDDD;
-      AfterHook = CsiAfterBuiltinDDDD;
-    }
+  // Get the hooks
+  Function *BeforeHook = getCSIBuiltinHook(M, I, true);
+  Function *AfterHook = getCSIBuiltinHook(M, I, false);
+  // Get the ID and builtin-func-op code.
+  Value *CallsiteId = CallsiteFED.localToGlobalId(LocalId, IRB);
+  Value *OpArg = IRB.getInt8(static_cast<unsigned>(Op));
 
-    Value *CallsiteId = CallsiteFED.localToGlobalId(LocalId, IRB);
-    Value *OpArg = IRB.getInt8(static_cast<unsigned>(Op));
-    std::pair<Value *, Value *> Operand0ID = getOperandID(Operand0, IRB);
-    std::pair<Value *, Value *> Operand1ID = getOperandID(Operand1, IRB);
-    std::pair<Value *, Value *> Operand2ID = getOperandID(Operand2, IRB);
-    Prop.setHasOneUse(checkHasOneUse(I, LI));
-    Value *PropVal = Prop.getValue(IRB);
-    insertHookCall(I, BeforeHook, {CallsiteId, OpArg, Operand0ID.first,
-                                   Operand0ID.second, Operand0,
-                                   Operand1ID.first, Operand1ID.second,
-                                   Operand1, Operand2ID.first,
-                                   Operand2ID.second, Operand2, PropVal});
-    BasicBlock::iterator Iter(I);
-    Iter++;
-    IRB.SetInsertPoint(&*Iter);
-    insertHookCall(&*Iter, AfterHook, {CallsiteId, OpArg, Operand0ID.first,
-                                       Operand0ID.second, Operand0,
-                                       Operand1ID.first, Operand1ID.second,
-                                       Operand1, Operand2ID.first,
-                                       Operand2ID.second, Operand2, PropVal});
-    return true;
+  // Collect all hook arguments
+  SmallVector<Value *, 3> HookArgs;
+  HookArgs.push_back(CallsiteId);
+  HookArgs.push_back(OpArg);
+  // Add the Operand ID and argument information for each argument.
+  for (Value *Arg : CS.args()) {
+    std::pair<Value *, Value *> OperandID = getOperandID(Arg, IRB);
+    HookArgs.push_back(OperandID.first);
+    HookArgs.push_back(OperandID.second);
+    // No casting is needed for FP builtins.
+    HookArgs.push_back(Arg);
   }
-  return false;
+  // Add the property value.
+  Prop.setHasOneUse(checkHasOneUse(I, LI));
+  Value *PropVal = Prop.getValue(IRB);
+  HookArgs.push_back(PropVal);
+
+  // Insert the before hook.
+  insertHookCall(I, BeforeHook, HookArgs);
+
+  // Insert the after hook.
+  BasicBlock::iterator Iter(I);
+  Iter++;
+  IRB.SetInsertPoint(&*Iter);
+  insertHookCall(&*Iter, AfterHook, HookArgs);
+  return true;
 }
 
 void CSIImpl::instrumentCallsite(Instruction *I, DominatorTree *DT,
@@ -2757,67 +2458,33 @@ void CSIImpl::instrumentCallsite(Instruction *I, DominatorTree *DT,
     FuncId = IRB.getInt64(CsiCallsiteUnknownTargetId);
   }
   assert(FuncId != NULL);
-  Type *OperandIDType = StructType::get(IRB.getInt8Ty(), IRB.getInt64Ty());
-  Value *ArgArray =
-    ConstantPointerNull::get(PointerType::get(OperandIDType, 0));
-  Type *ArgArrayTy = nullptr;
-  Value *StackAddr = nullptr;
-  if (NumArgs > 0) {
-    // Create an array to store operand ID information for the call.
-    ArgArray = IRB.CreateAlloca(OperandIDType, IRB.getInt32(NumArgs));
-    ArgArrayTy = cast<AllocaInst>(ArgArray)->getAllocatedType();
-    // Save the stack for proper deallocation of this allocated array later.
-    StackAddr = IRB.CreateCall(
-        Intrinsic::getDeclaration(&M, Intrinsic::stacksave));
-    IRB.CreateLifetimeStart(
-        ArgArray, IRB.getInt64(DL.getTypeAllocSize(ArgArrayTy) * NumArgs));
 
-    // Store operand ID information into the array.
-    if (CallInst *CI = dyn_cast<CallInst>(I)) {
-      unsigned ArgNum = 0;
-      for (Value *Operand : CI->arg_operands()) {
-        std::pair<Value *, Value *> OperandID = getOperandID(Operand, IRB);
-        IRB.CreateStore(OperandID.first,
-                        IRB.CreateInBoundsGEP(ArgArray, {IRB.getInt32(ArgNum),
-                                                         IRB.getInt32(0)}));
-        IRB.CreateStore(OperandID.second,
-                        IRB.CreateInBoundsGEP(ArgArray, {IRB.getInt32(ArgNum),
-                                                         IRB.getInt32(1)}));
-        ArgNum++;
-      }
-    } else if (InvokeInst *II = dyn_cast<InvokeInst>(I)) {
-      unsigned ArgNum = 0;
-      for (Value *Operand : II->arg_operands()) {
-        std::pair<Value *, Value *> OperandID = getOperandID(Operand, IRB);
-        IRB.CreateStore(OperandID.first,
-                        IRB.CreateInBoundsGEP(ArgArray, {IRB.getInt32(ArgNum),
-                                                         IRB.getInt32(0)}));
-        IRB.CreateStore(OperandID.second,
-                        IRB.CreateInBoundsGEP(ArgArray, {IRB.getInt32(ArgNum),
-                                                         IRB.getInt32(1)}));
-        ArgNum++;
-      }
-    }
+  // Insert input hooks for the inputs to the call.
+  if (Options.InstrumentInputs) {
+    CallSite CS(I);
+    SmallPtrSet<Value *, 4> Inputs;
+    for (Value *Input : CS.args())
+      Inputs.insert(Input);
+    instrumentInputs(IRB, CSIDataFlowObject::Call, CallsiteId, Inputs);
   }
+
+  // Get the ID of the basic block containing this call.  This is helpful in
+  // particular for invokes, which terminate a basic block and occur after the
+  // bb_exit hook.
+  csi_id_t LocalBBId = BasicBlockFED.lookupId(I->getParent());
+  Value *BBID = BasicBlockFED.localToGlobalId(LocalBBId, IRB);
 
   // Get properties of this call.
   CsiCallProperty Prop;
   Value *DefaultPropVal = Prop.getValue(IRB);
   Prop.setIsIndirect(!Called);
   Prop.setHasOneUse(checkHasOneUse(I, LI));
+  Prop.setBBLocal(checkBBLocal(I, *I->getParent()));
   Value *PropVal = Prop.getValue(IRB);
 
   // Instrument the call
   if (shouldInstrumentBefore)
-    insertHookCall(I, CsiBeforeCallsite, {CallsiteId, FuncId, ArgArray,
-                                          IRB.getInt32(NumArgs), PropVal});
-  if (NumArgs > 0) {
-    // Clean up the array of operand args
-    IRB.CreateLifetimeEnd(
-        ArgArray, IRB.getInt64(DL.getTypeAllocSize(ArgArrayTy) * NumArgs));
-    IRB.CreateCall(Intrinsic::getDeclaration(&M, Intrinsic::stackrestore),
-                   {StackAddr});
-  }
+    insertHookCall(I, CsiBeforeCallsite, {CallsiteId, BBID, FuncId, PropVal});
   BasicBlock::iterator Iter(I);
   if (shouldInstrumentAfter) {
     if (IsInvoke) {
@@ -3014,51 +2681,12 @@ void CSIImpl::instrumentDetach(DetachInst *DI, DominatorTree *DT, TaskInfo &TI,
     IRBuilder<> IRB(&*DetachedBlock->getFirstInsertionPt());
     csi_id_t LocalID = TaskFED.add(*DetachedBlock);
     Value *TaskID = TaskFED.localToGlobalId(LocalID, IRB);
-    // Determine inputs for this task.
-    const SmallPtrSetImpl<Value *> &Inputs =
-      TaskInputs.lookup(TI.getTaskFor(DetachedBlock));
-    unsigned NumArgs = Inputs.size();
-    Type *InputIDType = StructType::get(IRB.getInt8Ty(), IRB.getInt64Ty());
-    Value *ArgArray =
-      ConstantPointerNull::get(PointerType::get(InputIDType, 0));
-    Type *ArgArrayTy = nullptr;
-    Value *StackAddr = nullptr;
-    if (NumArgs > 0) {
-      // Save the stack for proper deallocation of this allocated array later.
-      StackAddr = IRB.CreateCall(
-          Intrinsic::getDeclaration(&M, Intrinsic::stacksave));
-      // Create an array to store input ID information for the call.
-      ArgArray = IRB.CreateAlloca(InputIDType, IRB.getInt32(NumArgs));
-      ArgArrayTy = cast<AllocaInst>(ArgArray)->getAllocatedType();
-      IRB.CreateLifetimeStart(
-          ArgArray, IRB.getInt64(DL.getTypeAllocSize(ArgArrayTy) * NumArgs));
-      // Store input ID information into the array.
-      unsigned ArgNum = 0;
-      for (Value *Input : Inputs) {
-        std::pair<Value *, Value *> OperandID = getOperandID(Input, IRB);
-        IRB.CreateStore(OperandID.first,
-                        IRB.CreateInBoundsGEP(ArgArray, {IRB.getInt32(ArgNum),
-                                                         IRB.getInt32(0)}));
-        IRB.CreateStore(OperandID.second,
-                        IRB.CreateInBoundsGEP(ArgArray, {IRB.getInt32(ArgNum),
-                                                         IRB.getInt32(1)}));
-        ArgNum++;
-      }
-    }
-
-    // Value *StackSave = IRB.CreateCall(
-    //     Intrinsic::getDeclaration(&M, Intrinsic::stacksave));
-    Instruction *Call = IRB.CreateCall(CsiTaskEntry,
-                                       {TaskID, DetachID, ArgArray,
-                                        IRB.getInt32(NumArgs)});
+    // Instrument inputs to the task.
+    instrumentInputs(IRB, CSIDataFlowObject::Task, TaskID,
+                     TaskInputs.lookup(TI.getTaskFor(DetachedBlock)));
+    // Insert hook.
+    Instruction *Call = IRB.CreateCall(CsiTaskEntry, {TaskID, DetachID});
     setInstrumentationDebugLoc(*DetachedBlock, Call);
-    if (NumArgs > 0) {
-      // Clean up the array of inputs
-      IRB.CreateLifetimeEnd(
-          ArgArray, IRB.getInt64(DL.getTypeAllocSize(ArgArrayTy) * NumArgs));
-      IRB.CreateCall(Intrinsic::getDeclaration(&M, Intrinsic::stackrestore),
-                     {StackAddr});
-    }
 
     // Instrument the exit points of the detached tasks.
     for (BasicBlock *Exit : TaskExits) {
@@ -3144,7 +2772,7 @@ void CSIImpl::instrumentSync(SyncInst *SI,
 }
 
 void CSIImpl::assignArithmeticID(Instruction *I) {
-  /*csi_id_t LocalId =*/ArithmeticFED.add(*I);
+  ArithmeticFED.add(*I);
 }
 
 void CSIImpl::instrumentArithmetic(Instruction *I, LoopInfo &LI) {
@@ -3160,6 +2788,7 @@ void CSIImpl::instrumentArithmetic(Instruction *I, LoopInfo &LI) {
   Value *CsiId = ArithmeticFED.localToGlobalId(LocalId, IRB);
   CsiArithmeticFlags Flags;
   Flags.setHasOneUse(checkHasOneUse(I, LI));
+  Flags.setBBLocal(checkBBLocal(I, *I->getParent()));
 
   Function *ArithmeticHook = getCSIArithmeticHook(M, I, true);
   // Exit early if we don't have a hook for this op.
@@ -3181,7 +2810,6 @@ void CSIImpl::instrumentArithmetic(Instruction *I, LoopInfo &LI) {
       CastOperand1 = IRB.CreateZExtOrBitCast(Operand1, OperandCastTy);
     }
     Flags.copyIRFlags(BO);
-    Flags.setHasOneUse(checkHasOneUse(BO, LI));
     Value *FlagsVal = Flags.getValue(IRB);
     insertHookCall(I, ArithmeticHook,
                    {CsiId, Opcode, Operand0ID.first, Operand0ID.second,
@@ -3315,7 +2943,7 @@ void CSIImpl::instrumentArithmetic(Instruction *I, LoopInfo &LI) {
     Function *CsiPhiHook = ArithmeticHook;
     Type *OperandCastTy = getOperandCastTy(M, OpTy);
     if (CsiPhiHook) {
-      PHINode *PHIArgs[2];
+      PHINode *PHIArgs[3];
       {
         // Make sure these PHI nodes are inserted at the beginning of the block.
         IRBuilder<> ArgB(&PN->getParent()->front());
@@ -3323,6 +2951,9 @@ void CSIImpl::instrumentArithmetic(Instruction *I, LoopInfo &LI) {
         PHIArgs[0] = ArgB.CreatePHI(ArgB.getInt8Ty(), PN->getNumIncomingValues());
         // OperandID.second type
         PHIArgs[1] = ArgB.CreatePHI(ArgB.getInt64Ty(),
+                                    PN->getNumIncomingValues());
+        // BBID type
+        PHIArgs[2] = ArgB.CreatePHI(ArgB.getInt64Ty(),
                                     PN->getNumIncomingValues());
       }
 
@@ -3332,8 +2963,17 @@ void CSIImpl::instrumentArithmetic(Instruction *I, LoopInfo &LI) {
         std::pair<Value *, Value *> OperandID = getOperandID(Operand, PredB);
         PHIArgs[0]->addIncoming(OperandID.first, Pred);
         PHIArgs[1]->addIncoming(OperandID.second, Pred);
+        // Basic-block ID of the predecessor.
+        if (const Instruction *OpI = dyn_cast<Instruction>(Operand))
+          PHIArgs[2]->addIncoming(
+              IRB.getInt64(BasicBlockFED.lookupId(OpI->getParent())), Pred);
+        else
+          PHIArgs[2]->addIncoming(IRB.getInt64(CsiUnknownId), Pred);
       }
 
+      csi_id_t LocalBBID = BasicBlockFED.lookupId(PN->getParent());
+      Value *BBID = BasicBlockFED.localToGlobalId(LocalBBID, IRB);
+      Value *SrcID = BasicBlockFED.localToGlobalId(PHIArgs[2], IRB);
       Value *CastPN = PN;
       if (OperandCastTy != OpTy)
         CastPN = IRB.CreateZExtOrBitCast(PN, OperandCastTy);
@@ -3341,9 +2981,9 @@ void CSIImpl::instrumentArithmetic(Instruction *I, LoopInfo &LI) {
 
       // Don't use insertHookCall for PHI instrumentation, because we must make
       // sure not to disrupt the PHIs in the block.
-      CallInst *Call = IRB.CreateCall(CsiPhiHook, {CsiId, PHIArgs[0],
-                                                   PHIArgs[1], CastPN,
-                                                   FlagsVal});
+      CallInst *Call = IRB.CreateCall(CsiPhiHook, {CsiId, BBID, SrcID,
+                                                   PHIArgs[0], PHIArgs[1],
+                                                   CastPN, FlagsVal});
       setInstrumentationDebugLoc(I, (Instruction *)Call);
     }
   } else if (InsertElementInst *IE = dyn_cast<InsertElementInst>(I)) {
@@ -4263,6 +3903,7 @@ void CSIImpl::computeLoadAndStoreProperties(
       bool HasBeenSeen = WriteTargets.count(Addr) > 0;
       Prop.setLoadReadBeforeWriteInBB(HasBeenSeen);
       Prop.setHasOneUse(checkHasOneUse(I, LI));
+      Prop.setBBLocal(checkBBLocal(I, *I->getParent()));
       LoadAndStoreProperties.push_back(std::make_pair(I, Prop));
     }
   }
@@ -4319,7 +3960,7 @@ void CSIImpl::instrumentFunction(Function &F) {
 
   for (Argument &Arg : F.args())
     // Add an ID for this function argument.
-    /*csi_id_t LocalId =*/ParameterFED.add(Arg);
+    ParameterFED.add(Arg);
 
   // Compile lists of all instrumentation points before anything is modified.
   for (BasicBlock &BB : F) {
@@ -4373,32 +4014,8 @@ void CSIImpl::instrumentFunction(Function &F) {
                                       DL, LI);
       } else if (isa<AllocaInst>(I)) {
         Allocas.push_back(&I);
-      } else {
-        if (isa<BinaryOperator>(I) || isa<TruncInst>(I) || isa<ZExtInst>(I) ||
-            isa<SExtInst>(I) || isa<FPToUIInst>(I) || isa<FPToSIInst>(I) ||
-            isa<UIToFPInst>(I) || isa<SIToFPInst>(I) || isa<FPTruncInst>(I) ||
-            isa<FPExtInst>(I) || isa<PHINode>(I) || isa<InsertElementInst>(I) ||
-            isa<ExtractElementInst>(I) || isa<ShuffleVectorInst>(I)) {
-          switch (Options.InstrumentArithmetic) {
-          default: break;
-          case CSIOptions::ArithmeticType::All:
-            Arithmetic.push_back(&I);
-            break;
-          case CSIOptions::ArithmeticType::FP:
-            if (I.getType()->isFPOrFPVectorTy())
-              Arithmetic.push_back(&I);
-            break;
-          case CSIOptions::ArithmeticType::Int:
-            if (I.getType()->isIntOrIntVectorTy())
-              Arithmetic.push_back(&I);
-            break;
-          }
-
-        // TODO: Handle GetElementPtr, PtrToInt, IntToPtr, BitCast,
-        // AddrSpaceCast
-
-        // TODO: Handle ExtractValue, InsertValue
-        }
+      } else if (IsInstrumentedArithmetic(&I)) {
+        Arithmetic.push_back(&I);
       }
     }
     computeLoadAndStoreProperties(LoadAndStoreProperties, BBLoadsAndStores, DL,
@@ -4426,6 +4043,8 @@ void CSIImpl::instrumentFunction(Function &F) {
     assignAllocFnID(I);
   for (Instruction *I : Arithmetic)
     assignArithmeticID(I);
+  for (BasicBlock *BB : BasicBlocks)
+    assignBasicBlockID(*BB);
 
   // Determine inputs for CFG structures.
   InputMap<BasicBlock> BBInputs;
@@ -4522,36 +4141,76 @@ void CSIImpl::instrumentFunction(Function &F) {
     Value *FuncId = FunctionFED.localToGlobalId(LocalId, IRB);
     if (Config->DoesFunctionRequireInstrumentationForPoint(
             F.getName(), InstrumentationPoint::INSTR_FUNCTION_ENTRY)) {
+      // Instrument the parameters of this function.
+      instrumentParams(IRB, F, FuncId);
+
+      // TODO? Remove this other instrumentation about function parameters.
       // Get the ID of the first function argument
       Value *FirstArgID = ParameterFED.localToGlobalId(
           ParameterFED.lookupId(&*F.arg_begin()), IRB);
       // Get the number of function arguments
       Value *NumArgs = IRB.getInt32(F.arg_size());
+
+      // Compute the properties of this function entry.
       CsiFuncProperty FuncEntryProp;
       FuncEntryProp.setMaySpawn(MaySpawn);
       Value *PropVal = FuncEntryProp.getValue(IRB);
+
+      // Insert the function-entry hook.
       insertHookCall(&*IRB.GetInsertPoint(), CsiFuncEntry,
                      {FuncId, FirstArgID, NumArgs, PropVal});
     }
     if (Config->DoesFunctionRequireInstrumentationForPoint(
             F.getName(), InstrumentationPoint::INSTR_FUNCTION_EXIT)) {
+      // Iterate over the exits from this function.  Any implicit exceptional
+      // exits should have been made explicit already by setupCalls(), so we
+      // don't need to do that here.
       EscapeEnumerator EE(F, "csi.cleanup", false);
       while (IRBuilder<> *AtExit = EE.Next()) {
-        // csi_id_t ExitLocalId = FunctionExitFED.add(F);
         Instruction *ExitInst = cast<Instruction>(AtExit->GetInsertPoint());
         csi_id_t ExitLocalId = FunctionExitFED.add(*ExitInst);
         Value *ExitCsiId =
             FunctionExitFED.localToGlobalId(ExitLocalId, *AtExit);
-        Value *ReturnOp = (ExitInst->getNumOperands() == 0) ? nullptr :
-          ExitInst->getOperand(0);
-        std::pair<Value *, Value *> OperandID = getOperandID(ReturnOp, *AtExit);
+
+        if (Options.InstrumentInputs && ExitInst->getNumOperands() > 0) {
+          Value *ReturnOp = ExitInst->getOperand(0);
+          // Get the input hook we need, based on the input type.
+          Type *RetOpTy = ReturnOp->getType();
+          if (!SupportedType(RetOpTy)) {
+            // Skip recording inputs for unsupported types
+            DEBUG(dbgs() << "[CSI] Skipping unsupported type " << *RetOpTy <<
+                  "\n");
+            continue;
+          }
+          Function *InputHook =
+            getCSIInputHook(M, CSIDataFlowObject::FunctionExit, RetOpTy);
+          std::pair<Value *, Value *> OperandID = getOperandID(ReturnOp,
+                                                               *AtExit);
+          // Cast the operand as needed.
+          Type *OperandCastTy = getOperandCastTy(M, RetOpTy);
+          Value *CastRetOp = ReturnOp;
+          if (OperandCastTy != RetOpTy)
+            CastRetOp = AtExit->CreateZExtOrBitCast(ReturnOp, OperandCastTy);
+          // TODO: Compute flags.  Not sure what flags to compute.
+          CsiArithmeticFlags Flags;
+          Value *FlagsVal = Flags.getValue(IRB);
+          // Insert the hook call.
+          CallInst *Call =
+            AtExit->CreateCall(InputHook, {ExitCsiId, OperandID.first,
+                                           OperandID.second, CastRetOp,
+                                           FlagsVal});
+          setInstrumentationDebugLoc(ExitInst, (Instruction *)Call);
+        }
+
+        // Compute the properties of this function exit.
         CsiFuncExitProperty FuncExitProp;
         FuncExitProp.setMaySpawn(MaySpawn);
-        FuncExitProp.setEHReturn(isa<ResumeInst>(ExitInst));
+        FuncExitProp.setEHReturn(!isa<ReturnInst>(ExitInst));
         Value *PropVal = FuncExitProp.getValue(*AtExit);
+
+        // Insert the hook call.
         insertHookCall(&*AtExit->GetInsertPoint(), CsiFuncExit,
-                       {ExitCsiId, FuncId, OperandID.first, OperandID.second,
-                        PropVal});
+                       {ExitCsiId, FuncId, PropVal});
       }
     }
   }

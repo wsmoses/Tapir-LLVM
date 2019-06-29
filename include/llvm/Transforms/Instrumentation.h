@@ -203,6 +203,7 @@ struct CSIOptions {
   bool InstrumentAllocas = true;
   bool InstrumentAllocFns = true;
   ArithmeticType InstrumentArithmetic = ArithmeticType::All;
+  bool InstrumentInputs = true;
   bool Interpose = true;
 
   CSIOptions() = default;
