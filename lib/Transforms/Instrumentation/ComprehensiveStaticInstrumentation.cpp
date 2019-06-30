@@ -697,6 +697,7 @@ bool CSIImpl::IsInstrumentedArithmetic(const Instruction *I) {
       isa<SExtInst>(I) || isa<FPToUIInst>(I) || isa<FPToSIInst>(I) ||
       isa<UIToFPInst>(I) || isa<SIToFPInst>(I) || isa<FPTruncInst>(I) ||
       isa<FPExtInst>(I) || isa<BitCastInst>(I) || isa<GetElementPtrInst>(I) ||
+      isa<IntToPtrInst>(I) || isa<PtrToIntInst>(I) ||
       isa<PHINode>(I) || isa<InsertElementInst>(I) ||
       isa<ExtractElementInst>(I) || isa<ShuffleVectorInst>(I))
     // TODO: Handle PtrToInt, IntToPtr, AddrSpaceCast, ExtractValue, InsertValue
@@ -880,6 +881,32 @@ Function *CSIImpl::getCSIArithmeticHook(Module &M, Instruction *I, bool Before) 
              "_getelementptr_" + TypeToStr(ITy)).str(),
             RetType, IDType, ValCatType, IDType, InTy,
             PointerType::get(IdxArgType, 0), IRB.getInt32Ty(), FlagsType));
+  }
+  case Instruction::IntToPtr: {
+    Type *OutTy = getOperandCastTy(M, ITy);
+    Type *IOpTy = I->getOperand(0)->getType();
+    Type *InTy = getOperandCastTy(M, IOpTy);
+    if (!OutTy || !InTy)
+      return nullptr;
+    return checkCsiInterfaceFunction(
+        M.getOrInsertFunction(
+            ("__csi_" + Twine(Before ? "before" : "after") +
+             "_inttoptr_" + TypeToStr(IOpTy) + "_" +
+             TypeToStr(ITy)).str(),
+            RetType, IDType, ValCatType, IDType, InTy, FlagsType));
+  }
+  case Instruction::PtrToInt: {
+    Type *OutTy = getOperandCastTy(M, ITy);
+    Type *IOpTy = I->getOperand(0)->getType();
+    Type *InTy = getOperandCastTy(M, IOpTy);
+    if (!OutTy || !InTy)
+      return nullptr;
+    return checkCsiInterfaceFunction(
+        M.getOrInsertFunction(
+            ("__csi_" + Twine(Before ? "before" : "after") +
+             "_ptrtoint_" + TypeToStr(IOpTy) + "_" +
+             TypeToStr(ITy)).str(),
+            RetType, IDType, ValCatType, IDType, InTy, FlagsType));
   }
   case Instruction::InsertElement: {
     VectorType *VecTy = cast<VectorType>(getOperandCastTy(M, ITy));
@@ -3040,6 +3067,32 @@ void CSIImpl::instrumentArithmetic(Instruction *I, LoopInfo &LI) {
       IRB.CreateCall(Intrinsic::getDeclaration(&M, Intrinsic::stackrestore),
                      {StackAddr});
     }
+
+  } else if (IntToPtrInst *I2P = dyn_cast<IntToPtrInst>(I)) {
+    // Integer conversion to pointer
+    Value *Operand = I2P->getOperand(0);
+    Type *OperandTy = Operand->getType();
+
+    Type *OperandCastTy = getOperandCastTy(M, OperandTy);
+    assert(OperandCastTy && "No type found for operand.");
+    std::pair<Value *, Value *> OperandID = getOperandID(Operand, IRB);
+    Value *CastOperand = IRB.CreateSExtOrBitCast(Operand, OperandCastTy);
+    Value *FlagsVal = Flags.getValue(IRB);
+    insertHookCall(I, ArithmeticHook, {CsiId, OperandID.first, OperandID.second,
+                                       CastOperand, FlagsVal});
+
+  } else if (PtrToIntInst *P2I = dyn_cast<PtrToIntInst>(I)) {
+    // Pointer conversion to integer
+    Value *Operand = P2I->getOperand(0);
+    Type *OperandTy = Operand->getType();
+
+    Type *OperandCastTy = getOperandCastTy(M, OperandTy);
+    assert(OperandCastTy && "No type found for operand.");
+    std::pair<Value *, Value *> OperandID = getOperandID(Operand, IRB);
+    Value *CastOperand = IRB.CreateBitCast(Operand, OperandCastTy);
+    Value *FlagsVal = Flags.getValue(IRB);
+    insertHookCall(I, ArithmeticHook, {CsiId, OperandID.first, OperandID.second,
+                                       CastOperand, FlagsVal});
 
   } else if (PHINode *PN = dyn_cast<PHINode>(I)) {
     Type *OpTy = PN->getType();
