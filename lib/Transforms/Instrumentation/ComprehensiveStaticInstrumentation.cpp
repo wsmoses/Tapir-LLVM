@@ -784,6 +784,25 @@ Function *CSIImpl::getCSIArithmeticHook(Module &M, Instruction *I, bool Before) 
     }
     return Hook;
   }
+  case Instruction::Select: {
+    // TODO: Support vector select
+    if (isa<VectorType>(ITy))
+      return nullptr;
+    Type *Ty = getOperandCastTy(M, ITy);
+    if (!ITy)
+      return nullptr;
+    Function *Hook = checkCsiInterfaceFunction(
+        M.getOrInsertFunction(
+            ("__csi_" + Twine(Before ? "before" : "after") +
+             "_select_" + TypeToStr(ITy)).str(),
+            RetType, IDType, ValCatType, IDType, IRB.getInt8Ty(), ValCatType,
+            IDType, Ty, ValCatType, IDType, Ty, FlagsType));
+    if (isa<PointerType>(Ty)) {
+      Hook->addParamAttr(6, Attribute::ReadOnly);
+      Hook->addParamAttr(9, Attribute::ReadOnly);
+    }
+    return Hook;
+  }
   case Instruction::FPTrunc: {
     Type *OutTy = getOperandCastTy(M, ITy);
     Type *IOpTy = I->getOperand(0)->getType();
@@ -2928,6 +2947,34 @@ void CSIImpl::instrumentArithmetic(Instruction *I, LoopInfo &LI) {
     // BasicBlock::iterator Iter(I);
     // Iter++;
     // IRB.SetInsertPoint(&*Iter);
+  } else if (SelectInst *SI = dyn_cast<SelectInst>(I)) {
+    // Select instruction
+    // Handle the condition
+    Value *Cond = SI->getCondition();
+    Type *CondCastTy = getOperandCastTy(M, Cond->getType());
+    Value *CastCond = IRB.CreateZExtOrBitCast(Cond, CondCastTy);
+    // Handle the two values
+    Value *Operand0 = SI->getTrueValue();
+    Value *Operand1 = SI->getFalseValue();
+    std::pair<Value *, Value *> CondID = getOperandID(Cond, IRB);
+    std::pair<Value *, Value *> Operand0ID = getOperandID(Operand0, IRB);
+    std::pair<Value *, Value *> Operand1ID = getOperandID(Operand1, IRB);
+    Type *OpTy = SI->getType();
+    Type *OperandCastTy = getOperandCastTy(M, OpTy);
+    Value *CastOperand0 = Operand0;
+    Value *CastOperand1 = Operand1;
+    if (OpTy->isIntegerTy()) {
+      CastOperand0 = IRB.CreateZExtOrBitCast(Operand0, OperandCastTy);
+      CastOperand1 = IRB.CreateZExtOrBitCast(Operand1, OperandCastTy);
+    }
+    // Set the flags
+    Flags.copyIRFlags(BO);
+    Value *FlagsVal = Flags.getValue(IRB);
+    insertHookCall(I, ArithmeticHook,
+                   {CsiId, CondID.first, CondID.second, CastCond,
+                    Operand0ID.first, Operand0ID.second, CastOperand0,
+                    Operand1ID.first, Operand1ID.second, CastOperand1,
+                    FlagsVal});
   } else if (TruncInst *TI = dyn_cast<TruncInst>(I)) {
     Value *Operand = TI->getOperand(0);
     Type *OpTy = TI->getType();
