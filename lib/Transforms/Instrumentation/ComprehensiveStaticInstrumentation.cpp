@@ -721,7 +721,7 @@ bool CSIImpl::IsInstrumentedArithmetic(const Instruction *I) {
       isa<SExtInst>(I) || isa<FPToUIInst>(I) || isa<FPToSIInst>(I) ||
       isa<UIToFPInst>(I) || isa<SIToFPInst>(I) || isa<FPTruncInst>(I) ||
       isa<FPExtInst>(I) || isa<BitCastInst>(I) || isa<GetElementPtrInst>(I) ||
-      isa<IntToPtrInst>(I) || isa<PtrToIntInst>(I) ||
+      isa<IntToPtrInst>(I) || isa<PtrToIntInst>(I) || isa<SelectInst>(I) ||
       isa<PHINode>(I) || isa<CmpInst>(I) ||
       isa<InsertElementInst>(I) || isa<ExtractElementInst>(I) ||
       isa<ShuffleVectorInst>(I))
@@ -2968,7 +2968,7 @@ void CSIImpl::instrumentArithmetic(Instruction *I, LoopInfo &LI) {
       CastOperand1 = IRB.CreateZExtOrBitCast(Operand1, OperandCastTy);
     }
     // Set the flags
-    Flags.copyIRFlags(BO);
+    Flags.copyIRFlags(SI);
     Value *FlagsVal = Flags.getValue(IRB);
     insertHookCall(I, ArithmeticHook,
                    {CsiId, CondID.first, CondID.second, CastCond,
