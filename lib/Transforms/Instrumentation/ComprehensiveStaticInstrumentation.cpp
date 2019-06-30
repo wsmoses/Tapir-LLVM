@@ -619,54 +619,78 @@ Function *CSIImpl::getCSIInputHook(Module &M, CSIDataFlowObject Obj,
   Type *FlagsType = CsiArithmeticFlags::getType(C);
 
   switch (Obj) {
-  case CSIDataFlowObject::BasicBlock:
-    return CreateCSIHookWithNull(
+  case CSIDataFlowObject::BasicBlock: {
+    Function *Hook = CreateCSIHookWithNull(
         M, ("__csi_bb_input_" + TypeToStr(InputTy)),
         RetType, IDType, ValCatType, IDType, OperandCastTy, FlagsType);
+    if (isa<PointerType>(OperandCastTy))
+      Hook->addParamAttr(3, Attribute::ReadOnly);
+    return Hook;
     // return checkCsiInterfaceFunction(
     //     M.getOrInsertFunction(
     //         ("__csi_bb_input_" + TypeToStr(InputTy)),
     //         RetType, IDType, ValCatType, IDType, OperandCastTy, FlagsType));
-  case CSIDataFlowObject::Call:
-    return CreateCSIHookWithNull(
+  }
+  case CSIDataFlowObject::Call: {
+    Function *Hook = CreateCSIHookWithNull(
         M, ("__csi_call_input_" + TypeToStr(InputTy)),
         RetType, IDType, ValCatType, IDType, OperandCastTy, FlagsType);
+    if (isa<PointerType>(OperandCastTy))
+      Hook->addParamAttr(3, Attribute::ReadOnly);
+    return Hook;
     // return checkCsiInterfaceFunction(
     //     M.getOrInsertFunction(
     //         ("__csi_call_input_" + TypeToStr(InputTy)),
     //         RetType, IDType, ValCatType, IDType, OperandCastTy, FlagsType));
-  case CSIDataFlowObject::Loop:
-    return CreateCSIHookWithNull(
+  }
+  case CSIDataFlowObject::Loop: {
+    Function *Hook = CreateCSIHookWithNull(
         M, ("__csi_loop_input_" + TypeToStr(InputTy)),
         RetType, IDType, ValCatType, IDType, OperandCastTy, FlagsType);
+    if (isa<PointerType>(OperandCastTy))
+      Hook->addParamAttr(3, Attribute::ReadOnly);
+    return Hook;
     // return checkCsiInterfaceFunction(
     //     M.getOrInsertFunction(
     //         ("__csi_loop_input_" + TypeToStr(InputTy)),
     //         RetType, IDType, ValCatType, IDType, OperandCastTy, FlagsType));
-  case CSIDataFlowObject::Task:
-    return CreateCSIHookWithNull(
+  }
+  case CSIDataFlowObject::Task: {
+    Function *Hook = CreateCSIHookWithNull(
         M, ("__csi_task_input_" + TypeToStr(InputTy)),
         RetType, IDType, ValCatType, IDType, OperandCastTy, FlagsType);
+    if (isa<PointerType>(OperandCastTy))
+      Hook->addParamAttr(3, Attribute::ReadOnly);
+    return Hook;
     // return checkCsiInterfaceFunction(
     //     M.getOrInsertFunction(
     //         ("__csi_task_input_" + TypeToStr(InputTy)),
     //         RetType, IDType, ValCatType, IDType, OperandCastTy, FlagsType));
-  case CSIDataFlowObject::FunctionEntry:
-    return CreateCSIHookWithNull(
+  }
+  case CSIDataFlowObject::FunctionEntry: {
+    Function *Hook = CreateCSIHookWithNull(
         M, ("__csi_func_parameter_" + TypeToStr(InputTy)),
         RetType, IDType, ValCatType, IDType, OperandCastTy, FlagsType);
+    if (isa<PointerType>(OperandCastTy))
+      Hook->addParamAttr(3, Attribute::ReadOnly);
+    return Hook;
     // return checkCsiInterfaceFunction(
     //     M.getOrInsertFunction(
     //         ("__csi_func_parameter_" + TypeToStr(InputTy)),
     //         RetType, IDType, ValCatType, IDType, OperandCastTy, FlagsType));
-  case CSIDataFlowObject::FunctionExit:
-    return CreateCSIHookWithNull(
+  }
+  case CSIDataFlowObject::FunctionExit: {
+    Function *Hook = CreateCSIHookWithNull(
         M, ("__csi_return_val_" + TypeToStr(InputTy)),
         RetType, IDType, ValCatType, IDType, OperandCastTy, FlagsType);
+    if (isa<PointerType>(OperandCastTy))
+      Hook->addParamAttr(3, Attribute::ReadOnly);
+    return Hook;
     // return checkCsiInterfaceFunction(
     //     M.getOrInsertFunction(
     //         ("__csi_return_val_" + TypeToStr(InputTy)),
     //         RetType, IDType, ValCatType, IDType, OperandCastTy, FlagsType));
+  }
   case CSIDataFlowObject::LAST_CSIDataFlowObject:
     llvm_unreachable("Unknown CSIDataFlowObject");
   }
@@ -715,8 +739,8 @@ Function *CSIImpl::getCSIArithmeticHook(Module &M, Instruction *I, bool Before) 
   Type *ValCatType = IRB.getInt8Ty();
   Type *FlagsType = CsiArithmeticFlags::getType(C);
 
+  Type *ITy = I->getType();
   if (isa<BinaryOperator>(I)) {
-    Type *ITy = I->getType();
     Type *Ty = getOperandCastTy(M, ITy);
     if (!Ty)
       return nullptr;
@@ -728,17 +752,19 @@ Function *CSIImpl::getCSIArithmeticHook(Module &M, Instruction *I, bool Before) 
             IDType, Ty, FlagsType));
   }
 
-  Type *ITy = I->getType();
   switch (I->getOpcode()) {
   case Instruction::PHI: {
     Type *Ty = getOperandCastTy(M, ITy);
     if (!Ty)
       return nullptr;
-    return checkCsiInterfaceFunction(
+    Function *Hook = checkCsiInterfaceFunction(
         M.getOrInsertFunction(
             ("__csi_phi_" + TypeToStr(ITy)),
             RetType, IDType, IDType, IDType, ValCatType, IDType, Ty,
             FlagsType));
+    if (isa<PointerType>(Ty))
+      Hook->addParamAttr(5, Attribute::ReadOnly);
+    return Hook;
   }
   case Instruction::FCmp:
   case Instruction::ICmp: {
@@ -746,12 +772,17 @@ Function *CSIImpl::getCSIArithmeticHook(Module &M, Instruction *I, bool Before) 
     Type *InTy = getOperandCastTy(M, IOpTy);
     if (!InTy)
       return nullptr;
-    return checkCsiInterfaceFunction(
+    Function *Hook = checkCsiInterfaceFunction(
         M.getOrInsertFunction(
             ("__csi_" + Twine(Before ? "before" : "after") +
              "_cmp_" + TypeToStr(IOpTy)).str(),
             RetType, IDType, OpcodeType, ValCatType, IDType, InTy, ValCatType,
             IDType, InTy, FlagsType));
+    if (isa<PointerType>(InTy)) {
+      Hook->addParamAttr(4, Attribute::ReadOnly);
+      Hook->addParamAttr(7, Attribute::ReadOnly);
+    }
+    return Hook;
   }
   case Instruction::FPTrunc: {
     Type *OutTy = getOperandCastTy(M, ITy);
@@ -870,11 +901,13 @@ Function *CSIImpl::getCSIArithmeticHook(Module &M, Instruction *I, bool Before) 
     Type *InTy = getOperandCastTy(M, IOpTy);
     if (!InTy)
       return nullptr;
-    return checkCsiInterfaceFunction(
+    Function *Hook = checkCsiInterfaceFunction(
         M.getOrInsertFunction(
             ("__csi_" + Twine(Before ? "before" : "after") +
              "_bitcast_" + TypeToStr(IOpTy) + "_" + TypeToStr(ITy)).str(),
             RetType, IDType, ValCatType, IDType, InTy, FlagsType));
+    Hook->addParamAttr(3, Attribute::ReadOnly);
+    return Hook;
   }
   case Instruction::GetElementPtr: {
     // TODO: Generalize the name of this hook to be less LLVM-specific.
@@ -889,12 +922,14 @@ Function *CSIImpl::getCSIArithmeticHook(Module &M, Instruction *I, bool Before) 
     Type *IdxArgType = StructType::get(IRB.getInt8Ty(), // Index ValCat
                                        IRB.getInt64Ty(), // Index operand ID
                                        IRB.getInt64Ty()); // Index operand
-    return checkCsiInterfaceFunction(
+    Function *Hook = checkCsiInterfaceFunction(
         M.getOrInsertFunction(
             ("__csi_" + Twine(Before ? "before" : "after") +
              "_getelementptr_" + TypeToStr(ITy)).str(),
             RetType, IDType, ValCatType, IDType, InTy,
             PointerType::get(IdxArgType, 0), IRB.getInt32Ty(), FlagsType));
+    Hook->addParamAttr(3, Attribute::ReadOnly);
+    return Hook;
   }
   case Instruction::IntToPtr: {
     Type *OutTy = getOperandCastTy(M, ITy);
@@ -915,12 +950,14 @@ Function *CSIImpl::getCSIArithmeticHook(Module &M, Instruction *I, bool Before) 
     Type *InTy = getOperandCastTy(M, IOpTy);
     if (!OutTy || !InTy)
       return nullptr;
-    return checkCsiInterfaceFunction(
+    Function *Hook = checkCsiInterfaceFunction(
         M.getOrInsertFunction(
             ("__csi_" + Twine(Before ? "before" : "after") +
              "_ptrtoint_" + TypeToStr(IOpTy) + "_" +
              TypeToStr(ITy)).str(),
             RetType, IDType, ValCatType, IDType, InTy, FlagsType));
+    Hook->addParamAttr(3, Attribute::ReadOnly);
+    return Hook;
   }
   case Instruction::InsertElement: {
     VectorType *VecTy = cast<VectorType>(getOperandCastTy(M, ITy));
