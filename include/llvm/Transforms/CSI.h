@@ -1452,6 +1452,32 @@ protected:
      And,
      Or,
      Xor,
+     ICmp_EQ,
+     ICmp_NE,
+     ICmp_UGT,
+     ICmp_UGE,
+     ICmp_ULT,
+     ICmp_ULE,
+     ICmp_SGT,
+     ICmp_SGE,
+     ICmp_SLT,
+     ICmp_SLE,
+     FCmp_False,
+     FCmp_OEQ,
+     FCmp_OGT,
+     FCmp_OGE,
+     FCmp_OLT,
+     FCmp_OLE,
+     FCmp_ONE,
+     FCmp_ORD,
+     FCmp_UNO,
+     FCmp_UEQ,
+     FCmp_UGT,
+     FCmp_UGE,
+     FCmp_ULT,
+     FCmp_ULE,
+     FCmp_UNE,
+     FCmp_True,
      LAST_CSIOpcode
     };
   Value *getOpcodeID(unsigned Opcode, IRBuilder<> &IRB) const {
@@ -1494,6 +1520,65 @@ protected:
       return IRB.getInt8(static_cast<unsigned>(CSIOpcode::Xor));
     default:
       llvm_unreachable("Invalid opcode");
+      break;
+    }
+  }
+  Value *getPredicateID(CmpInst::Predicate Pred, IRBuilder<> &IRB) const {
+    switch(Pred) {
+    case CmpInst::ICMP_EQ:
+      return IRB.getInt8(static_cast<unsigned>(CSIOpcode::ICmp_EQ));
+    case CmpInst::ICMP_NE:
+      return IRB.getInt8(static_cast<unsigned>(CSIOpcode::ICmp_NE));
+    case CmpInst::ICMP_UGT:
+      return IRB.getInt8(static_cast<unsigned>(CSIOpcode::ICmp_UGT));
+    case CmpInst::ICMP_UGE:
+      return IRB.getInt8(static_cast<unsigned>(CSIOpcode::ICmp_UGE));
+    case CmpInst::ICMP_ULT:
+      return IRB.getInt8(static_cast<unsigned>(CSIOpcode::ICmp_ULT));
+    case CmpInst::ICMP_ULE:
+      return IRB.getInt8(static_cast<unsigned>(CSIOpcode::ICmp_ULE));
+    case CmpInst::ICMP_SGT:
+      return IRB.getInt8(static_cast<unsigned>(CSIOpcode::ICmp_SGT));
+    case CmpInst::ICMP_SGE:
+      return IRB.getInt8(static_cast<unsigned>(CSIOpcode::ICmp_SGE));
+    case CmpInst::ICMP_SLT:
+      return IRB.getInt8(static_cast<unsigned>(CSIOpcode::ICmp_SLT));
+    case CmpInst::ICMP_SLE:
+      return IRB.getInt8(static_cast<unsigned>(CSIOpcode::ICmp_SLE));
+    case CmpInst::FCMP_FALSE:
+      return IRB.getInt8(static_cast<unsigned>(CSIOpcode::FCmp_False));
+    case CmpInst::FCMP_OEQ:
+      return IRB.getInt8(static_cast<unsigned>(CSIOpcode::FCmp_OEQ));
+    case CmpInst::FCMP_OGT:
+      return IRB.getInt8(static_cast<unsigned>(CSIOpcode::FCmp_OGT));
+    case CmpInst::FCMP_OGE:
+      return IRB.getInt8(static_cast<unsigned>(CSIOpcode::FCmp_OGE));
+    case CmpInst::FCMP_OLT:
+      return IRB.getInt8(static_cast<unsigned>(CSIOpcode::FCmp_OLT));
+    case CmpInst::FCMP_OLE:
+      return IRB.getInt8(static_cast<unsigned>(CSIOpcode::FCmp_OLE));
+    case CmpInst::FCMP_ONE:
+      return IRB.getInt8(static_cast<unsigned>(CSIOpcode::FCmp_ONE));
+    case CmpInst::FCMP_ORD:
+      return IRB.getInt8(static_cast<unsigned>(CSIOpcode::FCmp_ORD));
+    case CmpInst::FCMP_UNO:
+      return IRB.getInt8(static_cast<unsigned>(CSIOpcode::FCmp_UNO));
+    case CmpInst::FCMP_UEQ:
+      return IRB.getInt8(static_cast<unsigned>(CSIOpcode::FCmp_UEQ));
+    case CmpInst::FCMP_UGT:
+      return IRB.getInt8(static_cast<unsigned>(CSIOpcode::FCmp_UGT));
+    case CmpInst::FCMP_UGE:
+      return IRB.getInt8(static_cast<unsigned>(CSIOpcode::FCmp_UGE));
+    case CmpInst::FCMP_ULT:
+      return IRB.getInt8(static_cast<unsigned>(CSIOpcode::FCmp_ULT));
+    case CmpInst::FCMP_ULE:
+      return IRB.getInt8(static_cast<unsigned>(CSIOpcode::FCmp_ULE));
+    case CmpInst::FCMP_UNE:
+      return IRB.getInt8(static_cast<unsigned>(CSIOpcode::FCmp_UNE));
+    case CmpInst::FCMP_TRUE:
+      return IRB.getInt8(static_cast<unsigned>(CSIOpcode::FCmp_True));
+    default:
+      llvm_unreachable("Invalid predicate");
       break;
     }
   }

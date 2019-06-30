@@ -698,9 +698,10 @@ bool CSIImpl::IsInstrumentedArithmetic(const Instruction *I) {
       isa<UIToFPInst>(I) || isa<SIToFPInst>(I) || isa<FPTruncInst>(I) ||
       isa<FPExtInst>(I) || isa<BitCastInst>(I) || isa<GetElementPtrInst>(I) ||
       isa<IntToPtrInst>(I) || isa<PtrToIntInst>(I) ||
-      isa<PHINode>(I) || isa<InsertElementInst>(I) ||
-      isa<ExtractElementInst>(I) || isa<ShuffleVectorInst>(I))
-    // TODO: Handle PtrToInt, IntToPtr, AddrSpaceCast, ExtractValue, InsertValue
+      isa<PHINode>(I) || isa<CmpInst>(I) ||
+      isa<InsertElementInst>(I) || isa<ExtractElementInst>(I) ||
+      isa<ShuffleVectorInst>(I))
+    // TODO: Handle AddrSpaceCast, ExtractValue, InsertValue
     return checkArithmeticType(Options.InstrumentArithmetic, I->getType());
   return false;
 }
@@ -738,6 +739,19 @@ Function *CSIImpl::getCSIArithmeticHook(Module &M, Instruction *I, bool Before) 
             ("__csi_phi_" + TypeToStr(ITy)),
             RetType, IDType, IDType, IDType, ValCatType, IDType, Ty,
             FlagsType));
+  }
+  case Instruction::FCmp:
+  case Instruction::ICmp: {
+    Type *IOpTy = I->getOperand(0)->getType();
+    Type *InTy = getOperandCastTy(M, IOpTy);
+    if (!InTy)
+      return nullptr;
+    return checkCsiInterfaceFunction(
+        M.getOrInsertFunction(
+            ("__csi_" + Twine(Before ? "before" : "after") +
+             "_cmp_" + TypeToStr(IOpTy)).str(),
+            RetType, IDType, OpcodeType, ValCatType, IDType, InTy, ValCatType,
+            IDType, InTy, FlagsType));
   }
   case Instruction::FPTrunc: {
     Type *OutTy = getOperandCastTy(M, ITy);
@@ -3142,6 +3156,31 @@ void CSIImpl::instrumentArithmetic(Instruction *I, LoopInfo &LI) {
                                                    CastPN, FlagsVal});
       setInstrumentationDebugLoc(I, (Instruction *)Call);
     }
+  } else if (CmpInst *Cmp = dyn_cast<CmpInst>(I)) {
+    // Integer or floating-point comparison
+    Value *Pred = getPredicateID(Cmp->getPredicate(), IRB);
+    Value *Operand0 = Cmp->getOperand(0);
+    Value *Operand1 = Cmp->getOperand(1);
+    std::pair<Value *, Value *> Operand0ID = getOperandID(Operand0, IRB);
+    std::pair<Value *, Value *> Operand1ID = getOperandID(Operand1, IRB);
+    Type *Operand0CastTy = getOperandCastTy(M, Operand0->getType());
+    Type *Operand1CastTy = getOperandCastTy(M, Operand1->getType());
+    Value *CastOperand0 = Operand0;
+    Value *CastOperand1 = Operand1;
+    if (Cmp->isIntPredicate()) {
+      CastOperand0 = IRB.CreateZExtOrBitCast(Operand0, Operand0CastTy);
+      CastOperand1 = IRB.CreateZExtOrBitCast(Operand1, Operand1CastTy);
+    }
+    Value *FlagsVal = Flags.getValue(IRB);
+    insertHookCall(I, ArithmeticHook,
+                   {CsiId, Pred, Operand0ID.first, Operand0ID.second,
+                    CastOperand0, Operand1ID.first, Operand1ID.second,
+                    CastOperand1, FlagsVal});
+    // TODO: Insert CsiAfterArithmetic hooks
+    // BasicBlock::iterator Iter(I);
+    // Iter++;
+    // IRB.SetInsertPoint(&*Iter);
+
   } else if (InsertElementInst *IE = dyn_cast<InsertElementInst>(I)) {
     Value *Operand0 = IE->getOperand(0);
     Value *Operand1 = IE->getOperand(1);
