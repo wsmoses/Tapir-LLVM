@@ -1777,6 +1777,10 @@ protected:
       const Type *ElTy = cast<PointerType>(Ty)->getElementType();
       return SupportedType(ElTy);
     }
+    case Type::ArrayTyID: {
+      const Type *ElTy = cast<ArrayType>(Ty)->getElementType();
+      return SupportedType(ElTy);
+    }
       // TODO: Handle array types, struct types
     default: return false;
     }
@@ -1806,6 +1810,12 @@ protected:
       const PointerType *PtrTy = cast<PointerType>(Ty);
       const Type *ElTy = PtrTy->getElementType();
       return ("p" + TypeToStr(ElTy));
+    }
+    case Type::ArrayTyID: {
+      const ArrayType *ArrTy = cast<ArrayType>(Ty);
+      const Type *ElTy = ArrTy->getElementType();
+      uint64_t NumEls = ArrTy->getNumElements();
+      return ("a" + Twine(NumEls) + TypeToStr(ElTy)).str();
     }
     default: llvm_unreachable("No string for supported type");
     }
@@ -1842,6 +1852,8 @@ protected:
     }
     case Type::PointerTyID:
       return Type::getInt8PtrTy(C);
+    case Type::ArrayTyID:
+      return Ty;
     default: llvm_unreachable("No operand cast for supported type");
     }
   }
