@@ -1750,7 +1750,7 @@ bool CilkSanitizerImpl::simpleCallCannotRace(const Instruction &I) {
 
 bool CilkSanitizerImpl::prepareToInstrumentFunction(Function &F) {
   if (F.empty() || shouldNotInstrumentFunction(F) ||
-      F.hasFnAttribute(Attribute::SanitizeCilk))
+      !F.hasFnAttribute(Attribute::SanitizeCilk))
     return false;
 
   if (Options.CallsMayThrow)
@@ -1896,7 +1896,7 @@ bool CilkSanitizerImpl::instrumentFunction(
     Function &F, SmallPtrSetImpl<Instruction *> &ToInstrument,
     SmallPtrSetImpl<Instruction *> &NoRaceCallsites) {
   if (F.empty() || shouldNotInstrumentFunction(F) ||
-      F.hasFnAttribute(Attribute::SanitizeCilk))
+      !F.hasFnAttribute(Attribute::SanitizeCilk))
     return false;
   bool Res = false;
 
@@ -2070,7 +2070,7 @@ bool CilkSanitizerImpl::instrumentFunction(
     }
 
     updateInstrumentedFnAttrs(F);
-    F.addFnAttr(Attribute::SanitizeCilk);
+    F.removeFnAttr(Attribute::SanitizeCilk);
   }
 
   return Res;
