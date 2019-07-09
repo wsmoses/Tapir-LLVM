@@ -69,8 +69,8 @@ sync.continue:                                    ; preds = %pfor.cond.cleanup
 ; CHECK-NEXT: br i1 %[[ICMPEPIL]], label %[[EPILPH:.+]], label %[[LOOPEXIT:.+]], !dbg !8
 
 ; CHECK: [[EPILPH]]:
-; CHECK-NEXT: %[[EPILSTARTITER:.+]] = sub nuw nsw i64 %[[TRIPCOUNT]], %[[XTRAITER]]
-; CHECK-NEXT: %[[EPILSTART:.+]] = add i64 0, %[[EPILSTARTITER]]
+; CHECK-NEXT: %[[EPILSTARTTMP:.+]] = udiv i64 %[[TRIPCOUNT]], 2048
+; CHECK-NEXT: %[[EPILSTART:.+]] = mul nuw nsw i64 %[[EPILSTARTTMP]], 2048
 ; CHECK-NEXT: br label %[[EPILHEAD:.+]], !dbg !8
 
 ; CHECK: [[EPILHEAD]]:
