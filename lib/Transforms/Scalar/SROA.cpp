@@ -115,6 +115,8 @@ STATISTIC(NumPromoted, "Number of allocas promoted to SSA values");
 STATISTIC(NumLoadsSpeculated, "Number of loads speculated to allow promotion");
 STATISTIC(NumDeleted, "Number of instructions deleted");
 STATISTIC(NumVectorized, "Number of vectorized aggregates");
+STATISTIC(NumNotParallelPromotable, "Number of alloca's not promotable due to "
+          "Tapir instructions");
 
 /// Hidden option to enable randomly shuffling the slices to help uncover
 /// instability in their order.
@@ -4158,6 +4160,8 @@ AllocaInst *SROA::rewritePartition(AllocaInst &AI, AllocaSlices &AS,
     }
 
   // Check if any detaches block promotion.
+  if (!TI->isAllocaParallelPromotable(NewAI))
+    ++NumNotParallelPromotable;
   Promotable &= TI->isAllocaParallelPromotable(NewAI);
 
   if (Promotable) {
