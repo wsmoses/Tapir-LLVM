@@ -59,6 +59,10 @@ RunSLPVectorization("vectorize-slp", cl::Hidden,
                     cl::desc("Run the SLP vectorization passes"));
 
 static cl::opt<bool>
+RunLoopStripmining("stripmine-loops", cl::Hidden,
+                    cl::desc("Run the Tapir Loop stripmining passes"));
+
+static cl::opt<bool>
 UseGVNAfterVectorization("use-gvn-after-vectorization",
   cl::init(false), cl::Hidden,
   cl::desc("Run GVN instead of Early CSE after vectorization passes"));
@@ -161,10 +165,6 @@ static cl::opt<bool>
     EnableCHR("enable-chr", cl::init(true), cl::Hidden,
               cl::desc("Enable control height reduction optimization (CHR)"));
 
-static cl::opt<bool> EnableTapirLoopStripmine(
-    "enable-tapir-loop-stripmine", cl::init(true), cl::Hidden,
-    cl::desc("Enable the Tapir loop-stripmining pass (default = on)"));
-
 static cl::opt<bool> EnableSerializeSmallTasks(
   "enable-serialize-small-tasks", cl::Hidden, cl::init(false),
   cl::desc("Serialize any Tapir tasks found to be unprofitable (default = off)"));
@@ -184,6 +184,7 @@ PassManagerBuilder::PassManagerBuilder() {
     DisableUnrollLoops = false;
     SLPVectorize = RunSLPVectorization;
     LoopVectorize = RunLoopVectorization;
+    LoopStripmine = RunLoopStripmining;
     RerollLoops = RunLoopRerolling;
     NewGVN = RunNewGVN;
     DisableGVNLoadPRE = false;
@@ -680,9 +681,8 @@ void PassManagerBuilder::populateModulePassManager(
 
   MPM.add(createFloat2IntPass());
 
-  // Stripmine Tapir loops.  This pass is currently only performed when
-  // -enable-tapir-loop-stripmine is specified.
-  if (EnableTapirLoopStripmine) {
+  // Stripmine Tapir loops.
+  if (LoopStripmine) {
     MPM.add(createLoopStripMinePass());
     // Cleanup the IR after stripminning.
     MPM.add(createTaskSimplifyPass());
