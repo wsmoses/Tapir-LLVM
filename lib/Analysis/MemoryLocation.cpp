@@ -151,6 +151,19 @@ MemoryLocation MemoryLocation::getForArgument(ImmutableCallSite CS,
       assert(ArgIdx == 0 && "Invalid argument index");
       return MemoryLocation(
           Arg, DL.getTypeStoreSize(II->getArgOperand(1)->getType()), AATags);
+
+    case Intrinsic::masked_load:
+      assert(ArgIdx == 0 && "Invalid argument index");
+      // This is a conservative approxiamtion of the access size, because it
+      // does not account for the mask.
+      return MemoryLocation(Arg, DL.getTypeStoreSize(II->getType()), AATags);
+
+    case Intrinsic::masked_store:
+      assert(ArgIdx == 1 && "Invalid argument index");
+      // This is a conservative approxiamtion of the access size, because it
+      // does not account for the mask.
+      return MemoryLocation(
+          Arg, DL.getTypeStoreSize(II->getArgOperand(0)->getType()), AATags);
     }
   }
 
