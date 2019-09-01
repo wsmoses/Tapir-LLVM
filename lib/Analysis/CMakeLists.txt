@@ -78,6 +78,7 @@ add_llvm_library(LLVMAnalysis
   ScalarEvolutionExpander.cpp
   ScalarEvolutionNormalization.cpp
   SyntheticCountsUtils.cpp
+  TapirRaceDetect.cpp
   TapirTaskInfo.cpp
   TargetLibraryInfo.cpp
   TargetTransformInfo.cpp

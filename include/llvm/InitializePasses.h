@@ -400,6 +400,7 @@ void initializeTailDuplicatePass(PassRegistry&);
 void initializeTargetLibraryInfoWrapperPassPass(PassRegistry&);
 void initializeTargetPassConfigPass(PassRegistry&);
 void initializeTargetTransformInfoWrapperPassPass(PassRegistry&);
+void initializeTapirRaceDetectWrapperPassPass(PassRegistry&);
 void initializeTaskInfoWrapperPassPass(PassRegistry&);
 void initializeTaskSimplifyPass(PassRegistry&);
 void initializeThreadSanitizerPass(PassRegistry&);
