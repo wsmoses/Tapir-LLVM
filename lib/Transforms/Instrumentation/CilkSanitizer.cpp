@@ -162,8 +162,8 @@ struct CilkSanitizerImpl : public CSIImpl {
   class SimpleInstrumentor {
   public:
     SimpleInstrumentor(CilkSanitizerImpl &CilkSanImpl, TaskInfo &TI,
-                       DominatorTree *DT)
-        : CilkSanImpl(CilkSanImpl), TI(TI), DT(DT) {}
+                       LoopInfo &LI, DominatorTree *DT)
+        : CilkSanImpl(CilkSanImpl), TI(TI), LI(LI), DT(DT) {}
 
     bool InstrumentSimpleInstructions(
         SmallVectorImpl<Instruction *> &Instructions);
@@ -180,6 +180,7 @@ struct CilkSanitizerImpl : public CSIImpl {
 
     CilkSanitizerImpl &CilkSanImpl;
     TaskInfo &TI;
+    LoopInfo &LI;
     DominatorTree *DT;
 
     SmallPtrSet<DetachInst *, 8> Detaches;
@@ -192,8 +193,8 @@ struct CilkSanitizerImpl : public CSIImpl {
   class Instrumentor {
   public:
     Instrumentor(CilkSanitizerImpl &CilkSanImpl, RaceInfo &RI, TaskInfo &TI,
-                 DominatorTree *DT)
-        : CilkSanImpl(CilkSanImpl), RI(RI), TI(TI), DT(DT) {}
+                 LoopInfo &LI, DominatorTree *DT)
+        : CilkSanImpl(CilkSanImpl), RI(RI), TI(TI), LI(LI), DT(DT) {}
 
     void InsertArgSuppressionFlags(Function &F, Value *FuncId);
     bool InstrumentSimpleInstructions(
@@ -233,6 +234,7 @@ struct CilkSanitizerImpl : public CSIImpl {
     CilkSanitizerImpl &CilkSanImpl;
     RaceInfo &RI;
     TaskInfo &TI;
+    LoopInfo &LI;
     DominatorTree *DT;
 
     SmallPtrSet<DetachInst *, 8> Detaches;
@@ -325,7 +327,8 @@ struct CilkSanitizerImpl : public CSIImpl {
   bool suppressCallsite(Instruction *I);
   bool instrumentAllocationFn(Instruction *I, DominatorTree *DT);
   bool instrumentFree(Instruction *I);
-  bool instrumentDetach(DetachInst *DI, DominatorTree *DT, TaskInfo &TI);
+  bool instrumentDetach(DetachInst *DI, DominatorTree *DT, TaskInfo &TI,
+                        LoopInfo &LI);
   bool instrumentSync(SyncInst *SI);
   bool instrumentAlloca(Instruction *I);
 
@@ -809,6 +812,8 @@ void CilkSanitizerImpl::initializeCsanHooks() {
   IRBuilder<> IRB(C);
   Type *FuncPropertyTy = CsiFuncProperty::getType(C);
   Type *FuncExitPropertyTy = CsiFuncExitProperty::getType(C);
+  Type *TaskPropertyTy = CsiTaskProperty::getType(C);
+  Type *TaskExitPropertyTy = CsiTaskExitProperty::getType(C);
   Type *LoadPropertyTy = CsiLoadStoreProperty::getType(C);
   Type *StorePropertyTy = CsiLoadStoreProperty::getType(C);
   Type *CallPropertyTy = CsiCallProperty::getType(C);
@@ -885,7 +890,7 @@ void CilkSanitizerImpl::initializeCsanHooks() {
                             /* task_id */ IDType,
                             /* detach_id */ IDType,
                             /* frame_ptr */ AddrType,
-                            /* stack_ptr */ AddrType));
+                            /* stack_ptr */ AddrType, TaskPropertyTy));
   CsanTaskEntry->addParamAttr(2, Attribute::NoCapture);
   CsanTaskEntry->addParamAttr(2, Attribute::ReadNone);
   CsanTaskEntry->addParamAttr(3, Attribute::NoCapture);
@@ -896,7 +901,7 @@ void CilkSanitizerImpl::initializeCsanHooks() {
       M.getOrInsertFunction("__csan_task_exit", RetType,
                             /* task_exit_id */ IDType,
                             /* task_id */ IDType,
-                            /* detach_id */ IDType));
+                            /* detach_id */ IDType, TaskExitPropertyTy));
   CsanTaskExit->addFnAttr(Attribute::InaccessibleMemOnly);
   CsanDetachContinue = checkCsiInterfaceFunction(
       M.getOrInsertFunction("__csan_detach_continue", RetType,
@@ -1448,7 +1453,7 @@ bool CilkSanitizerImpl::SimpleInstrumentor::InstrumentAncillaryInstructions(
 
   // Instrument detaches
   for (DetachInst *DI : Detaches) {
-    CilkSanImpl.instrumentDetach(DI, DT, TI);
+    CilkSanImpl.instrumentDetach(DI, DT, TI, LI);
     // Get syncs associated with this detach
     for (SyncInst *SI : CilkSanImpl.DetachToSync[DI])
       Syncs.insert(SI);
@@ -2182,7 +2187,7 @@ bool CilkSanitizerImpl::Instrumentor::InstrumentAncillaryInstructions(
 
   // Instrument detaches
   for (DetachInst *DI : Detaches) {
-    CilkSanImpl.instrumentDetach(DI, DT, TI);
+    CilkSanImpl.instrumentDetach(DI, DT, TI, LI);
     // Get syncs associated with this detach
     for (SyncInst *SI : CilkSanImpl.DetachToSync[DI])
       Syncs.insert(SI);
@@ -2294,7 +2299,7 @@ bool CilkSanitizerImpl::instrumentFunctionUsingRI(Function &F) {
 
   bool Result = false;
   if (!EnableStaticRaceDetection) {
-    SimpleInstrumentor FuncI(*this, TI, DT);
+    SimpleInstrumentor FuncI(*this, TI, LI, DT);
     Result |= FuncI.InstrumentSimpleInstructions(AllLoadsAndStores);
     Result |= FuncI.InstrumentSimpleInstructions(AtomicAccesses);
     Result |= FuncI.InstrumentAnyMemIntrinsics(MemIntrinCalls);
@@ -2305,7 +2310,7 @@ bool CilkSanitizerImpl::instrumentFunctionUsingRI(Function &F) {
     Result |= FuncI.InstrumentAncillaryInstructions(Allocas, AllocationFnCalls,
                                                     FreeCalls);
   } else {
-    Instrumentor FuncI(*this, RI, TI, DT);
+    Instrumentor FuncI(*this, RI, TI, LI, DT);
     // Insert suppression flags for each function argument.
     FuncI.InsertArgSuppressionFlags(F, FuncId);
 
@@ -2733,8 +2738,9 @@ static void getTaskExits(
   }
 }
 
-bool CilkSanitizerImpl::instrumentDetach(DetachInst *DI,
-                                         DominatorTree *DT, TaskInfo &TI) {
+bool CilkSanitizerImpl::instrumentDetach(DetachInst *DI, DominatorTree *DT,
+                                         TaskInfo &TI, LoopInfo &LI) {
+  bool TapirLoopBody = spawnsTapirLoopBody(DI, LI, TI);
   // Instrument the detach instruction itself
   Value *DetachID;
   {
@@ -2759,8 +2765,9 @@ bool CilkSanitizerImpl::instrumentDetach(DetachInst *DI,
     IRBuilder<> IRB(&*DetachedBlock->getFirstInsertionPt());
     uint64_t LocalID = TaskFED.add(*DetachedBlock);
     Value *TaskID = TaskFED.localToGlobalId(LocalID, IRB);
-    // TODO: Determine if we actually want the frame pointer, not the stack
-    // pointer.
+    CsiTaskProperty Prop;
+    Prop.setIsTapirLoopBody(TapirLoopBody);
+    // Get the frame and stack pointers.
     Value *FrameAddr = IRB.CreateCall(
         Intrinsic::getDeclaration(&M, Intrinsic::task_frameaddress),
         {IRB.getInt32(0)});
@@ -2768,7 +2775,7 @@ bool CilkSanitizerImpl::instrumentDetach(DetachInst *DI,
         Intrinsic::getDeclaration(&M, Intrinsic::stacksave));
     Instruction *Call = IRB.CreateCall(CsanTaskEntry,
                                        {TaskID, DetachID, FrameAddr,
-                                        StackSave});
+                                        StackSave, Prop.getValue(IRB)});
     // Instruction *Call = IRB.CreateCall(CsanTaskEntry,
     //                                    {TaskID, DetachID, FrameAddr});
     IRB.SetInstDebugLocation(Call);
@@ -2778,8 +2785,10 @@ bool CilkSanitizerImpl::instrumentDetach(DetachInst *DI,
       IRBuilder<> IRB(TaskExit->getTerminator());
       uint64_t LocalID = TaskExitFED.add(*TaskExit->getTerminator());
       Value *TaskExitID = TaskExitFED.localToGlobalId(LocalID, IRB);
-      Instruction *Call = IRB.CreateCall(CsanTaskExit,
-                                         {TaskExitID, TaskID, DetachID});
+      CsiTaskExitProperty ExitProp;
+      ExitProp.setIsTapirLoopBody(TapirLoopBody);
+      Instruction *Call = IRB.CreateCall(
+          CsanTaskExit, {TaskExitID, TaskID, DetachID, ExitProp.getValue(IRB)});
       IRB.SetInstDebugLocation(Call);
       NumInstrumentedDetachExits++;
     }
@@ -2788,18 +2797,25 @@ bool CilkSanitizerImpl::instrumentDetach(DetachInst *DI,
       IRBuilder<> IRB(TaskExit->getTerminator());
       uint64_t LocalID = TaskExitFED.add(*TaskExit->getTerminator());
       Value *TaskExitID = TaskExitFED.localToGlobalId(LocalID, IRB);
-      Instruction *Call = IRB.CreateCall(CsanTaskExit,
-                                         {TaskExitID, TaskID, DetachID});
+      CsiTaskExitProperty ExitProp;
+      ExitProp.setIsTapirLoopBody(TapirLoopBody);
+      Instruction *Call = IRB.CreateCall(
+          CsanTaskExit, {TaskExitID, TaskID, DetachID, ExitProp.getValue(IRB)});
       IRB.SetInstDebugLocation(Call);
       NumInstrumentedDetachExits++;
     }
 
     Task *T = TI.getTaskFor(DetachedBlock);
     Value *DefaultID = getDefaultID(IRB);
-    for (Spindle *SharedEH : SharedEHExits)
+    for (Spindle *SharedEH : SharedEHExits) {
+      CsiTaskExitProperty ExitProp;
+      ExitProp.setIsTapirLoopBody(TapirLoopBody);
       insertHookCallAtSharedEHSpindleExits(
-          SharedEH, T, CsanTaskExit, TaskExitFED, {TaskID, DetachID},
-          {DefaultID, DefaultID});
+          SharedEH, T, CsanTaskExit, TaskExitFED,
+          {TaskID, DetachID, ExitProp.getValueImpl(DI->getContext())},
+          {DefaultID, DefaultID,
+           CsiTaskExitProperty::getDefaultValueImpl(DI->getContext())});
+    }
   }
 
   // Instrument the continuation of the detach.
