@@ -1,7 +1,7 @@
 version: 2
 jobs:
   "build-1404":
-    resource_class: 2XL+
+    resource_class: 2xlarge+
     docker:
       - image: wsmoses/tapir:1404
 
@@ -42,7 +42,7 @@ jobs:
             make -j2
   
   "build-1604":
-    resource_class: 2XL+
+    resource_class: 2xlarge+
     docker:
       - image: wsmoses/tapir:1604
 
