@@ -1,7 +1,7 @@
 version: 2
 jobs:
   "build-1404":
-    resource_class: xlarge
+    resource_class: 2XL+
     docker:
       - image: wsmoses/tapir:1404
 
@@ -17,7 +17,7 @@ jobs:
           command: |
             mkdir build
             cd build
-            cmake .. -DCMAKE_BUILD_TYPE=Release -DLLVM_TARGETS_TO_BUILD=host -DLLVM_BUILD_TESTS=ON -DLLVM_ENABLE_ASSERTIONS=ON -DLLVM_ENABLE_LTO=OFF -DLLVM_USE_LINKER=gold -DLLVM_PARALLEL_COMPILE_JOBS=2 -DLLVM_PARALLEL_LINK_JOBS=1 -DLLVM_BINUTILS_INCDIR=/usr/include -DLLVM_LIT_ARGS="-sv -j 2"
+            cmake .. -DCMAKE_BUILD_TYPE=Release -DLLVM_TARGETS_TO_BUILD=host -DLLVM_BUILD_TESTS=ON -DLLVM_ENABLE_ASSERTIONS=ON -DLLVM_ENABLE_LTO=OFF -DLLVM_USE_LINKER=gold -DLLVM_PARALLEL_COMPILE_JOBS=18 -DLLVM_PARALLEL_LINK_JOBS=17 -DLLVM_BINUTILS_INCDIR=/usr/include -DLLVM_LIT_ARGS="-sv -j 17"
       - run:
           name: make
           command: |
@@ -42,7 +42,7 @@ jobs:
             make -j2
   
   "build-1604":
-    resource_class: xlarge
+    resource_class: 2XL+
     docker:
       - image: wsmoses/tapir:1604
 
@@ -58,7 +58,7 @@ jobs:
           command: |
             mkdir build
             cd build
-            cmake .. -DCMAKE_BUILD_TYPE=Release -DLLVM_TARGETS_TO_BUILD=host -DLLVM_BUILD_TESTS=ON -DLLVM_ENABLE_ASSERTIONS=ON -DLLVM_ENABLE_LTO=OFF -DLLVM_USE_LINKER=gold -DLLVM_PARALLEL_COMPILE_JOBS=2 -DLLVM_PARALLEL_LINK_JOBS=1 -DLLVM_BINUTILS_INCDIR=/usr/include -DLLVM_LIT_ARGS="-sv -j 2"
+            cmake .. -DCMAKE_BUILD_TYPE=Release -DLLVM_TARGETS_TO_BUILD=host -DLLVM_BUILD_TESTS=ON -DLLVM_ENABLE_ASSERTIONS=ON -DLLVM_ENABLE_LTO=OFF -DLLVM_USE_LINKER=gold -DLLVM_PARALLEL_COMPILE_JOBS=18 -DLLVM_PARALLEL_LINK_JOBS=17 -DLLVM_BINUTILS_INCDIR=/usr/include -DLLVM_LIT_ARGS="-sv -j 17"
       - run:
           name: make
           command: |
