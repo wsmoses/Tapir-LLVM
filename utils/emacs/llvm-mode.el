@@ -22,7 +22,7 @@
   (list
    ;; Attributes
    `(,(regexp-opt
-       '("alwaysinline" "argmemonly" "builtin" "cold" "convergent" "inaccessiblememonly"
+       '("alwaysinline" "argmemonly" "builtin" "cold" "convergent" "dso_local" "inaccessiblememonly"
          "inaccessiblemem_or_argmemonly" "inlinehint" "jumptable" "local_unnamed_addr" "minsize"
 	 "naked" "nobuiltin" "nocapture" "noduplicate" "noimplicitfloat" "noinline" "nonlazybind"
 	 "nonnull" "noredzone" "noreturn" "norecurse" "nounwind" "optnone" "optsize" "readnone"
