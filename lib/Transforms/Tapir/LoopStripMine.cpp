@@ -587,14 +587,13 @@ static BasicBlock *NestDetachUnwindPredecessors(BasicBlock *EHCont,
                                                 LandingPadInst *OrigLPad,
                                                 Value *SyncReg, Module *M,
                                                 DominatorTree *DT, LoopInfo *LI,
-                                                MemorySSAUpdater *MSSAU,
                                                 bool PreserveLCSSA) {
   // Split the given Task predecessors of EHCont, which are given in Preds.
   BasicBlock *InnerUD = SplitBlockPredecessors(EHCont, Preds, Suffix1, DT, LI,
-                                               MSSAU, PreserveLCSSA);
+                                               PreserveLCSSA);
   // Split the NewDetachBB predecessor of EHCont.
   BasicBlock *OuterUD = SplitBlockPredecessors(EHCont, {NewDetachBB}, Suffix2,
-                                               DT, LI, MSSAU, PreserveLCSSA);
+                                               DT, LI, PreserveLCSSA);
 
   // Create a new landing pad for the outer detach by cloning the landing pad
   // from the old detach-unwind destination.
@@ -1042,7 +1041,7 @@ Loop *llvm::StripMineLoop(
       /* BasicBlock *OuterUD = */ NestDetachUnwindPredecessors(
           EHCont, EHContLPadVal, UDPreds, LoopDetach, ".strpm",
           ".strpm.detachloop.unwind", DI->getUnwindDest()->getLandingPadInst(),
-          SyncReg, M, DT, LI, nullptr, PreserveLCSSA);
+          SyncReg, M, DT, LI, PreserveLCSSA);
 
       // Replace sync regions of existing detached-rethrows.
       for (Instruction *I : DetachedRethrows) {

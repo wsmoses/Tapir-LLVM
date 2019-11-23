@@ -288,7 +288,8 @@ static bool checkInstructionForRace(const Instruction *I,
       isa<AnyMemSetInst>(I) || isa<AnyMemTransferInst>(I))
     return true;
 
-  if (isa<CallBase>(I)) {
+  ImmutableCallSite CS(I);
+  if (CS) {
     // Ignore debug info intrinsics
     if (isa<DbgInfoIntrinsic>(I))
       return false;
@@ -305,7 +306,6 @@ static bool checkInstructionForRace(const Instruction *I,
       case Intrinsic::invariant_end:
       case Intrinsic::launder_invariant_group:
       case Intrinsic::strip_invariant_group:
-      case Intrinsic::is_constant:
       case Intrinsic::lifetime_start:
       case Intrinsic::lifetime_end:
       case Intrinsic::objectsize:
@@ -318,9 +318,8 @@ static bool checkInstructionForRace(const Instruction *I,
     // We can assume allocation functions are safe.
     if (AssumeSafeMalloc && isAllocationFn(I, TLI)) {
       // Check if this is a realloc, because we have to handle those specially.
-      const CallBase *Call = cast<CallBase>(I);
       LibFunc F;
-      bool FoundLibFunc = TLI->getLibFunc(*Call->getCalledFunction(), F);
+      bool FoundLibFunc = TLI->getLibFunc(CS, F);
       if (FoundLibFunc && ((F == LibFunc_realloc || F == LibFunc_reallocf)))
         return true;
       return false;
@@ -329,7 +328,8 @@ static bool checkInstructionForRace(const Instruction *I,
     // If this call occurs in a termination block of the program, ignore it.
     if (IgnoreTerminationCalls &&
         isa<UnreachableInst>(I->getParent()->getTerminator())) {
-      const Function *CF = cast<CallBase>(I)->getCalledFunction();
+      ImmutableCallSite CS(I);
+      const Function *CF = CS.getCalledFunction();
       // If this is an ordinary function call in a terminating block, ignore it.
       if (!CF->hasFnAttribute(Attribute::NoReturn))
         return false;
@@ -401,28 +401,19 @@ static void GetGeneralAccesses(
   }
 
   // Handle arbitrary call sites by examining pointee arguments.
-  //
-  // This logic is based on that in AliasSetTracker.cpp.
-  if (const CallBase *Call = dyn_cast<CallBase>(I)) {
-    ModRefInfo CallMask = createModRefInfo(AA->getModRefBehavior(Call));
+  ImmutableCallSite CS(I);
+  if (CS) {
+    ModRefInfo CallMask = createModRefInfo(AA->getModRefBehavior(CS));
 
-    // Some intrinsics are marked as modifying memory for control flow modelling
-    // purposes, but don't actually modify any specific memory location.
-    using namespace PatternMatch;
-    if (Call->use_empty() &&
-        match(Call, m_Intrinsic<Intrinsic::invariant_start>()))
-      CallMask = clearMod(CallMask);
-    // TODO: See if we need to exclude additional intrinsics.
-
-    if (isAllocationFn(Call, TLI)) {
+    if (isAllocationFn(I, TLI)) {
       // Handle realloc as a special case.
       LibFunc F;
-      bool FoundLibFunc = TLI->getLibFunc(*Call->getCalledFunction(), F);
+      bool FoundLibFunc = TLI->getLibFunc(CS, F);
       if (FoundLibFunc && ((F == LibFunc_realloc || F == LibFunc_reallocf))) {
         // TODO: Try to get the size of the object being copied from.
         AccI.push_back(GeneralAccess(I, MemoryLocation::getForArgument(
-                                         Call, 0, TLI), 0,
-                                     AA->getArgModRefInfo(Call, 0)));
+                                         CS, 0, *TLI), 0,
+                                     AA->getArgModRefInfo(CS, 0)));
         // If we assume malloc is safe, don't worry about opaque accesses by
         // realloc.
         if (!AssumeSafeMalloc)
@@ -431,16 +422,16 @@ static void GetGeneralAccesses(
       }
     }
 
-    for (auto IdxArgPair : enumerate(Call->args())) {
+    for (auto IdxArgPair : enumerate(CS.args())) {
       int ArgIdx = IdxArgPair.index();
       const Value *Arg = IdxArgPair.value();
       if (!Arg->getType()->isPointerTy())
         continue;
       MemoryLocation ArgLoc =
-        MemoryLocation::getForArgument(Call, ArgIdx, TLI);
+        MemoryLocation::getForArgument(CS, ArgIdx, *TLI);
       if (AA->pointsToConstantMemory(ArgLoc))
         continue;
-      ModRefInfo ArgMask = AA->getArgModRefInfo(Call, ArgIdx);
+      ModRefInfo ArgMask = AA->getArgModRefInfo(CS, ArgIdx);
       ArgMask = intersectModRef(CallMask, ArgMask);
       if (!isNoModRef(ArgMask)) {
         // dbgs() << "New GA for " << *I << "\n  arg " << *Arg << "\n";
@@ -452,10 +443,10 @@ static void GetGeneralAccesses(
 
     // If we find a free call and we assume malloc is safe, don't worry about
     // opaque accesses by that free call.
-    if (AssumeSafeMalloc && isFreeCall(Call, TLI))
+    if (AssumeSafeMalloc && isFreeCall(I, TLI))
       return;
 
-    if (!Call->onlyAccessesArgMemory())
+    if (!CS.onlyAccessesArgMemory())
       // Add a generic GeneralAccess for this call to represent the fact that it
       // might access arbitrary global memory.
       AccI.push_back(GeneralAccess(I, None, CallMask));
@@ -678,20 +669,26 @@ bool AccessPtrAnalysis::checkDependence(std::unique_ptr<Dependence> D,
       // This optimization of bounding the loop nest to check only applies if
       // the underlying objects perform an allocation.
       Instruction *ObjI = dyn_cast<Instruction>(Obj);
-      if (!isa<AllocaInst>(ObjI) && !isa<CallBase>(ObjI)) {
-        CommonObjLoop = nullptr;
-        break;
+      if (!isa<AllocaInst>(ObjI)) {
+        ImmutableCallSite CS(ObjI);
+        if (CS) {
+          CommonObjLoop = nullptr;
+          break;
+        }
       }
       if (isa<AllocaInst>(ObjI))
         // Update the common loop for the underlying objects.
         CommonObjLoop = getCommonLoop(CommonObjLoop, ObjI->getParent(), LI);
-      else if (CallBase *CB = dyn_cast<CallBase>(ObjI)) {
-        if (!CB->returnDoesNotAlias()) {
-          CommonObjLoop = nullptr;
-          break;
+      else {
+        ImmutableCallSite CS(ObjI);
+        if (CS) {
+          if (!CS.returnDoesNotAlias()) {
+            CommonObjLoop = nullptr;
+            break;
+          }
+          // Update the common loop for the underlying objects.
+          CommonObjLoop = getCommonLoop(CommonObjLoop, ObjI->getParent(), LI);
         }
-        // Update the common loop for the underlying objects.
-        CommonObjLoop = getCommonLoop(CommonObjLoop, ObjI->getParent(), LI);
       }
     }
   }
@@ -848,7 +845,7 @@ bool AccessPtrAnalysis::PointerCapturedBefore(const Value *Ptr,
     Result = true;
   else
     Result = PointerMayBeCapturedBefore(Ptr, false, false, I, &DT, true,
-                                        nullptr, MaxUsesToExplore);
+                                        nullptr);
   MayBeCapturedCache[CaptureQuery] = Result;
   return Result;
 }
@@ -860,17 +857,17 @@ bool AccessPtrAnalysis::checkOpaqueAccesses(GeneralAccess &GA1,
     return false;
 
   if (!GA1.Loc && !GA2.Loc) {
-    const CallBase *Call1 = cast<CallBase>(GA1.I);
-    const CallBase *Call2 = cast<CallBase>(GA2.I);
+    ImmutableCallSite CS1(GA1.I);
+    ImmutableCallSite CS2(GA2.I);
 
-    assert(!AA->doesNotAccessMemory(Call1) && !AA->doesNotAccessMemory(Call2) &&
+    assert(!AA->doesNotAccessMemory(CS1) && !AA->doesNotAccessMemory(CS2) &&
            "Opaque call does not access memory.");
-    assert(!AA->onlyAccessesArgPointees(AA->getModRefBehavior(Call1)) &&
-           !AA->onlyAccessesArgPointees(AA->getModRefBehavior(Call2)) &&
+    assert(!AA->onlyAccessesArgPointees(AA->getModRefBehavior(CS1)) &&
+           !AA->onlyAccessesArgPointees(AA->getModRefBehavior(CS2)) &&
            "Opaque call only accesses arg pointees.");
 
     // // If both calls only read memory, then there's no dependence.
-    // if (AA->onlyReadsMemory(Call1) && AA->onlyReadsMemory(Call2))
+    // if (AA->onlyReadsMemory(CS1) && AA->onlyReadsMemory(CS2))
     //   return false;
 
     // We have two logically-parallel calls that opaquely access memory, and at
@@ -1024,10 +1021,6 @@ bool AccessPtrAnalysis::checkOpaqueAccesses(GeneralAccess &GA1,
   // The opaque access acts like a dependence across all iterations of any loops
   // containing the accesses.
   return true;
-
-  // if (const CallBase *Call1 = dyn_cast<CallBase>(GA1.I))
-  //   if (const CallBase *Call2 = dyn_cast<CallBase>(GA2.I))
-  //     return isModSet(AA->getModRefInfo(Call1, Call2));
 
   // assert((GA1.Loc || GA2.Loc) &&
   //        "Non-call general accesses lack memory locations.");
@@ -1813,10 +1806,11 @@ void AccessPtrAnalysis::processAccessPtrs(
       //   continue;
 
       if (!GA.getPtr()) {
-        if (const CallBase *Call = dyn_cast<CallBase>(GA.I)) {
-          if (!Call->onlyAccessesArgMemory() &&
-              !(AssumeSafeMalloc && (isAllocationFn(Call, TLI) ||
-                                     isFreeCall(Call, TLI)))) {
+        ImmutableCallSite CS(GA.I);
+        if (CS) {
+          if (!CS.onlyAccessesArgMemory() &&
+              !(AssumeSafeMalloc && (isAllocationFn(GA.I, TLI) ||
+                                     isFreeCall(GA.I, TLI)))) {
             LLVM_DEBUG(dbgs() << "Setting opaque race:\n" << "  GA.I: "
                        << *GA.I << "\n");
             Result.recordOpaqueRace(GA);

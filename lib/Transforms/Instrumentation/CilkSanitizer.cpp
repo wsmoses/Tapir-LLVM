@@ -310,7 +310,7 @@ struct CilkSanitizerImpl : public CSIImpl {
   // Initialize custom hooks for CilkSanitizer
   void initializeCsanHooks();
 
-  Value *GetCalleeFuncID(Function *Callee, IRBuilder<> &IRB);
+  Value *GetCalleeFuncID(const Function *Callee, IRBuilder<> &IRB);
 
   // Helper function for prepareToInstrumentFunction that chooses loads and
   // stores in a basic block to instrument.
@@ -1153,23 +1153,6 @@ static bool LocalBaseObj(Value *Addr, const DataLayout &DL, LoopInfo *LI,
   return true;
 }
 
-// /// Returns true if Addr can only refer to a locally allocated base object, that
-// /// is, an object created via an AllocaInst or an AllocationFn.
-// static bool LocalBaseObj(const CallBase *CS, const DataLayout &DL,
-//                          LoopInfo *LI, const TargetLibraryInfo *TLI) {
-//   // Check whether all pointer arguments point to local memory, and
-//   // ignore calls that only access local memory.
-//   for (auto CI = CS->arg_begin(), CE = CS->arg_end(); CI != CE; ++CI) {
-//     Value *Arg = *CI;
-//     if (!Arg->getType()->isPtrOrPtrVectorTy())
-//       continue;
-
-//     if (!LocalBaseObj(Arg, DL, LI, TLI))
-//       return false;
-//   }
-//   return true;
-// }
-
 // Examine the uses of a Instruction AI to determine if it is used in a subtask.
 // This method assumes that AI is an allocation instruction, i.e., either an
 // AllocaInst or an AllocationFn.
@@ -1289,23 +1272,6 @@ static bool PossibleRaceByCapture(Value *Addr, const DataLayout &DL,
   return false;
 }
 
-// /// Returns true if any address referenced by the callsite could race due to
-// /// pointer capture.
-// static bool PossibleRaceByCapture(const CallBase *CS, const DataLayout &DL,
-//                                   const TaskInfo &TI, LoopInfo *LI) {
-//   // Check whether all pointer arguments point to local memory, and
-//   // ignore calls that only access local memory.
-//   for (auto CI = CS->arg_begin(), CE = CS->arg_end(); CI != CE; ++CI) {
-//     Value *Arg = *CI;
-//     if (!Arg->getType()->isPtrOrPtrVectorTy())
-//       continue;
-
-//     if (PossibleRaceByCapture(Arg, DL, TI, LI))
-//       return true;
-//   }
-//   return false;
-// }
-
 static bool unknownObjectUses(Value *Addr, const DataLayout &DL, LoopInfo *LI,
                               const TargetLibraryInfo *TLI) {
   // Perform normal pointer-capture analysis.
@@ -1381,7 +1347,8 @@ bool CilkSanitizerImpl::simpleCallCannotRace(const Instruction &I) {
 // Helper function to get the ID of a function being called.  These IDs are
 // stored in separate global variables in the program.  This method will create
 // a new global variable for the Callee's ID if necessary.
-Value *CilkSanitizerImpl::GetCalleeFuncID(Function *Callee, IRBuilder<> &IRB) {
+Value *CilkSanitizerImpl::GetCalleeFuncID(const Function *Callee,
+                                          IRBuilder<> &IRB) {
   if (!Callee)
     // Unknown targets (i.e. indirect calls) are always unknown.
     return IRB.getInt64(CsiCallsiteUnknownTargetId);
@@ -1674,8 +1641,9 @@ void CilkSanitizerImpl::Instrumentor::InsertArgSuppressionFlags(
       // Determine if this object is no-alias.
       //
       // TODO: Figure out what "no-alias" information we can derive for allocas.
-      if (const CallBase *CB = dyn_cast<CallBase>(ObjRD.first))
-        if (CB->hasRetAttr(Attribute::NoAlias))
+      ImmutableCallSite CS(ObjRD.first);
+      if (CS)
+        if (CS.hasRetAttr(Attribute::NoAlias))
           SupprVal |= static_cast<unsigned>(SuppressionVal::NoAlias);
 
       LLVM_DEBUG(dbgs() << "Setting LocalSuppressions for " << *ObjRD.first
@@ -1779,8 +1747,8 @@ bool CilkSanitizerImpl::Instrumentor::InstrumentCalls(
 
     // Get update race data, if it's available.
     RaceInfo::RaceType FuncRT = CallRT;
-    CallBase *CB = dyn_cast<CallBase>(I);
-    if (Function *CF = CB->getCalledFunction())
+    ImmutableCallSite CS(I);
+    if (const Function *CF = CS.getCalledFunction())
       if (CilkSanImpl.FunctionRaceType.count(CF))
         FuncRT = CilkSanImpl.FunctionRaceType[CF];
 
@@ -1804,7 +1772,7 @@ bool CilkSanitizerImpl::Instrumentor::InstrumentCalls(
     if (!RaceInfo::isRace(CallRT)) {
       // We can only suppress calls whose functions don't have local races.
       if (!RaceInfo::isLocalRace(FuncRT)) {
-        if (!CB->doesNotAccessMemory())
+        if (!CS.doesNotAccessMemory())
           LocalResult |= CilkSanImpl.suppressCallsite(I);
         continue;
       // } else {
@@ -1822,21 +1790,21 @@ bool CilkSanitizerImpl::Instrumentor::InstrumentCalls(
     // suppression information for its arguments, if any races depend on the
     // ancestor.
     SmallVector<Value *, 8> SupprVals;
-    LLVM_DEBUG(dbgs() << "Getting suppression values for " << *CB << "\n");
+    LLVM_DEBUG(dbgs() << "Getting suppression values for " << *I << "\n");
     IRBuilder<> IRB(I);
     if (RaceInfo::isRaceViaAncestor(CallRT)) {
       // Otherwise, if the instruction might participate in a race via an
       // ancestor function instantiation, instrument it conditionally based on
       // the pointer.
       unsigned OpIdx = 0;
-      for (const Value *Op : CB->args()) {
+      for (const Value *Op : CS.args()) {
         if (!Op->getType()->isPtrOrPtrVectorTy()) {
           ++OpIdx;
           continue;
         }
         Value *SupprVal = getSuppressionValue(I, IRB, OpIdx);
         LLVM_DEBUG({
-            dbgs() << "  Op: " << *CB->getArgOperand(OpIdx) << "\n";
+            dbgs() << "  Op: " << *CS.getArgOperand(OpIdx) << "\n";
             dbgs() << "  Suppression value: " << *SupprVal << "\n";
           });
         SupprVals.push_back(SupprVal);
@@ -1848,7 +1816,7 @@ bool CilkSanitizerImpl::Instrumentor::InstrumentCalls(
       // arguments, but we don't need to be pessimistic when a value can't be
       // found.
       unsigned OpIdx = 0;
-      for (const Value *Op : CB->args()) {
+      for (const Value *Op : CS.args()) {
         if (!Op->getType()->isPtrOrPtrVectorTy()) {
           ++OpIdx;
           continue;
@@ -1858,14 +1826,14 @@ bool CilkSanitizerImpl::Instrumentor::InstrumentCalls(
                                               SuppressionVal::NoAccess,
                                               /*CheckArgs=*/ false);
         LLVM_DEBUG({
-            dbgs() << "  Op: " << *CB->getArgOperand(OpIdx) << "\n";
+            dbgs() << "  Op: " << *CS.getArgOperand(OpIdx) << "\n";
             dbgs() << "  Suppression value: " << *SupprVal << "\n";
           });
         SupprVals.push_back(SupprVal);
         ++OpIdx;
       }
     }
-    Value *CalleeID = CilkSanImpl.GetCalleeFuncID(CB->getCalledFunction(), IRB);
+    Value *CalleeID = CilkSanImpl.GetCalleeFuncID(CS.getCalledFunction(), IRB);
     // We set the suppression flags in reverse order to support stack-like
     // accesses of the flags by in-order calls to GetSuppressionFlag in the
     // callee.
@@ -1925,10 +1893,10 @@ static MemoryLocation getMemoryLocation(Instruction *I, unsigned OperandNum,
   } else if (OperandNum == static_cast<unsigned>(-1)) {
     return MemoryLocation::get(I);
   } else {
-    assert(isa<CallBase>(I) &&
+    ImmutableCallSite CS(I);
+    assert(CS &&
            "Unknown instruction and operand ID for getting MemoryLocation.");
-    CallBase *CB = cast<CallBase>(I);
-    return MemoryLocation::getForArgument(CB, OperandNum, TLI);
+    return MemoryLocation::getForArgument(CS, OperandNum, *TLI);
   }
 }
 
@@ -2094,35 +2062,6 @@ Value *CilkSanitizerImpl::Instrumentor::getSuppressionValue(
           // SV = IRB.CreateOr(SV, FlagCheck);
         }
       }
-
-      // // Check for noalias attributes to determine if we can set the noalias
-      // // suppression bit in this value (at this call).
-      // bool ObjNoAlias = false;
-      // if (Argument *Arg = dyn_cast<Argument>(Obj))
-      //   ObjNoAlias = Arg->hasNoAliasAttr();
-      // else if (CallBase *CB = dyn_cast<CallBase>(Obj))
-      //   ObjNoAlias = CB->hasRetAttr(Attribute::NoAlias);
-      // ObjNoAliasFlag = IRB.CreateOr(
-      //     ObjNoAliasFlag,
-      //     getSuppressionIRValue(IRB, ObjNoAlias ? SuppressionVal::NoAlias : 0));
-
-      // // Look for instances of the same object
-      // //
-      // // TODO: Possibly optimize this quadratic algorithm, if it proves to be a
-      // // problem.
-      // for (const RaceInfo::RaceData &OtherRD : RI.getRaceData(I)) {
-      //   // Skip this operand when scanning for aliases
-      //   if (OperandNum == OtherRD.OperandNum)
-      //     continue;
-      //   SmallPtrSet<Value *, 1> OtherObjects;
-      //   RI.getObjectsFor(OtherRD.Access, OtherObjects);
-      //   for (Value *OtherObj : OtherObjects) {
-      //     // If we find another instance of this object in another argument,
-      //     // then we don't have "no alias".
-      //     if (Obj == OtherObj)
-      //       ObjNoAliasFlag = getSuppressionIRValue(IRB, 0);
-      //   }
-      // }
 
       // Call getNoAliasSuppressionValue to evaluate the no-alias value in the
       // suppression for Obj, and intersect that result with the noalias
@@ -2519,10 +2458,11 @@ bool CilkSanitizerImpl::instrumentFunctionUsingRI(Function &F) {
   for (Instruction *I : MemIntrinCalls)
     FuncRT = RaceInfo::unionRaceTypes(FuncRT, RI.getRaceType(I));
   for (Instruction *I : Callsites) {
-    if (const CallBase *CB = dyn_cast<CallBase>(I)) {
+    ImmutableCallSite CS(I);
+    if (CS) {
       // Use updated information about the race type of the call, if it's
       // available.
-      const Function *CF = CB->getCalledFunction();
+      const Function *CF = CS.getCalledFunction();
       if (FunctionRaceType.count(CF)) {
         FuncRT = RaceInfo::unionRaceTypes(FuncRT, FunctionRaceType[CF]);
         continue;
@@ -2631,10 +2571,10 @@ bool CilkSanitizerImpl::instrumentCallsite(
     return false;
 
   bool IsInvoke = isa<InvokeInst>(I);
-  CallBase *CB = dyn_cast<CallBase>(I);
-  if (!CB)
+  ImmutableCallSite CS(I);
+  if (!CS)
     return false;
-  Function *Called = CB->getCalledFunction();
+  const Function *Called = CS.getCalledFunction();
 
   IRBuilder<> IRB(I);
   uint64_t LocalId = CallsiteFED.add(*I);
@@ -2703,7 +2643,7 @@ bool CilkSanitizerImpl::instrumentCallsite(
 
   // Don't bother adding after_call instrumentation for function calls that
   // don't return.
-  if (CB->doesNotReturn())
+  if (CS.doesNotReturn())
     return true;
 
   BasicBlock::iterator Iter(I);
