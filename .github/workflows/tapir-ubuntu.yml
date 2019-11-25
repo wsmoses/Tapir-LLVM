@@ -65,6 +65,6 @@ jobs:
         git checkout tags/v0.1.2
         mkdir build
         cd build
-        cmake -DCMAKE_C_COMPILER=$HOME/build/bin/clang -DCMAKE_CXX_COMPILER=$HOME/build/bin/clang++ ..
+        cmake -DCMAKE_C_COMPILER=$PWD/../../build/bin/clang -DCMAKE_CXX_COMPILER=$PWD/../../build/bin/clang++ ..
         make -j2
 
