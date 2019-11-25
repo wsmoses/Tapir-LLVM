@@ -12,28 +12,22 @@ jobs:
       matrix:
         build: ["Release"] #, "Debug"] # "RelWithDebInfo"
         os: [ubuntu-16.04, ubuntu-18.04]
-        compiler:
-          - name: gcc
-            c-compiler: gcc
-            cxx-compiler: g++
-          - name: clang
-            c-compiler: clang
-            cxx-compiler: clang++
-            linker-pkg: lld
-            cmake-linker: "-DLLVM_ENABLE_LLD=On"
-        # include:
-        #   - os: ubuntu-18.04
-        #     c-compiler: clang
-        #     linker-pkg: lld
-        #     cmake-linker: "-DLLVM_ENABLE_LLD=On"
+        compiler: [gcc, clang]
         exclude:
           - os: ubuntu-16.04
-            compiler:
-              - name: clang
+            compiler: clang
+        include:
+          - compiler: clang
+            cxx: clang++
+            linker-pkg: lld
+            cmake-linker-flag: "-DLLVM_ENABLE_LLD=On"
+        include:
+          - compiler: gcc
+            cxx: g++
 
     steps:
     - name: add dependencies #llvm
-      run: sudo apt-get install -y binutils-gold binutils binutils-dev ${{ matrix.compiler.name }} ${{ matrix.compiler.linker-pkg }}
+      run: sudo apt-get install -y binutils-gold binutils binutils-dev ${{ matrix.compiler }} ${{ matrix.linker-pkg }}
       #  run: sudo apt-get install -y llvm-${{ matrix.llvm }}-dev llvm-${{ matrix.llvm }}-tools
     - uses: actions/checkout@v1
       with:
@@ -60,7 +54,7 @@ jobs:
     - name: cmake
       run: |
         cd build
-        cmake .. -DCMAKE_BUILD_TYPE=${{ matrix.build }} -DCMAKE_C_COMPILER=${{ matrix.compiler.c-compiler }} -DCMAKE_CXX_COMPILER=${{ matrix.compiler.cxx-compiler }} ${{ matrix.compiler.cmake-linker }} -DLLVM_TARGETS_TO_BUILD="host;NVPTX" -DLLVM_BUILD_TESTS=ON -DLLVM_ENABLE_ASSERTIONS=ON -DLLVM_ENABLE_LTO=OFF -DLLVM_PARALLEL_COMPILE_JOBS=2 -DLLVM_PARALLEL_LINK_JOBS=2 -DLLVM_BINUTILS_INCDIR=/usr/include -DLLVM_LIT_ARGS="-sv -j 2"
+        cmake .. -DCMAKE_BUILD_TYPE=${{ matrix.build }} -DCMAKE_C_COMPILER=${{ matrix.compiler }} -DCMAKE_CXX_COMPILER=${{ matrix.cxx }} ${{ matrix.cmake-linker-flag }} -DLLVM_TARGETS_TO_BUILD="host;NVPTX" -DLLVM_BUILD_TESTS=ON -DLLVM_ENABLE_ASSERTIONS=ON -DLLVM_ENABLE_LTO=OFF -DLLVM_PARALLEL_COMPILE_JOBS=2 -DLLVM_PARALLEL_LINK_JOBS=2 -DLLVM_BINUTILS_INCDIR=/usr/include -DLLVM_LIT_ARGS="-sv -j 2"
     - name: make
       run: cd build && make -j2
     - name: make check-all
@@ -72,6 +66,6 @@ jobs:
         git checkout tags/v0.1.2
         mkdir build
         cd build
-        cmake -DCMAKE_C_COMPILER=$HOME/project/build/bin/clang -DCMAKE_CXX_COMPILER=$HOME/project/build/bin/clang++ ..
+        cmake -DCMAKE_C_COMPILER=$HOME/build/bin/clang -DCMAKE_CXX_COMPILER=$HOME/build/bin/clang++ ..
         make -j2
 
