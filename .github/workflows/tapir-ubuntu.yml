@@ -21,7 +21,6 @@ jobs:
             cxx: clang++
             linker-pkg: lld
             cmake-linker-flag: "-DLLVM_ENABLE_LLD=On"
-        include:
           - compiler: gcc
             cxx: g++
 
