@@ -4,14 +4,14 @@ on: [push]
 
 jobs:
   build:
-    name: Test on os ${{ matrix.os }} mode ${{ matrix.build }}
+    name: Build-test_${{ matrix.build }}_${{ matrix.os }}
     runs-on: ${{ matrix.os }}
 
     strategy:
       fail-fast: false
       matrix:
         build: ["Release"] #, "Debug"] # "RelWithDebInfo"
-        os: [ubuntu-18.04]
+        os: [ubuntu-16.04, ubuntu-18.04]
 
     steps:
     - name: add dependencies #llvm
@@ -35,7 +35,7 @@ jobs:
         fetch-depth: 1
         ref: xla_8
         clean: false
-        path: projects/compiler-rt
+        path: runtimes/compiler-rt
 
     - name: mkdir
       run: mkdir build
@@ -47,3 +47,13 @@ jobs:
       run: cd build && make -j2
     - name: make check-all
       run: cd build && make check-all -j2
+    - name: cilkrts-build-test
+      run: |
+        git clone https://github.com/CilkHub/cilkrts.git
+        cd cilkrts
+        git checkout tags/v0.1.2
+        mkdir build
+        cd build
+        cmake -DCMAKE_C_COMPILER=$HOME/project/build/bin/clang -DCMAKE_CXX_COMPILER=$HOME/project/build/bin/clang++ ..
+        make -j2
+
