@@ -31,6 +31,7 @@ jobs:
     - uses: actions/checkout@v1
       with:
         fetch-depth: 1
+        path: src
 
     - uses: actions/checkout@v1
       with:
@@ -38,7 +39,7 @@ jobs:
         fetch-depth: 1
         ref: xla_8
         clean: false
-        path: tools/clang
+        path: src/tools/clang
 
     - uses: actions/checkout@v1
       with:
@@ -46,7 +47,7 @@ jobs:
         fetch-depth: 1
         ref: xla_8
         clean: false
-        path: runtimes/compiler-rt
+        path: src/runtimes/compiler-rt
 
     - name: mkdir
       run: mkdir build
@@ -67,7 +68,7 @@ jobs:
         cd cilkrts
         git checkout tags/v0.1.2
         cd build
-        cmake -DCMAKE_C_COMPILER=$PWD/../../build/bin/clang-8 -DCMAKE_CXX_COMPILER=$PWD/../../build/bin/clang-8 .. || cat $PWD/CMakeFiles/CMakeError.log $PWD/CMakeFiles/CMakeOutput.log
+        cmake -DCMAKE_C_COMPILER=$PWD/../../build/bin/clang -DCMAKE_CXX_COMPILER=$PWD/../../build/bin/clang++ .. || cat $PWD/CMakeFiles/CMakeError.log $PWD/CMakeFiles/CMakeOutput.log
         make -j2
 
     - name: make check-all
