@@ -58,14 +58,20 @@ jobs:
       run: cd build && make -j2
     - name: make check-all
       run: cd build && make check-all -j2
+
+    - uses: actions/checkout@v1
+      with:
+        repository: CilkHub/cilkrts.git
+        fetch-depth: 1
+        ref: tags/v0.1.2
+        clean: false
+        path: cilkrts
     - name: cilkrts-build-test
       run: |
-        cd build
-        git clone https://github.com/CilkHub/cilkrts.git
-        cd cilkrts
-        git checkout tags/v0.1.2
-        mkdir build
-        cd build
-        cmake -DCMAKE_C_COMPILER=$PWD/../../bin/clang-8 -DCMAKE_CXX_COMPILER=$PWD/../../bin/clang-8 ..
+        mkdir -p cilkrts/build
+        cd cilkrts/build
+        cmake -DCMAKE_C_COMPILER=$PWD/../../build/bin/clang-8 -DCMAKE_CXX_COMPILER=$PWD/../../build/bin/clang-8 ..
+        cat $PWD/CMakeFiles/CMakeError.log
+        cat $PWD/CMakeFiles/CMakeOutput.log
         make -j2
 
