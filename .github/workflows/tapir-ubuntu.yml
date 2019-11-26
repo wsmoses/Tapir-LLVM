@@ -56,8 +56,6 @@ jobs:
         cmake .. -DCMAKE_BUILD_TYPE=${{ matrix.build }} -DCMAKE_C_COMPILER=${{ matrix.compiler }} -DCMAKE_CXX_COMPILER=${{ matrix.cxx }} ${{ matrix.cmake-linker-flag }} -DLLVM_TARGETS_TO_BUILD="host;NVPTX" -DLLVM_BUILD_TESTS=ON -DLLVM_ENABLE_ASSERTIONS=ON -DLLVM_ENABLE_LTO=OFF -DLLVM_PARALLEL_COMPILE_JOBS=2 -DLLVM_PARALLEL_LINK_JOBS=2 -DLLVM_BINUTILS_INCDIR=/usr/include -DLLVM_LIT_ARGS="-sv -j 2"
     - name: make
       run: cd build && make -j2
-    - name: make check-all
-      run: cd build && make check-all -j2
 
     - name: cilkrts-build-test
       run: |
@@ -66,8 +64,9 @@ jobs:
         cd cilkrts
         git checkout tags/v0.1.2
         cd build
-        cmake -DCMAKE_C_COMPILER=$PWD/../../build/bin/clang-8 -DCMAKE_CXX_COMPILER=$PWD/../../build/bin/clang-8 ..
-        cat $PWD/CMakeFiles/CMakeError.log
-        cat $PWD/CMakeFiles/CMakeOutput.log
+        cmake -DCMAKE_C_COMPILER=$PWD/../../build/bin/clang-8 -DCMAKE_CXX_COMPILER=$PWD/../../build/bin/clang-8 .. || cat $PWD/CMakeFiles/CMakeError.log $PWD/CMakeFiles/CMakeOutput.log
         make -j2
+
+    - name: make check-all
+      run: cd build && make check-all -j2
 
