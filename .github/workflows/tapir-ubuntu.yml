@@ -60,11 +60,12 @@ jobs:
       run: cd build && make check-all -j2
     - name: cilkrts-build-test
       run: |
+        cd build
         git clone https://github.com/CilkHub/cilkrts.git
         cd cilkrts
         git checkout tags/v0.1.2
         mkdir build
         cd build
-        cmake -DCMAKE_C_COMPILER=$PWD/../../build/bin/clang -DCMAKE_CXX_COMPILER=$PWD/../../build/bin/clang++ ..
+        cmake -DCMAKE_C_COMPILER=$PWD/../../bin/clang -DCMAKE_CXX_COMPILER=$PWD/../../bin/clang++ ..
         make -j2
 
