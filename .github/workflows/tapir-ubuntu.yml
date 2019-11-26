@@ -59,6 +59,9 @@ jobs:
 
     - name: cilkrts-build-test
       run: |
+        ls
+        ls build
+        ls build/bin
         git clone https://github.com/CilkHub/cilkrts.git
         mkdir -p cilkrts/build
         cd cilkrts
