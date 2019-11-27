@@ -25,9 +25,8 @@ jobs:
             cxx: g++
 
     steps:
-    - name: add dependencies #llvm
+    - name: add dependencies
       run: sudo apt-get install -y binutils-gold binutils binutils-dev ${{ matrix.compiler }} ${{ matrix.linker-pkg }}
-      #  run: sudo apt-get install -y llvm-${{ matrix.llvm }}-dev llvm-${{ matrix.llvm }}-tools
     - uses: actions/checkout@v1
       with:
         fetch-depth: 1
@@ -60,15 +59,12 @@ jobs:
 
     - name: cilkrts-build-test
       run: |
-        ls
-        ls build
-        ls build/bin
         git clone https://github.com/CilkHub/cilkrts.git
         mkdir -p cilkrts/build
         cd cilkrts
         git checkout tags/v0.1.2
         cd build
-        cmake -DCMAKE_C_COMPILER=$PWD/../../build/bin/clang -DCMAKE_CXX_COMPILER=$PWD/../../build/bin/clang++ .. || cat $PWD/CMakeFiles/CMakeError.log $PWD/CMakeFiles/CMakeOutput.log
+        cmake -DCMAKE_C_COMPILER=$PWD/../../build/bin/clang -DCMAKE_CXX_COMPILER=$PWD/../../build/bin/clang++ ..
         make -j2
 
     - name: make check-all
