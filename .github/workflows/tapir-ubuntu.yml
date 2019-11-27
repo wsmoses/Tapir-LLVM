@@ -47,7 +47,7 @@ jobs:
         fetch-depth: 1
         ref: xla_8
         clean: false
-        path: src/runtimes/compiler-rt
+        path: src/projects/compiler-rt
 
     - name: mkdir
       run: mkdir build
