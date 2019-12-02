@@ -1997,6 +1997,7 @@ Value *CilkSanitizerImpl::Instrumentor::getSuppressionValue(
       IRB, static_cast<unsigned>(SuppressionVal::NoAlias));
   // Check the recorded race data for I.
   for (const RaceInfo::RaceData &RD : RI.getRaceData(I)) {
+    // Skip race data for different operands of the same instruction.
     if (OperandNum != RD.OperandNum)
       continue;
 
@@ -2084,6 +2085,7 @@ Value *CilkSanitizerImpl::Instrumentor::getSuppressionCheck(
   Value *SuppressionChk = IRB.getTrue();
   // Check the recorded race data for I.
   for (const RaceInfo::RaceData &RD : RI.getRaceData(I)) {
+    // Skip race data for different operands of the same instruction.
     if (OperandNum != RD.OperandNum)
       continue;
 
@@ -2273,7 +2275,14 @@ static bool CheckSanitizeCilkAttr(Function &F) {
 bool CilkSanitizerImpl::instrumentFunctionUsingRI(Function &F) {
   if (F.empty() || shouldNotInstrumentFunction(F) ||
       !CheckSanitizeCilkAttr(F)) {
-    LLVM_DEBUG(dbgs() << "Skipping " << F.getName() << "\n");
+    LLVM_DEBUG({
+        dbgs() << "Skipping " << F.getName() << "\n";
+        if (F.empty())
+          dbgs() << "  Empty function\n";
+        else if (shouldNotInstrumentFunction(F))
+          dbgs() << "  Function should not be instrumented\n";
+        else if (!CheckSanitizeCilkAttr(F))
+          dbgs() << "  Function lacks sanitize_cilk attribute\n";});
     return false;
   }
 
