@@ -50,5 +50,5 @@ jobs:
           cmake .. -DCMAKE_BUILD_TYPE=${{ matrix.build }} -DLLVM_TARGETS_TO_BUILD="host;NVPTX" -DLLVM_BUILD_TESTS=ON -DLLVM_ENABLE_ASSERTIONS=ON -DLLVM_ENABLE_LTO=OFF -DLLVM_PARALLEL_COMPILE_JOBS=2 -DLLVM_PARALLEL_LINK_JOBS=1 -DLLVM_LIT_ARGS="-sv -j 1"
     - name: make
       run: cd build && make -j2
-    - name: make check-all
-      run: cd build && make check-all -j2
+      #    - name: make check-all
+      #run: cd build && make check-all -j2

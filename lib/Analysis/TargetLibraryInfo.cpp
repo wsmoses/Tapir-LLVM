@@ -40,6 +40,8 @@ static cl::opt<TapirTargetID> ClTapirTarget(
                           "openmp", "OpenMP"),
                clEnumValN(TapirTargetID::CilkR,
                           "cilkr", "CilkR"),
+               clEnumValN(TapirTargetID::GPU,
+                          "gpu", "GPU Backend"),
                clEnumValN(TapirTargetID::Cheetah,
                           "cheetah", "Cheetah")));
 

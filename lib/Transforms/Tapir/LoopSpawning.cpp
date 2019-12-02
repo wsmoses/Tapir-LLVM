@@ -1612,6 +1612,12 @@ bool LoopSpawningImpl::processLoop(Loop *L) {
       }
     }
     break;
+  case TapirLoopHints::ST_GPU:
+    LLVM_DEBUG(dbgs() << "LS: Hints dictate GPU spawning.\n");
+    {
+
+    }
+    break;
   case TapirLoopHints::ST_END:
     dbgs() << "LS: Hints specify unknown spawning strategy.\n";
     break;
