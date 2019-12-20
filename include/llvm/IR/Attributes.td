@@ -179,7 +179,9 @@ def SanitizeHWAddress : EnumAttr<"sanitize_hwaddress">;
 /// CilkSanitizer is on.
 def SanitizeCilk : EnumAttr<"sanitize_cilk">;
 
-/// CilkSanitizer is on.
+/// From the Cilk perspective, a continuation in the function can be
+/// stolen.  This attribute is used ensure correct code generation for
+/// such functions.
 def Stealable : EnumAttr<"stealable">;
 
 /// Argument is swift error.

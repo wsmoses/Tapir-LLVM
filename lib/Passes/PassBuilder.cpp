@@ -957,8 +957,7 @@ PassBuilder::buildTapirLoweringPipeline(OptimizationLevel Level,
 
 ModulePassManager
 PassBuilder::buildPerModuleDefaultPipeline(OptimizationLevel Level,
-                                           bool DebugLogging,
-                                           bool LowerTapir) {
+                                           bool DebugLogging, bool LowerTapir) {
   assert(Level != O0 && "Must request optimizations for the default pipeline!");
 
   ModulePassManager MPM(DebugLogging);
