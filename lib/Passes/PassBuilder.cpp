@@ -94,9 +94,9 @@
 #include "llvm/Transforms/Instrumentation.h"
 #include "llvm/Transforms/Instrumentation/BoundsChecking.h"
 #include "llvm/Transforms/Instrumentation/CGProfile.h"
-#include "llvm/Transforms/Instrumentation/ControlHeightReduction.h"
 #include "llvm/Transforms/Instrumentation/CilkSanitizer.h"
 #include "llvm/Transforms/Instrumentation/ComprehensiveStaticInstrumentation.h"
+#include "llvm/Transforms/Instrumentation/ControlHeightReduction.h"
 #include "llvm/Transforms/Instrumentation/GCOVProfiler.h"
 #include "llvm/Transforms/Instrumentation/InstrProfiling.h"
 #include "llvm/Transforms/Instrumentation/MemorySanitizer.h"
@@ -991,8 +991,7 @@ PassBuilder::buildTapirLoweringPipeline(OptimizationLevel Level,
 
 ModulePassManager
 PassBuilder::buildPerModuleDefaultPipeline(OptimizationLevel Level,
-                                           bool DebugLogging,
-                                           bool LowerTapir) {
+                                           bool DebugLogging, bool LowerTapir) {
   assert(Level != O0 && "Must request optimizations for the default pipeline!");
 
   ModulePassManager MPM(DebugLogging);

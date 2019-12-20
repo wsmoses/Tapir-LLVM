@@ -134,9 +134,9 @@ bool hoistRegion(DomTreeNode *, AliasAnalysis *, LoopInfo *, DominatorTree *,
 ///   - The loop needs to have a Preheader
 ///   - A unique dedicated exit block must exist
 ///
-/// This also updates the relevant analysis information in \p DT, \p SE, \p
-/// LI, and \p TI if pointers to those are provided.
-/// It also updates the loop PM if an updater struct is provided.
+/// This also updates the relevant analysis information in \p DT, \p SE, \p LI,
+/// and \p TI if pointers to those are provided.  It also updates the loop PM if
+/// an updater struct is provided.
 
 void deleteDeadLoop(Loop *L, DominatorTree *DT, ScalarEvolution *SE,
                     LoopInfo *LI, TaskInfo *TI);
@@ -278,8 +278,7 @@ void getLoopAnalysisUsage(AnalysisUsage &AU);
 bool canSinkOrHoistInst(Instruction &I, AAResults *AA, DominatorTree *DT,
                         Loop *CurLoop, AliasSetTracker *CurAST,
                         MemorySSAUpdater *MSSAU, bool TargetExecutesOncePerLoop,
-                        TaskInfo *TI,
-                        OptimizationRemarkEmitter *ORE = nullptr);
+                        TaskInfo *TI, OptimizationRemarkEmitter *ORE = nullptr);
 
 /// Returns a Min/Max operation corresponding to MinMaxRecurrenceKind.
 Value *createMinMaxOp(IRBuilder<> &Builder,

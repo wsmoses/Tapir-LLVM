@@ -1251,7 +1251,7 @@ PreservedAnalyses LoopFullUnrollPass::run(Loop &L, LoopAnalysisManager &AM,
   std::string LoopName = L.getName();
 
   bool Changed =
-    tryToUnrollLoop(&L, AR.DT, &AR.LI, AR.SE, AR.TTI, AR.AC, &AR.TI, *ORE,
+      tryToUnrollLoop(&L, AR.DT, &AR.LI, AR.SE, AR.TTI, AR.AC, &AR.TI, *ORE,
                       /*PreserveLCSSA*/ true, OptLevel, OnlyWhenForced,
                       /*Count*/ None,
                       /*Threshold*/ None, /*AllowPartial*/ false,
