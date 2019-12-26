@@ -371,8 +371,11 @@ void CilkABI::addHelperAttributes(Function &Helper) {
   Helper.addFnAttr(Attribute::NoInline);
   // If the helper uses an argument structure, then it is not a write-only
   // function.
-  if (getArgStructMode() != ArgStructMode::None)
+  if (getArgStructMode() != ArgStructMode::None) {
     Helper.removeFnAttr(Attribute::WriteOnly);
+    Helper.removeFnAttr(Attribute::ArgMemOnly);
+    Helper.removeFnAttr(Attribute::InaccessibleMemOrArgMemOnly);
+  }
   // Note that the address of the helper is unimportant.
   Helper.setUnnamedAddr(GlobalValue::UnnamedAddr::Global);
   // The helper is private to this module.
@@ -1598,7 +1601,7 @@ void CilkABI::processSubTaskCall(TaskOutlineInfo &TOI, DominatorTree &DT) {
   SmallVector<Value *, 8> SHInputVec;
   for (Value *V : SHInputs)
     SHInputVec.push_back(V);
-  BasicBlock *NewCallBlock = SplitEdge(DetBlock, CallBlock);
+  SplitEdge(DetBlock, CallBlock);
   B.SetInsertPoint(CallBlock->getTerminator());
   if (isa<InvokeInst>(ReplCall)) {
     InvokeInst *SpawnHelperCall = InvokeInst::Create(SpawnHelper, CallCont,
@@ -1712,8 +1715,11 @@ void RuntimeCilkFor::postProcessOutline(TapirLoopInfo &TL, TaskOutlineInfo &Out,
   Function *Helper = Out.Outline;
   // If the helper uses an argument structure, then it is not a write-only
   // function.
-  if (getArgStructMode() != ArgStructMode::None)
+  if (getArgStructMode() != ArgStructMode::None) {
     Helper->removeFnAttr(Attribute::WriteOnly);
+    Helper->removeFnAttr(Attribute::ArgMemOnly);
+    Helper->removeFnAttr(Attribute::InaccessibleMemOrArgMemOnly);
+  }
 }
 
 void RuntimeCilkFor::processOutlinedLoopCall(TapirLoopInfo &TL,
@@ -1868,7 +1874,7 @@ void RuntimeCilkFor::processOutlinedLoopCall(TapirLoopInfo &TL,
   SmallVector<Value *, 8> SHInputVec;
   for (Value *V : SHInputs)
     SHInputVec.push_back(V);
-  BasicBlock *NewCallBlock = SplitEdge(DetBlock, CallBlock);
+  SplitEdge(DetBlock, CallBlock);
   B.SetInsertPoint(CallBlock->getTerminator());
   if (isa<InvokeInst>(ReplCall)) {
     InvokeInst *SpawnHelperCall = InvokeInst::Create(SpawnHelper, CallCont,
