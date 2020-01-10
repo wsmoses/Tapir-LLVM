@@ -16,10 +16,10 @@
 
 #include "llvm/Transforms/Tapir/LoopSpawning.h"
 #include "llvm/Transforms/Tapir/LoweringUtils.h"
-#include "llvm/Transforms/Tapir/TapirLoopInfo.h"
 
 namespace llvm {
 class Value;
+class TapirLoopInfo;
 
 /// CilkABILoopSpawning uses the Cilk Plus ABI to handle Tapir loops.
 class CilkABILoopSpawning : public LoopOutline {
@@ -67,34 +67,6 @@ public:
   struct __cilkrts_pedigree {};
   struct __cilkrts_stack_frame {};
   struct __cilkrts_worker {};
-};
-
-/// The RuntimeCilkFor loop-outline processor transforms an outlined Tapir loop
-/// to be processed using a call to a runtime method __cilkrts_cilk_for_32 or
-/// __cilkrts_cilk_for_64.
-class RuntimeCilkFor : public LoopOutlineProcessor {
-  Type *GrainsizeType = nullptr;
-public:
-  RuntimeCilkFor(Module &M) : LoopOutlineProcessor(M) {
-    GrainsizeType = Type::getInt32Ty(M.getContext());
-  }
-
-  ArgStructMode getArgStructMode() const override final {
-    // return ArgStructMode::Dynamic;
-    return ArgStructMode::Static;
-  }
-  void setupLoopOutlineArgs(
-      Function &F, ValueSet &HelperArgs, SmallVectorImpl<Value *> &HelperInputs,
-      ValueSet &InputSet, const SmallVectorImpl<Value *> &LCArgs,
-      const SmallVectorImpl<Value *> &LCInputs,
-      const ValueSet &TLInputsFixed)
-    override final;
-  unsigned getIVArgIndex(const Function &F, const ValueSet &Args) const
-    override final;
-  void postProcessOutline(TapirLoopInfo &TL, TaskOutlineInfo &Out,
-                          ValueToValueMapTy &VMap) override final;
-  void processOutlinedLoopCall(TapirLoopInfo &TL, TaskOutlineInfo &TOI,
-                               DominatorTree &DT) override final;
 };
 }  // end of llvm namespace
 

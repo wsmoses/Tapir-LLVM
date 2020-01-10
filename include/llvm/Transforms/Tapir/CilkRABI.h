@@ -18,6 +18,7 @@
 
 namespace llvm {
 class Value;
+class TapirLoopInfo;
 
 class CilkRABI : public TapirTarget {
   ValueToValueMapTy DetachCtxToStackFrame;
@@ -26,6 +27,11 @@ public:
   ~CilkRABI() { DetachCtxToStackFrame.clear(); }
   Value *lowerGrainsizeCall(CallInst *GrainsizeCall) override final;
   void lowerSync(SyncInst &inst) override final;
+
+  ArgStructMode getArgStructMode() const override final {
+    return ArgStructMode::None;
+  }
+  void addHelperAttributes(Function &F) override final;
 
   void preProcessFunction(Function &F, TaskInfo &TI) override final;
   void postProcessFunction(Function &F) override final;
@@ -36,11 +42,13 @@ public:
   void processSubTaskCall(TaskOutlineInfo &TOI, DominatorTree &DT)
     override final;
 
+  LoopOutlineProcessor *getLoopOutlineProcessor(const TapirLoopInfo *TL) const
+    override final;
+
   // struct __cilkrts_pedigree {};
   struct __cilkrts_stack_frame {};
   struct __cilkrts_worker {};
 };
-
 }  // end of llvm namespace
 
 #endif
