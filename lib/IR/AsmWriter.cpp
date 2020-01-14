@@ -3870,6 +3870,9 @@ void AssemblyWriter::printInstruction(const Instruction &I) {
       Out << "inalloca ";
     if (AI->isSwiftError())
       Out << "swifterror ";
+    if (AI->isReducer()) {
+      Out << "reducer ";
+    }
     TypePrinter.print(AI->getAllocatedType(), Out);
 
     // Explicitly write the array size if the code is broken, if it's an array

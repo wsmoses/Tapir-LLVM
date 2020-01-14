@@ -1256,7 +1256,7 @@ AllocaInst::AllocaInst(Type *Ty, unsigned AddrSpace, Value *ArraySize,
                        Instruction *InsertBefore)
   : UnaryInstruction(PointerType::get(Ty, AddrSpace), Alloca,
                      getAISize(Ty->getContext(), ArraySize), InsertBefore),
-    AllocatedType(Ty) {
+    AllocatedType(Ty), reducer(false) {
   setAlignment(Align);
   assert(!Ty->isVoidTy() && "Cannot allocate void!");
   setName(Name);
@@ -4007,6 +4007,7 @@ AllocaInst *AllocaInst::cloneImpl() const {
                                       (Value *)getOperand(0), getAlignment());
   Result->setUsedWithInAlloca(isUsedWithInAlloca());
   Result->setSwiftError(isSwiftError());
+  Result->setReducer(isReducer());
   return Result;
 }
 

@@ -427,6 +427,8 @@ enum Kind {
   kw_bit,
   kw_varFlags,
 
+  kw_reducer,
+
   // Unsigned Valued tokens (UIntVal).
   GlobalID,   // @42
   LocalVarID, // %42

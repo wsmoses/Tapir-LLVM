@@ -6712,6 +6712,7 @@ int LLParser::ParseAlloc(Instruction *&Inst, PerFunctionState &PFS) {
 
   bool IsInAlloca = EatIfPresent(lltok::kw_inalloca);
   bool IsSwiftError = EatIfPresent(lltok::kw_swifterror);
+  bool IsReducer = EatIfPresent(lltok::kw_reducer);
 
   if (ParseType(Ty, TyLoc)) return true;
 
@@ -6757,6 +6758,7 @@ int LLParser::ParseAlloc(Instruction *&Inst, PerFunctionState &PFS) {
   AllocaInst *AI = new AllocaInst(Ty, AddrSpace, Size, Alignment);
   AI->setUsedWithInAlloca(IsInAlloca);
   AI->setSwiftError(IsSwiftError);
+  AI->setReducer(IsReducer);
   Inst = AI;
   return AteExtraComma ? InstExtraComma : InstNormal;
 }

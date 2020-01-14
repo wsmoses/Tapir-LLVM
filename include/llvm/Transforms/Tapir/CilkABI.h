@@ -111,6 +111,15 @@ class CilkABI : public TapirTarget {
   Function *Get__cilkrts_get_tls_worker();
   Function *Get__cilkrts_get_tls_worker_fast();
   Function *Get__cilkrts_bind_thread_1();
+  
+  StructType *MonoidTy = nullptr;
+  StructType *HyperBaseTy = nullptr;
+  Function *CilkRTSHyperLookup = nullptr;
+  Function *CilkRTSHyperCreate = nullptr;
+  Function *CilkRTSHyperDestroy = nullptr;
+  Function *Get__cilkrts_hyper_lookup();
+  Function *Get__cilkrts_hyper_create();
+  Function *Get__cilkrts_hyper_destroy();
 
   // Helper functions for implementing the Cilk ABI protocol
   Function *GetCilkSyncFn(bool instrument = false);

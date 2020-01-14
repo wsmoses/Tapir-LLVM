@@ -59,6 +59,7 @@ class LLVMContext;
 /// an instruction to allocate memory on the stack
 class AllocaInst : public UnaryInstruction {
   Type *AllocatedType;
+  bool reducer;
 
 protected:
   // Note: Instruction needs to be a friend here to call cloneImpl.
@@ -87,6 +88,9 @@ public:
   /// Return true if there is an allocation size parameter to the allocation
   /// instruction that is not 1.
   bool isArrayAllocation() const;
+
+  bool isReducer() const { return reducer; }
+  void setReducer(bool b) { reducer = b; } 
 
   /// Get the number of elements allocated. For a simple allocation of a single
   /// element, this will return a constant 1 value.

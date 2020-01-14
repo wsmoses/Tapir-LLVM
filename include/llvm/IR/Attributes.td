@@ -190,6 +190,9 @@ def SanitizeCilk : EnumAttr<"sanitize_cilk">;
 /// CilkSanitizer is on.
 def Stealable : EnumAttr<"stealable">;
 
+/// Reducer
+def Reducer : EnumAttr<"reducer">;
+
 /// Argument is swift error.
 def SwiftError : EnumAttr<"swifterror">;
 
