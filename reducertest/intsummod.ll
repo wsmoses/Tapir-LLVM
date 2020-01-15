@@ -3,15 +3,11 @@ source_filename = "intsum.c"
 target datalayout = "e-m:e-i64:64-f80:128-n8:16:32:64-S128"
 target triple = "x86_64-unknown-linux-gnu"
 
-%struct.anon = type { %struct.__cilkrts_hyperobject_base, i32, [60 x i8] }
-%struct.__cilkrts_hyperobject_base = type { %struct.cilk_c_monoid, i64, i64, i64 }
-%struct.cilk_c_monoid = type { void (i8*, i8*, i8*)*, void (i8*, i8*)*, void (i8*, i8*)*, i8* (i8*, i64)*, void (i8*, i8*)* }
 %struct._IO_FILE = type { i32, i8*, i8*, i8*, i8*, i8*, i8*, i8*, i8*, i8*, i8*, i8*, %struct._IO_marker*, %struct._IO_FILE*, i32, i32, i64, i16, i8, [1 x i8], i8*, i64, i8*, i8*, i8*, i8*, i64, i32, [20 x i8] }
 %struct._IO_marker = type { %struct._IO_marker*, %struct._IO_FILE*, i32 }
 %struct.timespec = type { i64, i64 }
 
 @.str = private unnamed_addr constant [18 x i8] c"ktiming_getmark()\00", align 1
-@__const.compute_sum.my_int_sum_reducer = private unnamed_addr constant %struct.anon { %struct.__cilkrts_hyperobject_base { %struct.cilk_c_monoid { void (i8*, i8*, i8*)* @reduce_intsum, void (i8*, i8*)* @identity_intsum, void (i8*, i8*)* @__cilkrts_hyperobject_noop_destroy, i8* (i8*, i64)* @__cilkrts_hyperobject_alloc, void (i8*, i8*)* @__cilkrts_hyperobject_dealloc }, i64 0, i64 64, i64 4 }, i32 0, [60 x i8] undef }, align 64
 @stderr = external dso_local local_unnamed_addr global %struct._IO_FILE*, align 8
 @.str.1 = private unnamed_addr constant [39 x i8] c"Usage: ilist_dac [<cilk-options>] <n>\0A\00", align 1
 @.str.2 = private unnamed_addr constant [26 x i8] c"Result: %d/%d successes!\0A\00", align 1

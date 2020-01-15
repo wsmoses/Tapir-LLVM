@@ -410,6 +410,23 @@ Function *llvm::CreateHelper(
     ResumeInst::Create(LPad, NewUnwind);
   }
 
+  for(Value* I : Inputs) {
+    if (VMap.count(I) != 0) {
+      if (auto arg = dyn_cast<Argument>(VMap[I])) {
+        if (auto ai = dyn_cast<AllocaInst>(I)) {
+            if (ai->isReducer()) {
+              arg->addAttr(Attribute::Reducer);
+            }
+        } else if (auto sarg = dyn_cast<Argument>(I)) {
+          if (sarg->getParent() && sarg->hasAttribute(Attribute::Reducer)) {
+            arg->addAttr(Attribute::Reducer);     
+          }
+        }
+
+      }
+    }
+  }
+
   return NewFunc;
 }
 

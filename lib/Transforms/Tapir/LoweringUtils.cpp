@@ -474,16 +474,14 @@ Instruction *llvm::replaceDetachWithCallToOutline(Task *T,
 
   DetachInst *DI = T->getDetach();
 
+  CallBase* TopCall;
+
   // Add call to new helper function in original function.
   if (!Out.ReplUnwind) {
     // Common case.  Insert a call to the outline immediately before the detach.
-    CallInst *TopCall;
     // Create call instruction.
     IRBuilder<> Builder(Out.ReplCall);
     TopCall = Builder.CreateCall(Out.Outline, Out.OutlineInputs);
-    // Use a fast calling convention for the outline.
-    TopCall->setCallingConv(CallingConv::Fast);
-    TopCall->setDebugLoc(DI->getDebugLoc());
     TopCall->setDoesNotThrow();
     // Replace the detach with an unconditional branch to its continuation.
     ReplaceInstWithInst(DI, BranchInst::Create(Out.ReplRet));
@@ -496,13 +494,26 @@ Instruction *llvm::replaceDetachWithCallToOutline(Task *T,
     // detach's continuation, and the unwind return is the detach's unwind.
     TopCall = InvokeInst::Create(Out.Outline, Out.ReplRet, Out.ReplUnwind,
                                  Out.OutlineInputs);
-    // Use a fast calling convention for the outline.
-    TopCall->setCallingConv(CallingConv::Fast);
-    TopCall->setDebugLoc(DI->getDebugLoc());
     // Replace the detach with the invoke.
     ReplaceInstWithInst(Out.ReplCall, TopCall);
-    return TopCall;
   }
+  // Use a fast calling convention for the outline.
+  TopCall->setCallingConv(CallingConv::Fast);
+  TopCall->setDebugLoc(DI->getDebugLoc());
+
+  for(unsigned i=0; i<Out.OutlineInputs.size(); i++) {
+    if (auto ai = dyn_cast<AllocaInst>(Out.OutlineInputs[i])) {
+        if (ai->isReducer()) {
+            TopCall->addParamAttr(i, Attribute::Reducer);
+        }
+    } else if (auto arg = dyn_cast<Argument>(Out.OutlineInputs[i])) {
+      if (arg->hasAttribute(Attribute::Reducer)) {
+        TopCall->addParamAttr(i, Attribute::Reducer);        
+      }
+    }
+  }
+
+  return TopCall;
 }
 
 /// Outlines a task \p T into a helper function that accepts the inputs \p
@@ -613,33 +624,28 @@ Instruction *llvm::replaceLoopWithCallToOutline(TapirLoopInfo *TL,
     });
 
   Loop *L = TL->getLoop();
+
+  CallBase* TopCall;
+
   // Add call to new helper function in original function.
   if (!Out.ReplUnwind) {
     // Common case.  Insert a call to the outline immediately before the detach.
-    CallInst *TopCall;
     // Create call instruction.
     IRBuilder<> Builder(Out.ReplCall);
     TopCall = Builder.CreateCall(Out.Outline, Out.OutlineInputs);
     // Use a fast calling convention for the outline.
-    TopCall->setCallingConv(CallingConv::Fast);
-    TopCall->setDebugLoc(TL->getDebugLoc());
     TopCall->setDoesNotThrow();
     // Replace the loop with an unconditional branch to its exit.
     L->getHeader()->removePredecessor(Out.ReplCall->getParent());
     ReplaceInstWithInst(Out.ReplCall, BranchInst::Create(Out.ReplRet));
-    return TopCall;
   } else {
     // The detach might catch an exception from the task.  Replace the detach
     // with an invoke of the outline.
-    InvokeInst *TopCall;
 
     // Create invoke instruction.  The ordinary return of the invoke is the
     // detach's continuation, and the unwind return is the detach's unwind.
     TopCall = InvokeInst::Create(Out.Outline, Out.ReplRet, Out.ReplUnwind,
                                  Out.OutlineInputs);
-    // Use a fast calling convention for the outline.
-    TopCall->setCallingConv(CallingConv::Fast);
-    TopCall->setDebugLoc(TL->getDebugLoc());
     // Replace the loop with the invoke.
     L->getHeader()->removePredecessor(Out.ReplCall->getParent());
     ReplaceInstWithInst(Out.ReplCall, TopCall);
@@ -647,8 +653,25 @@ Instruction *llvm::replaceLoopWithCallToOutline(TapirLoopInfo *TL,
     for (PHINode &Phi : Out.ReplUnwind->phis())
       Phi.addIncoming(Phi.getIncomingValueForBlock(L->getHeader()),
                       TopCall->getParent());
-    return TopCall;
   }
+
+  // Use a fast calling convention for the outline.
+  TopCall->setCallingConv(CallingConv::Fast);
+  TopCall->setDebugLoc(TL->getDebugLoc());
+
+  for(unsigned i=0; i<Out.OutlineInputs.size(); i++) {
+    //TODO also consider reducer argument
+    if (auto ai = dyn_cast<AllocaInst>(Out.OutlineInputs[i])) {
+        if (ai->isReducer()) {
+            TopCall->addParamAttr(i, Attribute::Reducer);
+        }
+    } else if (auto arg = dyn_cast<Argument>(Out.OutlineInputs[i])) {
+      if (arg->hasAttribute(Attribute::Reducer)) {
+        TopCall->addParamAttr(i, Attribute::Reducer);        
+      }
+    }
+  }
+  return TopCall;
 }
 
 //----------------------------------------------------------------------------//

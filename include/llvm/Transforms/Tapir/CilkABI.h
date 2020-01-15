@@ -120,6 +120,15 @@ class CilkABI : public TapirTarget {
   Function *Get__cilkrts_hyper_lookup();
   Function *Get__cilkrts_hyper_create();
   Function *Get__cilkrts_hyper_destroy();
+  
+  Function *CilkRTSHyperObjDestroy = nullptr;
+  Function *Get__cilkrts_hyperobject_noop_destroy();
+  
+  Function *CilkRTSHyperObjAlloc = nullptr;
+  Function *Get__cilkrts_hyperobject_alloc();
+  
+  Function *CilkRTSHyperObjDealloc = nullptr;
+  Function *Get__cilkrts_hyperobject_dealloc();
 
   // Helper functions for implementing the Cilk ABI protocol
   Function *GetCilkSyncFn(bool instrument = false);

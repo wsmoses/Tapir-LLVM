@@ -355,6 +355,8 @@ std::string Attribute::getAsString(bool InAttrGrp) const {
     return "zeroext";
   if (hasAttribute(Attribute::Cold))
     return "cold";
+  if (hasAttribute(Attribute::Reducer))
+    return "reducer";
 
   // FIXME: These should be output like this:
   //
