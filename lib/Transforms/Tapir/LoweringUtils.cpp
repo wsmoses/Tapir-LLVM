@@ -485,11 +485,9 @@ Instruction *llvm::replaceDetachWithCallToOutline(Task *T,
     TopCall->setDoesNotThrow();
     // Replace the detach with an unconditional branch to its continuation.
     ReplaceInstWithInst(DI, BranchInst::Create(Out.ReplRet));
-    return TopCall;
   } else {
     // The detach might catch an exception from the task.  Replace the detach
     // with an invoke of the outline.
-    InvokeInst *TopCall;
     // Create invoke instruction.  The ordinary return of the invoke is the
     // detach's continuation, and the unwind return is the detach's unwind.
     TopCall = InvokeInst::Create(Out.Outline, Out.ReplRet, Out.ReplUnwind,
@@ -633,6 +631,8 @@ Instruction *llvm::replaceLoopWithCallToOutline(TapirLoopInfo *TL,
     // Create call instruction.
     IRBuilder<> Builder(Out.ReplCall);
     TopCall = Builder.CreateCall(Out.Outline, Out.OutlineInputs);
+      TopCall->setCallingConv(CallingConv::Fast);
+      TopCall->setDebugLoc(TL->getDebugLoc());
     // Use a fast calling convention for the outline.
     TopCall->setDoesNotThrow();
     // Replace the loop with an unconditional branch to its exit.
@@ -646,6 +646,8 @@ Instruction *llvm::replaceLoopWithCallToOutline(TapirLoopInfo *TL,
     // detach's continuation, and the unwind return is the detach's unwind.
     TopCall = InvokeInst::Create(Out.Outline, Out.ReplRet, Out.ReplUnwind,
                                  Out.OutlineInputs);
+      TopCall->setCallingConv(CallingConv::Fast);
+      TopCall->setDebugLoc(TL->getDebugLoc());
     // Replace the loop with the invoke.
     L->getHeader()->removePredecessor(Out.ReplCall->getParent());
     ReplaceInstWithInst(Out.ReplCall, TopCall);
@@ -911,10 +913,18 @@ bool TapirTarget::shouldProcessFunction(const Function &F) {
   if (canDetach(&F))
     return true;
 
-  for (const Instruction &I : instructions(&F))
+  for(auto &arg : F.args()) {
+    if (arg.hasAttribute(Attribute::Reducer)) return true;
+  }
+
+  for (const Instruction &I : instructions(&F)) {
     if (const IntrinsicInst *II = dyn_cast<IntrinsicInst>(&I))
       if (Intrinsic::tapir_loop_grainsize == II->getIntrinsicID())
         return true;
+    if (const AllocaInst* AI = dyn_cast<AllocaInst>(&I)) {
+        if (AI->isReducer()) return true;
+    }
+  }
 
   return false;
 }

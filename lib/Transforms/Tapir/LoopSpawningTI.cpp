@@ -450,9 +450,9 @@ void DACSpawning::implementDACIterSpawnOnHelper(
         RecurCallInputs.push_back(&V);
     }
 
+    CallBase* RecurCall = nullptr;
     if (!UnwindDest) {
       // Common case.  Insert a call to the outline immediately before the detach.
-      CallInst *RecurCall;
       // Create call instruction.
       RecurCall = Builder.CreateCall(Helper, RecurCallInputs);
       // Use a fast calling convention for the outline.
@@ -460,7 +460,6 @@ void DACSpawning::implementDACIterSpawnOnHelper(
       RecurCall->setDebugLoc(TLDebugLoc);
       RecurCall->setDoesNotThrow();
     } else {
-      InvokeInst *RecurCall;
       BasicBlock *CallDest = SplitBlock(RecurDet, RecurDet->getTerminator());
       BasicBlock *CallUnwind =
         createTaskUnwind(Helper, UnwindDest, SyncRegion,
@@ -473,6 +472,19 @@ void DACSpawning::implementDACIterSpawnOnHelper(
       ReplaceInstWithInst(RecurDet->getTerminator(), RecurCall);
       RecurCallDest = CallDest;
     }
+
+	for(unsigned i=0; i<RecurCallInputs.size(); i++) {
+		if (auto ai = dyn_cast<AllocaInst>(RecurCallInputs[i])) {
+			if (ai->isReducer()) {
+				RecurCall->addParamAttr(i, Attribute::Reducer);
+			}
+		} else if (auto arg = dyn_cast<Argument>(RecurCallInputs[i])) {
+		  if (arg->hasAttribute(Attribute::Reducer)) {
+			RecurCall->addParamAttr(i, Attribute::Reducer);        
+		  }
+		}
+	}
+
   }
 
   // Set up continuation of detached recursive call to compute the next loop

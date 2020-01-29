@@ -1757,7 +1757,7 @@ void CilkABI::preProcessFunction(Function &F) {
         auto size = viewSize + F.getParent()->getDataLayout().getTypeSizeInBits(HyperBaseTy)/8;
         auto roundUp = ( (size + 63) / 64 ) * 64;
         Type* cache_buffer = ArrayType::get(Type::getInt8Ty(red->getContext()), roundUp - size); 
-        htTy->setBody(HyperBaseTy, Int64Ty, cache_buffer);
+        htTy->setBody(HyperBaseTy, red->getAllocatedType(), cache_buffer);
     }
 
     auto rtreducer = B.CreateAlloca(htTy);
@@ -1768,7 +1768,7 @@ void CilkABI::preProcessFunction(Function &F) {
 	Value* monoid = B.CreateInBoundsGEP(hyperbase, {ConstantInt::get(Int64Ty, 0), ConstantInt::get(Int32Ty, 0)});
     
 
-	auto getMeta = [&](std::string st, Constant* fn=nullptr) -> Constant* {
+	auto getMeta = [&](std::string st, Constant* fn=nullptr) -> Value* {
       auto md = red->getMetadata(st);
       if (!md || !isa<MDTuple>(md)) {
 		  if (fn) {
@@ -1785,12 +1785,27 @@ void CilkABI::preProcessFunction(Function &F) {
       auto md2 = cast<MDTuple>(md);
       assert(md2->getNumOperands() == 1);
 	  llvm::errs() << " md2: " << *md2 << "\n";
-      auto gvemd = cast<ConstantAsMetadata>(md2->getOperand(0));
+      if (md2->getOperand(0) == nullptr) {
+		  if (fn) {
+			llvm::errs() << "fn: " << *fn << "\n";
+			return fn;
+		  }
+          llvm::errs() << *red << "\n";
+		  if (md)
+          llvm::errs() << *md << "\n";
+          assert(0 && "cannot compute with global variable that doesn't have marked shadow global");
+          report_fatal_error("cannot compute with global variable that doesn't have marked shadow global (metadata incorrect type)");
+      }
+	  llvm::errs() << " md2-op: " << *md2->getOperand(0) << "\n";
+      auto gvemd = cast<ValueAsMetadata>(md2->getOperand(0));
       auto cs = gvemd->getValue();
 	  return cs;
  	};
 
-    B.CreateStore(getMeta("reduce"), B.CreateInBoundsGEP(monoid, {ConstantInt::get(Int64Ty, 0), ConstantInt::get(Int32Ty, 0)}));
+    llvm::errs() << " monoid: " << *monoid << "\n";
+    auto m00 = B.CreateInBoundsGEP(monoid, {ConstantInt::get(Int64Ty, 0), ConstantInt::get(Int32Ty, 0)});
+    llvm::errs() << "m00: " << *m00 << "\n";
+    B.CreateStore(getMeta("reduce"), m00);
     B.CreateStore(getMeta("identity"), B.CreateInBoundsGEP(monoid, {ConstantInt::get(Int64Ty, 0), ConstantInt::get(Int32Ty, 1)}));
     B.CreateStore(getMeta("destroy", CILKRTS_FUNC(hyperobject_noop_destroy)), B.CreateInBoundsGEP(monoid, {ConstantInt::get(Int64Ty, 0), ConstantInt::get(Int32Ty, 2)}));
     B.CreateStore(getMeta("alloc", CILKRTS_FUNC(hyperobject_alloc)), B.CreateInBoundsGEP(monoid, {ConstantInt::get(Int64Ty, 0), ConstantInt::get(Int32Ty, 3)}));
@@ -1823,15 +1838,18 @@ void CilkABI::preProcessFunction(Function &F) {
         
         llvm::Value* replacement = nullptr;
         if (auto cb = dyn_cast<CallBase>(user)) {
-          if (cb->paramHasAttr(pair.second - 1, Attribute::Reducer)) {
+          llvm::errs() << " + + callbase: " << *cb << " p.s: " << pair.second << "\n";
+          if (cb->paramHasAttr(pair.second, Attribute::Reducer)) {
+          llvm::errs() << " + + callbase red: " << *cb << "\n";
             replacement = B.CreatePointerCast(hyperbase, red->getType());
+            cb->removeParamAttr(pair.second, Attribute::Reducer);
           }
         }
 
         if (replacement == nullptr) {
           replacement = B.CreatePointerCast(B.CreateCall(CILKRTS_FUNC(hyper_lookup), hyperbase), red->getType());
         }
-		    user->setOperand(pair.second, replacement);
+		user->setOperand(pair.second, replacement);
     }
 
     for(auto ret: rets) {
@@ -1857,8 +1875,9 @@ void CilkABI::preProcessFunction(Function &F) {
             
             llvm::Value* replacement = nullptr;
             if (auto cb = dyn_cast<CallBase>(user)) {
-              if (cb->paramHasAttr(pair.second - 1, Attribute::Reducer)) {
+              if (cb->paramHasAttr(pair.second, Attribute::Reducer)) {
                 replacement = &arg;
+                cb->removeParamAttr(pair.second, Attribute::Reducer);
               }
             }
 
@@ -1867,6 +1886,7 @@ void CilkABI::preProcessFunction(Function &F) {
             }
             user->setOperand(pair.second, replacement);
         }
+      arg.removeAttr(Attribute::Reducer);
     }
   }
 }
