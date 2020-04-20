@@ -674,9 +674,12 @@ bool TapirTarget::shouldProcessFunction(const Function &F) const {
     return true;
 
   for (const Instruction &I : instructions(&F))
-    if (const IntrinsicInst *II = dyn_cast<IntrinsicInst>(&I))
+    if (const IntrinsicInst *II = dyn_cast<IntrinsicInst>(&I)) {
       if (Intrinsic::tapir_loop_grainsize == II->getIntrinsicID())
         return true;
+      if (Intrinsic::task_frameaddress == II->getIntrinsicID())
+        return true;
+    }
 
   return false;
 }
